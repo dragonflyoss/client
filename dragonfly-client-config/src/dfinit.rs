@@ -92,8 +92,15 @@ fn default_proxy_addr() -> String {
 /// default_container_runtime_containerd_registry_host_capabilities is the default
 /// capabilities of the containerd registry.
 #[inline]
-fn default_container_runtime_containerd_registry_capabilities() -> Vec<String> {
+pub fn default_container_runtime_containerd_registry_capabilities() -> Vec<String> {
     vec!["pull".to_string(), "resolve".to_string()]
+}
+
+/// default_container_runtime_containerd_proxy_all_registries is the default value of
+/// whether to proxy all registries through dfdaemon via a catch-all `_default/hosts.toml`.
+#[inline]
+fn default_container_runtime_containerd_proxy_all_registries() -> bool {
+    true
 }
 
 /// Registry is the registry configuration for containerd.
@@ -126,7 +133,7 @@ pub struct ContainerdRegistry {
 }
 
 /// Containerd is the containerd configuration for dfinit.
-#[derive(Debug, Clone, Default, Validate, Deserialize, Serialize)]
+#[derive(Debug, Clone, Validate, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Containerd {
     /// config_path is the path of containerd configuration file.
@@ -135,6 +142,24 @@ pub struct Containerd {
 
     /// registries is the list of containerd registries.
     pub registries: Vec<ContainerdRegistry>,
+
+    /// proxy_all_registries enables a catch-all `_default/hosts.toml` entry so that any
+    /// registry not explicitly listed in `registries` is still proxied through dfdaemon.
+    /// The dfdaemon infers the upstream registry from the `ns=` query parameter that
+    /// containerd appends when using a `_default` fallback mirror. Explicitly configured
+    /// registries continue to use their own `hosts.toml` and take precedence.
+    #[serde(default = "default_container_runtime_containerd_proxy_all_registries")]
+    pub proxy_all_registries: bool,
+}
+
+impl Default for Containerd {
+    fn default() -> Self {
+        Self {
+            config_path: PathBuf::default(),
+            registries: Vec::default(),
+            proxy_all_registries: default_container_runtime_containerd_proxy_all_registries(),
+        }
+    }
 }
 
 /// CRIORegistry is the registry configuration for cri-o.
@@ -407,7 +432,8 @@ mod tests {
         let expected = r#"
 containerd:
   configPath: ''
-  registries: []"#;
+  registries: []
+  proxyAllRegistries: true"#;
         assert_eq!(expected.trim(), res.trim());
 
         let runtime_cfg = ContainerRuntimeConfig::Docker(Docker {
@@ -450,7 +476,8 @@ proxy:
 containerRuntime:
   containerd:
     configPath: /root/.dragonfly/config/dfinit/yaml
-    registries: []"#;
+    registries: []
+    proxyAllRegistries: true"#;
         assert_eq!(expected.trim(), res.trim());
     }
 
