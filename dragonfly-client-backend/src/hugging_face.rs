@@ -48,6 +48,7 @@ use futures::TryStreamExt;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_LENGTH, RANGE, USER_AGENT};
 use reqwest::Client;
 use serde::Deserialize;
+use std::error::Error as _;
 use std::io::{Error as IOError, ErrorKind};
 use std::sync::Arc;
 use tokio_util::io::StreamReader;
@@ -605,11 +606,19 @@ impl Backend for HuggingFace {
 
         let response_header = response.headers().clone();
         let response_status_code = response.status();
-        let response_reader = Box::new(StreamReader::new(
-            response
-                .bytes_stream()
-                .map_err(|err| IOError::new(ErrorKind::Other, err)),
-        ));
+        let response_reader = Box::new(StreamReader::new(response.bytes_stream().map_err(
+            move |err| {
+                let mut chain = err.to_string();
+                let mut source = err.source();
+                while let Some(err) = source {
+                    chain.push_str(": ");
+                    chain.push_str(&err.to_string());
+                    source = err.source();
+                }
+
+                IOError::new(ErrorKind::Other, err)
+            },
+        )));
 
         debug!(
             "get response {} {}: {:?} {:?}",

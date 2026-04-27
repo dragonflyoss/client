@@ -68,6 +68,7 @@ use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use reqwest_tracing::TracingMiddleware;
 use rustls_pki_types::CertificateDer;
 use std::collections::HashMap;
+use std::error::Error as _;
 use std::io::{Error as IOError, ErrorKind};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -679,11 +680,19 @@ impl Backend for HTTP {
         let response_status_code = response.status();
 
         // Non-redirect response or redirect without Location header
-        let response_reader = Box::new(StreamReader::new(
-            response
-                .bytes_stream()
-                .map_err(|err| IOError::new(ErrorKind::Other, err)),
-        ));
+        let response_reader = Box::new(StreamReader::new(response.bytes_stream().map_err(
+            move |err| {
+                let mut chain = err.to_string();
+                let mut source = err.source();
+                while let Some(err) = source {
+                    chain.push_str(": ");
+                    chain.push_str(&err.to_string());
+                    source = err.source();
+                }
+
+                IOError::new(ErrorKind::Other, err)
+            },
+        )));
 
         debug!(
             "get response {} {}: {:?} {:?}",
