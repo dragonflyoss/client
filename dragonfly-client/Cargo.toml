@@ -83,7 +83,7 @@ fastrand.workspace = true
 opendal.workspace = true
 regex.workspace = true
 serde_regex.workspace = true
-tracing-appender = "0.2.4"
+tracing-appender = "0.2.5"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "chrono"] }
 tracing-panic = "0.1.2"
 tracing-opentelemetry = "0.32.0"
