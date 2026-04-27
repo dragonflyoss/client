@@ -108,9 +108,27 @@ impl Storage {
     }
 
     /// hard_link_task hard links the task content to the destination.
+    ///
+    /// On success, the destination path is recorded in the task's metadata
+    /// so that [`Self::delete_task`] (i.e. garbage collection) can later
+    /// unlink the hardlink as well as dfdaemon's own copy. Without this,
+    /// hardlinks at `to` would keep the inode alive and disk space would not
+    /// be reclaimed when GC runs. Recording is best-effort: if metadata
+    /// persistence fails after the hardlink succeeded we still return Ok,
+    /// since the hardlink is observable to the caller; we only log a warning.
     #[instrument(skip_all)]
     pub async fn hard_link_task(&self, task_id: &str, to: &Path) -> Result<()> {
-        self.content.hard_link_task(task_id, to).await
+        self.content.hard_link_task(task_id, to).await?;
+
+        if let Err(err) = self.metadata.add_task_output_path(task_id, to) {
+            warn!(
+                "record output path {:?} for task {}: {}; \
+                 hardlink may not be cleaned up on garbage collection",
+                to, task_id, err
+            );
+        }
+
+        Ok(())
     }
 
     /// copy_task copies the task content to the destination.
@@ -196,8 +214,50 @@ impl Storage {
     }
 
     /// delete_task deletes the task metadatas, task content and piece metadatas.
+    ///
+    /// Hardlinks created via [`Self::hard_link_task`] are also unlinked here:
+    /// dfdaemon's internal copy and the user's `output_path` share an inode,
+    /// so unless every link is removed, the data continues to occupy disk
+    /// space and garbage collection has no real effect. Hardlink removal is
+    /// best-effort — a missing destination (the user moved or removed it) is
+    /// not an error, and an unexpected unlink failure is logged but does not
+    /// stop the rest of the teardown.
     #[instrument(skip_all)]
     pub async fn delete_task(&self, id: &str) {
+        // Read the recorded output paths before we tear down the metadata.
+        // This is also load-bearing for ordering: the metadata row is the
+        // source of truth, and once we delete it the list of hardlinks is
+        // gone too.
+        let output_paths = match self.metadata.get_task(id) {
+            Ok(Some(task)) => task.output_paths,
+            Ok(None) => Vec::new(),
+            Err(err) => {
+                error!("read task metadata for hardlink cleanup failed: {}", err);
+                Vec::new()
+            }
+        };
+
+        for output_path in &output_paths {
+            match fs::remove_file(output_path).await {
+                Ok(()) => {
+                    debug!("removed hardlink at {:?} for task {}", output_path, id);
+                }
+                Err(err) => {
+                    if err.kind() == std::io::ErrorKind::NotFound {
+                        debug!(
+                            "hardlink at {:?} for task {} already deleted, skipping",
+                            output_path, id
+                        );
+                    } else {
+                        error!(
+                            "remove hardlink at {:?} for task {} failed: {}",
+                            output_path, id, err
+                        );
+                    }
+                }
+            }
+        }
+
         self.metadata
             .delete_task(id)
             .unwrap_or_else(|err| error!("delete task metadata failed: {}", err));
@@ -1635,5 +1695,104 @@ impl Storage {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    /// Verifies the bug fix: when a task is garbage-collected, the hardlink at
+    /// the user-supplied output_path is removed too. Before this fix, only
+    /// dfdaemon's internal copy was unlinked, so the inode stayed pinned by
+    /// the surviving hardlink and disk space was not reclaimed.
+    #[tokio::test]
+    async fn delete_task_unlinks_hard_link_destinations() {
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path().join("log");
+        let storage = Storage::new(Arc::new(Config::default()), dir.path(), log_dir)
+            .await
+            .unwrap();
+
+        let task_id = "d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c";
+        let content_length = 1024;
+
+        // Create the dfdaemon-internal task file.
+        storage
+            .download_task_started(task_id, 1024, content_length, None)
+            .await
+            .unwrap();
+
+        // Hard-link to two different destinations to exercise the multi-path case.
+        let dest_a = dir.path().join("output_a");
+        let dest_b = dir.path().join("output_b");
+        storage.hard_link_task(task_id, &dest_a).await.unwrap();
+        storage.hard_link_task(task_id, &dest_b).await.unwrap();
+        assert!(
+            dest_a.exists(),
+            "hardlink A should exist after hard_link_task"
+        );
+        assert!(
+            dest_b.exists(),
+            "hardlink B should exist after hard_link_task"
+        );
+
+        // Both destinations should be recorded so GC knows to clean them up.
+        let task = storage.get_task(task_id).unwrap().unwrap();
+        assert_eq!(
+            task.output_paths,
+            vec![dest_a.clone(), dest_b.clone()],
+            "both hardlink destinations should be recorded in metadata"
+        );
+
+        // Calling hard_link_task again with the same destination shouldn't
+        // duplicate the entry (idempotent re-records during retried downloads).
+        storage.hard_link_task(task_id, &dest_a).await.ok();
+        let task = storage.get_task(task_id).unwrap().unwrap();
+        assert_eq!(
+            task.output_paths,
+            vec![dest_a.clone(), dest_b.clone()],
+            "duplicate hard_link_task calls must not duplicate output_paths"
+        );
+
+        // GC.
+        storage.delete_task(task_id).await;
+
+        assert!(
+            !dest_a.exists(),
+            "hardlink A should be removed by delete_task"
+        );
+        assert!(
+            !dest_b.exists(),
+            "hardlink B should be removed by delete_task"
+        );
+    }
+
+    /// A missing destination at GC time is not an error: the user may have
+    /// already moved or removed the hardlink. The remaining cleanup must
+    /// still happen.
+    #[tokio::test]
+    async fn delete_task_tolerates_missing_destination() {
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path().join("log");
+        let storage = Storage::new(Arc::new(Config::default()), dir.path(), log_dir)
+            .await
+            .unwrap();
+
+        let task_id = "d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c";
+        storage
+            .download_task_started(task_id, 1024, 1024, None)
+            .await
+            .unwrap();
+
+        let dest = dir.path().join("output");
+        storage.hard_link_task(task_id, &dest).await.unwrap();
+        // User removes the hardlink themselves before GC runs.
+        std::fs::remove_file(&dest).unwrap();
+
+        // delete_task must not panic or surface an error to the GC loop.
+        storage.delete_task(task_id).await;
+        assert!(storage.get_task(task_id).unwrap().is_none());
     }
 }

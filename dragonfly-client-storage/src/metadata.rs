@@ -65,6 +65,16 @@ pub struct Task {
 
     /// finished_at is the time when the task downloads finished.
     pub finished_at: Option<NaiveDateTime>,
+
+    /// output_paths records every destination this task's content has been
+    /// hard-linked into via `hard_link_task`. Garbage collection unlinks each
+    /// of these on eviction so that the inode (and therefore the disk space)
+    /// is actually reclaimed; without this, a hardlink at the user-supplied
+    /// `output_path` would keep the inode alive after dfdaemon's own copy
+    /// is removed. `#[serde(default)]` keeps existing on-disk metadata
+    /// readable after upgrade.
+    #[serde(default)]
+    pub output_paths: Vec<PathBuf>,
 }
 
 /// Task implements the task database object.
@@ -763,6 +773,27 @@ impl<E: StorageEngineOwned> Metadata<E> {
     pub fn delete_task(&self, id: &str) -> Result<()> {
         info!("delete task metadata {}", id);
         self.db.delete::<Task>(id.as_bytes())
+    }
+
+    /// add_task_output_path appends `output_path` to the task's recorded
+    /// output paths if it is not already present, so that garbage collection
+    /// can later unlink the hardlinks it created. The task's `updated_at` is
+    /// not bumped here — recording a hardlink destination is bookkeeping, not
+    /// activity. Returns `TaskNotFound` if the task does not exist.
+    #[instrument(skip_all)]
+    pub fn add_task_output_path(&self, id: &str, output_path: &Path) -> Result<Task> {
+        let task = match self.db.get::<Task>(id.as_bytes())? {
+            Some(mut task) => {
+                if !task.output_paths.iter().any(|p| p == output_path) {
+                    task.output_paths.push(output_path.to_path_buf());
+                }
+                task
+            }
+            None => return Err(Error::TaskNotFound(id.to_string())),
+        };
+
+        self.db.put(id.as_bytes(), &task)?;
+        Ok(task)
     }
 
     /// create_persistent_task creates a new persistent task.
@@ -1658,6 +1689,54 @@ mod tests {
         metadata.delete_task(task_id).unwrap();
         let task = metadata.get_task(task_id).unwrap();
         assert!(task.is_none());
+    }
+
+    #[test]
+    fn test_add_task_output_path() {
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path().join("log");
+        let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
+        let task_id = "d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c";
+
+        // Adding before the task exists is an error.
+        assert!(matches!(
+            metadata.add_task_output_path(task_id, Path::new("/tmp/a")),
+            Err(Error::TaskNotFound(_))
+        ));
+
+        metadata
+            .download_task_started(task_id, 1024, 1024, None)
+            .unwrap();
+        let task = metadata.get_task(task_id).unwrap().unwrap();
+        assert!(task.output_paths.is_empty());
+
+        // Adding a path records it.
+        let path_a = Path::new("/var/lib/firecracker/images-p2p/foo/initrd");
+        let task = metadata.add_task_output_path(task_id, path_a).unwrap();
+        assert_eq!(task.output_paths, vec![path_a.to_path_buf()]);
+
+        // Persistence: re-read from storage.
+        let task = metadata.get_task(task_id).unwrap().unwrap();
+        assert_eq!(task.output_paths, vec![path_a.to_path_buf()]);
+
+        // Adding the same path again is a no-op (dedup).
+        let task = metadata.add_task_output_path(task_id, path_a).unwrap();
+        assert_eq!(task.output_paths, vec![path_a.to_path_buf()]);
+
+        // Adding a different path appends it.
+        let path_b = Path::new("/var/lib/firecracker/images-p2p/bar/initrd");
+        let task = metadata.add_task_output_path(task_id, path_b).unwrap();
+        assert_eq!(
+            task.output_paths,
+            vec![path_a.to_path_buf(), path_b.to_path_buf()]
+        );
+
+        // Persistence: re-read from storage.
+        let task = metadata.get_task(task_id).unwrap().unwrap();
+        assert_eq!(
+            task.output_paths,
+            vec![path_a.to_path_buf(), path_b.to_path_buf()]
+        );
     }
 
     #[test]
