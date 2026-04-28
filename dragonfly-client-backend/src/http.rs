@@ -47,7 +47,7 @@
 
 use crate::{
     Backend, Body, ExistsRequest, GetRequest, GetResponse, PutRequest, PutResponse, StatRequest,
-    StatResponse, DEFAULT_USER_AGENT, KEEP_ALIVE_INTERVAL, MAX_RETRY_TIMES, POOL_MAX_IDLE_PER_HOST,
+    StatResponse, DEFAULT_USER_AGENT, KEEP_ALIVE_INTERVAL, POOL_MAX_IDLE_PER_HOST,
 };
 use async_trait::async_trait;
 use dashmap::{mapref::entry::Entry, DashMap};
@@ -109,6 +109,11 @@ pub struct HTTP {
     /// which will insert to the each request if original header is not already set.
     request_header: Option<HashMap<String, String>>,
 
+    /// The maximum number of retry attempts when a chunk request to the backend
+    /// storage fails. Once this limit is reached, the request will be considered
+    /// failed and an error will be returned.
+    max_retries: u32,
+
     /// Temporary redirects stores 307 redirect url with TTL (LRU eviction).
     temporary_redirects: Arc<Mutex<LruCache<String, TemporaryRedirectEntry>>>,
 
@@ -137,6 +142,7 @@ impl HTTP {
     pub fn new(
         scheme: &str,
         request_header: Option<HashMap<String, String>>,
+        max_retries: u32,
         enable_cache_temporary_redirect: bool,
         cache_temporary_redirect_ttl: Duration,
         enable_hickory_dns: bool,
@@ -182,8 +188,7 @@ impl HTTP {
                 })) // Disable automatic redirects when status is 307.
                 .build()?;
 
-            let retry_policy =
-                ExponentialBackoff::builder().build_with_max_retries(MAX_RETRY_TIMES);
+            let retry_policy = ExponentialBackoff::builder().build_with_max_retries(max_retries);
             let client = ClientBuilder::new(client)
                 .with(TracingMiddleware::default())
                 .with(RetryTransientMiddleware::new_with_policy(retry_policy))
@@ -202,6 +207,7 @@ impl HTTP {
             scheme: scheme.to_string(),
             clients: Arc::new(clients),
             request_header,
+            max_retries,
             temporary_redirects: Arc::new(Mutex::new(LruCache::new(
                 NonZeroUsize::new(Self::DEFAULT_CACHE_TEMPORARY_REDIRECT_CAPACITY).unwrap(),
             ))),
@@ -264,7 +270,7 @@ impl HTTP {
                     .build()?;
 
                 let retry_policy =
-                    ExponentialBackoff::builder().build_with_max_retries(MAX_RETRY_TIMES);
+                    ExponentialBackoff::builder().build_with_max_retries(self.max_retries);
                 let client = ClientBuilder::new(client)
                     .with(TracingMiddleware::default())
                     .with(RetryTransientMiddleware::new_with_policy(retry_policy))
@@ -995,7 +1001,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600), true)
+        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
             .unwrap()
             .stat(StatRequest {
                 task_id: "test".to_string(),
@@ -1026,7 +1032,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600), true)
+        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
             .unwrap()
             .stat(StatRequest {
                 task_id: "test".to_string(),
@@ -1057,7 +1063,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let mut resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600), true)
+        let mut resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
             .unwrap()
             .get(GetRequest {
                 task_id: "test".to_string(),
@@ -1082,7 +1088,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[tokio::test]
     async fn should_stat_response_with_self_signed_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600), true)
+        let resp = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true)
             .unwrap()
             .stat(StatRequest {
                 task_id: "test".to_string(),
@@ -1104,7 +1110,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[tokio::test]
     async fn should_return_error_response_when_stat_with_wrong_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600), true)
+        let resp = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true)
             .unwrap()
             .stat(StatRequest {
                 task_id: "test".to_string(),
@@ -1125,7 +1131,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[tokio::test]
     async fn should_get_response_with_self_signed_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let mut resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600), true)
+        let mut resp = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true)
             .unwrap()
             .get(GetRequest {
                 task_id: "test".to_string(),
@@ -1150,7 +1156,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[tokio::test]
     async fn should_return_error_response_when_get_with_wrong_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600), true)
+        let resp = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true)
             .unwrap()
             .get(GetRequest {
                 task_id: "test".to_string(),
@@ -1173,7 +1179,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[tokio::test]
     async fn should_stat_response_with_no_verifier() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600), true)
+        let resp = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true)
             .unwrap()
             .stat(StatRequest {
                 task_id: "test".to_string(),
@@ -1195,7 +1201,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[tokio::test]
     async fn should_get_response_with_no_verifier() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let http_backend = HTTP::new(HTTPS_SCHEME, None, true, Duration::from_secs(600), true);
+        let http_backend = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true);
         let mut resp = http_backend
             .unwrap()
             .get(GetRequest {
@@ -1230,7 +1236,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600), true)
+        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
             .unwrap()
             .exists(ExistsRequest {
                 task_id: "test".to_string(),
@@ -1261,7 +1267,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600), true)
+        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
             .unwrap()
             .exists(ExistsRequest {
                 task_id: "test".to_string(),
@@ -1292,7 +1298,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600), true)
+        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
             .unwrap()
             .exists(ExistsRequest {
                 task_id: "test".to_string(),
@@ -1313,7 +1319,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[test]
     fn should_make_request_headers() {
         // Apply default user-agent when not specified.
-        let http = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600), true).unwrap();
+        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
         let mut headers = HeaderMap::new();
         http.make_request_headers(&mut headers, None).unwrap();
         assert_eq!(
@@ -1353,6 +1359,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
         let http = HTTP::new(
             HTTP_SCHEME,
             Some(custom_headers),
+            1,
             true,
             Duration::from_secs(600),
             true,
@@ -1396,6 +1403,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
         let http = HTTP::new(
             HTTP_SCHEME,
             Some(custom_headers),
+            1,
             true,
             Duration::from_secs(600),
             true,
@@ -1413,6 +1421,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
         let http = HTTP::new(
             HTTP_SCHEME,
             Some(custom_headers),
+            1,
             true,
             Duration::from_secs(600),
             true,
@@ -1446,7 +1455,8 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .await;
 
         // First request - should store redirect url.
-        let backend = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600), true).unwrap();
+        let backend =
+            HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
         let mut response = backend
             .get(GetRequest {
                 task_id: "025a7b4c4615f86617acb34c7ec3404a0a475c2cfaf847ecead944c0bae6277d"
@@ -1510,7 +1520,8 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let backend = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(600), true).unwrap();
+        let backend =
+            HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
 
         // First request - relative Location should NOT be cached.
         let mut response = backend
@@ -1578,7 +1589,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .await;
 
         // Use a very short TTL for this test (1 second).
-        let backend = HTTP::new(HTTP_SCHEME, None, true, Duration::from_secs(1), true).unwrap();
+        let backend = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(1), true).unwrap();
 
         // First request - should store redirect url.
         let mut response = backend

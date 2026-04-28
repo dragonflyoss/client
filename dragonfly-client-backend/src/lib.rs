@@ -58,9 +58,6 @@ const HTTP2_STREAM_WINDOW_SIZE: u32 = 16 * 1024 * 1024;
 /// HTTP2_CONNECTION_WINDOW_SIZE is the connection window size for HTTP2 connection.
 const HTTP2_CONNECTION_WINDOW_SIZE: u32 = 16 * 1024 * 1024;
 
-/// MAX_RETRY_TIMES is the max retry times for the request.
-const MAX_RETRY_TIMES: u32 = 1;
-
 /// DEFAULT_USER_AGENT is the default user agent.
 const DEFAULT_USER_AGENT: &str = concat!("dragonfly", "/", env!("CARGO_PKG_VERSION"));
 
@@ -399,6 +396,7 @@ impl BackendFactory {
             Box::new(http::HTTP::new(
                 http::HTTP_SCHEME,
                 self.config.backend.clone().request_header,
+                self.config.backend.clone().max_retries,
                 enable_cache_temporary_redirect,
                 cache_temporary_redirect_ttl,
                 self.config.backend.enable_hickory_dns,
@@ -411,6 +409,7 @@ impl BackendFactory {
             Box::new(http::HTTP::new(
                 http::HTTPS_SCHEME,
                 self.config.backend.clone().request_header,
+                self.config.backend.clone().max_retries,
                 enable_cache_temporary_redirect,
                 cache_temporary_redirect_ttl,
                 self.config.backend.enable_hickory_dns,
