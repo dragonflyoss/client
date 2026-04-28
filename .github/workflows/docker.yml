@@ -88,7 +88,7 @@ jobs:
           cache-to: type=local,dest=/tmp/.buildx-cache-new
 
       - name: Run Trivy vulnerability scanner in tarball mode
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
         with:
           image-ref: dragonflyoss/client:${{ steps.get_version.outputs.VERSION }}
           severity: 'CRITICAL,HIGH'
@@ -185,7 +185,7 @@ jobs:
           cache-to: type=local,dest=/tmp/.buildx-cache-new
 
       - name: Run Trivy vulnerability scanner in tarball mode
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
         with:
           image-ref: dragonflyoss/client:${{ steps.get_version.outputs.VERSION }}-debug
           severity: 'CRITICAL,HIGH'
@@ -282,7 +282,7 @@ jobs:
           cache-to: type=local,dest=/tmp/.buildx-cache-new
 
       - name: Run Trivy vulnerability scanner in tarball mode
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
         with:
           image-ref: dragonflyoss/dfinit:${{ steps.get_version.outputs.VERSION }}
           severity: 'CRITICAL,HIGH'
