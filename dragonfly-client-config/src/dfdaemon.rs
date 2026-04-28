@@ -170,6 +170,12 @@ fn default_download_concurrent_piece_count() -> u32 {
     8
 }
 
+/// default_backend_max_retries is the default max retries for backend request, default is 1.
+#[inline]
+fn default_backend_max_retries() -> u32 {
+    1
+}
+
 /// default_backend_enable_cache_temporary_redirect is the default value for caching temporary redirects.
 #[inline]
 fn default_backend_enable_cache_temporary_redirect() -> bool {
@@ -1511,6 +1517,12 @@ pub struct Backend {
     /// Request header is the request header of backend.
     pub request_header: Option<HashMap<String, String>>,
 
+    /// The maximum number of retry attempts when a chunk request to the backend
+    /// storage fails. Once this limit is reached, the request will be considered
+    /// failed and an error will be returned.
+    #[serde(default = "default_backend_max_retries")]
+    pub max_retries: u32,
+
     /// Enable cache temporary redirect controls whether to cache HTTP 307 (Temporary Redirect) response URLs.
     ///
     /// Motivation: Dragonfly splits a download URL into multiple pieces and performs multiple
@@ -1566,6 +1578,7 @@ impl Default for Backend {
     fn default() -> Self {
         Self {
             request_header: None,
+            max_retries: default_backend_max_retries(),
             enable_cache_temporary_redirect: default_backend_enable_cache_temporary_redirect(),
             cache_temporary_redirect_ttl: default_backend_cache_temporary_redirect_ttl(),
             put_concurrent_chunk_count: default_backend_put_concurrent_chunk_count(),
