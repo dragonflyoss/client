@@ -27,8 +27,8 @@ use tokio::sync::mpsc;
 use tracing::{error, info, instrument};
 
 /// Timeout for downloading tasks. Tasks that exceed this timeout will be
-/// garbage collected by disk usage. Default is 2 hours.
-pub const DOWNLOAD_TASK_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
+/// garbage collected by disk usage. Default is 24 hours.
+pub const DOWNLOAD_TASK_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Garbage collector for dfdaemon.
 pub struct GC {
