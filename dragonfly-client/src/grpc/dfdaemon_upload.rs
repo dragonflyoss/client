@@ -1312,7 +1312,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             })?;
 
         // Download task started.
-        info!("download persistent task started: {:?}", request);
+        info!(
+            "download persistent task started: {:?}",
+            crate::grpc::debug::RedactedDownloadPersistentTaskRequest(&request)
+        );
         let task = match self
             .persistent_task
             .download_started_for_replication(

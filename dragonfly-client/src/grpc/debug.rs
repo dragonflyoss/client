@@ -16,13 +16,14 @@
 
 //! Debug-safe wrappers for gRPC messages that carry authentication material.
 //!
-//! The dfdaemon download/upload handlers log the incoming `Download` payload
-//! at `info!` level for operator visibility. That payload carries the S3 /
-//! OSS / HDFS / HuggingFace / ModelScope credentials supplied by the caller,
-//! and the auto-derived `Debug` impl on the generated protobuf types prints
-//! those credential strings verbatim. Running dfdaemon at the default
-//! `info` log level therefore persists caller-provided AWS secret access
-//! keys and STS session tokens in plaintext to
+//! The dfdaemon download/upload handlers log the incoming request payload
+//! at `info!` level for operator visibility in both `download_task` and
+//! `download_persistent_task`. Those payloads carry the S3 / OSS / HDFS /
+//! HuggingFace / ModelScope credentials supplied by the caller, and the
+//! auto-derived `Debug` impl on the generated protobuf types prints those
+//! credential strings verbatim. Running dfdaemon at the default `info` log
+//! level therefore persists caller-provided AWS secret access keys and STS
+//! session tokens in plaintext to
 //! `/var/log/dragonfly/dfdaemon/dfdaemon.log`.
 //!
 //! This module provides newtype wrappers that implement `Debug` by scrubbing
@@ -31,7 +32,8 @@
 //! the log event actually fires at the current tracing level -- callers
 //! below the enabled level do not allocate.
 
-use dragonfly_api::common::v2::Download;
+use dragonfly_api::common::v2::{Download, ObjectStorage};
+use dragonfly_api::dfdaemon::v2::DownloadPersistentTaskRequest;
 use std::fmt;
 
 /// Placeholder inserted in place of redacted secret material.
@@ -73,24 +75,29 @@ impl fmt::Debug for RedactedDownload<'_> {
     }
 }
 
+/// Debug-safe wrapper around [`DownloadPersistentTaskRequest`].
+///
+/// `DownloadPersistentTaskRequest` only carries credentials inside its
+/// `object_storage` field; it does not have the `request_header`, `hdfs`,
+/// `hugging_face`, or `model_scope` fields that [`RedactedDownload`]
+/// protects. Scrubbing `object_storage` is therefore both necessary and
+/// sufficient to keep caller-provided secrets out of the
+/// `download persistent task started` log line.
+pub struct RedactedDownloadPersistentTaskRequest<'a>(pub &'a DownloadPersistentTaskRequest);
+
+impl fmt::Debug for RedactedDownloadPersistentTaskRequest<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut r = self.0.clone();
+        scrub_object_storage(&mut r.object_storage);
+        fmt::Debug::fmt(&r, f)
+    }
+}
+
 /// Replace sensitive credential fields on `download` in place with a fixed
 /// placeholder. Exposed for unit tests; production call sites should go
 /// through [`RedactedDownload`].
 pub(crate) fn scrub_download(download: &mut Download) {
-    if let Some(os) = download.object_storage.as_mut() {
-        if os.access_key_secret.is_some() {
-            os.access_key_secret = Some(REDACTED.to_string());
-        }
-        if os.session_token.is_some() {
-            os.session_token = Some(REDACTED.to_string());
-        }
-        if os.security_token.is_some() {
-            os.security_token = Some(REDACTED.to_string());
-        }
-        if os.credential_path.is_some() {
-            os.credential_path = Some(REDACTED.to_string());
-        }
-    }
+    scrub_object_storage(&mut download.object_storage);
     for (key, value) in download.request_header.iter_mut() {
         if is_sensitive_header(key) {
             *value = REDACTED.to_string();
@@ -109,6 +116,23 @@ pub(crate) fn scrub_download(download: &mut Download) {
     if let Some(ms) = download.model_scope.as_mut() {
         if ms.token.is_some() {
             ms.token = Some(REDACTED.to_string());
+        }
+    }
+}
+
+fn scrub_object_storage(os: &mut Option<ObjectStorage>) {
+    if let Some(os) = os.as_mut() {
+        if os.access_key_secret.is_some() {
+            os.access_key_secret = Some(REDACTED.to_string());
+        }
+        if os.session_token.is_some() {
+            os.session_token = Some(REDACTED.to_string());
+        }
+        if os.security_token.is_some() {
+            os.security_token = Some(REDACTED.to_string());
+        }
+        if os.credential_path.is_some() {
+            os.credential_path = Some(REDACTED.to_string());
         }
     }
 }
@@ -291,5 +315,33 @@ mod tests {
         // Sanity: identifiers that are safe to log should still be present.
         assert!(rendered.contains("AKIAEXAMPLEID"));
         assert!(rendered.contains("dfget-test"));
+    }
+
+    #[test]
+    fn redacts_object_storage_in_persistent_task_request() {
+        let object_storage = sample_download().object_storage.unwrap();
+        let request = DownloadPersistentTaskRequest {
+            url: "s3://bucket/key".to_string(),
+            object_storage: Some(object_storage.clone()),
+            ..Default::default()
+        };
+
+        let rendered = format!("{:?}", RedactedDownloadPersistentTaskRequest(&request));
+
+        for secret in [
+            object_storage.access_key_secret.as_deref().unwrap(),
+            object_storage.session_token.as_deref().unwrap(),
+            object_storage.security_token.as_deref().unwrap(),
+            object_storage.credential_path.as_deref().unwrap(),
+        ] {
+            assert!(
+                !rendered.contains(secret),
+                "debug output leaked secret `{}`: {}",
+                secret,
+                rendered
+            );
+        }
+        assert!(rendered.contains(REDACTED));
+        assert!(rendered.contains(object_storage.access_key_id.as_deref().unwrap()));
     }
 }
