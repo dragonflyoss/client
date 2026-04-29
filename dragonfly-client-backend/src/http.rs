@@ -59,7 +59,8 @@ use dragonfly_client_core::{
 use dragonfly_client_util::tls::NoVerifier;
 use futures::TryStreamExt;
 use http::header::{
-    HeaderName, HeaderValue, CONTENT_LENGTH, LOCATION, RANGE, TRANSFER_ENCODING, USER_AGENT,
+    HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_RANGE, LOCATION, RANGE, TRANSFER_ENCODING,
+    USER_AGENT,
 };
 use lru::LruCache;
 use reqwest::header::HeaderMap;
@@ -551,10 +552,7 @@ impl Backend for HTTP {
 
         let response_status_code = response.status();
         let response_header = response.headers().clone();
-        let content_length = match response_header.get(CONTENT_LENGTH) {
-            Some(content_length) => content_length.to_str()?.parse::<u64>().ok(),
-            None => response.content_length(),
-        };
+        let content_length = content_length_from_response(&response_header, &response)?;
 
         debug!(
             "stat response {} {}: {:?} {:?} {:?}",
@@ -824,6 +822,26 @@ fn remove_sensitive_headers(headers: &mut HeaderMap, next: &Url, previous: &Url)
     }
 }
 
+fn content_length_from_response(
+    headers: &HeaderMap,
+    response: &reqwest::Response,
+) -> Result<Option<u64>> {
+    if let Some(total) = content_range_total(headers) {
+        return Ok(Some(total));
+    }
+
+    match headers.get(CONTENT_LENGTH) {
+        Some(content_length) => Ok(content_length.to_str()?.parse::<u64>().ok()),
+        None => Ok(response.content_length()),
+    }
+}
+
+fn content_range_total(headers: &HeaderMap) -> Option<u64> {
+    let content_range = headers.get(CONTENT_RANGE)?.to_str().ok()?;
+    let (_, total) = content_range.rsplit_once('/')?;
+    total.parse::<u64>().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -841,9 +859,25 @@ mod tests {
     use tokio_rustls::rustls::ServerConfig;
     use tokio_rustls::TlsAcceptor;
     use wiremock::{
-        matchers::{method, path},
-        Mock, ResponseTemplate,
+        matchers::{header, method, path},
+        Mock, Request, Respond, ResponseTemplate,
     };
+
+    #[test]
+    fn test_content_range_total() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_RANGE,
+            HeaderValue::from_static("bytes 5242880-10485759/12582912"),
+        );
+        assert_eq!(content_range_total(&headers), Some(12_582_912));
+
+        headers.insert(CONTENT_RANGE, HeaderValue::from_static("bytes 0-1023/*"));
+        assert_eq!(content_range_total(&headers), None);
+
+        headers.insert(CONTENT_RANGE, HeaderValue::from_static("invalid"));
+        assert_eq!(content_range_total(&headers), None);
+    }
 
     // Generate the certificate and private key by script(`scripts/generate_certs.sh`).
     const SERVER_CERT: &str = r#"""
@@ -1633,5 +1667,162 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .unwrap();
         assert_eq!(response.http_status_code, Some(StatusCode::OK));
         assert_eq!(response.text().await.unwrap(), "target content");
+    }
+
+    struct AssertRangeResponder {
+        expected: &'static str,
+        body: &'static [u8],
+        content_range: &'static str,
+    }
+
+    impl Respond for AssertRangeResponder {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let ranges: Vec<String> = request
+                .headers
+                .get_all("Range")
+                .iter()
+                .map(|v| v.to_str().unwrap_or("<non-ascii>").to_string())
+                .collect();
+
+            if ranges.len() == 1 && ranges[0] == self.expected {
+                ResponseTemplate::new(206)
+                    .insert_header("Content-Range", self.content_range)
+                    .insert_header("Content-Length", self.body.len().to_string())
+                    .set_body_bytes(self.body)
+            } else {
+                ResponseTemplate::new(400).set_body_string(format!(
+                    "expected Range={:?} but saw {:?}",
+                    self.expected, ranges
+                ))
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn should_forward_caller_range_when_getrequest_range_is_none() {
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/object.bin"))
+            .and(header("Range", "bytes=5242880-10485759"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header("Content-Range", "bytes 5242880-10485759/12582912")
+                    .insert_header("Content-Length", "5242880")
+                    .set_body_bytes(vec![0u8; 5_242_880]),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut http_header = HeaderMap::new();
+        http_header.insert(RANGE, HeaderValue::from_static("bytes=5242880-10485759"));
+        http_header.insert(
+            reqwest::header::AUTHORIZATION,
+            HeaderValue::from_static(
+                "AWS4-HMAC-SHA256 Credential=AKIA/20260101/us-west-2/s3/aws4_request, \
+                 SignedHeaders=host;range;x-amz-content-sha256;x-amz-date, Signature=deadbeef",
+            ),
+        );
+
+        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
+            .unwrap()
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "test".to_string(),
+                url: format!("{}/object.bin", server.uri()),
+                range: None,
+                http_header: Some(http_header),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(resp.http_status_code, Some(StatusCode::PARTIAL_CONTENT));
+    }
+
+    #[tokio::test]
+    async fn should_overwrite_caller_range_when_getrequest_range_is_some() {
+        let server = wiremock::MockServer::start().await;
+        let responder = AssertRangeResponder {
+            expected: "bytes=0-1023",
+            body: &[0u8; 1024],
+            content_range: "bytes 0-1023/12582912",
+        };
+        Mock::given(method("GET"))
+            .and(path("/object.bin"))
+            .respond_with(responder)
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut http_header = HeaderMap::new();
+        http_header.insert(RANGE, HeaderValue::from_static("bytes=5242880-10485759"));
+
+        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
+            .unwrap()
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "test".to_string(),
+                url: format!("{}/object.bin", server.uri()),
+                range: Some(Range {
+                    start: 0,
+                    length: 1024,
+                }),
+                http_header: Some(http_header),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(resp.http_status_code, Some(StatusCode::PARTIAL_CONTENT));
+    }
+
+    #[tokio::test]
+    async fn should_stat_returns_content_range_total_as_content_length() {
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/object.bin"))
+            .and(header("Range", "bytes=5242880-10485759"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header("Content-Range", "bytes 5242880-10485759/12582912")
+                    .insert_header("Content-Length", "5242880")
+                    .set_body_bytes(vec![0u8; 5_242_880]),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut http_header = HeaderMap::new();
+        http_header.insert(RANGE, HeaderValue::from_static("bytes=5242880-10485759"));
+
+        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
+            .unwrap()
+            .stat(StatRequest {
+                task_id: "test".to_string(),
+                url: format!("{}/object.bin", server.uri()),
+                http_header: Some(http_header),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(resp.success);
+        assert_eq!(resp.content_length, Some(12_582_912));
     }
 }

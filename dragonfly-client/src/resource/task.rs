@@ -15,9 +15,11 @@
  */
 
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
+use crate::proxy::header as proxy_header;
 use crate::resource::parent_selector::ParentSelector;
+use chrono::Utc;
 use dragonfly_api::common::v2::{
-    Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, Peer, Piece, Task as CommonTask,
+    Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, Peer, Piece, Range, Task as CommonTask,
     TrafficType,
 };
 use dragonfly_api::dfdaemon::{
@@ -180,10 +182,13 @@ impl Task {
                 error!("convert header: {}", err);
             })?;
 
-        // Remove the range header to prevent the server from
-        // returning a 206 partial content and returning
-        // a 200 full content.
-        request_header.remove(reqwest::header::RANGE);
+        let preserve_original_range_for_source =
+            proxy_header::get_preserve_original_range_for_source(&request_header);
+        request_header.remove(proxy_header::DRAGONFLY_PRESERVE_ORIGINAL_RANGE_FOR_SOURCE_HEADER);
+
+        if !preserve_original_range_for_source {
+            request_header.remove(reqwest::header::RANGE);
+        }
 
         // Head the url to get the content length.
         let backend = self.backend_factory.build(request.url.as_str())?;
@@ -244,17 +249,19 @@ impl Task {
             None => return Err(Error::InvalidContentLength),
         };
 
-        let piece_length = match request.piece_length {
-            Some(piece_length) => self
-                .piece
-                .calculate_piece_length(piece::PieceLengthStrategy::FixedPieceLength(piece_length)),
-            None => {
-                self.piece
-                    .calculate_piece_length(piece::PieceLengthStrategy::OptimizeByFileLength(
-                        content_length,
-                    ))
-            }
-        };
+        let piece_length =
+            if preserve_original_range_for_source {
+                content_length
+            } else {
+                match request.piece_length {
+                    Some(piece_length) => self.piece.calculate_piece_length(
+                        piece::PieceLengthStrategy::FixedPieceLength(piece_length),
+                    ),
+                    None => self.piece.calculate_piece_length(
+                        piece::PieceLengthStrategy::OptimizeByFileLength(content_length),
+                    ),
+                }
+            };
 
         // If the task is not finished, check if the storage has enough space to
         // store the task.
@@ -356,17 +363,18 @@ impl Task {
         };
 
         // Calculate the interested pieces to download.
-        let interested_pieces =
-            match self
-                .piece
-                .calculate_interested(piece_length, content_length, request.range)
-            {
-                Ok(interested_pieces) => interested_pieces,
-                Err(err) => {
-                    error!("calculate interested pieces error: {:?}", err);
-                    return Err(err);
-                }
-            };
+        let interested_pieces = match Self::calculate_interested_pieces(
+            &self.piece,
+            piece_length,
+            content_length,
+            &request,
+        ) {
+            Ok(interested_pieces) => interested_pieces,
+            Err(err) => {
+                error!("calculate interested pieces error: {:?}", err);
+                return Err(err);
+            }
+        };
         debug!(
             "interested pieces: {:?}",
             interested_pieces
@@ -1317,9 +1325,13 @@ impl Task {
         let task_id = task.id.as_str();
 
         // Convert the header.
-        let request_header: HeaderMap = (&request.request_header)
+        let mut request_header: HeaderMap = (&request.request_header)
             .try_into()
             .or_err(ErrorType::ParseError)?;
+
+        let preserve_original_range_for_source =
+            proxy_header::get_preserve_original_range_for_source(&request_header);
+        request_header.remove(proxy_header::DRAGONFLY_PRESERVE_ORIGINAL_RANGE_FOR_SOURCE_HEADER);
 
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
@@ -1340,6 +1352,7 @@ impl Task {
                 length: u64,
                 request_header: HeaderMap,
                 is_prefetch: bool,
+                preserve_original_range_for_source: bool,
                 need_piece_content: bool,
                 piece_manager: Arc<piece::Piece>,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
@@ -1353,7 +1366,7 @@ impl Task {
                 info!("start to download piece {} from source", piece_id);
 
                 let metadata = piece_manager
-                    .download_from_source(
+                    .download_from_source_with_options(
                         piece_id.as_str(),
                         task_id.as_str(),
                         number,
@@ -1362,6 +1375,7 @@ impl Task {
                         length,
                         request_header,
                         is_prefetch,
+                        preserve_original_range_for_source,
                         object_storage,
                         hdfs,
                         hugging_face,
@@ -1481,6 +1495,7 @@ impl Task {
                         interested_piece.length,
                         request_header,
                         request.is_prefetch,
+                        preserve_original_range_for_source,
                         request.need_piece_content,
                         piece_manager,
                         download_progress_tx,
@@ -1723,9 +1738,13 @@ impl Task {
         let task_id = task.id.as_str();
 
         // Convert the header.
-        let request_header: HeaderMap = (&request.request_header)
+        let mut request_header: HeaderMap = (&request.request_header)
             .try_into()
             .or_err(ErrorType::ParseError)?;
+
+        let preserve_original_range_for_source =
+            proxy_header::get_preserve_original_range_for_source(&request_header);
+        request_header.remove(proxy_header::DRAGONFLY_PRESERVE_ORIGINAL_RANGE_FOR_SOURCE_HEADER);
 
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
@@ -1746,6 +1765,7 @@ impl Task {
                 length: u64,
                 request_header: HeaderMap,
                 is_prefetch: bool,
+                preserve_original_range_for_source: bool,
                 need_piece_content: bool,
                 piece_manager: Arc<piece::Piece>,
                 download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
@@ -1758,7 +1778,7 @@ impl Task {
                 info!("start to download piece {} from source", piece_id);
 
                 let metadata = piece_manager
-                    .download_from_source(
+                    .download_from_source_with_options(
                         piece_id.as_str(),
                         task_id.as_str(),
                         number,
@@ -1767,6 +1787,7 @@ impl Task {
                         length,
                         request_header,
                         is_prefetch,
+                        preserve_original_range_for_source,
                         object_storage,
                         hdfs,
                         hugging_face,
@@ -1863,6 +1884,7 @@ impl Task {
                         interested_piece.length,
                         request_header,
                         request.is_prefetch,
+                        preserve_original_range_for_source,
                         request.need_piece_content,
                         piece_manager,
                         download_progress_tx,
@@ -1908,6 +1930,59 @@ impl Task {
         }
 
         return Ok(finished_pieces);
+    }
+
+    fn calculate_interested_pieces(
+        piece_manager: &piece::Piece,
+        piece_length: u64,
+        content_length: u64,
+        request: &Download,
+    ) -> ClientResult<Vec<metadata::Piece>> {
+        if Self::should_preserve_original_range_for_source(request) {
+            if let Some(range) = request.range {
+                return Ok(vec![Self::signed_range_piece(range)]);
+            }
+        }
+
+        piece_manager.calculate_interested(piece_length, content_length, request.range)
+    }
+
+    fn should_preserve_original_range_for_source(request: &Download) -> bool {
+        request.request_header.iter().any(|(key, value)| {
+            key.eq_ignore_ascii_case(
+                proxy_header::DRAGONFLY_PRESERVE_ORIGINAL_RANGE_FOR_SOURCE_HEADER,
+            ) && value.eq_ignore_ascii_case("true")
+        })
+    }
+
+    fn signed_range_piece(range: Range) -> metadata::Piece {
+        metadata::Piece {
+            number: Self::signed_range_piece_number(&range),
+            offset: range.start,
+            length: range.length,
+            digest: "".to_string(),
+            parent_id: None,
+            uploading_count: 0,
+            uploaded_count: 0,
+            updated_at: Utc::now().naive_utc(),
+            created_at: Utc::now().naive_utc(),
+            finished_at: None,
+        }
+    }
+
+    fn signed_range_piece_number(range: &Range) -> u32 {
+        let mut hash = 0x811C_9DC5u32;
+        for byte in range
+            .start
+            .to_le_bytes()
+            .into_iter()
+            .chain(range.length.to_le_bytes())
+        {
+            hash ^= byte as u32;
+            hash = hash.wrapping_mul(0x0100_0193);
+        }
+
+        hash | 0x8000_0000
     }
 
     /// stat_task returns the task metadata from scheduler.
@@ -2031,6 +2106,7 @@ impl Task {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::sync::Arc;
     use tempfile::tempdir;
 
@@ -2076,5 +2152,41 @@ mod tests {
         // Verify that the task has been deleted.
         let task = storage.get_task(task_id).unwrap();
         assert!(task.is_none(), "task should be deleted");
+    }
+
+    #[test]
+    fn test_should_preserve_original_range_for_source() {
+        let request = Download {
+            request_header: HashMap::from([(
+                proxy_header::DRAGONFLY_PRESERVE_ORIGINAL_RANGE_FOR_SOURCE_HEADER.to_string(),
+                "true".to_string(),
+            )]),
+            ..Default::default()
+        };
+        assert!(Task::should_preserve_original_range_for_source(&request));
+
+        let request = Download::default();
+        assert!(!Task::should_preserve_original_range_for_source(&request));
+    }
+
+    #[test]
+    fn test_signed_range_piece_uses_original_offset_and_deterministic_number() {
+        let range = Range {
+            start: 5 * 1024 * 1024,
+            length: 5 * 1024 * 1024,
+        };
+
+        let piece = Task::signed_range_piece(range);
+        assert_eq!(piece.offset, range.start);
+        assert_eq!(piece.length, range.length);
+        assert_eq!(piece.number, Task::signed_range_piece_number(&range));
+        assert_ne!(
+            piece.number,
+            Task::signed_range_piece_number(&Range {
+                start: range.start + 1,
+                length: range.length,
+            })
+        );
+        assert_ne!(piece.number & 0x8000_0000, 0);
     }
 }
