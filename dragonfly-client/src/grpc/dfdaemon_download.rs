@@ -18,6 +18,7 @@ use crate::dynconfig::Dynconfig;
 use crate::grpc::block_list::{
     BlockList, DownloadBlockListCheckParams, UploadBlockListCheckParams,
 };
+use crate::proxy::header as proxy_header;
 use crate::resource::{persistent_cache_task, persistent_task, task};
 use dragonfly_api::common::v2::{
     CacheTask, PersistentCacheTask, PersistentTask, Priority, Task, TaskType,
@@ -341,6 +342,37 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
         // If concurrent_piece_count is not set in the request, use the default value in the config.
         download.concurrent_piece_count = Some(self.config.download.concurrent_piece_count);
+
+        download.request_header.retain(|key, _| {
+            !key.eq_ignore_ascii_case(
+                proxy_header::DRAGONFLY_PRESERVE_ORIGINAL_RANGE_FOR_SOURCE_HEADER,
+            )
+        });
+
+        if let Ok(parsed_header) = hashmap_to_headermap(&download.request_header) {
+            if proxy_header::range_header_is_signature_bound(
+                &parsed_header,
+                Some(download.url.as_str()),
+            ) {
+                download.request_header.insert(
+                    proxy_header::DRAGONFLY_PRESERVE_ORIGINAL_RANGE_FOR_SOURCE_HEADER.to_string(),
+                    "true".to_string(),
+                );
+
+                let range_value = parsed_header
+                    .get(reqwest::header::RANGE)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default();
+                let task_id_content = download
+                    .content_for_calculating_task_id
+                    .take()
+                    .unwrap_or_else(|| {
+                        format!("{}\n{}", download.url, download.piece_length.unwrap_or(0))
+                    });
+                download.content_for_calculating_task_id =
+                    Some(format!("{}\n{}", task_id_content, range_value));
+            }
+        }
 
         // Generate the task id.
         let task_id = self

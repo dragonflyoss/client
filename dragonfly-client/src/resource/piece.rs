@@ -476,6 +476,42 @@ impl Piece {
         hugging_face: Option<HuggingFace>,
         model_scope: Option<ModelScope>,
     ) -> Result<metadata::Piece> {
+        self.download_from_source_with_options(
+            piece_id,
+            task_id,
+            number,
+            url,
+            offset,
+            length,
+            request_header,
+            is_prefetch,
+            false,
+            object_storage,
+            hdfs,
+            hugging_face,
+            model_scope,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip_all, fields(piece_id))]
+    pub async fn download_from_source_with_options(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        number: u32,
+        url: &str,
+        offset: u64,
+        length: u64,
+        request_header: HeaderMap,
+        is_prefetch: bool,
+        preserve_original_range_for_source: bool,
+        object_storage: Option<ObjectStorage>,
+        hdfs: Option<Hdfs>,
+        hugging_face: Option<HuggingFace>,
+        model_scope: Option<ModelScope>,
+    ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
@@ -537,10 +573,14 @@ impl Piece {
                 task_id: task_id.to_string(),
                 piece_id: piece_id.to_string(),
                 url: url.to_string(),
-                range: Some(Range {
-                    start: offset,
-                    length,
-                }),
+                range: if preserve_original_range_for_source {
+                    None
+                } else {
+                    Some(Range {
+                        start: offset,
+                        length,
+                    })
+                },
                 http_header: Some(request_header),
                 timeout: self.config.download.piece_timeout,
                 client_cert: None,
