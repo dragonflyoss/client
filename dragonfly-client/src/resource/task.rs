@@ -1957,7 +1957,7 @@ impl Task {
 
     fn signed_range_piece(range: Range) -> metadata::Piece {
         metadata::Piece {
-            number: Self::signed_range_piece_number(&range),
+            number: 0,
             offset: range.start,
             length: range.length,
             digest: "".to_string(),
@@ -1968,21 +1968,6 @@ impl Task {
             created_at: Utc::now().naive_utc(),
             finished_at: None,
         }
-    }
-
-    fn signed_range_piece_number(range: &Range) -> u32 {
-        let mut hash = 0x811C_9DC5u32;
-        for byte in range
-            .start
-            .to_le_bytes()
-            .into_iter()
-            .chain(range.length.to_le_bytes())
-        {
-            hash ^= byte as u32;
-            hash = hash.wrapping_mul(0x0100_0193);
-        }
-
-        hash | 0x8000_0000
     }
 
     /// stat_task returns the task metadata from scheduler.
@@ -2170,7 +2155,7 @@ mod tests {
     }
 
     #[test]
-    fn test_signed_range_piece_uses_original_offset_and_deterministic_number() {
+    fn test_signed_range_piece_uses_original_offset_and_single_piece_number() {
         let range = Range {
             start: 5 * 1024 * 1024,
             length: 5 * 1024 * 1024,
@@ -2179,14 +2164,6 @@ mod tests {
         let piece = Task::signed_range_piece(range);
         assert_eq!(piece.offset, range.start);
         assert_eq!(piece.length, range.length);
-        assert_eq!(piece.number, Task::signed_range_piece_number(&range));
-        assert_ne!(
-            piece.number,
-            Task::signed_range_piece_number(&Range {
-                start: range.start + 1,
-                length: range.length,
-            })
-        );
-        assert_ne!(piece.number & 0x8000_0000, 0);
+        assert_eq!(piece.number, 0);
     }
 }

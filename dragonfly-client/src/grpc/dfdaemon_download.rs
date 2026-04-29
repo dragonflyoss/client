@@ -359,18 +359,18 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                     "true".to_string(),
                 );
 
-                if download.content_for_calculating_task_id.is_none() {
-                    let range_value = parsed_header
-                        .get(reqwest::header::RANGE)
-                        .and_then(|v| v.to_str().ok())
-                        .unwrap_or_default();
-                    download.content_for_calculating_task_id = Some(format!(
-                        "{}\n{}\n{}",
-                        download.url,
-                        download.piece_length.unwrap_or(0),
-                        range_value
-                    ));
-                }
+                let range_value = parsed_header
+                    .get(reqwest::header::RANGE)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default();
+                let task_id_content = download
+                    .content_for_calculating_task_id
+                    .take()
+                    .unwrap_or_else(|| {
+                        format!("{}\n{}", download.url, download.piece_length.unwrap_or(0))
+                    });
+                download.content_for_calculating_task_id =
+                    Some(format!("{}\n{}", task_id_content, range_value));
             }
         }
 

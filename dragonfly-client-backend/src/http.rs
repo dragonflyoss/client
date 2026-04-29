@@ -826,8 +826,8 @@ fn content_length_from_response(
     headers: &HeaderMap,
     response: &reqwest::Response,
 ) -> Result<Option<u64>> {
-    if let Some(total) = content_range_total(headers) {
-        return Ok(Some(total));
+    if headers.contains_key(CONTENT_RANGE) {
+        return Ok(content_range_total(headers));
     }
 
     match headers.get(CONTENT_LENGTH) {
@@ -1824,5 +1824,44 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
 
         assert!(resp.success);
         assert_eq!(resp.content_length, Some(12_582_912));
+    }
+
+    #[tokio::test]
+    async fn should_stat_not_fallback_to_slice_length_when_content_range_total_is_unknown() {
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/object.bin"))
+            .and(header("Range", "bytes=0-1023"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header("Content-Range", "bytes 0-1023/*")
+                    .insert_header("Content-Length", "1024")
+                    .set_body_bytes(vec![0u8; 1024]),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut http_header = HeaderMap::new();
+        http_header.insert(RANGE, HeaderValue::from_static("bytes=0-1023"));
+
+        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
+            .unwrap()
+            .stat(StatRequest {
+                task_id: "test".to_string(),
+                url: format!("{}/object.bin", server.uri()),
+                http_header: Some(http_header),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(resp.success);
+        assert_eq!(resp.content_length, None);
     }
 }
