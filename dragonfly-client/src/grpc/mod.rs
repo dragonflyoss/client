@@ -25,6 +25,7 @@ use tonic::Request;
 use tracing::{debug, error, info, instrument, Instrument};
 
 pub mod block_list;
+pub mod debug;
 pub mod dfdaemon_download;
 pub mod dfdaemon_upload;
 pub mod health;
