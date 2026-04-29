@@ -342,7 +342,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         );
 
         // Download task started.
-        info!("download task started: {:?}", download);
+        info!(
+            "download task started: {:?}",
+            crate::grpc::debug::RedactedDownload(&download)
+        );
         let task = match self
             .task
             .download_started(task_id.as_str(), download.clone())
