@@ -191,10 +191,7 @@ mod tests {
     fn redacts_hdfs_hf_modelscope_tokens() {
         let mut d = sample_download();
         scrub_download(&mut d);
-        assert_eq!(
-            d.hdfs.unwrap().delegation_token.as_deref(),
-            Some(REDACTED)
-        );
+        assert_eq!(d.hdfs.unwrap().delegation_token.as_deref(), Some(REDACTED));
         assert_eq!(d.hugging_face.unwrap().token.as_deref(), Some(REDACTED));
         assert_eq!(d.model_scope.unwrap().token.as_deref(), Some(REDACTED));
     }
@@ -208,7 +205,9 @@ mod tests {
             Some(REDACTED)
         );
         assert_eq!(
-            d.request_header.get("X-Amz-Security-Token").map(String::as_str),
+            d.request_header
+                .get("X-Amz-Security-Token")
+                .map(String::as_str),
             Some(REDACTED)
         );
         assert_eq!(
