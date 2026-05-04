@@ -83,7 +83,7 @@ humantime = "2.3.0"
 prost-wkt-types = "0.7"
 chrono = { version = "0.4.44", features = ["serde", "clock"] }
 openssl = { version = "0.10", features = ["vendored"] }
-opendal = { version = "0.55.0", features = [
+opendal = { version = "0.56.0", features = [
     "services-fs",
     "services-s3",
     "services-azblob",
