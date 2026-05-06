@@ -399,8 +399,18 @@ impl Builder {
 
         // Get local IP address and hostname.
         // In IPv6-only environments, IPv4 detection may fail, so we use a best-effort IPv4->IPv6 fallback.
-        let local_ip = preferred_local_ip().unwrap().to_string();
-        let hostname = hostname::get().unwrap().to_string_lossy().to_string();
+        let local_ip = preferred_local_ip()
+            .ok_or_else(|| {
+                Error::Internal(
+                    "failed to detect a preferred local IP address (no default network route?)"
+                        .to_string(),
+                )
+            })?
+            .to_string();
+        let hostname = hostname::get()
+            .map_err(|err| Error::Internal(format!("failed to get hostname: {}", err)))?
+            .to_string_lossy()
+            .to_string();
         let id_generator = IDGenerator::new(local_ip, hostname, true);
         let proxy = Proxy {
             seed_peer_selector,
