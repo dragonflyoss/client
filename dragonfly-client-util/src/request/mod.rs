@@ -401,10 +401,7 @@ impl Builder {
         // In IPv6-only environments, IPv4 detection may fail, so we use a best-effort IPv4->IPv6 fallback.
         let local_ip = preferred_local_ip()
             .ok_or_else(|| {
-                Error::Internal(
-                    "failed to detect a preferred local IP address (no default network route?)"
-                        .to_string(),
-                )
+                Error::Internal("failed to detect a preferred local IP address".to_string())
             })?
             .to_string();
         let hostname = hostname::get()
