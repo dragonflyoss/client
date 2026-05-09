@@ -236,7 +236,12 @@ impl TCPClient {
         &self,
         request: Bytes,
     ) -> ClientResult<(OwnedReadHalf, OwnedWriteHalf)> {
-        let stream = tokio::net::TcpStream::connect(self.addr.clone()).await?;
+        let stream = tokio::time::timeout(
+            super::DEFAULT_CONNECT_TIMEOUT,
+            tokio::net::TcpStream::connect(self.addr.clone()),
+        )
+        .await??;
+
         let socket = SockRef::from(&stream);
         socket.set_tcp_nodelay(true)?;
         socket.set_nonblocking(true)?;
