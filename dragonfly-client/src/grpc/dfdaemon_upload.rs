@@ -59,6 +59,7 @@ use dragonfly_client_util::{
     ratelimiter::bbr::BBR,
     shutdown,
     sysinfo::SystemMonitor,
+    types::redacted::{RedactedDownload, RedactedDownloadPersistentTaskRequest},
 };
 use opentelemetry::Context;
 use std::net::SocketAddr;
@@ -342,7 +343,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         );
 
         // Download task started.
-        info!("download task started: {:?}", download);
+        info!("download task started: {:?}", RedactedDownload(&download));
         let task = match self
             .task
             .download_started(task_id.as_str(), download.clone())
@@ -1309,7 +1310,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             })?;
 
         // Download task started.
-        info!("download persistent task started: {:?}", request);
+        info!(
+            "download persistent task started: {:?}",
+            RedactedDownloadPersistentTaskRequest(&request)
+        );
         let task = match self
             .persistent_task
             .download_started_for_replication(
