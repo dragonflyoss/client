@@ -263,10 +263,12 @@ impl QUICClient {
 
         // Connect's server name used for verifying the certificate. Since we used
         // NoVerifier, it can be anything.
-        let connection = endpoint
+        let connecting = endpoint
             .connect(self.addr.parse().or_err(ErrorType::ParseError)?, "d7y")
-            .or_err(ErrorType::ConnectError)?
-            .await
+            .or_err(ErrorType::ConnectError)?;
+
+        let connection = tokio::time::timeout(super::DEFAULT_CONNECT_TIMEOUT, connecting)
+            .await?
             .inspect_err(|err| error!("failed to connect to {}: {}", self.addr, err))
             .or_err(ErrorType::ConnectError)?;
 
