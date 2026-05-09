@@ -243,7 +243,6 @@ mod tests {
     fn scrub_hdfs_redacts_delegation_token() {
         let mut hdfs = Some(Hdfs {
             delegation_token: Some("super-secret-token".to_string()),
-            ..Default::default()
         });
 
         scrub_hdfs(&mut hdfs);
@@ -254,7 +253,6 @@ mod tests {
     fn scrub_hdfs_leaves_none_token_alone() {
         let mut hdfs = Some(Hdfs {
             delegation_token: None,
-            ..Default::default()
         });
 
         scrub_hdfs(&mut hdfs);
