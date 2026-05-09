@@ -68,6 +68,7 @@ use dragonfly_client_util::{
     id_generator::{PersistentCacheTaskIDParameter, PersistentTaskIDParameter, TaskIDParameter},
     ratelimiter::bbr::BBR,
     shutdown,
+    types::redacted::{RedactedDownload, RedactedDownloadPersistentTaskRequest},
 };
 use hyper_util::rt::TokioIo;
 use opentelemetry::Context;
@@ -390,7 +391,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         );
 
         // Download task started.
-        info!("download task started: {:?}", download);
+        info!("download task started: {:?}", RedactedDownload(&download));
         let task = match self
             .task
             .download_started(task_id.as_str(), download.clone())
@@ -1234,7 +1235,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         };
 
         // Download task started.
-        info!("download persistent task started: {:?}", request);
+        info!(
+            "download persistent task started: {:?}",
+            RedactedDownloadPersistentTaskRequest(&request)
+        );
         let task = match self
             .persistent_task
             .download_started(
