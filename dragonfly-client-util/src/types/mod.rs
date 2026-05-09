@@ -14,20 +14,4 @@
  * limitations under the License.
  */
 
-pub mod container;
-pub mod digest;
-pub mod fs;
-pub mod hashring;
-pub mod http;
-pub mod id_generator;
-pub mod net;
-pub mod pool;
-pub mod ratelimiter;
-pub mod request;
-pub mod shutdown;
-pub mod sysinfo;
-pub mod tls;
-pub mod types;
-
-#[cfg(target_os = "linux")]
-pub mod cgroups;
+pub mod redacted;
