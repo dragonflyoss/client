@@ -354,6 +354,13 @@ struct Args {
 
     #[arg(
         long,
+        env = "DFGET_HF_BASE_URL",
+        help = "Specify the base URL for Hugging Face Hub, for example: https://hf-mirror.com"
+    )]
+    hf_base_url: Option<String>,
+
+    #[arg(
+        long,
         default_value_t = 100,
         env = "DFGET_MAX_FILES",
         help = "Specify the max count of file to download when downloading a directory. If the actual file count is greater than this value, the downloading will be rejected"
@@ -792,7 +799,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
     // Get all entries in the directory with include files filter.
     let entries: Vec<DirEntry> = get_all_entries(
         &args.url,
-        args.header.clone(),
+        build_request_headers(&args),
         args.include_files.clone(),
         object_storage,
         hdfs,
@@ -1061,7 +1068,7 @@ async fn download(
                 application: Some(args.application),
                 priority: args.priority,
                 filtered_query_params,
-                request_header: header_vec_to_hashmap(args.header)?,
+                request_header: header_vec_to_hashmap(build_request_headers(&args))?,
                 piece_length: args.piece_length.map(|piece_length| piece_length.as_u64()),
                 output_path,
                 timeout: Some(
@@ -1255,6 +1262,31 @@ async fn download(
 
     progress_bar.finish();
     Ok(())
+}
+
+/// Builds request headers for backend requests, including internal Hugging Face overrides.
+fn build_request_headers(args: &Args) -> Vec<String> {
+    let mut headers = args.header.clone().unwrap_or_default();
+
+    if args.url.scheme() == hugging_face::SCHEME {
+        if let Some(base_url) = &args.hf_base_url {
+            let base_url = base_url.trim_end_matches('/');
+            headers.push(format!(
+                "{}: {}",
+                hugging_face::HUGGING_FACE_BASE_URL_HEADER,
+                base_url
+            ));
+
+            let api_base_url = format!("{}/api", base_url);
+            headers.push(format!(
+                "{}: {}",
+                hugging_face::HUGGING_FACE_API_BASE_URL_HEADER,
+                api_base_url
+            ));
+        }
+    }
+
+    headers
 }
 
 /// Retrieves all directory entries from a remote storage location.
