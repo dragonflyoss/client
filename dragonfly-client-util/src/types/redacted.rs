@@ -14,14 +14,6 @@
  * limitations under the License.
  */
 
-//! Debug-safe wrappers for messages that carry authentication material.
-//!
-//! This module provides newtype wrappers that implement `Debug` by scrubbing
-//! the sensitive leaf fields before delegating back to the auto-derived
-//! formatter. The scrub clones the message, so the cost is only paid when
-//! the log event actually fires at the current tracing level -- callers
-//! below the enabled level do not allocate.
-
 use dragonfly_api::common::v2::{Download, Hdfs, HuggingFace, ModelScope, ObjectStorage};
 use dragonfly_api::dfdaemon::v2::DownloadPersistentTaskRequest;
 use http::header::{AUTHORIZATION, COOKIE, PROXY_AUTHORIZATION, SET_COOKIE};
