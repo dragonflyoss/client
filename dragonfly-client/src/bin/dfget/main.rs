@@ -1041,6 +1041,8 @@ async fn download(
         None
     };
 
+    let request_header = header_vec_to_hashmap(build_request_headers(&args))?;
+
     // If the `filtered_query_params` is not provided, then use the default value.
     let filtered_query_params = args
         .filtered_query_params
@@ -1068,7 +1070,7 @@ async fn download(
                 application: Some(args.application),
                 priority: args.priority,
                 filtered_query_params,
-                request_header: header_vec_to_hashmap(build_request_headers(&args))?,
+                request_header,
                 piece_length: args.piece_length.map(|piece_length| piece_length.as_u64()),
                 output_path,
                 timeout: Some(
@@ -1266,7 +1268,7 @@ async fn download(
 
 /// Builds request headers for backend requests, including internal Hugging Face overrides.
 fn build_request_headers(args: &Args) -> Vec<String> {
-    let mut headers = args.header.clone().unwrap_or_default();
+    let mut headers = args.header.clone();
 
     if args.url.scheme() == hugging_face::SCHEME {
         if let Some(base_url) = &args.hf_base_url {
@@ -1275,13 +1277,6 @@ fn build_request_headers(args: &Args) -> Vec<String> {
                 "{}: {}",
                 hugging_face::HUGGING_FACE_BASE_URL_HEADER,
                 base_url
-            ));
-
-            let api_base_url = format!("{}/api", base_url);
-            headers.push(format!(
-                "{}: {}",
-                hugging_face::HUGGING_FACE_API_BASE_URL_HEADER,
-                api_base_url
             ));
         }
     }
