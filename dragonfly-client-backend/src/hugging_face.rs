@@ -292,12 +292,17 @@ impl HuggingFace {
     /// use the HF backend (preserving auth and URL semantics).
     fn build_hf_url(parsed_url: &ParsedURL, filename: &str) -> String {
         match parsed_url.repository_type {
-            RepositoryType::Model => format!("{}://{}/{}", SCHEME, parsed_url.repository_id, filename),
+            RepositoryType::Model => {
+                format!("{}://{}/{}", SCHEME, parsed_url.repository_id, filename)
+            }
             RepositoryType::Dataset => format!(
                 "{}://datasets/{}/{}",
                 SCHEME, parsed_url.repository_id, filename
             ),
-            RepositoryType::Space => format!("{}://spaces/{}/{}", SCHEME, parsed_url.repository_id, filename),
+            RepositoryType::Space => format!(
+                "{}://spaces/{}/{}",
+                SCHEME, parsed_url.repository_id, filename
+            ),
         }
     }
 
@@ -600,8 +605,7 @@ impl Backend for HuggingFace {
         };
 
         let (base_url, _) = Self::resolve_base_urls(request.http_header.as_ref());
-        let download_url =
-            Self::build_download_url(&parsed_url, file_path, &revision, &base_url);
+        let download_url = Self::build_download_url(&parsed_url, file_path, &revision, &base_url);
         let response = match self
             .client
             .get(&download_url)
