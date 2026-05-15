@@ -576,7 +576,7 @@ impl Backend for HuggingFace {
                 .hugging_face
                 .as_ref()
                 .and_then(|hf| hf.token.clone()),
-            None,
+            request.range.clone(),
         )?;
 
         // Get the revision from the request, request must contain revision for stat request,
@@ -932,6 +932,22 @@ mod tests {
         assert_eq!(
             request_headers.get(USER_AGENT).unwrap(),
             HeaderValue::from_static(DEFAULT_USER_AGENT)
+        );
+    }
+
+    #[test]
+    fn test_build_headers_with_range() {
+        let request_headers = HuggingFace::build_request_headers(
+            None,
+            Some(Range {
+                start: 0,
+                length: 1024,
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            request_headers.get(RANGE).unwrap(),
+            HeaderValue::from_static("bytes=0-1023")
         );
     }
 }
