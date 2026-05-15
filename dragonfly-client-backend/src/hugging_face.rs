@@ -576,7 +576,7 @@ impl Backend for HuggingFace {
                 .hugging_face
                 .as_ref()
                 .and_then(|hf| hf.token.clone()),
-            request.range.clone(),
+            request.range,
         )?;
 
         // Get the revision from the request, request must contain revision for stat request,
