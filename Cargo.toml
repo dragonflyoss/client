@@ -75,7 +75,7 @@ tokio = { version = "1.52.3", features = ["full", "tracing"] }
 tokio-util = { version = "0.7.18", features = ["full"] }
 tokio-stream = "0.1.18"
 validator = { version = "0.16", features = ["derive"] }
-warp = "0.3.5"
+warp = "0.4.3"
 headers = "0.4.1"
 regex = "1.12.3"
 serde_regex = "1.1.0"
