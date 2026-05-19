@@ -143,6 +143,14 @@ struct Args {
     overwrite: bool,
 
     #[arg(
+        long = "skip-if-exists",
+        default_value_t = false,
+        env = "DFGET_SKIP_IF_EXISTS",
+        help = "Specify whether to skip the download and return success if the output file already exists. For recursive downloads, existing files will be skipped. Cannot be used with `--overwrite=true`"
+    )]
+    skip_if_exists: bool,
+
+    #[arg(
         long = "force-hard-link",
         default_value_t = false,
         env = "DFGET_FORCE_HARD_LINK",
@@ -991,6 +999,15 @@ async fn download(
     progress_bar: ProgressBar,
     download_client: DfdaemonDownloadClient,
 ) -> Result<()> {
+    if should_skip_existing_output(&args) {
+        info!(
+            "output path {} already exists, skip download",
+            args.output.display()
+        );
+        progress_bar.finish_with_message(format!("{} (skipped)", args.output.display()));
+        return Ok(());
+    }
+
     let url = Url::parse(args.url.as_str()).or_err(ErrorType::ParseError)?;
     let object_storage = if object_storage::Scheme::is_supported(url.scheme()) {
         Some(ObjectStorage {
@@ -1367,6 +1384,12 @@ fn convert_args(mut args: Args) -> Args {
 /// The validation prevents common user errors and potential security issues before
 /// starting the download process.
 fn validate_args(args: &Args) -> Result<()> {
+    if args.overwrite && args.skip_if_exists {
+        return Err(Error::ValidationError(
+            "`--skip-if-exists` cannot be used with `--overwrite=true`".to_string(),
+        ));
+    }
+
     // If the URL is a directory, the output path should be a directory.
     if args.url.path().ends_with('/') && !args.output.is_dir() {
         return Err(Error::ValidationError(format!(
@@ -1396,7 +1419,7 @@ fn validate_args(args: &Args) -> Result<()> {
             }
         }
 
-        if !args.overwrite && absolute_path.exists() {
+        if !args.overwrite && !args.skip_if_exists && absolute_path.exists() {
             return Err(Error::ValidationError(format!(
                 "output path {} is already exist",
                 args.output.to_string_lossy()
@@ -1433,6 +1456,10 @@ fn validate_args(args: &Args) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn should_skip_existing_output(args: &Args) -> bool {
+    !args.url.path().ends_with('/') && args.skip_if_exists && args.output.exists()
 }
 
 /// Validates that a path string is a normal relative path without unsafe components.
@@ -1541,6 +1568,20 @@ mod tests {
 
         let result = validate_args(&args);
         assert!(result.is_ok());
+
+        // Skip download when the output file already exists.
+        let existing_file_path = tempdir.path().join("existing.txt");
+        std::fs::File::create(&existing_file_path).unwrap();
+        let args = Args::parse_from(vec![
+            "dfget",
+            "http://test.local/existing.txt",
+            "--output",
+            existing_file_path.as_os_str().to_str().unwrap(),
+            "--skip-if-exists",
+        ]);
+
+        let result = validate_args(&args);
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -1599,6 +1640,17 @@ mod tests {
                 Args::parse_from(vec!["dfget", "http://test.local/test.txt", "--output", "/"]),
                 "output path / is not exist".to_string(),
             ),
+            (
+                Args::parse_from(vec![
+                    "dfget",
+                    "http://test.local/test.txt",
+                    "--output",
+                    non_exist_file_path.as_os_str().to_str().unwrap(),
+                    "--overwrite",
+                    "--skip-if-exists",
+                ]),
+                "`--skip-if-exists` cannot be used with `--overwrite=true`".to_string(),
+            ),
         ];
 
         for (args, error_message) in test_cases {
@@ -1609,6 +1661,30 @@ mod tests {
                 Error::ValidationError(error_message).to_string()
             )
         }
+    }
+
+    #[test]
+    fn should_skip_existing_output_file() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let existing_file_path = tempdir.path().join("test.txt");
+        std::fs::File::create(&existing_file_path).unwrap();
+
+        let args = Args::parse_from(vec![
+            "dfget",
+            "http://test.local/test.txt",
+            "--output",
+            existing_file_path.as_os_str().to_str().unwrap(),
+            "--skip-if-exists",
+        ]);
+        assert!(should_skip_existing_output(&args));
+
+        let args = Args::parse_from(vec![
+            "dfget",
+            "http://test.local/test.txt",
+            "--output",
+            existing_file_path.as_os_str().to_str().unwrap(),
+        ]);
+        assert!(!should_skip_existing_output(&args));
     }
 
     #[test]
