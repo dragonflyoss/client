@@ -138,17 +138,9 @@ struct Args {
         long = "overwrite",
         default_value_t = false,
         env = "DFGET_OVERWRITE",
-        help = "Specify whether to overwrite the output file if it already exists. If it is true, dfget will overwrite the output file. If it is false, dfget will return an error if the output file already exists. Cannot be used with `--force-hard-link=true`"
+        help = "Specify whether to overwrite the output file if it already exists. If it is true, dfget will overwrite the output file. If it is false, dfget will skip the download and return success when the output file already exists. Cannot be used with `--force-hard-link=true`"
     )]
     overwrite: bool,
-
-    #[arg(
-        long = "skip-if-exists",
-        default_value_t = false,
-        env = "DFGET_SKIP_IF_EXISTS",
-        help = "Specify whether to skip the download and return success if the output file already exists. For recursive downloads, existing files will be skipped. Cannot be used with `--overwrite=true`"
-    )]
-    skip_if_exists: bool,
 
     #[arg(
         long = "force-hard-link",
@@ -1384,12 +1376,6 @@ fn convert_args(mut args: Args) -> Args {
 /// The validation prevents common user errors and potential security issues before
 /// starting the download process.
 fn validate_args(args: &Args) -> Result<()> {
-    if args.overwrite && args.skip_if_exists {
-        return Err(Error::ValidationError(
-            "`--skip-if-exists` cannot be used with `--overwrite=true`".to_string(),
-        ));
-    }
-
     // If the URL is a directory, the output path should be a directory.
     if args.url.path().ends_with('/') && !args.output.is_dir() {
         return Err(Error::ValidationError(format!(
@@ -1417,13 +1403,6 @@ fn validate_args(args: &Args) -> Result<()> {
                     args.output.to_string_lossy()
                 )));
             }
-        }
-
-        if !args.overwrite && !args.skip_if_exists && absolute_path.exists() {
-            return Err(Error::ValidationError(format!(
-                "output path {} is already exist",
-                args.output.to_string_lossy()
-            )));
         }
     }
 
@@ -1459,7 +1438,7 @@ fn validate_args(args: &Args) -> Result<()> {
 }
 
 fn should_skip_existing_output(args: &Args) -> bool {
-    !args.url.path().ends_with('/') && args.skip_if_exists && args.output.exists()
+    !args.url.path().ends_with('/') && !args.overwrite && args.output.exists()
 }
 
 /// Validates that a path string is a normal relative path without unsafe components.
@@ -1569,7 +1548,7 @@ mod tests {
         let result = validate_args(&args);
         assert!(result.is_ok());
 
-        // Skip download when the output file already exists.
+        // Existing file is allowed and will be skipped at runtime by default.
         let existing_file_path = tempdir.path().join("existing.txt");
         std::fs::File::create(&existing_file_path).unwrap();
         let args = Args::parse_from(vec![
@@ -1577,7 +1556,6 @@ mod tests {
             "http://test.local/existing.txt",
             "--output",
             existing_file_path.as_os_str().to_str().unwrap(),
-            "--skip-if-exists",
         ]);
 
         let result = validate_args(&args);
@@ -1620,15 +1598,6 @@ mod tests {
                     "dfget",
                     "http://test.local/test.txt",
                     "--output",
-                    file_path.as_os_str().to_str().unwrap(),
-                ]),
-                format!("output path {} is already exist", file_path.display()),
-            ),
-            (
-                Args::parse_from(vec![
-                    "dfget",
-                    "http://test.local/test.txt",
-                    "--output",
                     non_exist_file_path.as_os_str().to_str().unwrap(),
                 ]),
                 format!(
@@ -1639,17 +1608,6 @@ mod tests {
             (
                 Args::parse_from(vec!["dfget", "http://test.local/test.txt", "--output", "/"]),
                 "output path / is not exist".to_string(),
-            ),
-            (
-                Args::parse_from(vec![
-                    "dfget",
-                    "http://test.local/test.txt",
-                    "--output",
-                    non_exist_file_path.as_os_str().to_str().unwrap(),
-                    "--overwrite",
-                    "--skip-if-exists",
-                ]),
-                "`--skip-if-exists` cannot be used with `--overwrite=true`".to_string(),
             ),
         ];
 
@@ -1674,7 +1632,6 @@ mod tests {
             "http://test.local/test.txt",
             "--output",
             existing_file_path.as_os_str().to_str().unwrap(),
-            "--skip-if-exists",
         ]);
         assert!(should_skip_existing_output(&args));
 
@@ -1683,6 +1640,7 @@ mod tests {
             "http://test.local/test.txt",
             "--output",
             existing_file_path.as_os_str().to_str().unwrap(),
+            "--overwrite",
         ]);
         assert!(!should_skip_existing_output(&args));
     }
