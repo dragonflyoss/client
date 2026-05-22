@@ -2086,7 +2086,6 @@ impl PersistentTask {
                 };
 
                 // If need_piece_content is true, read the piece content from the local.
-                let mut response_piece = piece.clone();
                 if need_piece_content {
                     let mut reader = piece_manager
                         .download_persistent_from_local_into_async_read(
@@ -2107,11 +2106,41 @@ impl PersistentTask {
                         interrupt.store(true, Ordering::SeqCst);
                     })?;
 
-                    response_piece.content = Some(content);
-                }
+                    let piece = Piece {
+                        content: Some(content),
+                        ..piece.clone()
+                    };
 
-                // Send the download progress.
-                download_progress_tx
+                    // Piece content must be delivered to dfstore: the piece is already marked as
+                    // finished and will not be re-sent, so propagate any send failure to abort
+                    // the download instead of silently losing the content.
+                    download_progress_tx
+                    .send(
+                        Ok(DownloadPersistentTaskResponse {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.clone(),
+                            peer_id: peer_id.to_string(),
+                            response: Some(
+                                download_persistent_task_response::Response::DownloadPieceFinishedResponse(
+                                    dfdaemon::v2::DownloadPieceFinishedResponse {
+                                        piece: Some(piece),
+                                    },
+                                ),
+                            ),
+                        }),
+                    )
+                    .await
+                    .map_err(|err| {
+                        error!(
+                            "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
+                            piece_id, err
+                        );
+
+                        interrupt.store(true, Ordering::SeqCst);
+                        err
+                    })?;
+                } else {
+                    download_progress_tx
                     .send_timeout(
                         Ok(DownloadPersistentTaskResponse {
                             host_id: host_id.to_string(),
@@ -2120,7 +2149,7 @@ impl PersistentTask {
                             response: Some(
                                 download_persistent_task_response::Response::DownloadPieceFinishedResponse(
                                     dfdaemon::v2::DownloadPieceFinishedResponse {
-                                        piece: Some(response_piece),
+                                        piece: Some(piece.clone()),
                                     },
                                 ),
                             ),
@@ -2133,8 +2162,10 @@ impl PersistentTask {
                             "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
                             piece_id, err
                         );
+
                         interrupt.store(true, Ordering::SeqCst);
                     });
+                }
 
                 // Send the download piece finished request.
                 in_stream_tx
@@ -2159,6 +2190,7 @@ impl PersistentTask {
                             "send DownloadPieceFinishedRequest for piece {} failed: {:?}",
                             piece_id, err
                         );
+
                         interrupt.store(true, Ordering::SeqCst);
                     });
 
@@ -2352,7 +2384,6 @@ impl PersistentTask {
                 };
 
                 // If need_piece_content is true, read the piece content from the local.
-                let mut response_piece = piece.clone();
                 if need_piece_content {
                     let mut reader = piece_manager
                         .download_from_local_into_async_read(
@@ -2371,11 +2402,40 @@ impl PersistentTask {
                         error!("read piece {} failed: {:?}", piece_id, err);
                     })?;
 
-                    response_piece.content = Some(content);
-                }
+                    let piece = Piece {
+                        content: Some(content),
+                        ..piece.clone()
+                    };
 
-                // Send the download progress.
-                download_progress_tx
+                    // Piece content must be delivered to dfstore: the piece is already marked as
+                    // finished and will not be re-sent, so propagate any send failure to abort
+                    // the download instead of silently losing the content.
+                    download_progress_tx
+                    .send(
+                        Ok(DownloadPersistentTaskResponse {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.to_string(),
+                            peer_id: peer_id.to_string(),
+                            response: Some(
+                                download_persistent_task_response::Response::DownloadPieceFinishedResponse(
+                                    dfdaemon::v2::DownloadPieceFinishedResponse {
+                                        piece: Some(piece),
+                                    },
+                                ),
+                            ),
+                        }),
+                    )
+                    .await
+                    .map_err(|err| {
+                        error!(
+                            "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
+                            piece_id, err
+                        );
+
+                        err
+                    })?;
+                } else {
+                    download_progress_tx
                     .send_timeout(
                         Ok(DownloadPersistentTaskResponse {
                             host_id: host_id.to_string(),
@@ -2384,7 +2444,7 @@ impl PersistentTask {
                             response: Some(
                                 download_persistent_task_response::Response::DownloadPieceFinishedResponse(
                                     dfdaemon::v2::DownloadPieceFinishedResponse {
-                                        piece: Some(response_piece),
+                                        piece: Some(piece.clone()),
                                     },
                                 ),
                             ),
@@ -2398,6 +2458,7 @@ impl PersistentTask {
                             piece_id, err
                         );
                     });
+                }
 
                 // Send the download piece finished request.
                 in_stream_tx
@@ -2409,7 +2470,7 @@ impl PersistentTask {
                                 request: Some(
                                     announce_persistent_peer_request::Request::DownloadPieceBackToSourceFinishedRequest(
                                         DownloadPieceBackToSourceFinishedRequest {
-                                            piece: Some(piece),
+                                            piece: Some(piece.clone()),
                                         },
                                     ),
                                 ),
@@ -2606,7 +2667,7 @@ impl PersistentTask {
             info!("finished piece {} from local", piece_id,);
 
             // Construct the piece.
-            let mut piece = Piece {
+            let piece = Piece {
                 number: piece.number,
                 parent_id: None,
                 offset: piece.offset,
@@ -2638,26 +2699,46 @@ impl PersistentTask {
                     error!("read piece {} failed: {:?}", piece_id, err);
                 })?;
 
-                piece.content = Some(content);
-            }
+                let piece = Piece {
+                    content: Some(content),
+                    ..piece.clone()
+                };
 
-            // Send the download progress.
-            download_progress_tx
-                .send_timeout(
-                    Ok(DownloadPersistentTaskResponse {
-                        host_id: host_id.to_string(),
-                        task_id: task_id.to_string(),
-                        peer_id: peer_id.to_string(),
-                        response: Some(
-                            download_persistent_task_response::Response::DownloadPieceFinishedResponse(
-                                dfdaemon::v2::DownloadPieceFinishedResponse {
-                                    piece: Some(piece),
-                                },
-                            ),
+                // Piece content must be delivered to dfstore: the piece is already marked as
+                // finished and will not be re-sent, so propagate any send failure to abort
+                // the download instead of silently losing the content.
+                download_progress_tx
+                .send(Ok(DownloadPersistentTaskResponse {
+                    host_id: host_id.to_string(),
+                    task_id: task_id.to_string(),
+                    peer_id: peer_id.to_string(),
+                    response: Some(
+                        download_persistent_task_response::Response::DownloadPieceFinishedResponse(
+                            dfdaemon::v2::DownloadPieceFinishedResponse { piece: Some(piece) },
                         ),
-                    }),
-                    REQUEST_TIMEOUT,
-                )
+                    ),
+                }))
+                .await
+                .map_err(|err| {
+                    error!(
+                        "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
+                        piece_id, err
+                    );
+
+                    err
+                })?;
+            } else {
+                download_progress_tx
+                .send_timeout(Ok(DownloadPersistentTaskResponse {
+                    host_id: host_id.to_string(),
+                    task_id: task_id.to_string(),
+                    peer_id: peer_id.to_string(),
+                    response: Some(
+                        download_persistent_task_response::Response::DownloadPieceFinishedResponse(
+                            dfdaemon::v2::DownloadPieceFinishedResponse { piece: Some(piece) },
+                        ),
+                    ),
+                }), REQUEST_TIMEOUT)
                 .await
                 .unwrap_or_else(|err| {
                     error!(
@@ -2665,6 +2746,7 @@ impl PersistentTask {
                         piece_id, err
                     );
                 });
+            }
 
             // Store the finished piece.
             finished_pieces.push(interested_piece.clone());
@@ -2734,7 +2816,7 @@ impl PersistentTask {
                     .await?;
 
                 // Construct the piece.
-                let mut piece = Piece {
+                let piece = Piece {
                     number: metadata.number,
                     parent_id: None,
                     offset: metadata.offset,
@@ -2765,11 +2847,40 @@ impl PersistentTask {
                         error!("read piece {} failed: {:?}", piece_id, err);
                     })?;
 
-                    piece.content = Some(content);
-                }
+                    let piece = Piece {
+                        content: Some(content),
+                        ..piece.clone()
+                    };
 
-                // Send the download progress.
-                download_progress_tx
+                    // Piece content must be delivered to dfstore: the piece is already marked as
+                    // finished and will not be re-sent, so propagate any send failure to abort
+                    // the download instead of silently losing the content.
+                    download_progress_tx
+                    .send(
+                        Ok(DownloadPersistentTaskResponse {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.to_string(),
+                            peer_id: peer_id.to_string(),
+                            response: Some(
+                                download_persistent_task_response::Response::DownloadPieceFinishedResponse(
+                                    dfdaemon::v2::DownloadPieceFinishedResponse {
+                                        piece: Some(piece),
+                                    },
+                                ),
+                            ),
+                        }),
+                    )
+                    .await
+                    .map_err(|err| {
+                        error!(
+                            "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
+                            piece_id, err
+                        );
+
+                        err
+                    })?;
+                } else {
+                    download_progress_tx
                     .send_timeout(
                         Ok(DownloadPersistentTaskResponse {
                             host_id: host_id.to_string(),
@@ -2792,6 +2903,7 @@ impl PersistentTask {
                             piece_id, err
                         );
                     });
+                }
 
                 info!("finished piece {} from source", piece_id);
                 Ok(metadata)
