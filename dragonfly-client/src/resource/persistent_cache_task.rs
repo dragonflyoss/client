@@ -1242,7 +1242,6 @@ impl PersistentCacheTask {
                 };
 
                 // If need_piece_content is true, read the piece content from the local.
-                let mut response_piece = piece.clone();
                 if need_piece_content {
                     let mut reader = piece_manager
                         .download_persistent_cache_from_local_into_async_read(
@@ -1263,11 +1262,41 @@ impl PersistentCacheTask {
                         interrupt.store(true, Ordering::SeqCst);
                     })?;
 
-                    response_piece.content = Some(content);
-                }
+                    let piece = Piece {
+                        content: Some(content),
+                        ..piece.clone()
+                    };
 
-                // Send the download progress.
-                download_progress_tx
+                    // Piece content must be delivered to dfcache: the piece is already marked as
+                    // finished and will not be re-sent, so propagate any send failure to abort
+                    // the download instead of silently losing the content.
+                    download_progress_tx
+                    .send(
+                        Ok(DownloadPersistentCacheTaskResponse {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.clone(),
+                            peer_id: peer_id.to_string(),
+                            response: Some(
+                                download_persistent_cache_task_response::Response::DownloadPieceFinishedResponse(
+                                    dfdaemon::v2::DownloadPieceFinishedResponse {
+                                        piece: Some(piece),
+                                    },
+                                ),
+                            ),
+                        }),
+                    )
+                    .await
+                    .map_err(|err| {
+                        error!(
+                            "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
+                            piece_id, err
+                        );
+
+                        interrupt.store(true, Ordering::SeqCst);
+                        err
+                    })?;
+                } else {
+                    download_progress_tx
                     .send_timeout(
                         Ok(DownloadPersistentCacheTaskResponse {
                             host_id: host_id.to_string(),
@@ -1276,7 +1305,7 @@ impl PersistentCacheTask {
                             response: Some(
                                 download_persistent_cache_task_response::Response::DownloadPieceFinishedResponse(
                                     dfdaemon::v2::DownloadPieceFinishedResponse {
-                                        piece: Some(response_piece),
+                                        piece: Some(piece.clone()),
                                     },
                                 ),
                             ),
@@ -1289,8 +1318,10 @@ impl PersistentCacheTask {
                             "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
                             piece_id, err
                         );
+
                         interrupt.store(true, Ordering::SeqCst);
                     });
+                }
 
                 // Send the download piece finished request.
                 in_stream_tx
@@ -1472,7 +1503,7 @@ impl PersistentCacheTask {
             info!("finished persistent cache piece {} from local", piece_id);
 
             // Construct the piece.
-            let mut piece = Piece {
+            let piece = Piece {
                 number: piece.number,
                 parent_id: None,
                 offset: piece.offset,
@@ -1504,11 +1535,40 @@ impl PersistentCacheTask {
                     error!("read persistent cache piece {} failed: {:?}", piece_id, err);
                 })?;
 
-                piece.content = Some(content);
-            }
+                let piece = Piece {
+                    content: Some(content),
+                    ..piece.clone()
+                };
 
-            // Send the download progress.
-            download_progress_tx
+                // Piece content must be delivered to dfcache: the piece is already marked as
+                // finished and will not be re-sent, so propagate any send failure to abort
+                // the download instead of silently losing the content.
+                download_progress_tx
+                .send(
+                    Ok(DownloadPersistentCacheTaskResponse {
+                        host_id: host_id.to_string(),
+                        task_id: task_id.to_string(),
+                        peer_id: peer_id.to_string(),
+                        response: Some(
+                            download_persistent_cache_task_response::Response::DownloadPieceFinishedResponse(
+                                dfdaemon::v2::DownloadPieceFinishedResponse {
+                                    piece: Some(piece),
+                                },
+                            ),
+                        ),
+                    }),
+                )
+                .await
+                .map_err(|err| {
+                    error!(
+                        "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
+                        piece_id, err
+                    );
+
+                    err
+                })?;
+            } else {
+                download_progress_tx
                 .send_timeout(
                     Ok(DownloadPersistentCacheTaskResponse {
                         host_id: host_id.to_string(),
@@ -1531,6 +1591,7 @@ impl PersistentCacheTask {
                         piece_id, err
                     );
                 });
+            }
 
             // Store the finished piece.
             finished_pieces.push(interested_piece.clone());
