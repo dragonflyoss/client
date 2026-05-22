@@ -1160,7 +1160,6 @@ async fn download(
                     Some(download_task_response::Response::DownloadPieceFinishedResponse(
                         response,
                     )) => {
-                        tokio::time::sleep(Duration::from_secs(20)).await;
                         let piece = match response.piece {
                             Some(piece) => piece,
                             None => {
