@@ -1135,7 +1135,10 @@ impl Task {
                     response_piece.content = Some(content);
                 }
 
-                // Send the download progress.
+                // Send the download progress. If the send times out or the receiver is gone,
+                // the piece content was not delivered to the consumer, so this piece must NOT
+                // be marked as finished. Returning Error::SendTimeout lets the outer loop
+                // shut down and fall back to downloading the remaining pieces from source.
                 download_progress_tx
                     .send_timeout(
                         Ok(DownloadTaskResponse {
@@ -1153,15 +1156,18 @@ impl Task {
                         REQUEST_TIMEOUT,
                     )
                     .await
-                    .unwrap_or_else(|err| {
+                    .map_err(|err| {
                         error!(
                             "send DownloadPieceFinishedResponse for piece {} failed: {:?}",
                             piece_id, err
                         );
                         interrupt.store(true, Ordering::SeqCst);
-                    });
+                        Error::SendTimeout
+                    })?;
 
-                // Send the download piece finished request.
+                // Send the download piece finished request. If this fails, the scheduler
+                // does not know the piece finished, so we must not treat it as finished
+                // locally either; propagate the error and let the outer loop handle it.
                 in_stream_tx
                     .send_timeout(
                         AnnouncePeerRequest {
@@ -1177,13 +1183,14 @@ impl Task {
                         REQUEST_TIMEOUT,
                     )
                     .await
-                    .unwrap_or_else(|err| {
+                    .map_err(|err| {
                         error!(
                             "send DownloadPieceFinishedRequest for piece {} failed: {:?}",
                             piece_id, err
                         );
                         interrupt.store(true, Ordering::SeqCst);
-                    });
+                        Error::SendTimeout
+                    })?;
 
                 info!(
                     "finished piece {} from parent {:?} using protocol {}",
