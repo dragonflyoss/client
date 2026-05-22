@@ -21,8 +21,7 @@ use dragonfly_api::dfdaemon::v2::{
     download_task_response, DownloadTaskRequest, ListTaskEntriesRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
-use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
-use dragonfly_client::grpc::health::HealthClient;
+use dragonfly_client::grpc::{dfdaemon_download::DfdaemonDownloadClient, health::HealthClient};
 use dragonfly_client::resource::piece::MIN_PIECE_LENGTH;
 use dragonfly_client::tracing::init_command_tracing;
 use dragonfly_client_backend::{
@@ -1161,6 +1160,7 @@ async fn download(
                     Some(download_task_response::Response::DownloadPieceFinishedResponse(
                         response,
                     )) => {
+                        tokio::time::sleep(Duration::from_secs(20)).await;
                         let piece = match response.piece {
                             Some(piece) => piece,
                             None => {
