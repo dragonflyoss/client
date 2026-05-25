@@ -1,144 +1,160 @@
 [workspace]
 resolver = "2"
 members = [
-    "dragonfly-client",
-    "dragonfly-client-backend",
-    "dragonfly-client-config",
-    "dragonfly-client-core",
-    "dragonfly-client-init",
-    "dragonfly-client-storage",
-    "dragonfly-client-util",
-    "dragonfly-client-backend/examples/plugin",
-    "dragonfly-client-util/examples/request",
-    "dragonfly-client-metric",
+  "dragonfly-client",
+  "dragonfly-client-backend",
+  "dragonfly-client-backend/examples/plugin",
+  "dragonfly-client-config",
+  "dragonfly-client-core",
+  "dragonfly-client-init",
+  "dragonfly-client-metric",
+  "dragonfly-client-storage",
+  "dragonfly-client-util",
+  "dragonfly-client-util/examples/request",
 ]
 
 [workspace.package]
-version = "1.3.9"
+version = "1.3.10"
 authors = ["The Dragonfly Developers"]
+edition = "2021"
+readme = "README.md"
 homepage = "https://d7y.io/"
 repository = "https://github.com/dragonflyoss/client.git"
-keywords = ["dragonfly", "dragonfly-client", "p2p", "container", "docker-image"]
 license = "Apache-2.0"
-readme = "README.md"
-edition = "2021"
+keywords = ["container", "docker-image", "dragonfly", "dragonfly-client", "p2p"]
 
 [workspace.dependencies]
-dragonfly-client = { path = "dragonfly-client", version = "1.3.9" }
-dragonfly-client-core = { path = "dragonfly-client-core", version = "1.3.9" }
-dragonfly-client-config = { path = "dragonfly-client-config", version = "1.3.9" }
-dragonfly-client-storage = { path = "dragonfly-client-storage", version = "1.3.9" }
-dragonfly-client-backend = { path = "dragonfly-client-backend", version = "1.3.9" }
-dragonfly-client-metric = { path = "dragonfly-client-metric", version = "1.3.9" }
-dragonfly-client-util = { path = "dragonfly-client-util", version = "1.3.9" }
-dragonfly-client-init = { path = "dragonfly-client-init", version = "1.3.9" }
-dragonfly-api = "=2.2.30"
-thiserror = "2.0"
-futures = "0.3.32"
-reqwest = { version = "0.12.28", features = [
-    "stream",
-    "native-tls",
-    "default-tls",
-    "rustls-tls",
-    "blocking",
-    "hickory-dns",
-] }
-reqwest-middleware = "0.4"
-rcgen = { version = "0.12.1", features = ["x509-parser"] }
-hyper = { version = "1.9", features = ["full"] }
-hyper-util = { version = "0.1.20", features = [
-    "client",
-    "client-legacy",
-    "tokio",
-    "server-auto",
-    "http1",
-    "http2",
-] }
-hyper-rustls = { version = "0.27.9", default-features = false, features = ["http1", "http2", "logging", "ring"] }
-http-range-header = "0.4.2"
-tracing = "0.1"
-url = "2.5.4"
-rustls = { version = "0.23.40", default-features = false, features = ["tls12", "ring"] }
-rustls-pki-types = "1.14.1"
-rustls-pemfile = "2.2.0"
-sha2 = "0.10"
-crc32fast = "1.5.0"
-uuid = { version = "1.20", features = ["v4"] }
-hex = "0.4"
-rocksdb = "0.24.0"
-serde = { version = "1.0", features = ["derive"] }
-serde_yaml = "0.9"
-http = "1"
-tonic = { version = "=0.14.2", features = ["tls-ring"] }
-tonic-reflection = "=0.14.5"
-tokio = { version = "1.52.1", features = ["full", "tracing"] }
-tokio-util = { version = "0.7.18", features = ["full"] }
-tokio-stream = "0.1.18"
-validator = { version = "0.16", features = ["derive"] }
-warp = "0.3.5"
-headers = "0.4.1"
-regex = "1.12.3"
-serde_regex = "1.1.0"
-humantime = "2.3.0"
-prost-wkt-types = "0.7"
-chrono = { version = "0.4.44", features = ["serde", "clock"] }
-openssl = { version = "0.10", features = ["vendored"] }
-opendal = { version = "0.55.0", features = [
-    "services-fs",
-    "services-s3",
-    "services-azblob",
-    "services-gcs",
-    "services-oss",
-    "services-obs",
-    "services-cos",
-    "services-webhdfs",
-] }
-clap = { version = "4.6.1", features = ["derive", "env"] }
 anyhow = "1.0.102"
-toml_edit = "0.25.11"
-toml = "0.8.23"
+async-trait = "0.1"
+bytes = "1.11"
 bytesize = { version = "1.3.3", features = ["serde"] }
 bytesize-serde = "0.2.1"
-percent-encoding = "2.3.2"
-tempfile = "3.25.0"
-tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
-serde_json = "1.0.149"
-lru = "0.16.3"
-fs2 = "0.4.3"
-lazy_static = "1.5"
-bytes = "1.11"
-local-ip-address = "0.6.5"
-sysinfo = { version = "0.32.1", default-features = false, features = ["component", "disk", "network", "system", "user"] }
-leaky-bucket = "1.1.2"
-vortex-protocol = "0.1.5"
-dashmap = "6.1.0"
-hostname = "^0.4"
-tonic-health = "=0.14.5"
-hashring = "0.3.6"
-reqwest-tracing = "0.5"
-fastrand = "2.4.1"
 cgroups-rs = "0.5"
-num_cpus = "1.17"
-async-trait = "0.1"
+chrono = { version = "0.4.44", features = ["clock", "serde"] }
+clap = { version = "4.6.1", features = ["derive", "env"] }
+crc32fast = "1.5.0"
+dashmap = "6.1.0"
+dragonfly-api = "=2.2.30"
+dragonfly-client = { path = "dragonfly-client", version = "1.3.10" }
+dragonfly-client-backend = { path = "dragonfly-client-backend", version = "1.3.10" }
+dragonfly-client-config = { path = "dragonfly-client-config", version = "1.3.10" }
+dragonfly-client-core = { path = "dragonfly-client-core", version = "1.3.10" }
+dragonfly-client-init = { path = "dragonfly-client-init", version = "1.3.10" }
+dragonfly-client-metric = { path = "dragonfly-client-metric", version = "1.3.10" }
+dragonfly-client-storage = { path = "dragonfly-client-storage", version = "1.3.10" }
+dragonfly-client-util = { path = "dragonfly-client-util", version = "1.3.10" }
+fastrand = "2.4.1"
+fs2 = "0.4.3"
+futures = "0.3.32"
+hashring = "0.3.6"
+headers = "0.4.1"
+hex = "0.4"
+hostname = "^0.4"
+http = "1"
+http-range-header = "0.4.2"
+humantime = "2.3.0"
 humantime-serde = "1.1.1"
-oci-client = { version = "0.16.1", default-features = false, features = ["native-tls"] }
+hyper = { version = "1.9", features = ["full"] }
+hyper-rustls = { version = "0.27.9", default-features = false, features = [
+  "http1",
+  "http2",
+  "logging",
+  "ring"
+] }
+hyper-util = { version = "0.1.20", features = [
+  "client",
+  "client-legacy",
+  "http1",
+  "http2",
+  "server-auto",
+  "tokio",
+] }
+lazy_static = "1.5"
+leaky-bucket = "1.1.2"
+local-ip-address = "0.6.5"
+lru = "0.16.3"
+num_cpus = "1.17"
+oci-client = { version = "0.16.1", default-features = false, features = [
+  "native-tls"
+] }
 oci-spec = "0.9"
+opendal = { version = "0.55.0", features = [
+  "services-azblob",
+  "services-cos",
+  "services-fs",
+  "services-gcs",
+  "services-obs",
+  "services-oss",
+  "services-s3",
+  "services-webhdfs",
+] }
+openssl = { version = "0.10", features = ["vendored"] }
+percent-encoding = "2.3.2"
+prost-wkt-types = "0.7"
+rcgen = { version = "0.12.1", features = ["x509-parser"] }
+regex = "1.12.3"
+reqwest = { version = "0.12.28", features = [
+  "default-tls",
+  "blocking",
+  "hickory-dns",
+  "native-tls",
+  "rustls-tls",
+  "stream",
+] }
+reqwest-middleware = "0.4"
+reqwest-tracing = "0.5"
+rocksdb = "0.24.0"
+rustls = { version = "0.23.40", default-features = false, features = [
+  "ring",
+  "tls12"
+] }
+rustls-pemfile = "2.2.0"
+rustls-pki-types = "1.14.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0.149"
+serde_regex = "1.1.0"
+serde_yaml = "0.9"
+sha2 = "0.10"
+sysinfo = { version = "0.32.1", default-features = false, features = [
+  "component",
+  "disk",
+  "network",
+  "system",
+  "user"
+] }
+tempfile = "3.25.0"
+thiserror = "2.0"
+tokio = { version = "1.52.3", features = ["full", "tracing"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+tokio-stream = "0.1.18"
+tokio-util = { version = "0.7.18", features = ["full"] }
+toml = "0.8.23"
+toml_edit = "0.25.11"
+tonic = { version = "=0.14.2", features = ["tls-ring"] }
+tonic-health = "=0.14.5"
+tonic-reflection = "=0.14.5"
+tracing = "0.1"
+url = "2.5.4"
+uuid = { version = "1.20", features = ["v4"] }
+validator = { version = "0.16", features = ["derive"] }
+vortex-protocol = "0.1.5"
+warp = "0.3.5"
 
 # TODO(Gaius): Remove the git dependency after the next release of mocktail, refer to https://github.com/IBM/mocktail/issues/65.
-mocktail = { version = "0.3.0", git = "https://github.com/IBM/mocktail", rev = "860e75e171a8eb818083813dbeed4401d1a40b3b" }
+mocktail = { git = "https://github.com/IBM/mocktail", rev = "860e75e171a8eb818083813dbeed4401d1a40b3b", version = "0.3.0" }
 
-[profile.release]
-opt-level = 3
-lto = "thin"
-codegen-units = 1
-panic = "abort"
-strip = "symbols"
+[profile.bench]
+debug = true
 
 [profile.dev]
 opt-level = 0
 debug = true
-incremental = true
 strip = false
+incremental = true
 
-[profile.bench]
-debug = true
+[profile.release]
+opt-level = 3
+strip = "symbols"
+lto = "thin"
+panic = "abort"
+codegen-units = 1
