@@ -37,7 +37,7 @@ use crate::{
     StatRequest, StatResponse, DEFAULT_USER_AGENT, KEEP_ALIVE_INTERVAL, POOL_MAX_IDLE_PER_HOST,
 };
 use async_trait::async_trait;
-use dragonfly_api::common::v2::Range;
+use dragonfly_api::common::v2::{HuggingFace as HuggingFaceOptions, Range};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{BackendError, ErrorType, OrErr},
@@ -60,9 +60,6 @@ pub const SCHEME: &str = "hf";
 
 /// HUGGING_FACE_BASE_URL is the base URL for Hugging Face Hub.
 const HUGGING_FACE_BASE_URL: &str = "https://huggingface.co";
-
-/// HUGGING_FACE_BASE_URL_HEADER is the internal request header key for overriding the base URL.
-pub const HUGGING_FACE_BASE_URL_HEADER: &str = "X-Dragonfly-Hugging-Face-Base-Url";
 
 /// Repository represents the Hugging Face repository information returned by the API.
 #[derive(Default, Debug, Deserialize)]
@@ -306,12 +303,10 @@ impl HuggingFace {
         }
     }
 
-    /// Resolves the base URLs from explicit request headers.
-    fn resolve_base_urls(request_headers: Option<&HeaderMap>) -> (String, String) {
-        let base_url = request_headers
-            .and_then(|headers| headers.get(HUGGING_FACE_BASE_URL_HEADER))
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v.to_string())
+    /// Resolves the base URLs from gRPC Hugging Face options.
+    fn resolve_base_urls(hugging_face: Option<&HuggingFaceOptions>) -> (String, String) {
+        let base_url = hugging_face
+            .and_then(|hf| hf.base_url.clone())
             .unwrap_or_else(|| HUGGING_FACE_BASE_URL.to_string())
             .trim_end_matches('/')
             .to_string();
@@ -379,6 +374,7 @@ impl Backend for HuggingFace {
         // otherwise return error.
         let revision = request
             .hugging_face
+            .as_ref()
             .ok_or_else(|| {
                 error!(
                     "stat request {} {}: missing Hugging Face information",
@@ -387,10 +383,11 @@ impl Backend for HuggingFace {
 
                 Error::InvalidParameter
             })?
-            .revision;
+            .revision
+            .clone();
 
         let parsed_url = ParsedURL::try_from(request.url.as_str())?;
-        let (base_url, api_base_url) = Self::resolve_base_urls(request.http_header.as_ref());
+        let (base_url, api_base_url) = Self::resolve_base_urls(request.hugging_face.as_ref());
         match &parsed_url.file_path {
             Some(file_path) => {
                 let download_url =
@@ -583,6 +580,7 @@ impl Backend for HuggingFace {
         // otherwise return error.
         let revision = request
             .hugging_face
+            .as_ref()
             .ok_or_else(|| {
                 error!(
                     "get request {} {}: missing Hugging Face information",
@@ -591,7 +589,8 @@ impl Backend for HuggingFace {
 
                 Error::InvalidParameter
             })?
-            .revision;
+            .revision
+            .clone();
 
         // Parse the URL and build the download URL for the specified file.
         let parsed_url = ParsedURL::try_from(request.url.as_str())?;
@@ -604,7 +603,7 @@ impl Backend for HuggingFace {
             return Err(Error::InvalidParameter);
         };
 
-        let (base_url, _) = Self::resolve_base_urls(request.http_header.as_ref());
+        let (base_url, _) = Self::resolve_base_urls(request.hugging_face.as_ref());
         let download_url = Self::build_download_url(&parsed_url, file_path, &revision, &base_url);
         let response = match self
             .client
@@ -686,6 +685,7 @@ impl Backend for HuggingFace {
         // otherwise return error.
         let revision = request
             .hugging_face
+            .as_ref()
             .ok_or_else(|| {
                 error!(
                     "stat request {} {}: missing Hugging Face information",
@@ -694,10 +694,11 @@ impl Backend for HuggingFace {
 
                 Error::InvalidParameter
             })?
-            .revision;
+            .revision
+            .clone();
 
         let parsed_url = ParsedURL::try_from(request.url.as_str())?;
-        let (base_url, api_base_url) = Self::resolve_base_urls(request.http_header.as_ref());
+        let (base_url, api_base_url) = Self::resolve_base_urls(request.hugging_face.as_ref());
         match &parsed_url.file_path {
             Some(file_path) => {
                 let download_url =
@@ -901,13 +902,14 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_base_urls_from_headers() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            HUGGING_FACE_BASE_URL_HEADER,
-            HeaderValue::from_static("https://hf-mirror.com/"),
-        );
-        let (base_url, api_base_url) = HuggingFace::resolve_base_urls(Some(&headers));
+    fn test_resolve_base_urls_from_options() {
+        let options = HuggingFaceOptions {
+            revision: "main".to_string(),
+            token: None,
+            base_url: Some("https://hf-mirror.com/".to_string()),
+        };
+
+        let (base_url, api_base_url) = HuggingFace::resolve_base_urls(Some(&options));
         assert_eq!(base_url, "https://hf-mirror.com");
         assert_eq!(api_base_url, "https://hf-mirror.com/api");
     }

@@ -754,6 +754,10 @@ async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -
 /// locally and downloads files while preserving the remote directory hierarchy.
 async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Result<()> {
     let url = Url::parse(args.url.as_str()).or_err(ErrorType::ParseError)?;
+    let hf_base_url = args
+        .hf_base_url
+        .as_ref()
+        .map(|base_url| base_url.trim_end_matches('/').to_string());
     let object_storage = if object_storage::Scheme::is_supported(url.scheme()) {
         Some(ObjectStorage {
             access_key_id: args.storage_access_key_id.clone(),
@@ -782,6 +786,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         Some(HuggingFace {
             revision: args.hf_revision.clone(),
             token: args.hf_token.clone(),
+            base_url: hf_base_url.clone(),
         })
     } else {
         None
@@ -791,6 +796,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         Some(ModelScope {
             revision: args.ms_revision.clone(),
             token: args.ms_token.clone(),
+            base_url: None,
         })
     } else {
         None
@@ -999,6 +1005,10 @@ async fn download(
     download_client: DfdaemonDownloadClient,
 ) -> Result<()> {
     let url = Url::parse(args.url.as_str()).or_err(ErrorType::ParseError)?;
+    let hf_base_url = args
+        .hf_base_url
+        .as_ref()
+        .map(|base_url| base_url.trim_end_matches('/').to_string());
     let object_storage = if object_storage::Scheme::is_supported(url.scheme()) {
         Some(ObjectStorage {
             access_key_id: args.storage_access_key_id.clone(),
@@ -1027,6 +1037,7 @@ async fn download(
         Some(HuggingFace {
             revision: args.hf_revision.clone(),
             token: args.hf_token.clone(),
+            base_url: hf_base_url.clone(),
         })
     } else {
         None
@@ -1036,6 +1047,7 @@ async fn download(
         Some(ModelScope {
             revision: args.ms_revision.clone(),
             token: args.ms_token.clone(),
+            base_url: None,
         })
     } else {
         None
@@ -1266,22 +1278,9 @@ async fn download(
     Ok(())
 }
 
-/// Builds request headers for backend requests, including internal Hugging Face overrides.
+/// Builds request headers for backend requests from user-provided header flags.
 fn build_request_headers(args: &Args) -> Vec<String> {
-    let mut headers = args.header.clone();
-
-    if args.url.scheme() == hugging_face::SCHEME {
-        if let Some(base_url) = &args.hf_base_url {
-            let base_url = base_url.trim_end_matches('/');
-            headers.push(format!(
-                "{}: {}",
-                hugging_face::HUGGING_FACE_BASE_URL_HEADER,
-                base_url
-            ));
-        }
-    }
-
-    headers
+    args.header.clone()
 }
 
 /// Retrieves all directory entries from a remote storage location.

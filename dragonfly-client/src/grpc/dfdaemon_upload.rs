@@ -27,7 +27,6 @@ use dragonfly_api::dfdaemon::v2::{
     DownloadCacheTaskRequest, DownloadCacheTaskResponse, DownloadPersistentCacheTaskRequest,
     DownloadPersistentCacheTaskResponse, DownloadPersistentTaskRequest,
     DownloadPersistentTaskResponse, DownloadTaskRequest, DownloadTaskResponse, Entry,
-    ExchangeIbVerbsQueuePairEndpointRequest, ExchangeIbVerbsQueuePairEndpointResponse,
     ListTaskEntriesRequest, ListTaskEntriesResponse, StatCacheTaskRequest, StatLocalTaskRequest,
     StatLocalTaskResponse, StatPersistentCacheTaskRequest, StatPersistentTaskRequest,
     StatTaskRequest, StatTaskRequest as DfdaemonStatTaskRequest, SyncCachePiecesRequest,
@@ -2439,15 +2438,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    // Exchanges the ib verbs queue pair endpoint.
-    #[instrument(skip_all, fields(num, lid, gid))]
-    async fn exchange_ib_verbs_queue_pair_endpoint(
-        &self,
-        _request: Request<ExchangeIbVerbsQueuePairEndpointRequest>,
-    ) -> Result<Response<ExchangeIbVerbsQueuePairEndpointResponse>, Status> {
-        unimplemented!()
-    }
-
     /// Download cache task stream is the stream of the download cache task response.
     type DownloadCacheTaskStream = ReceiverStream<Result<DownloadCacheTaskResponse, Status>>;
 
@@ -2795,21 +2785,6 @@ impl DfdaemonUploadClient {
             .sync_persistent_cache_pieces(request)
             .await?;
         Ok(response)
-    }
-
-    /// Exchanges ib verbs queue pair endpoint.
-    #[instrument(skip_all)]
-    pub async fn exchange_ib_verbs_queue_pair_endpoint(
-        &self,
-        request: ExchangeIbVerbsQueuePairEndpointRequest,
-    ) -> ClientResult<ExchangeIbVerbsQueuePairEndpointResponse> {
-        let request = Self::make_request(request);
-        let response = self
-            .client
-            .clone()
-            .exchange_ib_verbs_queue_pair_endpoint(request)
-            .await?;
-        Ok(response.into_inner())
     }
 
     /// Creates a new request with timeout.
