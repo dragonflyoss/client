@@ -86,7 +86,7 @@ serde_regex.workspace = true
 tracing-appender = "0.2.4"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "chrono"] }
 tracing-panic = "0.1.2"
-tracing-opentelemetry = "0.32.0"
+tracing-opentelemetry = "0.33.0"
 opentelemetry = { version = "=0.31.0", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "=0.31.1", default-features = false, features = ["trace", "grpc-tonic", "http-proto", "reqwest-blocking-client"] }
 opentelemetry_sdk = { version = "=0.31.0", default-features = false, features = ["trace", "rt-tokio"] }
