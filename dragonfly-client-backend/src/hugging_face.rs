@@ -901,7 +901,7 @@ mod tests {
     fn test_resolve_base_urls() {
         let (base_url, api_base_url) =
             HuggingFace::resolve_base_urls(Some("https://hf-mirror.com/")).unwrap();
-        assert_eq!(base_url.as_str(), "https://hf-mirror.com");
+        assert_eq!(base_url.as_str(), "https://hf-mirror.com/");
         assert_eq!(api_base_url.as_str(), "https://hf-mirror.com/api");
     }
 
