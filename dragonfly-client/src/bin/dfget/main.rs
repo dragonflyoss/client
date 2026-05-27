@@ -354,7 +354,7 @@ struct Args {
     #[arg(
         long,
         env = "DFGET_HF_BASE_URL",
-        help = "Specify the base URL for Hugging Face Hub, for example: https://hf-mirror.com"
+        help = "Specify the base URL of the Hugging Face Hub endpoint (e.g., https://hf-mirror.com). If unspecified, it defaults to https://huggingface.co"
     )]
     hf_base_url: Option<String>,
 
@@ -753,10 +753,6 @@ async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -
 /// locally and downloads files while preserving the remote directory hierarchy.
 async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Result<()> {
     let url = Url::parse(args.url.as_str()).or_err(ErrorType::ParseError)?;
-    let hf_base_url = args
-        .hf_base_url
-        .as_ref()
-        .map(|base_url| base_url.trim_end_matches('/').to_string());
     let object_storage = if object_storage::Scheme::is_supported(url.scheme()) {
         Some(ObjectStorage {
             access_key_id: args.storage_access_key_id.clone(),
@@ -785,7 +781,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         Some(HuggingFace {
             revision: args.hf_revision.clone(),
             token: args.hf_token.clone(),
-            base_url: hf_base_url.clone(),
+            base_url: args.hf_base_url.clone(),
         })
     } else {
         None
@@ -804,7 +800,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
     // Get all entries in the directory with include files filter.
     let entries: Vec<DirEntry> = get_all_entries(
         &args.url,
-        build_request_headers(&args),
+        args.header.clone(),
         args.include_files.clone(),
         object_storage,
         hdfs,
@@ -1004,10 +1000,6 @@ async fn download(
     download_client: DfdaemonDownloadClient,
 ) -> Result<()> {
     let url = Url::parse(args.url.as_str()).or_err(ErrorType::ParseError)?;
-    let hf_base_url = args
-        .hf_base_url
-        .as_ref()
-        .map(|base_url| base_url.trim_end_matches('/').to_string());
     let object_storage = if object_storage::Scheme::is_supported(url.scheme()) {
         Some(ObjectStorage {
             access_key_id: args.storage_access_key_id.clone(),
@@ -1036,7 +1028,7 @@ async fn download(
         Some(HuggingFace {
             revision: args.hf_revision.clone(),
             token: args.hf_token.clone(),
-            base_url: hf_base_url.clone(),
+            base_url: args.hf_base_url.clone(),
         })
     } else {
         None
@@ -1051,8 +1043,6 @@ async fn download(
     } else {
         None
     };
-
-    let request_header = header_vec_to_hashmap(build_request_headers(&args))?;
 
     // If the `filtered_query_params` is not provided, then use the default value.
     let filtered_query_params = args
@@ -1081,7 +1071,7 @@ async fn download(
                 application: Some(args.application),
                 priority: args.priority,
                 filtered_query_params,
-                request_header,
+                request_header: header_vec_to_hashmap(args.header)?,
                 piece_length: args.piece_length.map(|piece_length| piece_length.as_u64()),
                 output_path,
                 timeout: Some(
@@ -1275,11 +1265,6 @@ async fn download(
 
     progress_bar.finish();
     Ok(())
-}
-
-/// Builds request headers for backend requests from user-provided header flags.
-fn build_request_headers(args: &Args) -> Vec<String> {
-    args.header.clone()
 }
 
 /// Retrieves all directory entries from a remote storage location.
