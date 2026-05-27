@@ -61,9 +61,6 @@ pub const SCHEME: &str = "modelscope";
 /// MODEL_SCOPE_BASE_URL is the base URL for ModelScope Hub.
 const MODEL_SCOPE_BASE_URL: &str = "https://modelscope.cn";
 
-/// MODELSCOPE_API_BASE_URL is the API base URL for ModelScope API.
-const MODEL_SCOPE_API_BASE_URL: &str = "https://modelscope.cn/api/v1";
-
 /// Response represents the top-level response from the ModelScope API.
 #[derive(Debug, Deserialize)]
 struct Response<T> {
@@ -238,31 +235,49 @@ impl ModelScope {
         })
     }
 
+    /// Resolves the base URLs from gRPC ModelScope options.
+    fn resolve_base_urls(base_url: Option<&str>) -> Result<(Url, Url)> {
+        let base_url = Url::parse(base_url.unwrap_or(MODEL_SCOPE_BASE_URL))?;
+        let api_base_url = base_url.join("/api/v1/")?;
+        Ok((base_url, api_base_url))
+    }
+
     /// Builds the download URL for a file based on the repository type and path.
     ///
-    /// Format: `{MODELSCOPE_API_BASE_URL}/{repo_type}/{repo_id}/repo?Revision={revision}&FilePath={file_path}`
-    fn build_download_url(parsed_url: &ParsedURL, file_path: &str, revision: &str) -> String {
-        format!(
-            "{}/{}/{}/resolve/{}/{}",
-            MODEL_SCOPE_BASE_URL,
+    /// Format: `{base_url}/{repo_type}/{repo_id}/resolve/{revision}/{file_path}`
+    fn build_download_url(
+        parsed_url: &ParsedURL,
+        file_path: &str,
+        revision: &str,
+        base_url: &Url,
+    ) -> Result<Url> {
+        let path = format!(
+            "{}/{}/resolve/{}/{}",
             parsed_url.repository_type.as_str(),
             parsed_url.repository_id,
             revision,
             file_path
-        )
+        );
+
+        Ok(base_url.join(&path)?)
     }
 
     /// Builds the API URL for listing files in the repository.
     ///
-    /// Format: `{MODELSCOPE_API_BASE_URL}/{repo_type}/{repo_id}/repo/files?Revision={revision}&Recursive=true`
-    fn build_file_list_url(parsed_url: &ParsedURL, revision: &str) -> String {
-        format!(
-            "{}/{}/{}/repo/files?Revision={}&Recursive=true",
-            MODEL_SCOPE_API_BASE_URL,
+    /// Format: `{api_base_url}/{repo_type}/{repo_id}/repo/files?Revision={revision}&Recursive=true`
+    fn build_file_list_url(
+        parsed_url: &ParsedURL,
+        revision: &str,
+        api_base_url: &Url,
+    ) -> Result<Url> {
+        let path = format!(
+            "{}/{}/repo/files?Revision={}&Recursive=true",
             parsed_url.repository_type.as_str(),
             parsed_url.repository_id,
             revision
-        )
+        );
+
+        Ok(api_base_url.join(&path)?)
     }
 
     /// Builds a `modelscope://` URL for a file so downstream downloads continue to
@@ -330,26 +345,30 @@ impl Backend for ModelScope {
             None,
         )?;
 
-        // Get the revision from the request, request must contain revision for stat request,
-        // otherwise return error.
-        let revision = request
-            .model_scope
-            .ok_or_else(|| {
-                error!(
-                    "stat request {} {}: missing ModelScope information",
-                    request.task_id, request.url
-                );
-                Error::InvalidParameter
-            })?
-            .revision;
+        // Get the ModelScope information from the request, request must contain ModelScope
+        // information for stat request, otherwise return error.
+        let model_scope = request.model_scope.as_ref().ok_or_else(|| {
+            error!(
+                "stat request {} {}: missing ModelScope information",
+                request.task_id, request.url
+            );
+            Error::InvalidParameter
+        })?;
 
         let parsed_url = ParsedURL::try_from(request.url.as_str())?;
+        let (base_url, api_base_url) = Self::resolve_base_urls(model_scope.base_url.as_deref())?;
         match &parsed_url.file_path {
             Some(file_path) => {
-                let download_url = Self::build_download_url(&parsed_url, file_path, &revision);
+                let download_url = Self::build_download_url(
+                    &parsed_url,
+                    file_path,
+                    &model_scope.revision,
+                    &base_url,
+                )?;
+
                 let response = match self
                     .client
-                    .get(&download_url)
+                    .get(download_url.as_str())
                     .headers(request_header)
                     .timeout(request.timeout)
                     .send()
@@ -400,10 +419,11 @@ impl Backend for ModelScope {
                 })
             }
             None => {
-                let file_list_url = Self::build_file_list_url(&parsed_url, &revision);
+                let file_list_url =
+                    Self::build_file_list_url(&parsed_url, &model_scope.revision, &api_base_url)?;
                 let response = match self
                     .client
-                    .get(&file_list_url)
+                    .get(file_list_url.as_str())
                     .headers(request_header)
                     .timeout(request.timeout)
                     .send()
@@ -539,18 +559,15 @@ impl Backend for ModelScope {
             None,
         )?;
 
-        // Get the revision from the request, request must contain revision for get request,
-        // otherwise return error.
-        let revision = request
-            .model_scope
-            .ok_or_else(|| {
-                error!(
-                    "get request {} {}: missing ModelScope information",
-                    request.task_id, request.url
-                );
-                Error::InvalidParameter
-            })?
-            .revision;
+        // Get the ModelScope information from the request, request must contain ModelScope
+        // information for get request, otherwise return error.
+        let model_scope = request.model_scope.as_ref().ok_or_else(|| {
+            error!(
+                "get request {} {}: missing ModelScope information",
+                request.task_id, request.url
+            );
+            Error::InvalidParameter
+        })?;
 
         // Parse the URL and build the download URL for the specified file.
         let parsed_url = ParsedURL::try_from(request.url.as_str())?;
@@ -562,10 +579,12 @@ impl Backend for ModelScope {
             return Err(Error::InvalidParameter);
         };
 
-        let download_url = Self::build_download_url(&parsed_url, file_path, &revision);
+        let (base_url, _) = Self::resolve_base_urls(model_scope.base_url.as_deref())?;
+        let download_url =
+            Self::build_download_url(&parsed_url, file_path, &model_scope.revision, &base_url)?;
         let response = match self
             .client
-            .get(&download_url)
+            .get(download_url.as_str())
             .headers(request_header)
             .timeout(request.timeout)
             .send()
@@ -635,26 +654,29 @@ impl Backend for ModelScope {
             None,
         )?;
 
-        // Get the revision from the request, request must contain revision for exists request,
-        // otherwise return error.
-        let revision = request
-            .model_scope
-            .ok_or_else(|| {
-                error!(
-                    "exists request {} {}: missing ModelScope information",
-                    request.task_id, request.url
-                );
-                Error::InvalidParameter
-            })?
-            .revision;
+        // Get the ModelScope information from the request, request must contain ModelScope
+        // information for exists request, otherwise return error.
+        let model_scope = request.model_scope.as_ref().ok_or_else(|| {
+            error!(
+                "exists request {} {}: missing ModelScope information",
+                request.task_id, request.url
+            );
+            Error::InvalidParameter
+        })?;
 
         let parsed_url = ParsedURL::try_from(request.url.as_str())?;
+        let (base_url, api_base_url) = Self::resolve_base_urls(model_scope.base_url.as_deref())?;
         match &parsed_url.file_path {
             Some(file_path) => {
-                let download_url = Self::build_download_url(&parsed_url, file_path, &revision);
+                let download_url = Self::build_download_url(
+                    &parsed_url,
+                    file_path,
+                    &model_scope.revision,
+                    &base_url,
+                )?;
                 let response = self
                     .client
-                    .head(&download_url)
+                    .head(download_url.as_str())
                     .headers(request_header)
                     .timeout(request.timeout)
                     .send()
@@ -678,10 +700,11 @@ impl Backend for ModelScope {
                 Ok(response_status_code.is_success())
             }
             None => {
-                let file_list_url = Self::build_file_list_url(&parsed_url, &revision);
+                let file_list_url =
+                    Self::build_file_list_url(&parsed_url, &model_scope.revision, &api_base_url)?;
                 let response = self
                     .client
-                    .get(&file_list_url)
+                    .get(file_list_url.as_str())
                     .headers(request_header)
                     .timeout(request.timeout)
                     .send()
@@ -787,9 +810,15 @@ mod tests {
     fn test_build_download_url_model() {
         let parsed_url =
             ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1/config.json").unwrap();
-        let url = ModelScope::build_download_url(&parsed_url, "config.json", "master");
+        let url = ModelScope::build_download_url(
+            &parsed_url,
+            "config.json",
+            "master",
+            &Url::parse(MODEL_SCOPE_BASE_URL).unwrap(),
+        )
+        .unwrap();
         assert_eq!(
-            url,
+            url.as_str(),
             "https://modelscope.cn/models/deepseek-ai/DeepSeek-R1/resolve/master/config.json"
         );
     }
@@ -798,9 +827,15 @@ mod tests {
     fn test_build_download_url_dataset() {
         let parsed_url =
             ParsedURL::try_from("modelscope://datasets/owner/my-dataset/train.json").unwrap();
-        let url = ModelScope::build_download_url(&parsed_url, "train.json", "master");
+        let url = ModelScope::build_download_url(
+            &parsed_url,
+            "train.json",
+            "master",
+            &Url::parse(MODEL_SCOPE_BASE_URL).unwrap(),
+        )
+        .unwrap();
         assert_eq!(
-            url,
+            url.as_str(),
             "https://modelscope.cn/datasets/owner/my-dataset/resolve/master/train.json"
         );
     }
@@ -809,9 +844,15 @@ mod tests {
     fn test_build_download_url_with_revision() {
         let parsed_url =
             ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1/config.json").unwrap();
-        let url = ModelScope::build_download_url(&parsed_url, "config.json", "v1.0");
+        let url = ModelScope::build_download_url(
+            &parsed_url,
+            "config.json",
+            "v1.0",
+            &Url::parse(MODEL_SCOPE_BASE_URL).unwrap(),
+        )
+        .unwrap();
         assert_eq!(
-            url,
+            url.as_str(),
             "https://modelscope.cn/models/deepseek-ai/DeepSeek-R1/resolve/v1.0/config.json"
         );
     }
@@ -819,9 +860,14 @@ mod tests {
     #[test]
     fn test_build_file_list_url_model() {
         let parsed_url = ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1").unwrap();
-        let url = ModelScope::build_file_list_url(&parsed_url, "master");
+        let url = ModelScope::build_file_list_url(
+            &parsed_url,
+            "master",
+            &Url::parse("https://modelscope.cn/api/v1/").unwrap(),
+        )
+        .unwrap();
         assert_eq!(
-            url,
+            url.as_str(),
             "https://modelscope.cn/api/v1/models/deepseek-ai/DeepSeek-R1/repo/files?Revision=master&Recursive=true"
         );
     }
@@ -829,10 +875,33 @@ mod tests {
     #[test]
     fn test_build_file_list_url_dataset() {
         let parsed_url = ParsedURL::try_from("modelscope://datasets/owner/my-dataset").unwrap();
-        let url = ModelScope::build_file_list_url(&parsed_url, "master");
+        let url = ModelScope::build_file_list_url(
+            &parsed_url,
+            "master",
+            &Url::parse("https://modelscope.cn/api/v1/").unwrap(),
+        )
+        .unwrap();
         assert_eq!(
-            url,
+            url.as_str(),
             "https://modelscope.cn/api/v1/datasets/owner/my-dataset/repo/files?Revision=master&Recursive=true"
+        );
+    }
+
+    #[test]
+    fn test_resolve_base_urls_default() {
+        let (base_url, api_base_url) = ModelScope::resolve_base_urls(None).unwrap();
+        assert_eq!(base_url.as_str(), "https://modelscope.cn/");
+        assert_eq!(api_base_url.as_str(), "https://modelscope.cn/api/v1/");
+    }
+
+    #[test]
+    fn test_resolve_base_urls_custom() {
+        let (base_url, api_base_url) =
+            ModelScope::resolve_base_urls(Some("https://modelscope-mirror.example.com/")).unwrap();
+        assert_eq!(base_url.as_str(), "https://modelscope-mirror.example.com/");
+        assert_eq!(
+            api_base_url.as_str(),
+            "https://modelscope-mirror.example.com/api/v1/"
         );
     }
 
