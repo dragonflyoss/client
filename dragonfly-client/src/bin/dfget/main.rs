@@ -353,6 +353,13 @@ struct Args {
 
     #[arg(
         long,
+        env = "DFGET_HF_BASE_URL",
+        help = "Specify the base URL of the Hugging Face Hub endpoint (e.g., https://hf-mirror.com). If unspecified, it defaults to https://huggingface.co"
+    )]
+    hf_base_url: Option<String>,
+
+    #[arg(
+        long,
         default_value_t = 100,
         env = "DFGET_MAX_FILES",
         help = "Specify the max count of file to download when downloading a directory. If the actual file count is greater than this value, the downloading will be rejected"
@@ -774,6 +781,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         Some(HuggingFace {
             revision: args.hf_revision.clone(),
             token: args.hf_token.clone(),
+            base_url: args.hf_base_url.clone(),
         })
     } else {
         None
@@ -783,6 +791,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         Some(ModelScope {
             revision: args.ms_revision.clone(),
             token: args.ms_token.clone(),
+            base_url: None,
         })
     } else {
         None
@@ -1019,6 +1028,7 @@ async fn download(
         Some(HuggingFace {
             revision: args.hf_revision.clone(),
             token: args.hf_token.clone(),
+            base_url: args.hf_base_url.clone(),
         })
     } else {
         None
@@ -1028,6 +1038,7 @@ async fn download(
         Some(ModelScope {
             revision: args.ms_revision.clone(),
             token: args.ms_token.clone(),
+            base_url: None,
         })
     } else {
         None
