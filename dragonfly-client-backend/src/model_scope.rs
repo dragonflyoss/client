@@ -282,8 +282,8 @@ impl ModelScope {
 
     /// Builds a `modelscope://` URL for a file so downstream downloads continue to
     /// use the ModelScope backend (preserving auth and URL semantics).
-    fn build_model_scope_url(parsed_url: &ParsedURL, filename: &str) -> String {
-        match parsed_url.repository_type {
+    fn build_model_scope_url(parsed_url: &ParsedURL, filename: &str) -> Result<Url> {
+        let url = match parsed_url.repository_type {
             RepositoryType::Model => {
                 format!("{}://{}/{}", SCHEME, parsed_url.repository_id, filename)
             }
@@ -291,7 +291,9 @@ impl ModelScope {
                 "{}://datasets/{}/{}",
                 SCHEME, parsed_url.repository_id, filename
             ),
-        }
+        };
+
+        Ok(Url::parse(&url)?)
     }
 
     /// Build the request headers for ModelScope API requests, including authentication if a
@@ -352,6 +354,7 @@ impl Backend for ModelScope {
                 "stat request {} {}: missing ModelScope information",
                 request.task_id, request.url
             );
+
             Error::InvalidParameter
         })?;
 
@@ -508,23 +511,19 @@ impl Backend for ModelScope {
                     .files
                     .unwrap_or_default()
                     .into_iter()
-                    .filter_map(|file| {
-                        // Skip directories.
-                        if file.entry_type == "tree" {
-                            return None;
-                        }
-
+                    .filter(|file: &File| file.entry_type != "tree")
+                    .map(|file: File| -> Result<DirEntry> {
                         // Return modelscope:// URLs so downstream downloads continue to use the
                         // ModelScope backend (preserving auth headers and URL semantics).
-                        let ms_url = Self::build_model_scope_url(&parsed_url, &file.path);
+                        let ms_url = Self::build_model_scope_url(&parsed_url, &file.path)?;
                         let content_length = file.size.unwrap_or(0);
-                        Some(DirEntry {
-                            url: ms_url,
+                        Ok(DirEntry {
+                            url: ms_url.to_string(),
                             content_length: content_length as usize,
                             is_dir: false,
                         })
                     })
-                    .collect();
+                    .collect::<Result<Vec<_>>>()?;
 
                 debug!(
                     "stat response {} {}: {:?} {:?} {:?}",
@@ -566,6 +565,7 @@ impl Backend for ModelScope {
                 "get request {} {}: missing ModelScope information",
                 request.task_id, request.url
             );
+
             Error::InvalidParameter
         })?;
 
@@ -661,6 +661,7 @@ impl Backend for ModelScope {
                 "exists request {} {}: missing ModelScope information",
                 request.task_id, request.url
             );
+
             Error::InvalidParameter
         })?;
 
@@ -888,14 +889,11 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_base_urls_default() {
+    fn test_resolve_base_urls() {
         let (base_url, api_base_url) = ModelScope::resolve_base_urls(None).unwrap();
         assert_eq!(base_url.as_str(), "https://modelscope.cn/");
         assert_eq!(api_base_url.as_str(), "https://modelscope.cn/api/v1/");
-    }
 
-    #[test]
-    fn test_resolve_base_urls_custom() {
         let (base_url, api_base_url) =
             ModelScope::resolve_base_urls(Some("https://modelscope-mirror.example.com/")).unwrap();
         assert_eq!(base_url.as_str(), "https://modelscope-mirror.example.com/");
@@ -908,23 +906,29 @@ mod tests {
     #[test]
     fn test_build_model_scope_url_model() {
         let parsed_url = ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1").unwrap();
-        let url = ModelScope::build_model_scope_url(&parsed_url, "config.json");
-        assert_eq!(url, "modelscope://deepseek-ai/DeepSeek-R1/config.json");
+        let url = ModelScope::build_model_scope_url(&parsed_url, "config.json").unwrap();
+        assert_eq!(
+            url.as_str(),
+            "modelscope://deepseek-ai/DeepSeek-R1/config.json"
+        );
     }
 
     #[test]
     fn test_build_model_scope_url_dataset() {
         let parsed_url = ParsedURL::try_from("modelscope://datasets/owner/my-dataset").unwrap();
-        let url = ModelScope::build_model_scope_url(&parsed_url, "train.json");
-        assert_eq!(url, "modelscope://datasets/owner/my-dataset/train.json");
+        let url = ModelScope::build_model_scope_url(&parsed_url, "train.json").unwrap();
+        assert_eq!(
+            url.as_str(),
+            "modelscope://datasets/owner/my-dataset/train.json"
+        );
     }
 
     #[test]
     fn test_build_model_scope_url_nested_file() {
         let parsed_url = ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1").unwrap();
-        let url = ModelScope::build_model_scope_url(&parsed_url, "models/v1/model.bin");
+        let url = ModelScope::build_model_scope_url(&parsed_url, "models/v1/model.bin").unwrap();
         assert_eq!(
-            url,
+            url.as_str(),
             "modelscope://deepseek-ai/DeepSeek-R1/models/v1/model.bin"
         );
     }
