@@ -39,9 +39,6 @@ mod content_linux;
 #[cfg(target_os = "macos")]
 mod content_macos;
 
-#[cfg(target_os = "freebsd")]
-mod content_freebsd;
-
 pub mod cache;
 pub mod client;
 pub mod content;
