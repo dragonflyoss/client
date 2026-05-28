@@ -338,6 +338,13 @@ struct Args {
 
     #[arg(
         long,
+        env = "DFGET_MS_BASE_URL",
+        help = "Specify the base URL of the ModelScope Hub endpoint (e.g., https://modelscope-mirror.example.com). If unspecified, it defaults to https://modelscope.cn"
+    )]
+    ms_base_url: Option<String>,
+
+    #[arg(
+        long,
         default_value = "main",
         env = "DFGET_HF_REVISION",
         help = "Specify the revision version for Hugging Face Hub"
@@ -791,7 +798,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         Some(ModelScope {
             revision: args.ms_revision.clone(),
             token: args.ms_token.clone(),
-            base_url: None,
+            base_url: args.ms_base_url.clone(),
         })
     } else {
         None
@@ -1038,7 +1045,7 @@ async fn download(
         Some(ModelScope {
             revision: args.ms_revision.clone(),
             token: args.ms_token.clone(),
-            base_url: None,
+            base_url: args.ms_base_url.clone(),
         })
     } else {
         None
