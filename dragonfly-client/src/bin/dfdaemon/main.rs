@@ -45,6 +45,7 @@ use std::time::Duration;
 use termion::{color, style};
 use tokio::sync::mpsc;
 use tokio::sync::Barrier;
+use tokio::task::JoinError;
 use tracing::{error, info, Level};
 
 #[cfg(not(target_env = "msvc"))]
@@ -54,6 +55,10 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 #[allow(non_upper_case_globals)]
 #[export_name = "malloc_conf"]
 pub static malloc_conf: &[u8] = b"prof:true,prof_active:true,lg_prof_sample:19\0";
+
+fn join_task<T>(result: Result<T, JoinError>, name: &str) -> Result<T, anyhow::Error> {
+    result.map_err(|err| anyhow::anyhow!("{name} failed: {err}"))
+}
 
 #[derive(Debug, Parser)]
 #[command(
@@ -442,72 +447,82 @@ async fn main() -> Result<(), anyhow::Error> {
     // grpc server started barrier.
     let grpc_server_started_barrier = Arc::new(Barrier::new(3));
 
+    let mut dynconfig_handle = tokio::spawn(async move { dynconfig.run().await });
+    let mut health_handle = tokio::spawn(async move { health.run().await });
+    let mut metrics_handle = tokio::spawn(async move { metrics.run().await });
+    let mut stats_handle = tokio::spawn(async move { stats.run().await });
+    let mut scheduler_announcer_handle =
+        tokio::spawn(async move { scheduler_announcer.run().await });
+    let mut gc_handle = tokio::spawn(async move { gc.run().await });
+    let mut storage_tcp_handle = tokio::spawn(async move { storage_tcp_server.run().await });
+    let mut storage_quic_handle = tokio::spawn(async move { storage_quic_server.run().await });
+    let mut dfdaemon_upload_grpc_handle = {
+        let barrier = grpc_server_started_barrier.clone();
+        tokio::spawn(async move { dfdaemon_upload_grpc.run(barrier).await })
+    };
+    let mut dfdaemon_download_grpc_handle = {
+        let barrier = grpc_server_started_barrier.clone();
+        tokio::spawn(async move { dfdaemon_download_grpc.run(barrier).await })
+    };
+    let mut proxy_handle = {
+        let barrier = grpc_server_started_barrier.clone();
+        tokio::spawn(async move { proxy.run(barrier).await })
+    };
+
     // Wait for servers to exit or shutdown signal.
     tokio::select! {
-        _ = tokio::spawn(async move { dynconfig.run().await }) => {
+        result = &mut dynconfig_handle => {
+            join_task(result, "dynconfig manager")?;
             info!("dynconfig manager exited");
         },
 
-        _ = tokio::spawn(async move { health.run().await }) => {
+        result = &mut health_handle => {
+            join_task(result, "health server")?;
             info!("health server exited");
         },
 
-        _ = tokio::spawn(async move { metrics.run().await }) => {
+        result = &mut metrics_handle => {
+            join_task(result, "metrics server")?;
             info!("metrics server exited");
         },
 
-        _ = tokio::spawn(async move { stats.run().await }) => {
+        result = &mut stats_handle => {
+            join_task(result, "stats server")?;
             info!("stats server exited");
         },
 
-        _ = tokio::spawn(async move { scheduler_announcer.run().await }) => {
+        result = &mut scheduler_announcer_handle => {
+            join_task(result, "scheduler announcer")?;
             info!("announcer scheduler exited");
         },
 
-        _ = tokio::spawn(async move { gc.run().await }) => {
+        result = &mut gc_handle => {
+            join_task(result, "garbage collector")?;
             info!("garbage collector exited");
         },
 
-        _ = {
-            tokio::spawn(async move {
-                storage_tcp_server.run().await.unwrap_or_else(|err| error!("storage tcp server failed: {}", err));
-            })
-        } => {
+        result = &mut storage_tcp_handle => {
+            join_task(result, "storage tcp server")??;
             info!("storage tcp server exited");
         },
 
-        _ = {
-            tokio::spawn(async move {
-                storage_quic_server.run().await.unwrap_or_else(|err| error!("storage quic server failed: {}", err));
-            })
-        } => {
+        result = &mut storage_quic_handle => {
+            join_task(result, "storage quic server")??;
             info!("storage quic server exited");
         },
 
-        _ = {
-            let barrier = grpc_server_started_barrier.clone();
-            tokio::spawn(async move {
-                dfdaemon_upload_grpc.run(barrier).await.unwrap_or_else(|err| error!("dfdaemon upload grpc server failed: {}", err));
-            })
-        } => {
+        result = &mut dfdaemon_upload_grpc_handle => {
+            join_task(result, "dfdaemon upload grpc server")??;
             info!("dfdaemon upload grpc server exited");
         },
 
-        _ = {
-            let barrier = grpc_server_started_barrier.clone();
-            tokio::spawn(async move {
-                dfdaemon_download_grpc.run(barrier).await.unwrap_or_else(|err| error!("dfdaemon download grpc server failed: {}", err));
-            })
-        } => {
+        result = &mut dfdaemon_download_grpc_handle => {
+            join_task(result, "dfdaemon download grpc unix server")??;
             info!("dfdaemon download grpc unix server exited");
         },
 
-        _ = {
-            let barrier = grpc_server_started_barrier.clone();
-            tokio::spawn(async move {
-                proxy.run(barrier).await.unwrap_or_else(|err| error!("proxy server failed: {}", err));
-            })
-        } => {
+        result = &mut proxy_handle => {
+            join_task(result, "proxy server")??;
             info!("proxy server exited");
         },
 
@@ -540,4 +555,38 @@ async fn main() -> Result<(), anyhow::Error> {
     let _ = shutdown_complete_rx.recv().await;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::join_task;
+    use dragonfly_client::health::Health;
+    use dragonfly_client_util::shutdown;
+    use std::net::{Ipv4Addr, TcpListener};
+    use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn join_task_returns_ok_for_successful_task() {
+        let result = tokio::spawn(async {}).await;
+
+        assert!(join_task(result, "test task").is_ok());
+    }
+
+    #[tokio::test]
+    async fn join_task_propagates_bind_panics_from_background_servers() {
+        let occupied_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let addr = occupied_listener.local_addr().unwrap();
+        let shutdown = shutdown::Shutdown::new();
+        let (shutdown_complete_tx, _shutdown_complete_rx) = mpsc::unbounded_channel();
+        let health = Health::new(addr, shutdown, shutdown_complete_tx);
+
+        let result = tokio::spawn(async move {
+            health.run().await;
+        })
+        .await;
+
+        let err = join_task(result, "health server").unwrap_err();
+        assert!(err.to_string().contains("health server failed"));
+        assert!(err.to_string().contains("panic"));
+    }
 }
