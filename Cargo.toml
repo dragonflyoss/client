@@ -33,7 +33,7 @@ cgroups-rs = "0.5"
 chrono = { version = "0.4.44", features = ["clock", "serde"] }
 clap = { version = "4.6.1", features = ["derive", "env"] }
 crc32fast = "1.5.0"
-dashmap = "6.1.0"
+dashmap = "6.2.1"
 dragonfly-api = "=2.2.30"
 dragonfly-client = { path = "dragonfly-client", version = "1.3.10" }
 dragonfly-client-backend = { path = "dragonfly-client-backend", version = "1.3.10" }
