@@ -129,7 +129,7 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring"]
 tokio-stream = "0.1.18"
 tokio-util = { version = "0.7.18", features = ["full"] }
 toml = "0.8.23"
-toml_edit = "0.25.11"
+toml_edit = "0.25.12"
 tonic = { version = "=0.14.2", features = ["tls-ring"] }
 tonic-health = "=0.14.5"
 tonic-reflection = "=0.14.5"
