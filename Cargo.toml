@@ -30,7 +30,7 @@ bytes = "1.11"
 bytesize = { version = "1.3.3", features = ["serde"] }
 bytesize-serde = "0.2.1"
 cgroups-rs = "0.5"
-chrono = { version = "0.4.44", features = ["clock", "serde"] }
+chrono = { version = "0.4.45", features = ["clock", "serde"] }
 clap = { version = "4.6.1", features = ["derive", "env"] }
 crc32fast = "1.5.0"
 dashmap = "6.1.0"
