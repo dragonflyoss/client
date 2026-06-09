@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Dragonfly Client (`dragonflyoss/client`) is a high-performance P2P download client written in **Rust 1.85.0**. It implements both the peer and seed-peer roles in the [Dragonfly](https://d7y.io/) distributed file distribution system. The daemon (`dfdaemon`) intercepts HTTP requests via an MITM proxy, coordinates piece-level downloads across peers, and persists data through a local RocksDB-backed storage layer.
+Dragonfly Client (`dragonflyoss/client`) is a high-performance P2P download client written in **Rust 1.88.0**. It implements both the peer and seed-peer roles in the [Dragonfly](https://d7y.io/) distributed file distribution system. The daemon (`dfdaemon`) intercepts HTTP requests via an MITM proxy, coordinates piece-level downloads across peers, and persists data through a local RocksDB-backed storage layer.
 
 ---
 
@@ -30,7 +30,7 @@ All crates share `[workspace.package]` metadata (version `1.2.11`, Apache-2.0 li
 
 ### Toolchain
 
-Pin the toolchain to `1.85.0` via `rust-toolchain.toml`. Always write code compatible with that version.
+Pin the toolchain to `1.88.0` via `rust-toolchain.toml`. Always write code compatible with that version.
 
 ### Edition
 
