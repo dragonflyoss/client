@@ -62,7 +62,7 @@ fn get_commit_from_git() -> Option<Commit> {
 fn main() {
     // Set the environment variables for the build platform.
     let target = env::var("TARGET").unwrap_or_default();
-    println!("cargo:rustc-env=BUILD_PLATFORM={}", target);
+    println!("cargo:rustc-env=BUILD_PLATFORM={target}");
 
     // Set the environment variables for the build time.
     if let Ok(build_time) = SystemTime::now().duration_since(UNIX_EPOCH) {
