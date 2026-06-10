@@ -91,7 +91,7 @@ impl QUICServer {
     pub async fn run(&mut self) -> ClientResult<()> {
         let (certs, key) = generate_simple_self_signed_certs("d7y", vec!["d7y".into()])?;
         let mut server_config = ServerConfig::with_single_cert(certs, key).map_err(|err| {
-            ClientError::Unknown(format!("failed to create server config: {}", err))
+            ClientError::Unknown(format!("failed to create server config: {err}"))
         })?;
 
         let mut transport = TransportConfig::default();
@@ -504,14 +504,14 @@ impl QUICServerHandler {
                 error!("piece {} not found in local storage", piece_id);
                 return Err(Error::new(
                     Code::NotFound,
-                    format!("piece {} not found", piece_id),
+                    format!("piece {piece_id} not found"),
                 ));
             }
             Err(err) => {
                 error!("get piece {} from local storage error: {:?}", piece_id, err);
                 return Err(Error::new(
                     Code::Internal,
-                    format!("failed to get piece: {}", err),
+                    format!("failed to get piece: {err}"),
                 ));
             }
         };
@@ -530,7 +530,7 @@ impl QUICServerHandler {
                 error!("failed to get piece content: {}", err);
                 Error::new(
                     Code::Internal,
-                    format!("failed to get piece {} content: {}", piece_id, err),
+                    format!("failed to get piece {piece_id} content: {err}"),
                 )
             })?;
 
@@ -568,14 +568,14 @@ impl QUICServerHandler {
                 error!("piece {} not found in local storage", piece_id);
                 return Err(Error::new(
                     Code::NotFound,
-                    format!("piece {} not found", piece_id),
+                    format!("piece {piece_id} not found"),
                 ));
             }
             Err(err) => {
                 error!("get piece {} from local storage error: {:?}", piece_id, err);
                 return Err(Error::new(
                     Code::Internal,
-                    format!("failed to get piece: {}", err),
+                    format!("failed to get piece: {err}"),
                 ));
             }
         };
@@ -594,7 +594,7 @@ impl QUICServerHandler {
                 error!("failed to get piece content: {}", err);
                 Error::new(
                     Code::Internal,
-                    format!("failed to get piece {} content: {}", piece_id, err),
+                    format!("failed to get piece {piece_id} content: {err}"),
                 )
             })?;
 
@@ -632,14 +632,14 @@ impl QUICServerHandler {
                 error!("piece {} not found in local storage", piece_id);
                 return Err(Error::new(
                     Code::NotFound,
-                    format!("piece {} not found", piece_id),
+                    format!("piece {piece_id} not found"),
                 ));
             }
             Err(err) => {
                 error!("get piece {} from local storage error: {:?}", piece_id, err);
                 return Err(Error::new(
                     Code::Internal,
-                    format!("failed to get piece: {}", err),
+                    format!("failed to get piece: {err}"),
                 ));
             }
         };
@@ -658,7 +658,7 @@ impl QUICServerHandler {
                 error!("failed to get piece content: {}", err);
                 Error::new(
                     Code::Internal,
-                    format!("failed to get piece {} content: {}", piece_id, err),
+                    format!("failed to get piece {piece_id} content: {err}"),
                 )
             })?;
 

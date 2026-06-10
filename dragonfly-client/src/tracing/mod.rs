@@ -130,7 +130,7 @@ pub fn init_tracing(
                     }
                 }
 
-                let endpoint_url = url::Url::parse(&format!("http://{}", endpoint))
+                let endpoint_url = url::Url::parse(&format!("http://{endpoint}"))
                     .expect("failed to parse OTLP endpoint URL");
 
                 opentelemetry_otlp::SpanExporter::builder()
@@ -142,7 +142,7 @@ pub fn init_tracing(
                     .expect("failed to create OTLP exporter")
             }
             "http" | "https" => {
-                let mut endpoint_url = url::Url::parse(&format!("{}://{}", protocol, endpoint))
+                let mut endpoint_url = url::Url::parse(&format!("{protocol}://{endpoint}"))
                     .expect("failed to parse OTLP endpoint URL");
 
                 if let Some(path) = otel_path {
@@ -160,7 +160,7 @@ pub fn init_tracing(
                     .expect("failed to create OTLP exporter")
             }
             _ => {
-                panic!("unsupported OTLP protocol: {}", protocol);
+                panic!("unsupported OTLP protocol: {protocol}");
             }
         };
 

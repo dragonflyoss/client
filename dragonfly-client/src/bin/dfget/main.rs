@@ -736,7 +736,7 @@ async fn run(mut args: Args, dfdaemon_download_client: DfdaemonDownloadClient) -
     let scheme = args.url.scheme();
     if args.url.path().ends_with('/') {
         if BackendFactory::unsupported_download_directory(scheme) {
-            return Err(Error::Unsupported(format!("{} download directory", scheme)));
+            return Err(Error::Unsupported(format!("{scheme} download directory")));
         };
 
         return download_dir(args, dfdaemon_download_client).await;
@@ -1435,15 +1435,13 @@ fn validate_args(args: &Args) -> Result<()> {
         for include_file in include_files {
             if Pattern::new(include_file).is_err() {
                 return Err(Error::ValidationError(format!(
-                    "invalid glob pattern in include_files: '{}'",
-                    include_file
+                    "invalid glob pattern in include_files: '{include_file}'"
                 )));
             }
 
             if !is_normal_relative_path(include_file) {
                 return Err(Error::ValidationError(format!(
-                    "path is not a normal relative path in include_files: '{}'. It must not contain '..', '.', or start with '/'.",
-                    include_file
+                    "path is not a normal relative path in include_files: '{include_file}'. It must not contain '..', '.', or start with '/'."
                 )));
             }
         }

@@ -592,7 +592,7 @@ mod tests {
         // Test attempting to overwrite existing pieces.
         // The write should succeed (return Ok) but content should not change.
         for (piece_id, original_content) in &test_cases {
-            let new_content = format!("updated content for {}", piece_id);
+            let new_content = format!("updated content for {piece_id}");
             let result = cache
                 .write_piece("task1", piece_id, Bytes::from(new_content))
                 .await;
@@ -864,7 +864,7 @@ mod tests {
                 let mut reader = cache_clone
                     .read_piece("task1", "piece1", piece, range)
                     .await
-                    .unwrap_or_else(|e| panic!("Reader {} failed: {:?}.", i, e));
+                    .unwrap_or_else(|e| panic!("Reader {i} failed: {e:?}."));
 
                 let mut buffer = Vec::new();
                 reader.read_to_end(&mut buffer).await.unwrap();
@@ -900,10 +900,10 @@ mod tests {
         // Spawn concurrent writers.
         for i in 0..50 {
             let cache_clone = cache_arc.clone();
-            let content = format!("content for piece {}", i).into_bytes();
+            let content = format!("content for piece {i}").into_bytes();
 
             join_set.spawn(async move {
-                let piece_id = format!("piece{}", i);
+                let piece_id = format!("piece{i}");
                 let result = cache_clone
                     .write_piece("task1", &piece_id, Bytes::from(content.clone()))
                     .await;
@@ -962,7 +962,7 @@ mod tests {
         // Spawn concurrent writers.
         for i in 0..50 {
             let cache_clone = cache_arc.clone();
-            let new_content = format!("new content from writer {}", i).into_bytes();
+            let new_content = format!("new content from writer {i}").into_bytes();
 
             join_set.spawn(async move {
                 let result = cache_clone

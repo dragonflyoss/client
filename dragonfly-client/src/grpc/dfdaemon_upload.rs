@@ -404,7 +404,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             // Convert the header.
             let request_header = match hashmap_to_headermap(&download.request_header) {
                 Ok(header) => header,
-                Err(e) => {
+                Err(err) => {
                     // Download task failed.
                     self.task
                         .download_failed(task_id.as_str())
@@ -419,15 +419,15 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         download.priority.to_string().as_str(),
                     );
 
-                    error!("convert header: {}", e);
-                    return Err(Status::invalid_argument(e.to_string()));
+                    error!("convert header: {}", err);
+                    return Err(Status::invalid_argument(err.to_string()));
                 }
             };
 
             download.range =
                 match get_range(&request_header, task.content_length().unwrap_or_default()) {
                     Ok(range) => range,
-                    Err(e) => {
+                    Err(err) => {
                         // Download task failed.
                         self.task
                             .download_failed(task_id.as_str())
@@ -442,8 +442,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             download.priority.to_string().as_str(),
                         );
 
-                        error!("get range failed: {}", e);
-                        return Err(Status::failed_precondition(e.to_string()));
+                        error!("get range failed: {}", err);
+                        return Err(Status::failed_precondition(err.to_string()));
                     }
                 };
         }
@@ -737,7 +737,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 // Map the error to an appropriate gRPC status.
                 Err(match err {
                     ClientError::TaskNotFound(id) => {
-                        Status::not_found(format!("task not found: {}", id))
+                        Status::not_found(format!("task not found: {id}"))
                     }
                     _ => Status::internal(err.to_string()),
                 })
@@ -784,7 +784,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 // Map the error to an appropriate gRPC status.
                 Err(match err {
                     ClientError::TaskNotFound(id) => {
-                        Status::not_found(format!("local task not found: {}", id))
+                        Status::not_found(format!("local task not found: {id}"))
                     }
                     _ => Status::internal(err.to_string()),
                 })
@@ -976,7 +976,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             error!("get task {} failed", task_id);
                             out_stream_tx
                                 .send_timeout(
-                                    Err(Status::internal(format!("task {} failed", task_id))),
+                                    Err(Status::internal(format!("task {task_id} failed"))),
                                     super::REQUEST_TIMEOUT,
                                 )
                                 .await
@@ -993,7 +993,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         error!("get task {} not found", task_id);
                         out_stream_tx
                             .send_timeout(
-                                Err(Status::internal(format!("task {} not found", task_id))),
+                                Err(Status::internal(format!("task {task_id} not found"))),
                                 super::REQUEST_TIMEOUT,
                             )
                             .await
@@ -1289,7 +1289,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             .or_err(ErrorType::ParseError)
             .map_err(|_err| {
                 error!("invalid ttl: {}", ttl);
-                Status::internal(format!("invalid ttl: {}", ttl))
+                Status::internal(format!("invalid ttl: {ttl}"))
             })?;
 
         // Convert prost_wkt_types::Timestamp to chrono::DateTime.
@@ -1305,7 +1305,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             .ok_or(ClientError::InvalidParameter)
             .map_err(|_err| {
                 error!("invalid created_at: {}", created_at);
-                Status::internal(format!("invalid created_at: {}", created_at))
+                Status::internal(format!("invalid created_at: {created_at}"))
             })?;
 
         // Download task started.
@@ -1343,9 +1343,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             json.into(),
                         ));
                     }
-                    Err(e) => {
-                        error!("serialize error: {}", e);
-                        return Err(Status::internal(e.to_string()));
+                    Err(err) => {
+                        error!("serialize error: {}", err);
+                        return Err(Status::internal(err.to_string()));
                     }
                 }
             }
@@ -1484,8 +1484,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                                         handle_error(
                                             &out_stream_tx,
                                             Status::invalid_argument(format!(
-                                                "invalid digest({}): {}",
-                                                raw_digest, err
+                                                "invalid digest({raw_digest}): {err}"
                                             )),
                                         )
                                         .await;
@@ -1717,8 +1716,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             out_stream_tx
                                 .send_timeout(
                                     Err(Status::internal(format!(
-                                        "persistent task {} failed",
-                                        task_id
+                                        "persistent task {task_id} failed"
                                     ))),
                                     super::REQUEST_TIMEOUT,
                                 )
@@ -1740,8 +1738,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         out_stream_tx
                             .send_timeout(
                                 Err(Status::internal(format!(
-                                    "persistent task {} not found",
-                                    task_id
+                                    "persistent task {task_id} not found"
                                 ))),
                                 super::REQUEST_TIMEOUT,
                             )
@@ -1947,9 +1944,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             json.into(),
                         ));
                     }
-                    Err(e) => {
-                        error!("serialize error: {}", e);
-                        return Err(Status::internal(e.to_string()));
+                    Err(err) => {
+                        error!("serialize error: {}", err);
+                        return Err(Status::internal(err.to_string()));
                     }
                 }
             }
@@ -2300,7 +2297,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             error!("get persistent cache task {} failed", task_id);
                             out_stream_tx
                                 .send_timeout(
-                                    Err(Status::internal(format!("persistent cache task {} failed", task_id))),
+                                    Err(Status::internal(format!("persistent cache task {task_id} failed"))),
                                     super::REQUEST_TIMEOUT,
                                 )
                                 .await
@@ -2317,7 +2314,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         error!("get persistent cache task {} not found", task_id);
                         out_stream_tx
                             .send_timeout(
-                                Err(Status::internal(format!("persistent cache task {} not found", task_id))),
+                                Err(Status::internal(format!("persistent cache task {task_id} not found"))),
                                 super::REQUEST_TIMEOUT,
                             )
                             .await

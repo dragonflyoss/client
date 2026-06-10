@@ -178,7 +178,7 @@ impl Network {
     pub fn get_speed(name: &str) -> Option<u64> {
         #[cfg(target_os = "linux")]
         {
-            let speed_path = format!("/sys/class/net/{}/speed", name);
+            let speed_path = format!("/sys/class/net/{name}/speed");
             std::fs::read_to_string(&speed_path)
                 .ok()
                 .and_then(|speed_str| speed_str.trim().parse::<u64>().ok())

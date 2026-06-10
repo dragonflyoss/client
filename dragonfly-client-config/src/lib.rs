@@ -67,7 +67,7 @@ lazy_static! {
             env::var("POD_NAMESPACE").ok(),
             env::var("POD_NAME").ok()
         ) {
-            format!("{}-{}", pod_namespace, pod_name)
+            format!("{pod_namespace}-{pod_name}")
         } else {
             hostname::get()
                 .unwrap()

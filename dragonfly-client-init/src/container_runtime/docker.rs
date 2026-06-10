@@ -63,7 +63,7 @@ impl Docker {
         let proxy_port = proxy_url
             .port_or_known_default()
             .ok_or(Error::Unknown("port not found".to_string()))?;
-        let proxy_location = format!("{}:{}", proxy_host, proxy_port);
+        let proxy_location = format!("{proxy_host}:{proxy_port}");
 
         // Prepare proxies configuration.
         let mut proxies_map = serde_json::Map::new();
@@ -128,7 +128,7 @@ mod tests {
         );
 
         let result = docker.run().await;
-        println!("{:?}", result);
+        println!("{result:?}");
         assert!(result.is_ok());
 
         // Read and verify configuration.
@@ -204,7 +204,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
-                format!("{}", e),
+                format!("{e}"),
                 "ParseError cause: trailing comma at line 5 column 9"
             );
         }

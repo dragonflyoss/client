@@ -72,7 +72,7 @@ impl FromStr for Algorithm {
             "crc32" => Ok(Algorithm::Crc32),
             "sha256" => Ok(Algorithm::Sha256),
             "sha512" => Ok(Algorithm::Sha512),
-            _ => Err(format!("invalid digest algorithm: {}", s)),
+            _ => Err(format!("invalid digest algorithm: {s}")),
         }
     }
 }
@@ -130,7 +130,7 @@ impl FromStr for Digest {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<&str> = s.splitn(2, SEPARATOR).collect();
         if parts.len() != 2 {
-            return Err(format!("invalid digest: {}", s));
+            return Err(format!("invalid digest: {s}"));
         }
 
         let algorithm = match parts[0] {

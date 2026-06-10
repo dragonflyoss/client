@@ -460,14 +460,14 @@ impl TCPServerHandler {
                 error!("piece {} not found in local storage", piece_id);
                 return Err(Error::new(
                     Code::NotFound,
-                    format!("piece {} not found", piece_id),
+                    format!("piece {piece_id} not found"),
                 ));
             }
             Err(err) => {
                 error!("get piece {} from local storage error: {:?}", piece_id, err);
                 return Err(Error::new(
                     Code::Internal,
-                    format!("failed to get piece: {}", err),
+                    format!("failed to get piece: {err}"),
                 ));
             }
         };
@@ -486,7 +486,7 @@ impl TCPServerHandler {
                 error!("failed to get piece content: {}", err);
                 Error::new(
                     Code::Internal,
-                    format!("failed to get piece {} content: {}", piece_id, err),
+                    format!("failed to get piece {piece_id} content: {err}"),
                 )
             })?;
 
@@ -524,14 +524,14 @@ impl TCPServerHandler {
                 error!("piece {} not found in local storage", piece_id);
                 return Err(Error::new(
                     Code::NotFound,
-                    format!("piece {} not found", piece_id),
+                    format!("piece {piece_id} not found"),
                 ));
             }
             Err(err) => {
                 error!("get piece {} from local storage error: {:?}", piece_id, err);
                 return Err(Error::new(
                     Code::Internal,
-                    format!("failed to get piece: {}", err),
+                    format!("failed to get piece: {err}"),
                 ));
             }
         };
@@ -550,7 +550,7 @@ impl TCPServerHandler {
                 error!("failed to get piece content: {}", err);
                 Error::new(
                     Code::Internal,
-                    format!("failed to get piece {} content: {}", piece_id, err),
+                    format!("failed to get piece {piece_id} content: {err}"),
                 )
             })?;
 
@@ -588,14 +588,14 @@ impl TCPServerHandler {
                 error!("piece {} not found in local storage", piece_id);
                 return Err(Error::new(
                     Code::NotFound,
-                    format!("piece {} not found", piece_id),
+                    format!("piece {piece_id} not found"),
                 ));
             }
             Err(err) => {
                 error!("get piece {} from local storage error: {:?}", piece_id, err);
                 return Err(Error::new(
                     Code::Internal,
-                    format!("failed to get piece: {}", err),
+                    format!("failed to get piece: {err}"),
                 ));
             }
         };
@@ -614,7 +614,7 @@ impl TCPServerHandler {
                 error!("failed to get piece content: {}", err);
                 Error::new(
                     Code::Internal,
-                    format!("failed to get piece {} content: {}", piece_id, err),
+                    format!("failed to get piece {piece_id} content: {err}"),
                 )
             })?;
 

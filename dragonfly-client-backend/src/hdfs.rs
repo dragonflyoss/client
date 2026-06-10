@@ -90,7 +90,7 @@ impl Hdfs {
         builder = builder
             .root("/")
             // Host can be an IP address or a hostname, so we need to handle both cases.
-            .endpoint(&format!("http://{}:{}", host, port));
+            .endpoint(&format!("http://{host}:{port}"));
 
         // If HDFS config is not None, set the config for builder.
         if let Some(config) = config {

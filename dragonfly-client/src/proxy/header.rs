@@ -151,7 +151,7 @@ impl FromStr for ErrorType {
             "backend" => Ok(ErrorType::Backend),
             "proxy" => Ok(ErrorType::Proxy),
             "dfdaemon" => Ok(ErrorType::Dfdaemon),
-            _ => Err(format!("invalid error type: {}", s)),
+            _ => Err(format!("invalid error type: {s}")),
         }
     }
 }

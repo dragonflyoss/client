@@ -185,7 +185,7 @@ impl SchedulerClient {
                 debug!("announce host to {}", addr);
 
                 // Connect to the scheduler.
-                let channel = Channel::from_shared(format!("http://{}", addr))
+                let channel = Channel::from_shared(format!("http://{addr}"))
                     .map_err(|_| Error::InvalidURI(addr.to_string()))?
                     .buffer_size(super::BUFFER_SIZE)
                     .connect_timeout(super::CONNECT_TIMEOUT)
@@ -239,7 +239,7 @@ impl SchedulerClient {
                 info!("announce host to {:?}", addr);
 
                 // Connect to the scheduler.
-                let channel = Channel::from_shared(format!("http://{}", addr))
+                let channel = Channel::from_shared(format!("http://{addr}"))
                     .map_err(|_| Error::InvalidURI(addr.to_string()))?
                     .buffer_size(super::BUFFER_SIZE)
                     .connect_timeout(super::CONNECT_TIMEOUT)
@@ -298,7 +298,7 @@ impl SchedulerClient {
                 info!("delete host from {}", addr);
 
                 // Connect to the scheduler.
-                let channel = Channel::from_shared(format!("http://{}", addr))
+                let channel = Channel::from_shared(format!("http://{addr}"))
                     .map_err(|_| Error::InvalidURI(addr.to_string()))?
                     .buffer_size(super::BUFFER_SIZE)
                     .connect_timeout(super::CONNECT_TIMEOUT)
@@ -595,7 +595,7 @@ impl SchedulerClient {
         drop(addrs);
         info!("picked {:?}", addr);
 
-        let addr = format!("http://{}", addr);
+        let addr = format!("http://{addr}");
         let domain_name = Url::parse(addr.as_str())?
             .host_str()
             .ok_or(Error::InvalidParameter)

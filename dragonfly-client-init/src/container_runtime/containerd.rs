@@ -116,7 +116,7 @@ impl Containerd {
         registry_table.insert("config_path", value(config_path));
         containerd_config["plugins"][plugin_id]
             .as_table_mut()
-            .ok_or(Error::Unknown(format!("{} not found", plugin_id)))?
+            .ok_or(Error::Unknown(format!("{plugin_id} not found")))?
             .insert("registry", Item::Table(registry_table));
 
         // Override containerd configuration.
@@ -269,9 +269,8 @@ mod tests {
 [plugins]
   [plugins."io.containerd.grpc.v1.cri"]
     [plugins."io.containerd.grpc.v1.cri".registry]
-      config_path = "{}"
-"#,
-            certs_dir_str
+      config_path = "{certs_dir_str}"
+"#
         );
         fs::write(&config_path, initial_config).await.unwrap();
 
@@ -296,9 +295,9 @@ mod tests {
         // Run containerd configuration
         let result = containerd.run().await;
         if let Err(e) = &result {
-            println!("Error: {:?}", e);
+            println!("Error: {e:?}");
             if let Ok(contents) = fs::read_to_string(&config_path).await {
-                println!("Current config file contents:\n{}", contents);
+                println!("Current config file contents:\n{contents}");
             }
         }
         assert!(result.is_ok());
@@ -333,9 +332,8 @@ X-Dragonfly-Registry = "https://registry.example.com"
 [plugins]
   [plugins."io.containerd.grpc.v1.cri"]
     [plugins."io.containerd.grpc.v1.cri".registry]
-      config_path = "{}"
-"#,
-            certs_dir_str
+      config_path = "{certs_dir_str}"
+"#
         );
         fs::write(&config_path, initial_config).await.unwrap();
 
@@ -357,7 +355,7 @@ X-Dragonfly-Registry = "https://registry.example.com"
         );
 
         let result = containerd.run().await;
-        assert!(result.is_ok(), "containerd.run() failed: {:?}", result);
+        assert!(result.is_ok(), "containerd.run() failed: {result:?}");
 
         // Explicitly configured registry still gets its own hosts.toml with the registry header.
         let explicit_hosts = fs::read_to_string(certs_dir.join("docker.io").join("hosts.toml"))
@@ -388,9 +386,8 @@ capabilities = ["pull", "resolve"]
 [plugins]
   [plugins."io.containerd.grpc.v1.cri"]
     [plugins."io.containerd.grpc.v1.cri".registry]
-      config_path = "{}"
-"#,
-            certs_dir_str
+      config_path = "{certs_dir_str}"
+"#
         );
         fs::write(&config_path, initial_config).await.unwrap();
 
@@ -424,9 +421,8 @@ version = 3
 [plugins]
   [plugins."io.containerd.cri.v1.images"]
     [plugins."io.containerd.cri.v1.images".registry]
-      config_path = "{}"
-"#,
-            certs_dir_str
+      config_path = "{certs_dir_str}"
+"#
         );
         fs::write(&config_path, initial_config).await.unwrap();
 
@@ -451,9 +447,9 @@ version = 3
         // Run containerd configuration
         let result = containerd.run().await;
         if let Err(e) = &result {
-            println!("Error: {:?}", e);
+            println!("Error: {e:?}");
             if let Ok(contents) = fs::read_to_string(&config_path).await {
-                println!("Current config file contents:\n{}", contents);
+                println!("Current config file contents:\n{contents}");
             }
         }
         assert!(result.is_ok());

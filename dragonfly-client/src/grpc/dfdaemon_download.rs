@@ -453,7 +453,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             // Convert the header.
             let request_header = match hashmap_to_headermap(&download.request_header) {
                 Ok(header) => header,
-                Err(e) => {
+                Err(err) => {
                     // Download task failed.
                     self.task
                         .download_failed(task_id.as_str())
@@ -468,15 +468,15 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                         download.priority.to_string().as_str(),
                     );
 
-                    error!("convert header: {}", e);
-                    return Err(Status::invalid_argument(e.to_string()));
+                    error!("convert header: {}", err);
+                    return Err(Status::invalid_argument(err.to_string()));
                 }
             };
 
             download.range =
                 match get_range(&request_header, task.content_length().unwrap_or_default()) {
                     Ok(range) => range,
-                    Err(e) => {
+                    Err(err) => {
                         // Download task failed.
                         self.task
                             .download_failed(task_id.as_str())
@@ -491,8 +491,8 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             download.priority.to_string().as_str(),
                         );
 
-                        error!("get range failed: {}", e);
-                        return Err(Status::failed_precondition(e.to_string()));
+                        error!("get range failed: {}", err);
+                        return Err(Status::failed_precondition(err.to_string()));
                     }
                 };
         }
@@ -633,8 +633,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                             handle_error(
                                                 &out_stream_tx,
                                                 Status::invalid_argument(format!(
-                                                    "invalid digest({}): {}",
-                                                    raw_digest, err
+                                                    "invalid digest({raw_digest}): {err}"
                                                 )),
                                             )
                                             .await;
@@ -813,7 +812,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 // Map the error to an appropriate gRPC status.
                 Err(match err {
                     ClientError::TaskNotFound(id) => {
-                        Status::not_found(format!("task not found: {}", id))
+                        Status::not_found(format!("task not found: {id}"))
                     }
                     _ => Status::internal(err.to_string()),
                 })
@@ -865,7 +864,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 // Map the error to an appropriate gRPC status.
                 Err(match err {
                     ClientError::TaskNotFound(id) => {
-                        Status::not_found(format!("local task not found: {}", id))
+                        Status::not_found(format!("local task not found: {id}"))
                     }
                     _ => Status::internal(err.to_string()),
                 })
@@ -1268,9 +1267,9 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             json.into(),
                         ));
                     }
-                    Err(e) => {
-                        error!("serialize error: {}", e);
-                        return Err(Status::internal(e.to_string()));
+                    Err(err) => {
+                        error!("serialize error: {}", err);
+                        return Err(Status::internal(err.to_string()));
                     }
                 }
             }
@@ -1409,8 +1408,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                         handle_error(
                                             &out_stream_tx,
                                             Status::invalid_argument(format!(
-                                                "invalid digest({}): {}",
-                                                raw_digest, err
+                                                "invalid digest({raw_digest}): {err}"
                                             )),
                                         )
                                         .await;
@@ -1823,9 +1821,9 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             json.into(),
                         ));
                     }
-                    Err(e) => {
-                        error!("serialize error: {}", e);
-                        return Err(Status::internal(e.to_string()));
+                    Err(err) => {
+                        error!("serialize error: {}", err);
+                        return Err(Status::internal(err.to_string()));
                     }
                 }
             }
@@ -1968,8 +1966,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                         handle_error(
                                             &out_stream_tx,
                                             Status::invalid_argument(format!(
-                                                "invalid digest({}): {}",
-                                                raw_digest, err
+                                                "invalid digest({raw_digest}): {err}"
                                             )),
                                         )
                                         .await;

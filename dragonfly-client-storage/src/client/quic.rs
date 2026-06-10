@@ -243,7 +243,7 @@ impl QUICClient {
                     .with_no_client_auth(),
             )
             .map_err(|err| {
-                ClientError::Unknown(format!("failed to create quic client config: {}", err))
+                ClientError::Unknown(format!("failed to create quic client config: {err}"))
             })?,
         ));
 
@@ -364,7 +364,7 @@ impl QUICClient {
             })
             .unwrap_or_else(|err| {
                 error!("failed to extract error: {}", err);
-                ClientError::Unknown(format!("failed to extract error: {}", err))
+                ClientError::Unknown(format!("failed to extract error: {err}"))
             })
     }
 }

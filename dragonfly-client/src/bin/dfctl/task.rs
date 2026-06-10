@@ -1269,7 +1269,7 @@ impl PreheatCommand {
         let registry = reference.resolve_registry();
         let repository = reference.repository();
         let tag = reference.tag().unwrap_or("latest");
-        let manifest_url = format!("https://{}/v2/{}/manifests/{}", registry, repository, tag);
+        let manifest_url = format!("https://{registry}/v2/{repository}/manifests/{tag}");
 
         let channel = Channel::from_shared(self.scheduler_endpoint.clone())
             .or_err(ErrorType::ParseError)?
@@ -1400,7 +1400,7 @@ impl PreheatCommand {
             .scheduler_endpoint(self.scheduler_endpoint.clone())
             .build()
             .await
-            .map_err(|err| Error::Unknown(format!("failed to build proxy: {}", err)))?;
+            .map_err(|err| Error::Unknown(format!("failed to build proxy: {err}")))?;
 
         let filtered_query_params = self
             .filtered_query_params
@@ -1436,7 +1436,7 @@ impl PreheatCommand {
         proxy
             .preheat(&request)
             .await
-            .map_err(|err| Error::Unknown(format!("preheat failed: {}", err)))?;
+            .map_err(|err| Error::Unknown(format!("preheat failed: {err}")))?;
 
         println!(
             "{}{}Preheat Succeeded!{}",
@@ -1454,7 +1454,7 @@ impl PreheatCommand {
             .scheduler_endpoint(self.scheduler_endpoint.clone())
             .build()
             .await
-            .map_err(|err| Error::Unknown(format!("failed to build proxy: {}", err)))?;
+            .map_err(|err| Error::Unknown(format!("failed to build proxy: {err}")))?;
 
         let filtered_query_params = self
             .filtered_query_params
@@ -1482,7 +1482,7 @@ impl PreheatCommand {
         let response = proxy
             .get(&request)
             .await
-            .map_err(|err| Error::Unknown(format!("preheat failed: {}", err)))?;
+            .map_err(|err| Error::Unknown(format!("preheat failed: {err}")))?;
 
         if let Some(mut reader) = response.reader {
             tokio::io::copy(&mut reader, &mut tokio::io::sink()).await?;

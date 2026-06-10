@@ -294,7 +294,7 @@ mod tests {
     #[test]
     fn should_convert_externalerror_to_dferror() {
         fn function_return_inner_error() -> Result<(), std::io::Error> {
-            let inner_error = std::io::Error::new(std::io::ErrorKind::Other, "inner error");
+            let inner_error = std::io::Error::other("inner error");
             Err(inner_error)
         }
 
@@ -306,6 +306,6 @@ mod tests {
         }
 
         let err = do_sth_with_error().err().unwrap();
-        assert_eq!(format!("{}", err), "StorageError cause: inner error");
+        assert_eq!(format!("{err}"), "StorageError cause: inner error");
     }
 }

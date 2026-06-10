@@ -625,7 +625,7 @@ pub async fn upgraded_handler(
         *request.uri_mut() = builder
             .scheme("https")
             // Host can be an IP address or a hostname, so we need to handle both cases.
-            .authority(format!("{}:{}", host, port))
+            .authority(format!("{host}:{port}"))
             .path_and_query(
                 request
                     .uri()
@@ -1189,8 +1189,7 @@ fn make_download_task_request(
     if let Some(piece_length) = piece_length {
         if piece_length < MIN_PIECE_LENGTH {
             return Err(ClientError::ValidationError(format!(
-                "piece length {} is less than the minimum piece length {}",
-                piece_length, MIN_PIECE_LENGTH
+                "piece length {piece_length} is less than the minimum piece length {MIN_PIECE_LENGTH}"
             )));
         }
     }
