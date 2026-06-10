@@ -646,7 +646,7 @@ impl Backend for HuggingFace {
                     source = err.source();
                 }
 
-                IOError::other(err)
+                IOError::new(ErrorKind::Other, chain)
             },
         )));
 

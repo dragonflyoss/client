@@ -696,7 +696,7 @@ impl Backend for HTTP {
                     source = err.source();
                 }
 
-                IOError::other(err)
+                IOError::new(ErrorKind::Other, chain)
             },
         )));
 

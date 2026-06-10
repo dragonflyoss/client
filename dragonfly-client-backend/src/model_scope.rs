@@ -618,7 +618,7 @@ impl Backend for ModelScope {
                     source = err.source();
                 }
 
-                IOError::other(err)
+                IOError::new(ErrorKind::Other, chain)
             },
         )));
 
