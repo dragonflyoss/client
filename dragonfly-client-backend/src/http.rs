@@ -69,7 +69,7 @@ use reqwest_tracing::TracingMiddleware;
 use rustls_pki_types::CertificateDer;
 use std::collections::HashMap;
 use std::error::Error as _;
-use std::io::{Error as IOError, ErrorKind as IOErrorKind};
+use std::io::Error as IOError;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -696,7 +696,7 @@ impl Backend for HTTP {
                     source = err.source();
                 }
 
-                IOErrorKind::Other(chain)
+                IOError::other(chain)
             },
         )));
 
