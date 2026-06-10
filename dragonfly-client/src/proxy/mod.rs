@@ -844,7 +844,14 @@ async fn proxy_via_dfdaemon(
         config.host.ip.unwrap(),
         download_task_started_response.clone(),
     )?;
-    *response.status_mut() = http::StatusCode::OK;
+    // Return 206 Partial Content for range requests to match the Content-Range header set by
+    // make_response_headers. Returning 200 for a partial body breaks range-aware clients (e.g. the
+    // containerd stargz-snapshotter), which then read the partial body as the full object.
+    *response.status_mut() = if download_task_started_response.range.is_some() {
+        http::StatusCode::PARTIAL_CONTENT
+    } else {
+        http::StatusCode::OK
+    };
 
     // Return the response if the client return the first piece.
     let mut initialized = false;
