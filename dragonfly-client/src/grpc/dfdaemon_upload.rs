@@ -404,7 +404,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             // Convert the header.
             let request_header = match hashmap_to_headermap(&download.request_header) {
                 Ok(header) => header,
-                Err(e) => {
+                Err(err) => {
                     // Download task failed.
                     self.task
                         .download_failed(task_id.as_str())
@@ -419,15 +419,15 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         download.priority.to_string().as_str(),
                     );
 
-                    error!("convert header: {}", e);
-                    return Err(Status::invalid_argument(e.to_string()));
+                    error!("convert header: {}", err);
+                    return Err(Status::invalid_argument(err.to_string()));
                 }
             };
 
             download.range =
                 match get_range(&request_header, task.content_length().unwrap_or_default()) {
                     Ok(range) => range,
-                    Err(e) => {
+                    Err(err) => {
                         // Download task failed.
                         self.task
                             .download_failed(task_id.as_str())
@@ -442,8 +442,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             download.priority.to_string().as_str(),
                         );
 
-                        error!("get range failed: {}", e);
-                        return Err(Status::failed_precondition(e.to_string()));
+                        error!("get range failed: {}", err);
+                        return Err(Status::failed_precondition(err.to_string()));
                     }
                 };
         }
@@ -1343,9 +1343,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             json.into(),
                         ));
                     }
-                    Err(e) => {
-                        error!("serialize error: {}", e);
-                        return Err(Status::internal(e.to_string()));
+                    Err(err) => {
+                        error!("serialize error: {}", err);
+                        return Err(Status::internal(err.to_string()));
                     }
                 }
             }
@@ -1944,9 +1944,9 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                             json.into(),
                         ));
                     }
-                    Err(e) => {
-                        error!("serialize error: {}", e);
-                        return Err(Status::internal(e.to_string()));
+                    Err(err) => {
+                        error!("serialize error: {}", err);
+                        return Err(Status::internal(err.to_string()));
                     }
                 }
             }
