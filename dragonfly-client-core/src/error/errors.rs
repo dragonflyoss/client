@@ -104,7 +104,7 @@ impl ExternalError {
                 write!(f, " cause: ")?;
                 e.chain_display(Some(self), f)
             } else {
-                write!(f, " cause: {}", c)
+                write!(f, " cause: {c}")
             }
         } else {
             Ok(())
