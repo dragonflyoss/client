@@ -335,8 +335,7 @@ impl Content {
 
         if length != expected_length {
             return Err(Error::Unknown(format!(
-                "expected length {} but got {}",
-                expected_length, length
+                "expected length {expected_length} but got {length}"
             )));
         }
 
@@ -562,8 +561,7 @@ impl Content {
 
         if length != expected_length {
             return Err(Error::Unknown(format!(
-                "expected length {} but got {}",
-                expected_length, length
+                "expected length {expected_length} but got {length}"
             )));
         }
 
@@ -808,8 +806,7 @@ impl Content {
 
         if length != expected_length {
             return Err(Error::Unknown(format!(
-                "expected length {} but got {}",
-                expected_length, length
+                "expected length {expected_length} but got {length}"
             )));
         }
 

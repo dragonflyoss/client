@@ -140,7 +140,7 @@ impl FromStr for Scheme {
             "oss" => Ok(Scheme::OSS),
             "obs" => Ok(Scheme::OBS),
             "cos" => Ok(Scheme::COS),
-            _ => Err(format!("invalid scheme: {}", s)),
+            _ => Err(format!("invalid scheme: {s}")),
         }
     }
 }
@@ -936,7 +936,7 @@ mod tests {
 
         // Test each scheme for both file and directory URLs.
         for scheme in schemes {
-            let file_url = format!("{}://{}", scheme, file_key);
+            let file_url = format!("{scheme}://{file_key}");
             let url: Url = file_url.parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
@@ -945,7 +945,7 @@ mod tests {
             assert_eq!(parsed_url.key, "file");
             assert_eq!(parsed_url.scheme, scheme);
 
-            let dir_url = format!("{}://{}", scheme, dir_key);
+            let dir_url = format!("{scheme}://{dir_key}");
             let url: Url = dir_url.parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
@@ -970,7 +970,7 @@ mod tests {
 
         // Test each scheme for both file and directory URLs.
         for scheme in schemes {
-            let file_url = format!("{}://{}", scheme, file_key);
+            let file_url = format!("{scheme}://{file_key}");
             let url: Url = file_url.parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
@@ -1004,7 +1004,7 @@ mod tests {
         ];
 
         for scheme in schemes {
-            let url: Url = format!("{}:///file", scheme).parse().unwrap();
+            let url: Url = format!("{scheme}:///file").parse().unwrap();
             let result = TryInto::<ParsedURL>::try_into(url);
 
             assert!(result.is_err());
@@ -1064,7 +1064,7 @@ mod tests {
         ];
 
         for (scheme, object_storage) in test_cases {
-            let url: Url = format!("{}://test-bucket/file", scheme).parse().unwrap();
+            let url: Url = format!("{scheme}://test-bucket/file").parse().unwrap();
             let parsed_url: ParsedURL = url.try_into().unwrap();
 
             let result = ObjectStorage::new(scheme, Arc::new(Config::default()))

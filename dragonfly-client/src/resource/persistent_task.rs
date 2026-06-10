@@ -198,8 +198,7 @@ impl PersistentTask {
         let has_enough_space = self.storage.has_enough_space(content_length)?;
         if !has_enough_space {
             return Err(Error::NoSpace(format!(
-                "not enough space to store the persistent task: content_length={}",
-                content_length
+                "not enough space to store the persistent task: content_length={content_length}"
             )));
         }
 
@@ -695,8 +694,7 @@ impl PersistentTask {
             let has_enough_space = self.storage.has_enough_space(content_length)?;
             if !has_enough_space {
                 return Err(Error::NoSpace(format!(
-                    "not enough space to store the persistent task: content_length={}",
-                    content_length
+                    "not enough space to store the persistent task: content_length={content_length}"
                 )));
             }
         }
@@ -760,8 +758,7 @@ impl PersistentTask {
             let has_enough_space = self.storage.has_enough_space(content_length)?;
             if !has_enough_space {
                 return Err(Error::NoSpace(format!(
-                    "not enough space to store the persistent task: content_length={}",
-                    content_length
+                    "not enough space to store the persistent task: content_length={content_length}"
                 )));
             }
         }

@@ -32,7 +32,7 @@ async fn main() -> anyhow::Result<()> {
         .max_retries(3)
         .build()
         .await
-        .map_err(|err| anyhow::anyhow!("failed to build proxy: {}", err))?;
+        .map_err(|err| anyhow::anyhow!("failed to build proxy: {err}"))?;
 
     let request = GetRequest {
         url: "https://example.com/path/to/file".to_string(),
@@ -42,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
     let response = proxy
         .get(&request)
         .await
-        .map_err(|err| anyhow::anyhow!("get request failed: {}", err))?;
+        .map_err(|err| anyhow::anyhow!("get request failed: {err}"))?;
 
     if let Some(mut reader) = response.reader {
         let mut body = Vec::new();

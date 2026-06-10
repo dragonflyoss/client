@@ -277,7 +277,7 @@ impl BBR {
     fn is_in_cooldown(&self) -> bool {
         self.shed_at
             .lock()
-            .map_or(false, |shed_at| shed_at.elapsed() < self.shed_cooldown)
+            .is_some_and(|shed_at| shed_at.elapsed() < self.shed_cooldown)
     }
 }
 

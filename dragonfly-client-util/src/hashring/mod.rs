@@ -242,7 +242,7 @@ mod tests {
             let va = ring_a.get(&key).unwrap();
             let vb = ring_b.get(&key).unwrap();
 
-            assert_eq!(va.to_string(), vb.to_string(), "key={}", key);
+            assert_eq!(va.to_string(), vb.to_string(), "key={key}");
         }
     }
 }

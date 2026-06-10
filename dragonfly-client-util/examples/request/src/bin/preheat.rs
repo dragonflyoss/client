@@ -31,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
         .max_retries(3)
         .build()
         .await
-        .map_err(|err| anyhow::anyhow!("failed to build proxy: {}", err))?;
+        .map_err(|err| anyhow::anyhow!("failed to build proxy: {err}"))?;
 
     let request = PreheatRequest {
         image: "docker.io/dragonflyoss/scheduler:v2.4.3".to_string(),
@@ -42,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
     proxy
         .preheat(&request)
         .await
-        .map_err(|err| anyhow::anyhow!("preheat failed: {}", err))?;
+        .map_err(|err| anyhow::anyhow!("preheat failed: {err}"))?;
 
     println!("{} has been preheated", request.image);
     Ok(())

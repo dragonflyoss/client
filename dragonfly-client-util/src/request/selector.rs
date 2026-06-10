@@ -240,7 +240,7 @@ mod tests {
             ip: ip.to_string(),
             port,
             r#type: host_type,
-            hostname: format!("host-{}", id),
+            hostname: format!("host-{id}"),
             ..Default::default()
         }
     }
@@ -254,7 +254,7 @@ mod tests {
             }
         });
 
-        let channel = Channel::from_shared(format!("http://{}", addr))
+        let channel = Channel::from_shared(format!("http://{addr}"))
             .unwrap()
             .connect()
             .await
@@ -315,7 +315,7 @@ mod tests {
         let selector = create_test_selector().await;
 
         for i in 1..=5 {
-            let host = create_test_host(&i.to_string(), &format!("192.168.1.{}", i), 8080, 1);
+            let host = create_test_host(&i.to_string(), &format!("192.168.1.{i}"), 8080, 1);
             add_test_host(&selector, host).await;
         }
 
@@ -332,7 +332,7 @@ mod tests {
         let selector = create_test_selector().await;
 
         for i in 1..=2 {
-            let host = create_test_host(&i.to_string(), &format!("192.168.1.{}", i), 8080, 1);
+            let host = create_test_host(&i.to_string(), &format!("192.168.1.{i}"), 8080, 1);
             add_test_host(&selector, host).await;
         }
 
@@ -348,7 +348,7 @@ mod tests {
         let selector = create_test_selector().await;
 
         for i in 1..=5 {
-            let host = create_test_host(&i.to_string(), &format!("192.168.1.{}", i), 8080, 1);
+            let host = create_test_host(&i.to_string(), &format!("192.168.1.{i}"), 8080, 1);
             add_test_host(&selector, host).await;
         }
 
@@ -374,7 +374,7 @@ mod tests {
         let selector = Arc::new(create_test_selector().await);
 
         for i in 1..=5 {
-            let host = create_test_host(&i.to_string(), &format!("192.168.1.{}", i), 8080, 1);
+            let host = create_test_host(&i.to_string(), &format!("192.168.1.{i}"), 8080, 1);
             add_test_host(&selector, host).await;
         }
 
@@ -382,7 +382,7 @@ mod tests {
         for i in 0..10 {
             let selector = Arc::clone(&selector);
             let handle = tokio::spawn(async move {
-                let task_id = format!("concurrent-task-{}", i);
+                let task_id = format!("concurrent-task-{i}");
                 selector.select(task_id, 2).await
             });
             handles.push(handle);
@@ -402,7 +402,7 @@ mod tests {
         let selector = create_test_selector().await;
 
         for i in 1..=20 {
-            let host = create_test_host(&i.to_string(), &format!("192.168.1.{}", i), 8080, 1);
+            let host = create_test_host(&i.to_string(), &format!("192.168.1.{i}"), 8080, 1);
             add_test_host(&selector, host).await;
         }
 

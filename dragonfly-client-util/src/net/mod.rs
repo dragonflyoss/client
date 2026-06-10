@@ -26,8 +26,8 @@ use std::{io, mem, os::unix::io::RawFd};
 /// IPv6 addresses are formatted as `[ip]:port` (e.g., "[::1]:8080")
 pub fn format_socket_addr(ip: IpAddr, port: u16) -> String {
     match ip {
-        IpAddr::V4(v4) => format!("{}:{}", v4, port),
-        IpAddr::V6(v6) => format!("[{}]:{}", v6, port),
+        IpAddr::V4(v4) => format!("{v4}:{port}"),
+        IpAddr::V6(v6) => format!("[{v6}]:{port}"),
     }
 }
 

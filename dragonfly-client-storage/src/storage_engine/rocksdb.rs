@@ -469,7 +469,7 @@ mod tests {
             let found = retrieved_objects
                 .iter()
                 .any(|(_, v)| v.id == object.id && v.value == object.value);
-            assert!(found, "could not find object with key {:?}", key);
+            assert!(found, "could not find object with key {key:?}");
         }
 
         // Verify objects with different prefix are not retrieved.
@@ -477,7 +477,7 @@ mod tests {
             let found = retrieved_objects
                 .iter()
                 .any(|(_, v)| v.id == object.id && v.value == object.value);
-            assert!(!found, "found object with different prefix: {:?}", key);
+            assert!(!found, "found object with different prefix: {key:?}");
         }
     }
 
@@ -625,7 +625,7 @@ mod tests {
             let found = retrieved_objects
                 .iter()
                 .any(|(k, _)| k.as_ref() == key.as_slice());
-            assert!(!found, "found object with different prefix: {:?}", key);
+            assert!(!found, "found object with different prefix: {key:?}");
         }
     }
 
@@ -648,7 +648,7 @@ mod tests {
 
         assert!(result.is_err());
         if let Err(err) = result {
-            assert!(format!("{:?}", err).contains("ColumnFamilyNotFound"));
+            assert!(format!("{err:?}").contains("ColumnFamilyNotFound"));
         }
     }
 }

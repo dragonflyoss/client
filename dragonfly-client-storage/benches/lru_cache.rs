@@ -32,7 +32,7 @@ pub fn lru_cache_put(c: &mut Criterion) {
                 || LruCache::new(OPERATION_COUNT),
                 |mut cache| {
                     for i in 0..OPERATION_COUNT {
-                        cache.put(format!("key{}", i), size.as_u64());
+                        cache.put(format!("key{i}"), size.as_u64());
                     }
                 },
                 criterion::BatchSize::SmallInput,
@@ -48,7 +48,7 @@ pub fn lru_cache_put(c: &mut Criterion) {
                 || LruCache::new(OPERATION_COUNT),
                 |mut cache| {
                     for i in 0..OPERATION_COUNT {
-                        cache.put(format!("key{}", i), size.as_u64());
+                        cache.put(format!("key{i}"), size.as_u64());
                     }
                 },
                 criterion::BatchSize::SmallInput,
@@ -64,7 +64,7 @@ pub fn lru_cache_put(c: &mut Criterion) {
                 || LruCache::new(OPERATION_COUNT),
                 |mut cache| {
                     for i in 0..OPERATION_COUNT {
-                        cache.put(format!("key{}", i), size.as_u64());
+                        cache.put(format!("key{i}"), size.as_u64());
                     }
                 },
                 criterion::BatchSize::SmallInput,
@@ -86,13 +86,13 @@ pub fn lru_cache_get(c: &mut Criterion) {
                 || {
                     let mut cache = LruCache::new(OPERATION_COUNT);
                     for i in 0..OPERATION_COUNT {
-                        cache.put(format!("key{}", i), size.as_u64());
+                        cache.put(format!("key{i}"), size.as_u64());
                     }
                     cache
                 },
                 |mut cache| {
                     for i in 0..OPERATION_COUNT {
-                        black_box(cache.get(&format!("key{}", i)));
+                        black_box(cache.get(&format!("key{i}")));
                     }
                 },
                 criterion::BatchSize::SmallInput,
@@ -108,13 +108,13 @@ pub fn lru_cache_get(c: &mut Criterion) {
                 || {
                     let mut cache = LruCache::new(OPERATION_COUNT);
                     for i in 0..OPERATION_COUNT {
-                        cache.put(format!("key{}", i), size.as_u64());
+                        cache.put(format!("key{i}"), size.as_u64());
                     }
                     cache
                 },
                 |mut cache| {
                     for i in 0..OPERATION_COUNT {
-                        black_box(cache.get(&format!("key{}", i)));
+                        black_box(cache.get(&format!("key{i}")));
                     }
                 },
                 criterion::BatchSize::SmallInput,
@@ -130,13 +130,13 @@ pub fn lru_cache_get(c: &mut Criterion) {
                 || {
                     let mut cache = LruCache::new(OPERATION_COUNT);
                     for i in 0..OPERATION_COUNT {
-                        cache.put(format!("key{}", i), size.as_u64());
+                        cache.put(format!("key{i}"), size.as_u64());
                     }
                     cache
                 },
                 |mut cache| {
                     for i in 0..OPERATION_COUNT {
-                        black_box(cache.get(&format!("key{}", i)));
+                        black_box(cache.get(&format!("key{i}")));
                     }
                 },
                 criterion::BatchSize::SmallInput,
@@ -158,13 +158,13 @@ pub fn lru_cache_peek(c: &mut Criterion) {
                 || {
                     let mut cache = LruCache::new(OPERATION_COUNT);
                     for i in 0..OPERATION_COUNT {
-                        cache.put(format!("key{}", i), size.as_u64());
+                        cache.put(format!("key{i}"), size.as_u64());
                     }
                     cache
                 },
                 |cache| {
                     for i in 0..OPERATION_COUNT {
-                        black_box(cache.peek(&format!("key{}", i)));
+                        black_box(cache.peek(&format!("key{i}")));
                     }
                 },
                 criterion::BatchSize::SmallInput,
@@ -180,13 +180,13 @@ pub fn lru_cache_peek(c: &mut Criterion) {
                 || {
                     let mut cache = LruCache::new(OPERATION_COUNT);
                     for i in 0..OPERATION_COUNT {
-                        cache.put(format!("key{}", i), size.as_u64());
+                        cache.put(format!("key{i}"), size.as_u64());
                     }
                     cache
                 },
                 |cache| {
                     for i in 0..OPERATION_COUNT {
-                        black_box(cache.peek(&format!("key{}", i)));
+                        black_box(cache.peek(&format!("key{i}")));
                     }
                 },
                 criterion::BatchSize::SmallInput,
@@ -202,13 +202,13 @@ pub fn lru_cache_peek(c: &mut Criterion) {
                 || {
                     let mut cache = LruCache::new(OPERATION_COUNT);
                     for i in 0..OPERATION_COUNT {
-                        cache.put(format!("key{}", i), size.as_u64());
+                        cache.put(format!("key{i}"), size.as_u64());
                     }
                     cache
                 },
                 |cache| {
                     for i in 0..OPERATION_COUNT {
-                        black_box(cache.peek(&format!("key{}", i)));
+                        black_box(cache.peek(&format!("key{i}")));
                     }
                 },
                 criterion::BatchSize::SmallInput,
@@ -230,13 +230,13 @@ pub fn lru_cache_contains(c: &mut Criterion) {
                 || {
                     let mut cache = LruCache::new(OPERATION_COUNT);
                     for i in 0..OPERATION_COUNT {
-                        cache.put(format!("key{}", i), size.as_u64());
+                        cache.put(format!("key{i}"), size.as_u64());
                     }
                     cache
                 },
                 |cache| {
                     for i in 0..OPERATION_COUNT {
-                        black_box(cache.contains(&format!("key{}", i)));
+                        black_box(cache.contains(&format!("key{i}")));
                     }
                 },
                 criterion::BatchSize::SmallInput,
@@ -252,13 +252,13 @@ pub fn lru_cache_contains(c: &mut Criterion) {
                 || {
                     let mut cache = LruCache::new(OPERATION_COUNT);
                     for i in 0..OPERATION_COUNT {
-                        cache.put(format!("key{}", i), size.as_u64());
+                        cache.put(format!("key{i}"), size.as_u64());
                     }
                     cache
                 },
                 |cache| {
                     for i in 0..OPERATION_COUNT {
-                        black_box(cache.contains(&format!("key{}", i)));
+                        black_box(cache.contains(&format!("key{i}")));
                     }
                 },
                 criterion::BatchSize::SmallInput,
@@ -274,13 +274,13 @@ pub fn lru_cache_contains(c: &mut Criterion) {
                 || {
                     let mut cache = LruCache::new(OPERATION_COUNT);
                     for i in 0..OPERATION_COUNT {
-                        cache.put(format!("key{}", i), size.as_u64());
+                        cache.put(format!("key{i}"), size.as_u64());
                     }
                     cache
                 },
                 |cache| {
                     for i in 0..OPERATION_COUNT {
-                        black_box(cache.contains(&format!("key{}", i)));
+                        black_box(cache.contains(&format!("key{i}")));
                     }
                 },
                 criterion::BatchSize::SmallInput,
@@ -302,13 +302,13 @@ pub fn lru_cache_pop(c: &mut Criterion) {
                 || {
                     let mut cache = LruCache::new(OPERATION_COUNT);
                     for i in 0..OPERATION_COUNT {
-                        cache.put(format!("key{}", i), size.as_u64());
+                        cache.put(format!("key{i}"), size.as_u64());
                     }
                     cache
                 },
                 |mut cache| {
                     for i in 0..OPERATION_COUNT {
-                        black_box(cache.pop(&format!("key{}", i)));
+                        black_box(cache.pop(&format!("key{i}")));
                     }
                 },
                 criterion::BatchSize::SmallInput,
@@ -324,13 +324,13 @@ pub fn lru_cache_pop(c: &mut Criterion) {
                 || {
                     let mut cache = LruCache::new(OPERATION_COUNT);
                     for i in 0..OPERATION_COUNT {
-                        cache.put(format!("key{}", i), size.as_u64());
+                        cache.put(format!("key{i}"), size.as_u64());
                     }
                     cache
                 },
                 |mut cache| {
                     for i in 0..OPERATION_COUNT {
-                        black_box(cache.pop(&format!("key{}", i)));
+                        black_box(cache.pop(&format!("key{i}")));
                     }
                 },
                 criterion::BatchSize::SmallInput,
@@ -346,13 +346,13 @@ pub fn lru_cache_pop(c: &mut Criterion) {
                 || {
                     let mut cache = LruCache::new(OPERATION_COUNT);
                     for i in 0..OPERATION_COUNT {
-                        cache.put(format!("key{}", i), size.as_u64());
+                        cache.put(format!("key{i}"), size.as_u64());
                     }
                     cache
                 },
                 |mut cache| {
                     for i in 0..OPERATION_COUNT {
-                        black_box(cache.pop(&format!("key{}", i)));
+                        black_box(cache.pop(&format!("key{i}")));
                     }
                 },
                 criterion::BatchSize::SmallInput,
@@ -374,7 +374,7 @@ pub fn lru_cache_pop_lru(c: &mut Criterion) {
                 || {
                     let mut cache = LruCache::new(OPERATION_COUNT);
                     for i in 0..OPERATION_COUNT {
-                        cache.put(format!("key{}", i), size.as_u64());
+                        cache.put(format!("key{i}"), size.as_u64());
                     }
                     cache
                 },
@@ -396,7 +396,7 @@ pub fn lru_cache_pop_lru(c: &mut Criterion) {
                 || {
                     let mut cache = LruCache::new(OPERATION_COUNT);
                     for i in 0..OPERATION_COUNT {
-                        cache.put(format!("key{}", i), size.as_u64());
+                        cache.put(format!("key{i}"), size.as_u64());
                     }
                     cache
                 },
@@ -418,7 +418,7 @@ pub fn lru_cache_pop_lru(c: &mut Criterion) {
                 || {
                     let mut cache = LruCache::new(OPERATION_COUNT);
                     for i in 0..OPERATION_COUNT {
-                        cache.put(format!("key{}", i), size.as_u64());
+                        cache.put(format!("key{i}"), size.as_u64());
                     }
                     cache
                 },
