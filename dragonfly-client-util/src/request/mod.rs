@@ -40,7 +40,7 @@ use reqwest_tracing::TracingMiddleware;
 use rustix::path::Arg;
 use rustls_pki_types::CertificateDer;
 use selector::{SeedPeerSelector, Selector};
-use std::io::{Error as IOError, ErrorKind};
+use std::io::Error as IOError;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -295,10 +295,10 @@ impl Factory<String, ClientWithMiddleware> for HTTPClientFactory {
             .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
             .tcp_keepalive(KEEP_ALIVE_INTERVAL)
             .proxy(reqwest::Proxy::all(proxy_addr).map_err(|err| {
-                Error::Internal(format!("failed to set proxy {}: {}", proxy_addr, err))
+                Error::Internal(format!("failed to set proxy {proxy_addr}: {err}"))
             })?)
             .build()
-            .map_err(|err| Error::Internal(format!("failed to build reqwest client: {}", err)))?;
+            .map_err(|err| Error::Internal(format!("failed to build reqwest client: {err}")))?;
 
         Ok(ClientBuilder::new(client)
             .with(TracingMiddleware::default())
@@ -387,7 +387,7 @@ impl Builder {
             SeedPeerSelector::new(scheduler_client, self.health_check_interval)
                 .await
                 .map_err(|err| {
-                    Error::Internal(format!("failed to create seed peer selector: {}", err))
+                    Error::Internal(format!("failed to create seed peer selector: {err}"))
                 })?,
         );
 
@@ -405,7 +405,7 @@ impl Builder {
             })?
             .to_string();
         let hostname = hostname::get()
-            .map_err(|err| Error::Internal(format!("failed to get hostname: {}", err)))?
+            .map_err(|err| Error::Internal(format!("failed to get hostname: {err}")))?
             .to_string_lossy()
             .to_string();
         let id_generator = IDGenerator::new(local_ip, hostname, true);
@@ -496,7 +496,7 @@ impl Request for Proxy {
         let reader = Box::new(StreamReader::new(
             response
                 .bytes_stream()
-                .map_err(|err| IOError::new(ErrorKind::Other, err)),
+                .map_err(|err| IOError::other(err)),
         ));
 
         Ok(GetResponse {
@@ -522,7 +522,7 @@ impl Request for Proxy {
 
             if status.is_success() {
                 let bytes = response.bytes().await.map_err(|err| {
-                    Error::Internal(format!("failed to read response body: {}", err))
+                    Error::Internal(format!("failed to read response body: {err}"))
                 })?;
 
                 buf.extend_from_slice(&bytes);
@@ -556,7 +556,7 @@ impl Request for Proxy {
         let reference: Reference = request
             .image
             .parse()
-            .map_err(|err| Error::InvalidArgument(format!("invalid image reference: {}", err)))?;
+            .map_err(|err| Error::InvalidArgument(format!("invalid image reference: {err}")))?;
 
         // Create registry authentication.
         let auth = match (&request.username, &request.password) {
@@ -571,7 +571,7 @@ impl Request for Proxy {
         let (manifest, digest) = oci_client
             .pull_image_manifest(&reference, &auth)
             .await
-            .map_err(|err| Error::Internal(format!("failed to pull image manifest: {}", err)))?;
+            .map_err(|err| Error::Internal(format!("failed to pull image manifest: {err}")))?;
         debug!(
             "pulled manifest for image {} with digest {}, layers: {}",
             request.image,
@@ -584,7 +584,7 @@ impl Request for Proxy {
             .auth(&reference, &auth, RegistryOperation::Pull)
             .await
             .map_err(|err| {
-                Error::Internal(format!("failed to authenticate with registry: {}", err))
+                Error::Internal(format!("failed to authenticate with registry: {err}"))
             })?
             .ok_or_else(|| {
                 Error::Internal("registry did not return authentication token".to_string())
@@ -594,8 +594,8 @@ impl Request for Proxy {
         let mut header = HeaderMap::new();
         header.insert(
             AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {}", token))
-                .map_err(|err| Error::Internal(format!("invalid auth token: {}", err)))?,
+            HeaderValue::from_str(&format!("Bearer {token}"))
+                .map_err(|err| Error::Internal(format!("invalid auth token: {err}")))?,
         );
 
         let registry = reference.resolve_registry();
@@ -624,7 +624,7 @@ impl Request for Proxy {
                     tokio::io::copy(&mut reader, &mut tokio::io::sink())
                         .await
                         .map_err(|err| {
-                            Error::Internal(format!("failed to read blob {}: {}", digest, err))
+                            Error::Internal(format!("failed to read blob {digest}: {err}"))
                         })?;
                 }
                 None => {
@@ -669,7 +669,7 @@ impl Proxy {
                     }
                 },
             )
-            .map_err(|err| Error::Internal(format!("failed to generate task id: {}", err)))?;
+            .map_err(|err| Error::Internal(format!("failed to generate task id: {err}")))?;
 
         // Select seed peers for downloading.
         let seed_peers = self
@@ -677,10 +677,7 @@ impl Proxy {
             .select(task_id.clone(), self.max_retries as u32)
             .await
             .map_err(|err| {
-                Error::Internal(format!(
-                    "failed to select seed peers from scheduler: {}",
-                    err
-                ))
+                Error::Internal(format!("failed to select seed peers from scheduler: {err}"))
             })?;
 
         debug!("task {} selected seed peers: {:?}", task_id, seed_peers);
@@ -773,12 +770,12 @@ impl Proxy {
             })),
             Some("dfdaemon") => Err(Error::DfdaemonError(DfdaemonError { message })),
             Some(other) => Err(Error::ProxyError(ProxyError {
-                message: Some(format!("unknown error type from proxy: {}", other)),
+                message: Some(format!("unknown error type from proxy: {other}")),
                 header: header_map,
                 status_code: Some(status),
             })),
             None => Err(Error::ProxyError(ProxyError {
-                message: Some(format!("unexpected status code from proxy: {}", status)),
+                message: Some(format!("unexpected status code from proxy: {status}")),
                 header: header_map,
                 status_code: Some(status),
             })),
@@ -792,7 +789,7 @@ impl Proxy {
             headers.insert(
                 "X-Dragonfly-Piece-Length",
                 piece_length.to_string().parse().map_err(|err| {
-                    Error::InvalidArgument(format!("invalid piece length: {}", err))
+                    Error::InvalidArgument(format!("invalid piece length: {err}"))
                 })?,
             );
         }
@@ -802,7 +799,7 @@ impl Proxy {
                 "X-Dragonfly-Tag",
                 tag.to_string()
                     .parse()
-                    .map_err(|err| Error::InvalidArgument(format!("invalid tag: {}", err)))?,
+                    .map_err(|err| Error::InvalidArgument(format!("invalid tag: {err}")))?,
             );
         }
 
@@ -810,7 +807,7 @@ impl Proxy {
             headers.insert(
                 "X-Dragonfly-Application",
                 application.to_string().parse().map_err(|err| {
-                    Error::InvalidArgument(format!("invalid application: {}", err))
+                    Error::InvalidArgument(format!("invalid application: {err}"))
                 })?,
             );
         }
@@ -824,10 +821,7 @@ impl Proxy {
                     .to_string()
                     .parse()
                     .map_err(|err| {
-                        Error::InvalidArgument(format!(
-                            "invalid content for calculating task id: {}",
-                            err
-                        ))
+                        Error::InvalidArgument(format!("invalid content for calculating task id: {err}"))
                     })?,
             );
         }
@@ -839,10 +833,7 @@ impl Proxy {
                 .to_string()
                 .parse()
                 .map_err(|err| {
-                    Error::InvalidArgument(format!(
-                        "invalid enable task id based blob digest: {}",
-                        err
-                    ))
+                    Error::InvalidArgument(format!("invalid enable task id based blob digest: {err}"))
                 })?,
         );
 
@@ -852,7 +843,7 @@ impl Proxy {
                 priority
                     .to_string()
                     .parse()
-                    .map_err(|err| Error::InvalidArgument(format!("invalid priority: {}", err)))?,
+                    .map_err(|err| Error::InvalidArgument(format!("invalid priority: {err}")))?,
             );
         }
 
@@ -861,7 +852,7 @@ impl Proxy {
             headers.insert(
                 "X-Dragonfly-Filtered-Query-Params",
                 value.parse().map_err(|err| {
-                    Error::InvalidArgument(format!("invalid filtered query params: {}", err))
+                    Error::InvalidArgument(format!("invalid filtered query params: {err}"))
                 })?,
             );
         }
@@ -873,7 +864,7 @@ impl Proxy {
     /// Helper function to check if a URL is an OCI blob URL (e.g., /v2/<name>/blobs/sha256:
     /// <digest>).
     fn build_blob_url(registry: &str, repository: &str, digest: &str) -> String {
-        format!("https://{}/v2/{}/blobs/{}", registry, repository, digest)
+        format!("https://{registry}/v2/{repository}/blobs/{digest}")
     }
 
     /// Builds an OCI client with a platform resolver that matches the requested os/arch.
@@ -884,10 +875,7 @@ impl Proxy {
                 .split_once('/')
                 .map(|(os, arch)| (Os::from(os), Arch::from(arch)))
                 .ok_or_else(|| {
-                    Error::InvalidArgument(format!(
-                        "invalid platform format '{}', expected 'os/arch' (e.g., 'linux/amd64')",
-                        platform
-                    ))
+                    Error::InvalidArgument(format!("invalid platform format '{platform}', expected 'os/arch' (e.g., 'linux/amd64')"))
                 })?;
 
             oci_config.platform_resolver = Some(Box::new(move |manifests: &[ImageIndexEntry]| {

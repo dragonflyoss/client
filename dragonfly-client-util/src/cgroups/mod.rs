@@ -83,15 +83,15 @@ pub fn get_cgroup_by_pid(pid: u32) -> Result<Cgroup> {
 /// // Returns something like: /sys/fs/cgroup/system.slice/service.scope
 /// ```
 pub fn get_cgroup_v2_path_by_pid(pid: u32) -> Result<PathBuf> {
-    let content = fs::read_to_string(format!("/proc/{}/cgroup", pid))?;
+    let content = fs::read_to_string(format!("/proc/{pid}/cgroup"))?;
     let first_line = content.lines().next().ok_or_else(|| {
-        Error::ValidationError(format!("No cgroup information found for PID {}", pid))
+        Error::ValidationError(format!("No cgroup information found for PID {pid}"))
     })?;
 
     // Extract the cgroup v2 relative path by removing "0::" prefix and leading "/".
     let relative_path = first_line
         .strip_prefix("0::")
-        .ok_or_else(|| Error::ValidationError(format!("Cgroup v2 not found for PID {}", pid)))?
+        .ok_or_else(|| Error::ValidationError(format!("Cgroup v2 not found for PID {pid}")))?
         .trim_start_matches('/');
     Ok(PathBuf::from("/sys/fs/cgroup").join(relative_path))
 }
