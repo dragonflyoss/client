@@ -205,7 +205,7 @@ impl DfdaemonDownloadServer {
             .http2_keepalive_interval(Some(super::HTTP2_KEEP_ALIVE_INTERVAL))
             .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
             .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
-            .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
+            .initial_connection_window_size(super::INITIAL_CONNECTION_WINDOW_SIZE)
             .layer(option_layer(self.bbr.clone().map(BBRLayer::new)))
             .layer(
                 ServiceBuilder::new()
@@ -2379,7 +2379,7 @@ impl DfdaemonDownloadClient {
             .buffer_size(super::BUFFER_SIZE)
             .connect_timeout(super::CONNECT_TIMEOUT)
             .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
-            .initial_connection_window_size(super::INITIAL_WINDOW_SIZE)
+            .initial_connection_window_size(super::INITIAL_CONNECTION_WINDOW_SIZE)
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
             .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
