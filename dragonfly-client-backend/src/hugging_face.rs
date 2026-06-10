@@ -49,7 +49,7 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_LENGTH, RAN
 use reqwest::Client;
 use serde::Deserialize;
 use std::error::Error as _;
-use std::io::Error as IOError;
+use std::io::{Error as IOError, ErrorKind as IOErrorKind};
 use std::sync::Arc;
 use tokio_util::io::StreamReader;
 use tracing::{debug, error};
@@ -646,7 +646,7 @@ impl Backend for HuggingFace {
                     source = err.source();
                 }
 
-                IOError::new(ErrorKind::Other, chain)
+                IOError::new(IOErrorKind::Other, chain)
             },
         )));
 
