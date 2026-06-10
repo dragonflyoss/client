@@ -360,7 +360,7 @@ impl TCPClient {
             })
             .unwrap_or_else(|err| {
                 error!("failed to extract error: {}", err);
-                ClientError::Unknown(format!("failed to extract error: {}", err))
+                ClientError::Unknown(format!("failed to extract error: {err}"))
             })
     }
 }

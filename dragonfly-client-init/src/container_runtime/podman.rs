@@ -72,7 +72,7 @@ impl Podman {
         let proxy_port = proxy_url
             .port_or_known_default()
             .ok_or(Error::Unknown("port not found".to_string()))?;
-        let proxy_location = format!("{}:{}", proxy_host, proxy_port);
+        let proxy_location = format!("{proxy_host}:{proxy_port}");
 
         // Add registries to the registries config.
         let mut registries_table = ArrayOfTables::new();

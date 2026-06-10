@@ -494,9 +494,7 @@ impl Request for Proxy {
         let header = response.headers().clone();
         let status_code = response.status();
         let reader = Box::new(StreamReader::new(
-            response
-                .bytes_stream()
-                .map_err(|err| IOError::other(err)),
+            response.bytes_stream().map_err(IOError::other),
         ));
 
         Ok(GetResponse {
@@ -583,9 +581,7 @@ impl Request for Proxy {
         let token = oci_client
             .auth(&reference, &auth, RegistryOperation::Pull)
             .await
-            .map_err(|err| {
-                Error::Internal(format!("failed to authenticate with registry: {err}"))
-            })?
+            .map_err(|err| Error::Internal(format!("failed to authenticate with registry: {err}")))?
             .ok_or_else(|| {
                 Error::Internal("registry did not return authentication token".to_string())
             })?;
@@ -806,9 +802,10 @@ impl Proxy {
         if let Some(application) = request.application.clone() {
             headers.insert(
                 "X-Dragonfly-Application",
-                application.to_string().parse().map_err(|err| {
-                    Error::InvalidArgument(format!("invalid application: {err}"))
-                })?,
+                application
+                    .to_string()
+                    .parse()
+                    .map_err(|err| Error::InvalidArgument(format!("invalid application: {err}")))?,
             );
         }
 
@@ -821,7 +818,9 @@ impl Proxy {
                     .to_string()
                     .parse()
                     .map_err(|err| {
-                        Error::InvalidArgument(format!("invalid content for calculating task id: {err}"))
+                        Error::InvalidArgument(format!(
+                            "invalid content for calculating task id: {err}"
+                        ))
                     })?,
             );
         }
@@ -833,7 +832,9 @@ impl Proxy {
                 .to_string()
                 .parse()
                 .map_err(|err| {
-                    Error::InvalidArgument(format!("invalid enable task id based blob digest: {err}"))
+                    Error::InvalidArgument(format!(
+                        "invalid enable task id based blob digest: {err}"
+                    ))
                 })?,
         );
 
@@ -911,7 +912,7 @@ mod tests {
 
         let server = MockServer::new_grpc("scheduler.v2.Scheduler").with_mocks(mocks);
         server.start().await.map_err(|err| {
-            Error::Internal(format!("failed to start mock scheduler server: {}", err))
+            Error::Internal(format!("failed to start mock scheduler server: {err}"))
         })?;
 
         Ok(server)

@@ -636,7 +636,7 @@ mod tests {
         ];
 
         for scheme in schemes {
-            let result = factory.build(&format!("{}://example.com/key", scheme));
+            let result = factory.build(&format!("{scheme}://example.com/key"));
             assert!(result.is_ok());
 
             let backend = result.unwrap();
@@ -680,7 +680,7 @@ mod tests {
         };
 
         std::fs::rename(
-            format!("../target/debug/{}", plugin_file),
+            format!("../target/debug/{plugin_file}"),
             backend_dir.join(plugin_file),
         )
         .unwrap();

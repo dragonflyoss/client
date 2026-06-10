@@ -633,8 +633,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                             handle_error(
                                                 &out_stream_tx,
                                                 Status::invalid_argument(format!(
-                                                    "invalid digest({}): {}",
-                                                    raw_digest, err
+                                                    "invalid digest({raw_digest}): {err}"
                                                 )),
                                             )
                                             .await;
@@ -813,7 +812,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 // Map the error to an appropriate gRPC status.
                 Err(match err {
                     ClientError::TaskNotFound(id) => {
-                        Status::not_found(format!("task not found: {}", id))
+                        Status::not_found(format!("task not found: {id}"))
                     }
                     _ => Status::internal(err.to_string()),
                 })
@@ -865,7 +864,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 // Map the error to an appropriate gRPC status.
                 Err(match err {
                     ClientError::TaskNotFound(id) => {
-                        Status::not_found(format!("local task not found: {}", id))
+                        Status::not_found(format!("local task not found: {id}"))
                     }
                     _ => Status::internal(err.to_string()),
                 })
@@ -1409,8 +1408,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                         handle_error(
                                             &out_stream_tx,
                                             Status::invalid_argument(format!(
-                                                "invalid digest({}): {}",
-                                                raw_digest, err
+                                                "invalid digest({raw_digest}): {err}"
                                             )),
                                         )
                                         .await;
@@ -1968,8 +1966,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                         handle_error(
                                             &out_stream_tx,
                                             Status::invalid_argument(format!(
-                                                "invalid digest({}): {}",
-                                                raw_digest, err
+                                                "invalid digest({raw_digest}): {err}"
                                             )),
                                         )
                                         .await;

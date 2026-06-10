@@ -211,7 +211,7 @@ pub fn write_piece(c: &mut Criterion) {
                             cache
                                 .write_piece(
                                     "task",
-                                    &format!("piece{}", i),
+                                    &format!("piece{i}"),
                                     Bytes::copy_from_slice(data),
                                 )
                                 .await
@@ -249,7 +249,7 @@ pub fn write_piece(c: &mut Criterion) {
                             cache
                                 .write_piece(
                                     "task",
-                                    &format!("piece{}", i),
+                                    &format!("piece{i}"),
                                     Bytes::copy_from_slice(data),
                                 )
                                 .await
@@ -287,7 +287,7 @@ pub fn write_piece(c: &mut Criterion) {
                             cache
                                 .write_piece(
                                     "task",
-                                    &format!("piece{}", i),
+                                    &format!("piece{i}"),
                                     Bytes::copy_from_slice(data),
                                 )
                                 .await
@@ -327,7 +327,7 @@ pub fn read_piece(c: &mut Criterion) {
                             cache
                                 .write_piece(
                                     "task",
-                                    &format!("piece{}", i),
+                                    &format!("piece{i}"),
                                     Bytes::copy_from_slice(data),
                                 )
                                 .await
@@ -342,7 +342,7 @@ pub fn read_piece(c: &mut Criterion) {
                             let mut reader = cache
                                 .read_piece(
                                     "task",
-                                    &format!("piece{}", i),
+                                    &format!("piece{i}"),
                                     create_piece(data.len() as u64),
                                     None,
                                 )
@@ -378,7 +378,7 @@ pub fn read_piece(c: &mut Criterion) {
                             cache
                                 .write_piece(
                                     "task",
-                                    &format!("piece{}", i),
+                                    &format!("piece{i}"),
                                     Bytes::copy_from_slice(data),
                                 )
                                 .await
@@ -393,7 +393,7 @@ pub fn read_piece(c: &mut Criterion) {
                             let mut reader = cache
                                 .read_piece(
                                     "task",
-                                    &format!("piece{}", i),
+                                    &format!("piece{i}"),
                                     create_piece(data.len() as u64),
                                     None,
                                 )
@@ -429,7 +429,7 @@ pub fn read_piece(c: &mut Criterion) {
                             cache
                                 .write_piece(
                                     "task",
-                                    &format!("piece{}", i),
+                                    &format!("piece{i}"),
                                     Bytes::copy_from_slice(data),
                                 )
                                 .await
@@ -444,7 +444,7 @@ pub fn read_piece(c: &mut Criterion) {
                             let mut reader = cache
                                 .read_piece(
                                     "task",
-                                    &format!("piece{}", i),
+                                    &format!("piece{i}"),
                                     create_piece(data.len() as u64),
                                     None,
                                 )

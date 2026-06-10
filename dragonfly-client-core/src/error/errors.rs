@@ -189,49 +189,40 @@ mod tests {
     #[test]
     fn should_create_error() {
         let error = ExternalError::new(ErrorType::StorageError).with_context("error message");
-        assert_eq!(format!("{}", error), "StorageError context: error message");
+        assert_eq!(format!("{error}"), "StorageError context: error message");
 
         let error = ExternalError::new(ErrorType::StorageError)
             .with_context(format!("error message {}", "with owned string"));
         assert_eq!(
-            format!("{}", error),
+            format!("{error}"),
             "StorageError context: error message with owned string"
         );
 
         let error = ExternalError::new(ErrorType::StorageError)
             .with_context(format!("error message {}", "with owned string"))
-            .with_cause(Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "inner error",
-            )));
+            .with_cause(Box::new(std::io::Error::other("inner error")));
 
         assert_eq!(
-            format!("{}", error),
+            format!("{error}"),
             "StorageError context: error message with owned string cause: inner error"
         );
     }
 
     #[test]
     fn should_extend_result_with_error() {
-        let result: Result<(), std::io::Error> = Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "inner error",
-        ));
+        let result: Result<(), std::io::Error> = Err(std::io::Error::other("inner error"));
 
         let error = result.or_err(ErrorType::StorageError).unwrap_err();
-        assert_eq!(format!("{}", error), "StorageError cause: inner error");
+        assert_eq!(format!("{error}"), "StorageError cause: inner error");
 
-        let result: Result<(), std::io::Error> = Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "inner error",
-        ));
+        let result: Result<(), std::io::Error> = Err(std::io::Error::other("inner error"));
 
         let error = result
             .or_context(ErrorType::StorageError, "error message")
             .unwrap_err();
 
         assert_eq!(
-            format!("{}", error),
+            format!("{error}"),
             "StorageError context: error message cause: inner error"
         );
     }
