@@ -37,6 +37,7 @@ pub mod scheduler;
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// REQUEST_TIMEOUT is the timeout for GRPC requests, default is 10 second.
+///
 /// Note: This timeout is used for the whole request, including wait for scheduler
 /// scheduling, refer to https://d7y.io/docs/next/reference/configuration/scheduler/.
 /// Scheduler'configure `scheduler.retryInterval`, `scheduler.retryBackToSourceLimit` and `scheduler.retryLimit`
@@ -53,6 +54,12 @@ pub const HTTP2_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(300);
 pub const HTTP2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// MAX_FRAME_SIZE is the max frame size for GRPC, default is 256KiB.
+///
+/// Note: A single HTTP/2 frame cannot be interrupted once it starts being
+/// written to the connection. If this value is set too large, a big DATA
+/// frame from a file transfer stream will monopolize the connection, forcing
+/// small gRPC requests (e.g. health checks) on the same connection to queue
+/// behind it, which may cause head-of-line blocking and request timeouts.
 pub const MAX_FRAME_SIZE: u32 = 256 * 1024;
 
 /// BUFFER_SIZE is the buffer size for GRPC, default is 512KiB.
