@@ -547,8 +547,14 @@ name = "bytesize"
 version = "1.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e93abca9e28e0a1b9877922aacb20576e05d4679ffa78c3d6dc22a26a216659"
+
+[[package]]
+name = "bytesize"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49e78e506b9d7633710dab98996f22f95f3d0f488e8f1aa162830556ed9fc14d"
 dependencies = [
- "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -557,7 +563,7 @@ version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "86d1eb2fd2668859e9785b99700c66b7ea9fdeda35d99f95827a4e5493440178"
 dependencies = [
- "bytesize",
+ "bytesize 1.3.3",
  "serde",
 ]
 
@@ -1296,7 +1302,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bytes",
- "bytesize",
+ "bytesize 2.4.0",
  "chrono",
  "clap",
  "console-subscriber",
@@ -1415,7 +1421,7 @@ dependencies = [
 name = "dragonfly-client-config"
 version = "1.3.12"
 dependencies = [
- "bytesize",
+ "bytesize 2.4.0",
  "bytesize-serde",
  "clap",
  "dragonfly-client-core",
@@ -1502,7 +1508,7 @@ version = "1.3.12"
 dependencies = [
  "bincode",
  "bytes",
- "bytesize",
+ "bytesize 2.4.0",
  "chrono",
  "crc32fast",
  "criterion",
@@ -1537,7 +1543,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "bytes",
- "bytesize",
+ "bytesize 2.4.0",
  "cgroups-rs",
  "crc32fast",
  "dashmap",
