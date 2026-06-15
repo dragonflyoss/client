@@ -78,7 +78,7 @@ oci-client = { version = "0.17.0", default-features = false, features = [
   "native-tls"
 ] }
 oci-spec = "0.9"
-opendal = { version = "0.55.0", features = [
+opendal = { version = "0.57.0", features = [
   "services-azblob",
   "services-cos",
   "services-fs",
