@@ -400,8 +400,7 @@ impl HTTP {
         // Origin must return 206 Partial Content for non-zero-offset Range requests.
         if response_status_code != reqwest::StatusCode::PARTIAL_CONTENT {
             error!(
-                "get request {} {} {}: origin ignored Range, expected 206 Partial Content but got {}",
-                task_id, piece_id, request_url, response_status_code
+                "get request {task_id} {piece_id} {request_url}: origin ignored Range, expected 206 Partial Content but got {response_status_code}"
             );
 
             return Some(GetResponse {
@@ -410,8 +409,7 @@ impl HTTP {
                 http_status_code: Some(response_status_code),
                 reader: Box::new(tokio::io::empty()),
                 error_message: Some(format!(
-                    "origin ignored range request: expected 206 Partial Content but got {}",
-                    response_status_code
+                    "origin ignored range request: expected 206 Partial Content but got {response_status_code}"
                 )),
             });
         }
@@ -429,8 +427,8 @@ impl HTTP {
 
         if !start_matches.unwrap_or(false) {
             error!(
-                "get request {} {} {}: origin returned invalid Content-Range {:?}, expected start {}",
-                task_id, piece_id, request_url, content_range, range.start
+                "get request {task_id} {piece_id} {request_url}: origin returned invalid Content-Range {content_range:?}, expected start {}",
+                range.start
             );
 
             return Some(GetResponse {
@@ -439,8 +437,8 @@ impl HTTP {
                 http_status_code: Some(response_status_code),
                 reader: Box::new(tokio::io::empty()),
                 error_message: Some(format!(
-                    "origin returned invalid content-range: {:?}, expected start {}",
-                    content_range, range.start
+                    "origin returned invalid content-range: {content_range:?}, expected start {}",
+                    range.start
                 )),
             });
         }
