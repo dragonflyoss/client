@@ -1090,21 +1090,29 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true, true)
-            .unwrap()
-            .stat(StatRequest {
-                task_id: "test".to_string(),
-                url: format!("{}/stat", server.uri()),
-                http_header: Some(HeaderMap::new()),
-                timeout: std::time::Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await
-            .unwrap();
+        let resp = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap()
+        .stat(StatRequest {
+            task_id: "test".to_string(),
+            url: format!("{}/stat", server.uri()),
+            http_header: Some(HeaderMap::new()),
+            timeout: std::time::Duration::from_secs(5),
+            client_cert: None,
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+        })
+        .await
+        .unwrap();
 
         assert_eq!(resp.http_status_code, Some(StatusCode::OK))
     }
@@ -1121,20 +1129,28 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true, true)
-            .unwrap()
-            .stat(StatRequest {
-                task_id: "test".to_string(),
-                url: format!("{}/stat", server.uri()),
-                http_header: None,
-                timeout: std::time::Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await;
+        let resp = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap()
+        .stat(StatRequest {
+            task_id: "test".to_string(),
+            url: format!("{}/stat", server.uri()),
+            http_header: None,
+            timeout: std::time::Duration::from_secs(5),
+            client_cert: None,
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+        })
+        .await;
 
         assert!(resp.is_err());
     }
@@ -1152,23 +1168,31 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let mut resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true, true)
-            .unwrap()
-            .get(GetRequest {
-                task_id: "test".to_string(),
-                piece_id: "test".to_string(),
-                url: format!("{}/get", server.uri()),
-                range: None,
-                http_header: Some(HeaderMap::new()),
-                timeout: std::time::Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await
-            .unwrap();
+        let mut resp = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap()
+        .get(GetRequest {
+            task_id: "test".to_string(),
+            piece_id: "test".to_string(),
+            url: format!("{}/get", server.uri()),
+            range: None,
+            http_header: Some(HeaderMap::new()),
+            timeout: std::time::Duration::from_secs(5),
+            client_cert: None,
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+        })
+        .await
+        .unwrap();
 
         assert_eq!(resp.http_status_code, Some(StatusCode::OK));
         assert_eq!(resp.text().await.unwrap(), "OK");
@@ -1177,21 +1201,29 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[tokio::test]
     async fn should_stat_response_with_self_signed_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true, true)
-            .unwrap()
-            .stat(StatRequest {
-                task_id: "test".to_string(),
-                url: server_addr,
-                http_header: Some(HeaderMap::new()),
-                timeout: Duration::from_secs(5),
-                client_cert: Some(load_certs_from_pem(CA_CERT).unwrap()),
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await
-            .unwrap();
+        let resp = HTTP::new(
+            HTTPS_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap()
+        .stat(StatRequest {
+            task_id: "test".to_string(),
+            url: server_addr,
+            http_header: Some(HeaderMap::new()),
+            timeout: Duration::from_secs(5),
+            client_cert: Some(load_certs_from_pem(CA_CERT).unwrap()),
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+        })
+        .await
+        .unwrap();
 
         assert_eq!(resp.http_status_code, Some(StatusCode::OK));
     }
@@ -1199,20 +1231,28 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[tokio::test]
     async fn should_return_error_response_when_stat_with_wrong_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true, true)
-            .unwrap()
-            .stat(StatRequest {
-                task_id: "test".to_string(),
-                url: server_addr,
-                http_header: Some(HeaderMap::new()),
-                timeout: Duration::from_secs(5),
-                client_cert: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await;
+        let resp = HTTP::new(
+            HTTPS_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap()
+        .stat(StatRequest {
+            task_id: "test".to_string(),
+            url: server_addr,
+            http_header: Some(HeaderMap::new()),
+            timeout: Duration::from_secs(5),
+            client_cert: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+        })
+        .await;
 
         assert!(!resp.unwrap().success);
     }
@@ -1220,23 +1260,31 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[tokio::test]
     async fn should_get_response_with_self_signed_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let mut resp = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true, true)
-            .unwrap()
-            .get(GetRequest {
-                task_id: "test".to_string(),
-                piece_id: "test".to_string(),
-                url: server_addr,
-                range: None,
-                http_header: Some(HeaderMap::new()),
-                timeout: std::time::Duration::from_secs(5),
-                client_cert: Some(load_certs_from_pem(CA_CERT).unwrap()),
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await
-            .unwrap();
+        let mut resp = HTTP::new(
+            HTTPS_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap()
+        .get(GetRequest {
+            task_id: "test".to_string(),
+            piece_id: "test".to_string(),
+            url: server_addr,
+            range: None,
+            http_header: Some(HeaderMap::new()),
+            timeout: std::time::Duration::from_secs(5),
+            client_cert: Some(load_certs_from_pem(CA_CERT).unwrap()),
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+        })
+        .await
+        .unwrap();
 
         assert_eq!(resp.http_status_code, Some(StatusCode::OK));
         assert_eq!(resp.text().await.unwrap(), "OK");
@@ -1245,22 +1293,30 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[tokio::test]
     async fn should_return_error_response_when_get_with_wrong_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true, true)
-            .unwrap()
-            .get(GetRequest {
-                task_id: "test".to_string(),
-                piece_id: "test".to_string(),
-                url: server_addr,
-                range: None,
-                http_header: Some(HeaderMap::new()),
-                timeout: std::time::Duration::from_secs(5),
-                client_cert: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await;
+        let resp = HTTP::new(
+            HTTPS_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap()
+        .get(GetRequest {
+            task_id: "test".to_string(),
+            piece_id: "test".to_string(),
+            url: server_addr,
+            range: None,
+            http_header: Some(HeaderMap::new()),
+            timeout: std::time::Duration::from_secs(5),
+            client_cert: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+        })
+        .await;
 
         assert!(!resp.unwrap().success);
     }
@@ -1268,21 +1324,29 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[tokio::test]
     async fn should_stat_response_with_no_verifier() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true, true)
-            .unwrap()
-            .stat(StatRequest {
-                task_id: "test".to_string(),
-                url: server_addr,
-                http_header: Some(HeaderMap::new()),
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await
-            .unwrap();
+        let resp = HTTP::new(
+            HTTPS_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap()
+        .stat(StatRequest {
+            task_id: "test".to_string(),
+            url: server_addr,
+            http_header: Some(HeaderMap::new()),
+            timeout: Duration::from_secs(5),
+            client_cert: None,
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+        })
+        .await
+        .unwrap();
 
         assert_eq!(resp.http_status_code, Some(StatusCode::OK));
     }
@@ -1290,7 +1354,15 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[tokio::test]
     async fn should_get_response_with_no_verifier() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let http_backend = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true, true);
+        let http_backend = HTTP::new(
+            HTTPS_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        );
         let mut resp = http_backend
             .unwrap()
             .get(GetRequest {
@@ -1325,21 +1397,29 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true, true)
-            .unwrap()
-            .exists(ExistsRequest {
-                task_id: "test".to_string(),
-                url: format!("{}/exists", server.uri()),
-                http_header: Some(HeaderMap::new()),
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await
-            .unwrap();
+        let resp = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap()
+        .exists(ExistsRequest {
+            task_id: "test".to_string(),
+            url: format!("{}/exists", server.uri()),
+            http_header: Some(HeaderMap::new()),
+            timeout: Duration::from_secs(5),
+            client_cert: None,
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+        })
+        .await
+        .unwrap();
 
         assert!(resp);
     }
@@ -1356,21 +1436,29 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true, true)
-            .unwrap()
-            .exists(ExistsRequest {
-                task_id: "test".to_string(),
-                url: format!("{}/exists", server.uri()),
-                http_header: Some(HeaderMap::new()),
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await
-            .unwrap();
+        let resp = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap()
+        .exists(ExistsRequest {
+            task_id: "test".to_string(),
+            url: format!("{}/exists", server.uri()),
+            http_header: Some(HeaderMap::new()),
+            timeout: Duration::from_secs(5),
+            client_cert: None,
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+        })
+        .await
+        .unwrap();
 
         assert!(!resp);
     }
@@ -1387,20 +1475,28 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true, true)
-            .unwrap()
-            .exists(ExistsRequest {
-                task_id: "test".to_string(),
-                url: format!("{}/exists", server.uri()),
-                http_header: None,
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await;
+        let resp = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap()
+        .exists(ExistsRequest {
+            task_id: "test".to_string(),
+            url: format!("{}/exists", server.uri()),
+            http_header: None,
+            timeout: Duration::from_secs(5),
+            client_cert: None,
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+        })
+        .await;
 
         assert!(resp.is_err());
     }
@@ -1408,7 +1504,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[test]
     fn should_make_request_headers() {
         // Apply default user-agent when not specified.
-        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true, true).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap();
         let mut headers = HeaderMap::new();
         http.make_request_headers(&mut headers, None).unwrap();
         assert_eq!(
@@ -1547,8 +1652,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .await;
 
         // First request - should store redirect url.
-        let backend =
-            HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true, true).unwrap();
+        let backend = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap();
         let mut response = backend
             .get(GetRequest {
                 task_id: "025a7b4c4615f86617acb34c7ec3404a0a475c2cfaf847ecead944c0bae6277d"
@@ -1612,8 +1725,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let backend =
-            HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true, true).unwrap();
+        let backend = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap();
 
         // First request - relative Location should NOT be cached.
         let mut response = backend
@@ -1681,7 +1802,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .await;
 
         // Use a very short TTL for this test (1 second).
-        let backend = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(1), true, true).unwrap();
+        let backend = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(1),
+            true,
+            true,
+        )
+        .unwrap();
 
         // First request - should store redirect url.
         let mut response = backend
@@ -1744,8 +1874,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let backend =
-            HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true, true).unwrap();
+        let backend = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap();
         let mut response = backend
             .get(GetRequest {
                 task_id: "test".to_string(),
@@ -1789,8 +1927,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let backend =
-            HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true, true).unwrap();
+        let backend = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap();
         let response = backend
             .get(GetRequest {
                 task_id: "test".to_string(),
@@ -1841,8 +1987,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let backend =
-            HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true, true).unwrap();
+        let backend = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap();
         let response = backend
             .get(GetRequest {
                 task_id: "test".to_string(),
@@ -1893,8 +2047,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let backend =
-            HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true, true).unwrap();
+        let backend = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap();
         let mut response = backend
             .get(GetRequest {
                 task_id: "test".to_string(),
