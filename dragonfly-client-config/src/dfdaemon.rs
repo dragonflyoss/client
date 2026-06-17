@@ -210,10 +210,10 @@ fn default_backend_enable_hickory_dns() -> bool {
     true
 }
 
-/// default_backend_enable_range_compliance_check is the default value for range compliance check, default is true.
+/// default_backend_enable_range_compliance_check is the default value for range compliance check, default is false.
 #[inline]
 fn default_backend_enable_range_compliance_check() -> bool {
-    true
+    false
 }
 
 /// default_download_max_schedule_count is the default max count of schedule.
