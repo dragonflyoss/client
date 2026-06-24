@@ -1165,7 +1165,8 @@ async fn download(
                         response,
                     )) => {
                         if let Some(f) = &f {
-                            if let Err(err) = fallocate(f, response.content_length).await {
+                            if let Err(err) = fallocate(f.get_ref(), response.content_length).await
+                            {
                                 error!("fallocate {:?} failed: {}", args.output, err);
                                 fs::remove_file(&args.output).await.inspect_err(|err| {
                                     error!("remove file {:?} failed: {}", args.output, err);
