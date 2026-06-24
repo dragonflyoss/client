@@ -21,7 +21,7 @@ use dragonfly_api::dfdaemon::v2::{
     download_task_response, DownloadTaskRequest, ListTaskEntriesRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
-use dragonfly_client::grpc::{dfdaemon_download::DfdaemonDownloadClient, health::HealthClient};
+use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::resource::piece::MIN_PIECE_LENGTH;
 use dragonfly_client::tracing::init_command_tracing;
 use dragonfly_client_backend::{
@@ -1351,10 +1351,6 @@ fn make_output_by_entry(url: Url, output: &Path, entry: DirEntry) -> Result<Path
 /// download requests. Only after successful health verification does it return the
 /// download client for actual use.
 async fn get_dfdaemon_download_client(endpoint: PathBuf) -> Result<DfdaemonDownloadClient> {
-    // Check dfdaemon's health.
-    let health_client = HealthClient::new_unix(endpoint.clone()).await?;
-    health_client.check_dfdaemon_download().await?;
-
     // Get dfdaemon download client.
     let dfdaemon_download_client = DfdaemonDownloadClient::new_unix(endpoint).await?;
     Ok(dfdaemon_download_client)
