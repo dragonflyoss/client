@@ -37,6 +37,7 @@ dragonfly-client-storage.workspace = true
 async-trait.workspace = true
 dragonfly-client-backend.workspace = true
 dragonfly-client-metric.workspace = true
+dragonfly-client-request.workspace = true
 dragonfly-client-util.workspace = true
 dragonfly-api.workspace = true
 oci-client.workspace = true

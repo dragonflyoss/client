@@ -29,13 +29,13 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
+use dragonfly_client_request::{GetRequest, PreheatRequest, Proxy, Request};
 use dragonfly_client_util::{
     http::{
         header_vec_to_hashmap, header_vec_to_headermap,
         query_params::default_proxy_rule_filtered_query_params,
     },
     net::preferred_local_ip,
-    request::{GetRequest, PreheatRequest, Proxy, Request},
 };
 use oci_client::Reference;
 use std::path::PathBuf;

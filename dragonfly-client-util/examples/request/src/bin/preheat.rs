@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use dragonfly_client_util::request::{PreheatRequest, Proxy, Request};
+use dragonfly_client_request::{PreheatRequest, Proxy, Request};
 use std::time::Duration;
 
 /// This example demonstrates how to use the preheat method of the Dragonfly request module

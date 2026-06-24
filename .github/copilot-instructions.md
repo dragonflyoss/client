@@ -19,6 +19,7 @@ The repository is a Cargo workspace (resolver `"2"`) containing nine crates:
 | `dragonfly-client-backend`                 | Download backends: HTTP, S3/object-storage, HDFS, HuggingFace, plugins     |
 | `dragonfly-client-util`                    | Utilities: crypto, TLS, networking, ID generation, rate limiting, shutdown |
 | `dragonfly-client-metric`                  | Prometheus metrics                                                         |
+| `dragonfly-client-request`                 | Request library for downloading files via Dragonfly HTTP Proxy             |
 | `dragonfly-client-init`                    | `dfinit` binary — bootstraps the runtime environment                       |
 | `dragonfly-client-backend/examples/plugin` | Example backend plugin                                                     |
 

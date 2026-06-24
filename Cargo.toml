@@ -8,6 +8,7 @@ members = [
   "dragonfly-client-core",
   "dragonfly-client-init",
   "dragonfly-client-metric",
+  "dragonfly-client-request",
   "dragonfly-client-storage",
   "dragonfly-client-util",
   "dragonfly-client-util/examples/request",
@@ -41,6 +42,7 @@ dragonfly-client-config = { path = "dragonfly-client-config", version = "1.4.0" 
 dragonfly-client-core = { path = "dragonfly-client-core", version = "1.4.0" }
 dragonfly-client-init = { path = "dragonfly-client-init", version = "1.4.0" }
 dragonfly-client-metric = { path = "dragonfly-client-metric", version = "1.4.0" }
+dragonfly-client-request = { path = "dragonfly-client-request", version = "1.4.0" }
 dragonfly-client-storage = { path = "dragonfly-client-storage", version = "1.4.0" }
 dragonfly-client-util = { path = "dragonfly-client-util", version = "1.4.0" }
 fastrand = "2.4.1"

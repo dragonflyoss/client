@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 The Dragonfly Authors
+ * Copyright 2026 The Dragonfly Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-use crate::hashring::VNodeHashRing;
-use crate::net::format_url;
-use crate::shutdown;
 use async_trait::async_trait;
 use dragonfly_api::common::v2::Host;
 use dragonfly_api::scheduler::v2::{scheduler_client::SchedulerClient, ListHostsRequest};
 use dragonfly_client_core::{Error, Result};
+use dragonfly_client_util::hashring::VNodeHashRing;
+use dragonfly_client_util::net::format_url;
+use dragonfly_client_util::shutdown;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::str::FromStr;
@@ -228,8 +228,8 @@ impl Selector for SeedPeerSelector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::net::format_socket_addr;
     use dragonfly_api::common::v2::Host;
+    use dragonfly_client_util::net::format_socket_addr;
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::RwLock;
