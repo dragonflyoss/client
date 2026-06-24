@@ -1508,6 +1508,7 @@ dependencies = [
  "dragonfly-client-util",
  "futures",
  "hostname",
+ "mocktail",
  "oci-client",
  "oci-spec",
  "reqwest 0.12.28",
