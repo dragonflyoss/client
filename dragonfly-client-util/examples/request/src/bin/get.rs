@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use dragonfly_client_util::request::{GetRequest, Proxy, Request};
+use dragonfly_client_request::{GetRequest, Proxy, Request};
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 

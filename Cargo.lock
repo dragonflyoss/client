@@ -4898,7 +4898,7 @@ name = "request"
 version = "1.4.0"
 dependencies = [
  "anyhow",
- "dragonfly-client-util",
+ "dragonfly-client-request",
  "tokio",
 ]
 
