@@ -1,5 +1,6 @@
 [package]
 name = "dragonfly-client-request"
+description = "Request library for the dragonfly client"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
