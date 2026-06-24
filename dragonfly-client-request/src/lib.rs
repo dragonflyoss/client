@@ -1,5 +1,5 @@
 /*
- *     Copyright 2025 The Dragonfly Authors
+ *     Copyright 2026 The Dragonfly Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,18 +14,19 @@
  * limitations under the License.
  */
 
-use crate::digest::is_blob_url;
-use crate::http::{headermap_to_hashmap, query_params::default_proxy_rule_filtered_query_params};
-use crate::id_generator::{IDGenerator, TaskIDParameter};
-use crate::net::format_url;
-use crate::net::preferred_local_ip;
-use crate::pool::{Builder as PoolBuilder, Entry, Factory, Pool};
 use async_trait::async_trait;
 use bytes::BytesMut;
 use dragonfly_api::scheduler::v2::scheduler_client::SchedulerClient;
+use dragonfly_client_util::digest::is_blob_url;
+use dragonfly_client_util::http::{
+    headermap_to_hashmap, query_params::default_proxy_rule_filtered_query_params,
+};
+use dragonfly_client_util::id_generator::{IDGenerator, TaskIDParameter};
+use dragonfly_client_util::net::format_url;
+use dragonfly_client_util::net::preferred_local_ip;
+use dragonfly_client_util::pool::{Builder as PoolBuilder, Entry, Factory, Pool};
 use errors::{BackendError, DfdaemonError, Error, ProxyError};
 use futures::TryStreamExt;
-use hostname;
 use oci_client::client::ClientConfig;
 use oci_client::manifest::ImageIndexEntry;
 use oci_client::secrets::RegistryAuth;
