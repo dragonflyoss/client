@@ -2377,7 +2377,7 @@ impl DfdaemonDownloadClient {
         let channel = Endpoint::try_from("http://[::]:50051")
             .unwrap()
             .buffer_size(super::BUFFER_SIZE)
-            .connect_timeout(super::CONNECT_TIMEOUT)
+            .connect_timeout(super::UNIX_SOCKET_CONNECT_TIMEOUT)
             .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
             .initial_connection_window_size(super::INITIAL_CONNECTION_WINDOW_SIZE)
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))

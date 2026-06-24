@@ -36,6 +36,13 @@ pub mod scheduler;
 /// CONNECT_TIMEOUT is the timeout for GRPC connection.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// UNIX_SOCKET_CONNECT_TIMEOUT is the timeout for GRPC unix socket connection.
+///
+/// Local dfdaemon unix socket may be temporarily backlogged under bursty short-lived
+/// client traffic (for example many concurrent dfget processes). Use a longer timeout
+/// than CONNECT_TIMEOUT to avoid transient connection failures.
+pub const UNIX_SOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// REQUEST_TIMEOUT is the timeout for GRPC requests, default is 10 second.
 ///
 /// Note: This timeout is used for the whole request, including wait for scheduler
