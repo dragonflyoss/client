@@ -69,15 +69,15 @@ fn default_download_protocol() -> String {
 }
 
 /// default_download_request_rate_limit is the default rate limit of the download request in the
-/// download grpc server, default is 4000 req/s.
+/// download grpc server, default is 400 req/s.
 pub fn default_download_request_rate_limit() -> u64 {
-    4000
+    400
 }
 
 // default_download_request_buffer_size is the default buffer size for download request channel,
-// default is 1000.
+// default is 50.
 pub fn default_download_request_buffer_size() -> usize {
-    1000
+    50
 }
 
 /// default_host_hostname is the default hostname of the host.
@@ -105,15 +105,15 @@ fn default_upload_grpc_server_port() -> u16 {
 }
 
 /// default_upload_request_rate_limit is the default rate limit of the upload request in the
-/// upload grpc server, default is 4000 req/s.
+/// upload grpc server, default is 400 req/s.
 pub fn default_upload_request_rate_limit() -> u64 {
-    4000
+    400
 }
 
 /// default_upload_request_buffer_size is the default buffer size for upload request channel,
-/// default is 1000.
+/// default is 50.
 pub fn default_upload_request_buffer_size() -> usize {
-    1000
+    50
 }
 
 /// default_upload_bandwidth_limit is the default rate limit of the upload speed in GB/MB/KB per second, default is 50GB/s.
@@ -423,7 +423,7 @@ impl Default for Server {
         Server {
             plugin_dir: default_dfdaemon_plugin_dir(),
             cache_dir: default_dfdaemon_cache_dir(),
-            adaptive_rate_limit: None,
+            adaptive_rate_limit: Some(BBRConfig::default()),
         }
     }
 }
