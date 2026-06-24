@@ -84,6 +84,11 @@ impl HealthClient {
         // Ignore the uri because it is not used.
         let channel = Endpoint::try_from("http://[::]:50051")
             .unwrap()
+            .connect_timeout(super::CONNECT_TIMEOUT)
+            .timeout(super::REQUEST_TIMEOUT)
+            .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+            .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+            .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
             .connect_with_connector(service_fn(move |_: Uri| {
                 let socket_path = socket_path.clone();
                 async move {

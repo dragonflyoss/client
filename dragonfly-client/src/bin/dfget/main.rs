@@ -47,7 +47,7 @@ use std::time::Duration;
 use std::{cmp::min, fmt::Write};
 use termion::{color, style};
 use tokio::fs::{self, OpenOptions};
-use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
+use tokio::io::{AsyncSeekExt, AsyncWriteExt, BufWriter, SeekFrom};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn, Instrument, Level};
@@ -424,6 +424,10 @@ struct Args {
     )]
     version: bool,
 }
+
+/// The buffer size used for transferring data from dfdaemon to dfget when
+/// `--transfer-from-dfdaemon` is enabled.
+const TRANSFER_WRITE_BUFFER_SIZE: usize = 8 * 1024 * 1024;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -1133,7 +1137,7 @@ async fn download(
                 error!("open file {:?} failed: {}", args.output, err);
             })?;
 
-        Some(f)
+        Some(BufWriter::with_capacity(TRANSFER_WRITE_BUFFER_SIZE, f))
     } else {
         None
     };
@@ -1163,7 +1167,8 @@ async fn download(
                         response,
                     )) => {
                         if let Some(f) = &f {
-                            if let Err(err) = fallocate(f, response.content_length).await {
+                            if let Err(err) = fallocate(f.get_ref(), response.content_length).await
+                            {
                                 error!("fallocate {:?} failed: {}", args.output, err);
                                 fs::remove_file(&args.output).await.inspect_err(|err| {
                                     error!("remove file {:?} failed: {}", args.output, err);

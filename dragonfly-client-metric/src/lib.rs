@@ -1531,7 +1531,7 @@ mod tests {
         let tag = "slow-upload-tag";
         let app = "slow-upload-app";
         let small_size = 512 * 1024;
-        let slow_duration = Duration::from_millis(600);
+        let slow_duration = Duration::from_millis(1000);
         collect_upload_task_started_metrics(1, tag, app);
 
         let histogram_before = UPLOAD_TASK_DURATION
