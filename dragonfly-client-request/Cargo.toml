@@ -31,3 +31,6 @@ tracing.workspace = true
 url.workspace = true
 tonic-health.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+mocktail.workspace = true
