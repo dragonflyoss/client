@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use anyhow::Context;
 use clap::Parser;
 use dragonfly_client::announcer::SchedulerAnnouncer;
 use dragonfly_client::dynconfig::Dynconfig;
@@ -439,75 +440,88 @@ async fn main() -> Result<(), anyhow::Error> {
         is_running_in_container()
     );
 
+    // Spawn tasks for servers.
+    let mut dynconfig_handle = tokio::spawn(async move { dynconfig.run().await });
+    let mut health_handle = tokio::spawn(async move { health.run().await });
+    let mut metrics_handle = tokio::spawn(async move { metrics.run().await });
+    let mut stats_handle = tokio::spawn(async move { stats.run().await });
+    let mut scheduler_announcer_handle =
+        tokio::spawn(async move { scheduler_announcer.run().await });
+    let mut gc_handle = tokio::spawn(async move { gc.run().await });
+    let mut storage_tcp_handle = tokio::spawn(async move { storage_tcp_server.run().await });
+    let mut storage_quic_handle = tokio::spawn(async move { storage_quic_server.run().await });
+
     // grpc server started barrier.
     let grpc_server_started_barrier = Arc::new(Barrier::new(3));
+    let mut dfdaemon_upload_grpc_handle = {
+        let barrier = grpc_server_started_barrier.clone();
+        tokio::spawn(async move { dfdaemon_upload_grpc.run(barrier).await })
+    };
+
+    let mut dfdaemon_download_grpc_handle = {
+        let barrier = grpc_server_started_barrier.clone();
+        tokio::spawn(async move { dfdaemon_download_grpc.run(barrier).await })
+    };
+
+    let mut proxy_handle = {
+        let barrier = grpc_server_started_barrier.clone();
+        tokio::spawn(async move { proxy.run(barrier).await })
+    };
 
     // Wait for servers to exit or shutdown signal.
     tokio::select! {
-        _ = tokio::spawn(async move { dynconfig.run().await }) => {
+        result = &mut dynconfig_handle => {
+            result.context("dynconfig manager failed")?;
             info!("dynconfig manager exited");
         },
 
-        _ = tokio::spawn(async move { health.run().await }) => {
+        result = &mut health_handle => {
+            result.context("health server failed")?;
             info!("health server exited");
         },
 
-        _ = tokio::spawn(async move { metrics.run().await }) => {
+        result = &mut metrics_handle => {
+            result.context("metrics server failed")?;
             info!("metrics server exited");
         },
 
-        _ = tokio::spawn(async move { stats.run().await }) => {
+        result = &mut stats_handle => {
+            result.context("stats server failed")?;
             info!("stats server exited");
         },
 
-        _ = tokio::spawn(async move { scheduler_announcer.run().await }) => {
+        result = &mut scheduler_announcer_handle => {
+            result.context("scheduler announcer failed")?;
             info!("announcer scheduler exited");
         },
 
-        _ = tokio::spawn(async move { gc.run().await }) => {
+        result = &mut gc_handle => {
+            result.context("garbage collector failed")?;
             info!("garbage collector exited");
         },
 
-        _ = {
-            tokio::spawn(async move {
-                storage_tcp_server.run().await.unwrap_or_else(|err| error!("storage tcp server failed: {}", err));
-            })
-        } => {
+        result = &mut storage_tcp_handle => {
+            result.context("storage tcp server failed")??;
             info!("storage tcp server exited");
         },
 
-        _ = {
-            tokio::spawn(async move {
-                storage_quic_server.run().await.unwrap_or_else(|err| error!("storage quic server failed: {}", err));
-            })
-        } => {
+        result = &mut storage_quic_handle => {
+            result.context("storage quic server failed")??;
             info!("storage quic server exited");
         },
 
-        _ = {
-            let barrier = grpc_server_started_barrier.clone();
-            tokio::spawn(async move {
-                dfdaemon_upload_grpc.run(barrier).await.unwrap_or_else(|err| error!("dfdaemon upload grpc server failed: {}", err));
-            })
-        } => {
+        result = &mut dfdaemon_upload_grpc_handle => {
+            result.context("dfdaemon upload grpc server failed")??;
             info!("dfdaemon upload grpc server exited");
         },
 
-        _ = {
-            let barrier = grpc_server_started_barrier.clone();
-            tokio::spawn(async move {
-                dfdaemon_download_grpc.run(barrier).await.unwrap_or_else(|err| error!("dfdaemon download grpc server failed: {}", err));
-            })
-        } => {
+        result = &mut dfdaemon_download_grpc_handle => {
+            result.context("dfdaemon download grpc unix server failed")??;
             info!("dfdaemon download grpc unix server exited");
         },
 
-        _ = {
-            let barrier = grpc_server_started_barrier.clone();
-            tokio::spawn(async move {
-                proxy.run(barrier).await.unwrap_or_else(|err| error!("proxy server failed: {}", err));
-            })
-        } => {
+        result = &mut proxy_handle => {
+            result.context("proxy server failed")??;
             info!("proxy server exited");
         },
 
@@ -540,4 +554,32 @@ async fn main() -> Result<(), anyhow::Error> {
     let _ = shutdown_complete_rx.recv().await;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Context;
+    use dragonfly_client::health::Health;
+    use dragonfly_client_util::shutdown;
+    use std::net::{Ipv4Addr, TcpListener};
+    use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn background_server_panic_propagates_with_context() {
+        let occupied_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let addr = occupied_listener.local_addr().unwrap();
+        let shutdown = shutdown::Shutdown::new();
+        let (shutdown_complete_tx, _shutdown_complete_rx) = mpsc::unbounded_channel();
+        let health = Health::new(addr, shutdown, shutdown_complete_tx);
+
+        let result = tokio::spawn(async move {
+            health.run().await;
+        })
+        .await;
+
+        let err = result.context("health server failed").unwrap_err();
+        let message = format!("{err:#}");
+        assert!(message.contains("health server failed"));
+        assert!(message.contains("panic"));
+    }
 }
