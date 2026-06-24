@@ -16,7 +16,6 @@
 
 use clap::{Parser, Subcommand};
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
-use dragonfly_client::grpc::health::HealthClient;
 use dragonfly_client::tracing::init_command_tracing;
 use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{dfdaemon, dfstore};
@@ -103,10 +102,6 @@ async fn main() -> anyhow::Result<()> {
 /// download requests. Only after successful health verification does it return the
 /// download client for actual use.
 pub async fn get_dfdaemon_download_client(endpoint: PathBuf) -> Result<DfdaemonDownloadClient> {
-    // Check dfdaemon's health.
-    let health_client = HealthClient::new_unix(endpoint.clone()).await?;
-    health_client.check_dfdaemon_download().await?;
-
     // Get dfdaemon download client.
     let dfdaemon_download_client = DfdaemonDownloadClient::new_unix(endpoint).await?;
     Ok(dfdaemon_download_client)
