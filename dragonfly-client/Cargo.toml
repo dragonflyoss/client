@@ -104,6 +104,7 @@ rand = "0.9.4"
 glob = "0.3.3"
 console-subscriber = "=0.5.0"
 scopeguard = "1.2.0"
+socket2.workspace = true
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = { version = "0.5.4", features = ["profiling", "stats", "unprefixed_malloc_on_supported_platforms", "background_threads"] }

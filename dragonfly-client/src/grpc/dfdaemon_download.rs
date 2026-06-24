@@ -72,6 +72,7 @@ use dragonfly_client_util::{
 };
 use hyper_util::rt::TokioIo;
 use opentelemetry::Context;
+use socket2::{Domain, SockAddr, Socket, Type};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -194,7 +195,10 @@ impl DfdaemonDownloadServer {
             });
 
         // Bind the unix domain socket and set the permissions for the socket.
-        let uds = UnixListener::bind(&self.socket_path)?;
+        let uds = bind_unix_listener(
+            &self.socket_path,
+            self.config.download.server.request_buffer_size,
+        )?;
         let perms = std::fs::Permissions::from_mode(0o777);
         fs::set_permissions(&self.socket_path, perms).await?;
 
@@ -266,6 +270,15 @@ impl DfdaemonDownloadServer {
         info!("remove the unix domain socket file of the download server");
         Ok(())
     }
+}
+
+fn bind_unix_listener(socket_path: &Path, backlog: usize) -> ClientResult<UnixListener> {
+    let socket = Socket::new(Domain::UNIX, Type::STREAM, None)?;
+    socket.bind(&SockAddr::unix(socket_path)?)?;
+    socket.listen(backlog.min(i32::MAX as usize) as i32)?;
+    socket.set_nonblocking(true)?;
+
+    Ok(UnixListener::from_std(socket.into())?)
 }
 
 /// Handler for the dfdaemon download gRPC service.
