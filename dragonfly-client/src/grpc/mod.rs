@@ -34,7 +34,7 @@ pub mod middleware;
 pub mod scheduler;
 
 /// CONNECT_TIMEOUT is the timeout for GRPC connection.
-pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// REQUEST_TIMEOUT is the timeout for GRPC requests, default is 10 second.
 ///
@@ -70,6 +70,9 @@ pub const INITIAL_WINDOW_SIZE: u32 = 512 * 1024;
 
 /// INITIAL_CONNECTION_WINDOW_SIZE is the initial connection window size for GRPC, default is 4MiB.
 pub const INITIAL_CONNECTION_WINDOW_SIZE: u32 = 4 * 1024 * 1024;
+
+/// DOWNLOAD_STREAM_BUFFER_SIZE is the buffer size for download gRPC stream messages.
+pub const DOWNLOAD_STREAM_BUFFER_SIZE: usize = 12;
 
 /// prefetch_task prefetches the task if prefetch flag is true.
 #[instrument(skip_all)]

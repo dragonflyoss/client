@@ -33,7 +33,7 @@ use std::time::Duration;
 use std::{cmp::min, fmt::Write};
 use termion::{color, style};
 use tokio::fs::{self, OpenOptions};
-use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
+use tokio::io::{AsyncSeekExt, AsyncWriteExt, BufWriter, SeekFrom};
 use tracing::{debug, error, info};
 use url::Url;
 
@@ -191,6 +191,10 @@ pub struct ExportCommand {
     )]
     console: bool,
 }
+
+/// The buffer size used for transferring data from dfdaemon to dfget when
+/// `--transfer-from-dfdaemon` is enabled.
+const TRANSFER_WRITE_BUFFER_SIZE: usize = 8 * 1024 * 1024;
 
 /// Implement the execute for ExportCommand.
 impl ExportCommand {
@@ -570,7 +574,7 @@ impl ExportCommand {
                     error!("open file {:?} failed: {}", self.output, err);
                 })?;
 
-            Some(f)
+            Some(BufWriter::with_capacity(TRANSFER_WRITE_BUFFER_SIZE, f))
         } else {
             None
         };
@@ -604,7 +608,7 @@ impl ExportCommand {
                             response,
                         )) => {
                             if let Some(f) = &f {
-                                if let Err(err) = fallocate(f, response.content_length).await {
+                                if let Err(err) = fallocate(f.get_ref(), response.content_length).await {
                                     error!("fallocate {:?} failed: {}", self.output, err);
                                     fs::remove_file(&self.output).await.inspect_err(|err| {
                                         error!("remove file {:?} failed: {}", self.output, err);
