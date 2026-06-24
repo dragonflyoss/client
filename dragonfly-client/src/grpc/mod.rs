@@ -34,7 +34,7 @@ pub mod middleware;
 pub mod scheduler;
 
 /// CONNECT_TIMEOUT is the timeout for GRPC connection.
-pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// REQUEST_TIMEOUT is the timeout for GRPC requests, default is 10 second.
 ///
@@ -43,6 +43,12 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 /// Scheduler'configure `scheduler.retryInterval`, `scheduler.retryBackToSourceLimit` and `scheduler.retryLimit`
 /// is used for the scheduler to schedule the task.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// STREAM_SEND_TIMEOUT is the timeout for sending messages to long-lived gRPC streams.
+pub const STREAM_SEND_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// DOWNLOAD_STREAM_BUFFER_SIZE is the buffer size for download gRPC stream messages.
+pub const DOWNLOAD_STREAM_BUFFER_SIZE: usize = 32;
 
 /// TCP_KEEPALIVE is the keepalive duration for TCP connection.
 pub const TCP_KEEPALIVE: Duration = Duration::from_secs(3600);

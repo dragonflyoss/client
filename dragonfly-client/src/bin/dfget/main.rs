@@ -47,7 +47,7 @@ use std::time::Duration;
 use std::{cmp::min, fmt::Write};
 use termion::{color, style};
 use tokio::fs::{self, OpenOptions};
-use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
+use tokio::io::{AsyncSeekExt, AsyncWriteExt, BufWriter, SeekFrom};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn, Instrument, Level};
@@ -111,6 +111,8 @@ Examples:
   # Download from ModelScope Hub with authentication token.
   $ dfget modelscope://<owner>/<repo>/<path> -O /tmp/model.safetensors --ms-token=<token>
 "#;
+
+const TRANSFER_WRITE_BUFFER_SIZE: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Parser, Clone)]
 #[command(
@@ -1133,7 +1135,7 @@ async fn download(
                 error!("open file {:?} failed: {}", args.output, err);
             })?;
 
-        Some(f)
+        Some(BufWriter::with_capacity(TRANSFER_WRITE_BUFFER_SIZE, f))
     } else {
         None
     };

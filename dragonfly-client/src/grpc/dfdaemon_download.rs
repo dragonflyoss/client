@@ -501,7 +501,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let download_clone = download.clone();
         let task_manager_clone = self.task.clone();
         let task_clone = task.clone();
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(4);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(super::DOWNLOAD_STREAM_BUFFER_SIZE);
 
         // Define the error handler to send the error to the stream.
         async fn handle_error(
@@ -511,7 +511,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             out_stream_tx
                 .send_timeout(
                     Err(Status::internal(err.to_string())),
-                    super::REQUEST_TIMEOUT,
+                    super::STREAM_SEND_TIMEOUT,
                 )
                 .await
                 .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
@@ -523,7 +523,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             err: Status,
         ) {
             out_stream_tx
-                .send_timeout(Err(err), super::REQUEST_TIMEOUT)
+                .send_timeout(Err(err), super::STREAM_SEND_TIMEOUT)
                 .await
                 .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
         }
@@ -1295,7 +1295,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let request_clone = request.clone();
         let task_manager_clone = self.persistent_task.clone();
         let task_clone = task.clone();
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(4);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(super::DOWNLOAD_STREAM_BUFFER_SIZE);
 
         // Define the error handler to send the error to the stream.
         async fn handle_error(
@@ -1305,7 +1305,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             out_stream_tx
                 .send_timeout(
                     Err(Status::internal(err.to_string())),
-                    super::REQUEST_TIMEOUT,
+                    super::STREAM_SEND_TIMEOUT,
                 )
                 .await
                 .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
@@ -1849,7 +1849,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let request_clone = request.clone();
         let task_manager_clone = self.persistent_cache_task.clone();
         let task_clone = task.clone();
-        let (out_stream_tx, out_stream_rx) = mpsc::channel(4);
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(super::DOWNLOAD_STREAM_BUFFER_SIZE);
 
         // Define the error handler to send the error to the stream.
         async fn handle_error(
@@ -1859,7 +1859,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             out_stream_tx
                 .send_timeout(
                     Err(Status::internal(err.to_string())),
-                    super::REQUEST_TIMEOUT,
+                    super::STREAM_SEND_TIMEOUT,
                 )
                 .await
                 .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
