@@ -47,6 +47,11 @@ jobs:
         shell: bash
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
 
+      - name: Fix Cargo/Rustup permissions (self-hosted)
+        shell: bash
+        run: |
+          sudo chown -R "$USER":"$USER" "$HOME/.cargo" "$HOME/.rustup" 2>/dev/null || true
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
