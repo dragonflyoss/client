@@ -59,7 +59,8 @@ use dragonfly_client_core::{
 use dragonfly_client_util::tls::NoVerifier;
 use futures::TryStreamExt;
 use http::header::{
-    HeaderName, HeaderValue, CONTENT_LENGTH, LOCATION, RANGE, TRANSFER_ENCODING, USER_AGENT,
+    HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_RANGE, LOCATION, RANGE, TRANSFER_ENCODING,
+    USER_AGENT,
 };
 use lru::LruCache;
 use reqwest::header::HeaderMap;
@@ -128,6 +129,10 @@ pub struct HTTP {
     /// Enable hickory DNS resolver for reqwest client. It can be enabled to improve DNS resolution
     /// performance
     enable_hickory_dns: bool,
+
+    /// Enable range compliance check for non-zero-offset pieces. When enabled, responses that
+    /// ignore Range are rejected to prevent silent data corruption.
+    enable_range_compliance_check: bool,
 }
 
 /// HTTP implements the http interface.
@@ -146,6 +151,7 @@ impl HTTP {
         enable_cache_temporary_redirect: bool,
         cache_temporary_redirect_ttl: Duration,
         enable_hickory_dns: bool,
+        enable_range_compliance_check: bool,
     ) -> Result<HTTP> {
         // Disable automatic compression to prevent double-decompression issues.
         //
@@ -214,6 +220,7 @@ impl HTTP {
             enable_cache_temporary_redirect,
             cache_temporary_redirect_ttl,
             enable_hickory_dns,
+            enable_range_compliance_check,
         })
     }
 
@@ -372,6 +379,71 @@ impl HTTP {
             "caching temporary redirect {} -> {}",
             original_url, target_url
         );
+    }
+
+    /// validate_range_response checks that the origin honored the Range request
+    /// for non-zero-offset pieces. Returns Some(error GetResponse) if the origin
+    /// returned 200 instead of 206, or if the Content-Range start does not match.
+    fn validate_range_response(
+        range: Option<Range>,
+        response_header: &HeaderMap,
+        response_status_code: reqwest::StatusCode,
+        task_id: &str,
+        piece_id: &str,
+        request_url: &str,
+    ) -> Option<GetResponse<Body>> {
+        let range = range?;
+        if range.start == 0 {
+            return None;
+        }
+
+        // Origin must return 206 Partial Content for non-zero-offset Range requests.
+        if response_status_code != reqwest::StatusCode::PARTIAL_CONTENT {
+            error!(
+                "get request {task_id} {piece_id} {request_url}: origin ignored Range, expected 206 Partial Content but got {response_status_code}"
+            );
+
+            return Some(GetResponse {
+                success: false,
+                http_header: None,
+                http_status_code: Some(response_status_code),
+                reader: Box::new(tokio::io::empty()),
+                error_message: Some(format!(
+                    "origin ignored range request: expected 206 Partial Content but got {response_status_code}"
+                )),
+            });
+        }
+
+        // 206 must carry a Content-Range whose start matches the requested offset.
+        let content_range = response_header
+            .get(CONTENT_RANGE)
+            .and_then(|v| v.to_str().ok());
+        let start_matches = content_range.and_then(|cr| {
+            cr.strip_prefix("bytes ")
+                .and_then(|s| s.split('-').next())
+                .and_then(|s| s.parse::<u64>().ok())
+                .map(|start| start == range.start)
+        });
+
+        if !start_matches.unwrap_or(false) {
+            error!(
+                "get request {task_id} {piece_id} {request_url}: origin returned invalid Content-Range {content_range:?}, expected start {}",
+                range.start
+            );
+
+            return Some(GetResponse {
+                success: false,
+                http_header: None,
+                http_status_code: Some(response_status_code),
+                reader: Box::new(tokio::io::empty()),
+                error_message: Some(format!(
+                    "origin returned invalid content-range: {content_range:?}, expected start {}",
+                    range.start
+                )),
+            });
+        }
+
+        None
     }
 }
 
@@ -685,6 +757,21 @@ impl Backend for HTTP {
         let response_header = response.headers().clone();
         let response_status_code = response.status();
 
+        // Validate that the origin honored the Range request for non-zero-offset
+        // pieces to prevent silent data corruption.
+        if self.enable_range_compliance_check {
+            if let Some(response) = Self::validate_range_response(
+                request.range,
+                &response_header,
+                response_status_code,
+                &request.task_id,
+                &request.piece_id,
+                &request_url,
+            ) {
+                return Ok(response);
+            }
+        }
+
         // Non-redirect response or redirect without Location header
         let response_reader = Box::new(StreamReader::new(response.bytes_stream().map_err(
             move |err| {
@@ -841,7 +928,7 @@ mod tests {
     use tokio_rustls::rustls::ServerConfig;
     use tokio_rustls::TlsAcceptor;
     use wiremock::{
-        matchers::{method, path},
+        matchers::{header, method, path},
         Mock, ResponseTemplate,
     };
 
@@ -1001,21 +1088,29 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .stat(StatRequest {
-                task_id: "test".to_string(),
-                url: format!("{}/stat", server.uri()),
-                http_header: Some(HeaderMap::new()),
-                timeout: std::time::Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await
-            .unwrap();
+        let resp = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap()
+        .stat(StatRequest {
+            task_id: "test".to_string(),
+            url: format!("{}/stat", server.uri()),
+            http_header: Some(HeaderMap::new()),
+            timeout: std::time::Duration::from_secs(5),
+            client_cert: None,
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+        })
+        .await
+        .unwrap();
 
         assert_eq!(resp.http_status_code, Some(StatusCode::OK))
     }
@@ -1032,20 +1127,28 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .stat(StatRequest {
-                task_id: "test".to_string(),
-                url: format!("{}/stat", server.uri()),
-                http_header: None,
-                timeout: std::time::Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await;
+        let resp = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap()
+        .stat(StatRequest {
+            task_id: "test".to_string(),
+            url: format!("{}/stat", server.uri()),
+            http_header: None,
+            timeout: std::time::Duration::from_secs(5),
+            client_cert: None,
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+        })
+        .await;
 
         assert!(resp.is_err());
     }
@@ -1063,23 +1166,31 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let mut resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .get(GetRequest {
-                task_id: "test".to_string(),
-                piece_id: "test".to_string(),
-                url: format!("{}/get", server.uri()),
-                range: None,
-                http_header: Some(HeaderMap::new()),
-                timeout: std::time::Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await
-            .unwrap();
+        let mut resp = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap()
+        .get(GetRequest {
+            task_id: "test".to_string(),
+            piece_id: "test".to_string(),
+            url: format!("{}/get", server.uri()),
+            range: None,
+            http_header: Some(HeaderMap::new()),
+            timeout: std::time::Duration::from_secs(5),
+            client_cert: None,
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+        })
+        .await
+        .unwrap();
 
         assert_eq!(resp.http_status_code, Some(StatusCode::OK));
         assert_eq!(resp.text().await.unwrap(), "OK");
@@ -1088,21 +1199,29 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[tokio::test]
     async fn should_stat_response_with_self_signed_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .stat(StatRequest {
-                task_id: "test".to_string(),
-                url: server_addr,
-                http_header: Some(HeaderMap::new()),
-                timeout: Duration::from_secs(5),
-                client_cert: Some(load_certs_from_pem(CA_CERT).unwrap()),
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await
-            .unwrap();
+        let resp = HTTP::new(
+            HTTPS_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap()
+        .stat(StatRequest {
+            task_id: "test".to_string(),
+            url: server_addr,
+            http_header: Some(HeaderMap::new()),
+            timeout: Duration::from_secs(5),
+            client_cert: Some(load_certs_from_pem(CA_CERT).unwrap()),
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+        })
+        .await
+        .unwrap();
 
         assert_eq!(resp.http_status_code, Some(StatusCode::OK));
     }
@@ -1110,20 +1229,28 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[tokio::test]
     async fn should_return_error_response_when_stat_with_wrong_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .stat(StatRequest {
-                task_id: "test".to_string(),
-                url: server_addr,
-                http_header: Some(HeaderMap::new()),
-                timeout: Duration::from_secs(5),
-                client_cert: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await;
+        let resp = HTTP::new(
+            HTTPS_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap()
+        .stat(StatRequest {
+            task_id: "test".to_string(),
+            url: server_addr,
+            http_header: Some(HeaderMap::new()),
+            timeout: Duration::from_secs(5),
+            client_cert: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+        })
+        .await;
 
         assert!(!resp.unwrap().success);
     }
@@ -1131,23 +1258,31 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[tokio::test]
     async fn should_get_response_with_self_signed_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let mut resp = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .get(GetRequest {
-                task_id: "test".to_string(),
-                piece_id: "test".to_string(),
-                url: server_addr,
-                range: None,
-                http_header: Some(HeaderMap::new()),
-                timeout: std::time::Duration::from_secs(5),
-                client_cert: Some(load_certs_from_pem(CA_CERT).unwrap()),
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await
-            .unwrap();
+        let mut resp = HTTP::new(
+            HTTPS_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap()
+        .get(GetRequest {
+            task_id: "test".to_string(),
+            piece_id: "test".to_string(),
+            url: server_addr,
+            range: None,
+            http_header: Some(HeaderMap::new()),
+            timeout: std::time::Duration::from_secs(5),
+            client_cert: Some(load_certs_from_pem(CA_CERT).unwrap()),
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+        })
+        .await
+        .unwrap();
 
         assert_eq!(resp.http_status_code, Some(StatusCode::OK));
         assert_eq!(resp.text().await.unwrap(), "OK");
@@ -1156,22 +1291,30 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[tokio::test]
     async fn should_return_error_response_when_get_with_wrong_cert() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .get(GetRequest {
-                task_id: "test".to_string(),
-                piece_id: "test".to_string(),
-                url: server_addr,
-                range: None,
-                http_header: Some(HeaderMap::new()),
-                timeout: std::time::Duration::from_secs(5),
-                client_cert: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await;
+        let resp = HTTP::new(
+            HTTPS_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap()
+        .get(GetRequest {
+            task_id: "test".to_string(),
+            piece_id: "test".to_string(),
+            url: server_addr,
+            range: None,
+            http_header: Some(HeaderMap::new()),
+            timeout: std::time::Duration::from_secs(5),
+            client_cert: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+        })
+        .await;
 
         assert!(!resp.unwrap().success);
     }
@@ -1179,21 +1322,29 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[tokio::test]
     async fn should_stat_response_with_no_verifier() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .stat(StatRequest {
-                task_id: "test".to_string(),
-                url: server_addr,
-                http_header: Some(HeaderMap::new()),
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await
-            .unwrap();
+        let resp = HTTP::new(
+            HTTPS_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap()
+        .stat(StatRequest {
+            task_id: "test".to_string(),
+            url: server_addr,
+            http_header: Some(HeaderMap::new()),
+            timeout: Duration::from_secs(5),
+            client_cert: None,
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+        })
+        .await
+        .unwrap();
 
         assert_eq!(resp.http_status_code, Some(StatusCode::OK));
     }
@@ -1201,7 +1352,15 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[tokio::test]
     async fn should_get_response_with_no_verifier() {
         let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let http_backend = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true);
+        let http_backend = HTTP::new(
+            HTTPS_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        );
         let mut resp = http_backend
             .unwrap()
             .get(GetRequest {
@@ -1236,21 +1395,29 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .exists(ExistsRequest {
-                task_id: "test".to_string(),
-                url: format!("{}/exists", server.uri()),
-                http_header: Some(HeaderMap::new()),
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await
-            .unwrap();
+        let resp = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap()
+        .exists(ExistsRequest {
+            task_id: "test".to_string(),
+            url: format!("{}/exists", server.uri()),
+            http_header: Some(HeaderMap::new()),
+            timeout: Duration::from_secs(5),
+            client_cert: None,
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+        })
+        .await
+        .unwrap();
 
         assert!(resp);
     }
@@ -1267,21 +1434,29 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .exists(ExistsRequest {
-                task_id: "test".to_string(),
-                url: format!("{}/exists", server.uri()),
-                http_header: Some(HeaderMap::new()),
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await
-            .unwrap();
+        let resp = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap()
+        .exists(ExistsRequest {
+            task_id: "test".to_string(),
+            url: format!("{}/exists", server.uri()),
+            http_header: Some(HeaderMap::new()),
+            timeout: Duration::from_secs(5),
+            client_cert: None,
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+        })
+        .await
+        .unwrap();
 
         assert!(!resp);
     }
@@ -1298,20 +1473,28 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .exists(ExistsRequest {
-                task_id: "test".to_string(),
-                url: format!("{}/exists", server.uri()),
-                http_header: None,
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-            })
-            .await;
+        let resp = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap()
+        .exists(ExistsRequest {
+            task_id: "test".to_string(),
+            url: format!("{}/exists", server.uri()),
+            http_header: None,
+            timeout: Duration::from_secs(5),
+            client_cert: None,
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+        })
+        .await;
 
         assert!(resp.is_err());
     }
@@ -1319,7 +1502,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[test]
     fn should_make_request_headers() {
         // Apply default user-agent when not specified.
-        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap();
         let mut headers = HeaderMap::new();
         http.make_request_headers(&mut headers, None).unwrap();
         assert_eq!(
@@ -1362,6 +1554,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             1,
             true,
             Duration::from_secs(600),
+            true,
             true,
         )
         .unwrap();
@@ -1407,6 +1600,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             true,
             Duration::from_secs(600),
             true,
+            true,
         )
         .unwrap();
         let mut headers = HeaderMap::new();
@@ -1424,6 +1618,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             1,
             true,
             Duration::from_secs(600),
+            true,
             true,
         )
         .unwrap();
@@ -1455,8 +1650,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .await;
 
         // First request - should store redirect url.
-        let backend =
-            HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+        let backend = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap();
         let mut response = backend
             .get(GetRequest {
                 task_id: "025a7b4c4615f86617acb34c7ec3404a0a475c2cfaf847ecead944c0bae6277d"
@@ -1520,8 +1723,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .mount(&server)
             .await;
 
-        let backend =
-            HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+        let backend = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap();
 
         // First request - relative Location should NOT be cached.
         let mut response = backend
@@ -1589,7 +1800,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .await;
 
         // Use a very short TTL for this test (1 second).
-        let backend = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(1), true).unwrap();
+        let backend = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(1),
+            true,
+            true,
+        )
+        .unwrap();
 
         // First request - should store redirect url.
         let mut response = backend
@@ -1633,5 +1853,230 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .unwrap();
         assert_eq!(response.http_status_code, Some(StatusCode::OK));
         assert_eq!(response.text().await.unwrap(), "target content");
+    }
+
+    // A non-zero-offset Range request that the origin honors with 206 and a
+    // matching Content-Range must succeed and return the requested bytes.
+    #[tokio::test]
+    async fn should_get_partial_content_for_nonzero_range() {
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/blob"))
+            .and(header("range", "bytes=4-6"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .set_body_string("MID")
+                    .insert_header("Content-Range", "bytes 4-6/10")
+                    .insert_header("Content-Length", "3"),
+            )
+            .mount(&server)
+            .await;
+
+        let backend = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap();
+        let mut response = backend
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "1".to_string(),
+                url: format!("{}/blob", server.uri()),
+                range: Some(Range {
+                    start: 4,
+                    length: 3,
+                }),
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(response.success);
+        assert_eq!(response.http_status_code, Some(StatusCode::PARTIAL_CONTENT));
+        assert_eq!(response.text().await.unwrap(), "MID");
+    }
+
+    // Reproduces the registry-mirror corruption bug: when the origin ignores the
+    // Range header and returns 200 with the full body, get() must reject the
+    // response for non-zero-offset pieces instead of letting write_piece()
+    // silently write the blob's leading bytes at the wrong offset.
+    #[tokio::test]
+    async fn should_reject_when_origin_ignores_range_and_returns_200() {
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/blob"))
+            .and(header("range", "bytes=4-6"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("0123456789")
+                    .insert_header("Content-Length", "10"),
+            )
+            .mount(&server)
+            .await;
+
+        let backend = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap();
+        let response = backend
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "1".to_string(),
+                url: format!("{}/blob", server.uri()),
+                range: Some(Range {
+                    start: 4,
+                    length: 3,
+                }),
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!response.success);
+        assert_eq!(response.http_status_code, Some(StatusCode::OK));
+        assert!(
+            response
+                .error_message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("206 Partial Content"),
+            "unexpected error_message: {:?}",
+            response.error_message
+        );
+    }
+
+    // A 206 with a Content-Range whose start does not match the requested offset
+    // would also corrupt the reassembled file, so it must be rejected.
+    #[tokio::test]
+    async fn should_reject_when_content_range_start_mismatches() {
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/blob"))
+            .and(header("range", "bytes=4-6"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .set_body_string("BAD")
+                    .insert_header("Content-Range", "bytes 0-2/10")
+                    .insert_header("Content-Length", "3"),
+            )
+            .mount(&server)
+            .await;
+
+        let backend = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap();
+        let response = backend
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "1".to_string(),
+                url: format!("{}/blob", server.uri()),
+                range: Some(Range {
+                    start: 4,
+                    length: 3,
+                }),
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!response.success);
+        assert_eq!(response.http_status_code, Some(StatusCode::PARTIAL_CONTENT));
+        assert!(
+            response
+                .error_message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("invalid content-range"),
+            "unexpected error_message: {:?}",
+            response.error_message
+        );
+    }
+
+    // A zero-offset Range (the first piece) is allowed to be a 200 full body:
+    // reader.take(piece_length) reads the correct leading bytes, so it must not
+    // be rejected even when the origin does not support Range.
+    #[tokio::test]
+    async fn should_allow_full_body_for_zero_offset_range() {
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/blob"))
+            .and(header("range", "bytes=0-3"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("0123456789")
+                    .insert_header("Content-Length", "10"),
+            )
+            .mount(&server)
+            .await;
+
+        let backend = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            true,
+        )
+        .unwrap();
+        let mut response = backend
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "0".to_string(),
+                url: format!("{}/blob", server.uri()),
+                range: Some(Range {
+                    start: 0,
+                    length: 4,
+                }),
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(response.success);
+        assert_eq!(response.http_status_code, Some(StatusCode::OK));
+        assert_eq!(response.text().await.unwrap(), "0123456789");
     }
 }
