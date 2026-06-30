@@ -555,7 +555,7 @@ impl Backend for ModelScope {
         // Build request headers, including authentication if provided ModelScope token.
         let request_header = Self::build_request_headers(
             request.model_scope.as_ref().and_then(|ms| ms.token.clone()),
-            None,
+            request.range,
         )?;
 
         // Get the ModelScope information from the request, request must contain ModelScope
@@ -736,6 +736,13 @@ impl Backend for ModelScope {
 mod tests {
     use super::*;
     use crate::DEFAULT_USER_AGENT;
+    use dragonfly_api::common::v2::ModelScope as ModelScopeOptions;
+    use dragonfly_client_config::dfdaemon::Config;
+    use std::{sync::Arc, time::Duration};
+    use wiremock::{
+        matchers::{header, method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
 
     #[test]
     fn test_parse_url_simple() {
@@ -1008,5 +1015,50 @@ mod tests {
     fn test_repository_type_as_str() {
         assert_eq!(RepositoryType::Model.as_str(), "models");
         assert_eq!(RepositoryType::Dataset.as_str(), "datasets");
+    }
+
+    #[tokio::test]
+    async fn test_get_propagates_range_header() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(
+                "/models/deepseek-ai/DeepSeek-R1/resolve/master/config.json",
+            ))
+            .and(header("range", "bytes=10-29"))
+            .respond_with(ResponseTemplate::new(206).set_body_string("partial content"))
+            .mount(&server)
+            .await;
+
+        let backend = ModelScope::new(Arc::new(Config::default())).unwrap();
+        let mut response = backend
+            .get(GetRequest {
+                task_id: "task".to_string(),
+                piece_id: "piece".to_string(),
+                url: "modelscope://deepseek-ai/DeepSeek-R1/config.json".to_string(),
+                range: Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                http_header: None,
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: Some(ModelScopeOptions {
+                    revision: "master".to_string(),
+                    token: None,
+                    base_url: Some(server.uri()),
+                }),
+            })
+            .await
+            .unwrap();
+
+        assert!(response.success);
+        assert_eq!(
+            response.http_status_code,
+            Some(reqwest::StatusCode::PARTIAL_CONTENT)
+        );
+        assert_eq!(response.text().await.unwrap(), "partial content");
     }
 }
