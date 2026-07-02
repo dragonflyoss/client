@@ -21,7 +21,7 @@ use dragonfly_api::manager::v2::{
 };
 use dragonfly_client_config::{dfdaemon::Config, CARGO_PKG_VERSION, GIT_COMMIT_SHORT_HASH};
 use dragonfly_client_core::{Error, Result};
-use dragonfly_client_util::net::format_url;
+use dragonfly_client_util::net::{format_url, scheme_for_tls};
 use dragonfly_client_util::shutdown;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -310,8 +310,13 @@ impl Dynconfig {
                 }
             }
 
+            let scheme = scheme_for_tls(
+                &self.config.scheduler.ca_cert,
+                &self.config.scheduler.cert,
+                &self.config.scheduler.key,
+            );
             let addr = format_url(
-                "http",
+                scheme,
                 IpAddr::from_str(&scheduler.ip)?,
                 scheduler.port as u16,
             );
