@@ -23,7 +23,7 @@ use dragonfly_api::dfdaemon::v2::{
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_storage::metadata;
-use dragonfly_client_util::net::format_url;
+use dragonfly_client_util::net::{format_url, scheme_for_tls};
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -211,10 +211,15 @@ impl PieceCollector {
                     Error::InvalidPeer(parent.id.clone())
                 })?;
 
+                let scheme = scheme_for_tls(
+                    &config.upload.client.ca_cert,
+                    &config.upload.client.cert,
+                    &config.upload.client.key,
+                );
                 // Create a dfdaemon client.
                 let dfdaemon_upload_client = DfdaemonUploadClient::new(
                     config,
-                    format_url("http", IpAddr::from_str(&host.ip)?, host.port as u16),
+                    format_url(scheme, IpAddr::from_str(&host.ip)?, host.port as u16),
                     false,
                 )
                 .await
@@ -505,10 +510,15 @@ impl PersistentPieceCollector {
                     Error::InvalidPeer(parent.id.clone())
                 })?;
 
+                let scheme = scheme_for_tls(
+                    &config.upload.client.ca_cert,
+                    &config.upload.client.cert,
+                    &config.upload.client.key,
+                );
                 // Create a dfdaemon client.
                 let dfdaemon_upload_client = DfdaemonUploadClient::new(
                     config,
-                    format_url("http", IpAddr::from_str(&host.ip)?, host.port as u16),
+                    format_url(scheme, IpAddr::from_str(&host.ip)?, host.port as u16),
                     false,
                 )
                 .await
@@ -807,10 +817,15 @@ impl PersistentCachePieceCollector {
                     Error::InvalidPeer(parent.id.clone())
                 })?;
 
+                let scheme = scheme_for_tls(
+                    &config.upload.client.ca_cert,
+                    &config.upload.client.cert,
+                    &config.upload.client.key,
+                );
                 // Create a dfdaemon client.
                 let dfdaemon_upload_client = DfdaemonUploadClient::new(
                     config,
-                    format_url("http", IpAddr::from_str(&host.ip)?, host.port as u16),
+                    format_url(scheme, IpAddr::from_str(&host.ip)?, host.port as u16),
                     false,
                 )
                 .await

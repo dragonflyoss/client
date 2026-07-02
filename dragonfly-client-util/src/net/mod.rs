@@ -16,6 +16,7 @@
 
 use local_ip_address::{local_ip, local_ipv6};
 use std::net::IpAddr;
+use std::path::PathBuf;
 
 #[cfg(target_os = "linux")]
 use std::{io, mem, os::unix::io::RawFd};
@@ -34,6 +35,22 @@ pub fn format_socket_addr(ip: IpAddr, port: u16) -> String {
 /// Formats a complete URL with scheme, IP address, and port.
 pub fn format_url(scheme: &str, ip: IpAddr, port: u16) -> String {
     format!("{}://{}", scheme, format_socket_addr(ip, port))
+}
+
+/// scheme_for_tls returns the gRPC dial scheme: `https` when client TLS is fully
+/// configured (ca_cert, cert, and key all set, the same gate as
+/// load_client_tls_config), otherwise `http`. tonic derives transport security
+/// from the URL scheme alone, so it must match whether a TLS config is attached.
+pub fn scheme_for_tls(
+    ca_cert: &Option<PathBuf>,
+    cert: &Option<PathBuf>,
+    key: &Option<PathBuf>,
+) -> &'static str {
+    if ca_cert.is_some() && cert.is_some() && key.is_some() {
+        "https"
+    } else {
+        "http"
+    }
 }
 
 /// Get the local IP address of the machine.
@@ -152,5 +169,19 @@ mod tests {
     fn test_preferred_local_ip() {
         let ip = preferred_local_ip();
         assert!(ip.is_some());
+    }
+
+    #[test]
+    fn test_scheme_for_tls() {
+        let ca = Some(PathBuf::from("/etc/tls/ca.pem"));
+        let cert = Some(PathBuf::from("/etc/tls/cert.pem"));
+        let key = Some(PathBuf::from("/etc/tls/key.pem"));
+
+        assert_eq!(scheme_for_tls(&ca, &cert, &key), "https");
+
+        assert_eq!(scheme_for_tls(&None, &cert, &key), "http");
+        assert_eq!(scheme_for_tls(&ca, &None, &key), "http");
+        assert_eq!(scheme_for_tls(&ca, &cert, &None), "http");
+        assert_eq!(scheme_for_tls(&None, &None, &None), "http");
     }
 }
