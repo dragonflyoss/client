@@ -23,174 +23,174 @@ pub use errors::ExternalError;
 pub use errors::OrErr;
 pub use errors::{BackendError, DownloadFromParentFailed};
 
-/// DFError is the error for dragonfly.
+/// The error for dragonfly.
 #[derive(thiserror::Error, Debug)]
 pub enum DFError {
-    /// IO is the error for IO operation.
+    /// The error for IO operation.
     #[error(transparent)]
     IO(#[from] std::io::Error),
 
-    /// VarError is the error for environment variable.
+    /// The error for environment variable.
     #[error(transparent)]
     VarError(#[from] std::env::VarError),
 
-    /// MpscSend is the error for send.
+    /// The error for send.
     #[error("mpsc send: {0}")]
     MpscSend(String),
 
-    /// SendTimeout is the error for send timeout.
+    /// The error for send timeout.
     #[error("send timeout")]
     SendTimeout,
 
-    /// HashRing is the error for hashring.
+    /// The error for hashring.
     #[error{"hashring {0} is failed"}]
     HashRing(String),
 
-    /// NoSpace is the error when there is no space left on device.
+    /// The error when there is no space left on device.
     #[error("no space left on device: {0}")]
     NoSpace(String),
 
-    /// HostNotFound is the error when the host is not found.
+    /// The error when the host is not found.
     #[error{"host {0} not found"}]
     HostNotFound(String),
 
-    /// TaskNotFound is the error when the task is not found.
+    /// The error when the task is not found.
     #[error{"task {0} not found"}]
     TaskNotFound(String),
 
-    /// PieceNotFound is the error when the piece is not found.
+    /// The error when the piece is not found.
     #[error{"piece {0} not found"}]
     PieceNotFound(String),
 
-    /// PieceStateIsFailed is the error when the piece state is failed.
+    /// The error when the piece state is failed.
     #[error{"piece {0} state is failed"}]
     PieceStateIsFailed(String),
 
-    /// DownloadPieceFinished is the error when the download piece finished timeout.
+    /// The error when the download piece finished timeout.
     #[error{"download piece {0} finished timeout"}]
     DownloadPieceFinishedTimeout(String),
 
-    /// WaitForPieceFinishedTimeout is the error when the wait for piece finished timeout.
+    /// The error when the wait for piece finished timeout.
     #[error{"wait for piece {0} finished timeout"}]
     WaitForPieceFinishedTimeout(String),
 
-    /// AvailableManagerNotFound is the error when the available manager is not found.
+    /// The error when the available manager is not found.
     #[error{"available manager not found"}]
     AvailableManagerNotFound,
 
-    /// AvailableSchedulersNotFound is the error when the available schedulers is not found.
+    /// The error when the available schedulers is not found.
     #[error{"available schedulers not found"}]
     AvailableSchedulersNotFound,
 
-    /// DownloadFromParentFailed is the error when the download from parent is failed.
+    /// The error when the download from parent is failed.
     #[error(transparent)]
     DownloadFromParentFailed(DownloadFromParentFailed),
 
-    /// ColumnFamilyNotFound is the error when the column family is not found.
+    /// The error when the column family is not found.
     #[error{"column family {0} not found"}]
     ColumnFamilyNotFound(String),
 
-    /// InvalidStateTransition is the error when the state transition is invalid.
+    /// The error when the state transition is invalid.
     #[error{"can not transit from {0} to {1}"}]
     InvalidStateTransition(String, String),
 
-    /// InvalidState is the error when the state is invalid.
+    /// The error when the state is invalid.
     #[error{"invalid state {0}"}]
     InvalidState(String),
 
-    /// InvalidURI is the error when the uri is invalid.
+    /// The error when the uri is invalid.
     #[error("invalid uri {0}")]
     InvalidURI(String),
 
-    /// InvalidPeer is the error when the peer is invalid.
+    /// The error when the peer is invalid.
     #[error("invalid peer {0}")]
     InvalidPeer(String),
 
-    /// SchedulerClientNotFound is the error when the scheduler client is not found.
+    /// The error when the scheduler client is not found.
     #[error{"scheduler client not found"}]
     SchedulerClientNotFound,
 
-    /// UnexpectedResponse is the error when the response is unexpected.
+    /// The error when the response is unexpected.
     #[error{"unexpected response"}]
     UnexpectedResponse,
 
-    /// DigestMismatch is the error when the digest is mismatch.
+    /// The error when the digest is mismatch.
     #[error{"digest mismatch expected: {0}, actual: {1}"}]
     DigestMismatch(String, String),
 
-    /// ContentLengthMismatch is the error when the content length is mismatch.
+    /// The error when the content length is mismatch.
     #[error("content length mismatch expected: {0}, actual: {1}")]
     ContentLengthMismatch(u64, u64),
 
-    /// MaxScheduleCountExceeded is the error when the max schedule count is exceeded.
+    /// The error when the max schedule count is exceeded.
     #[error("max schedule count {0} exceeded")]
     MaxScheduleCountExceeded(u32),
 
-    /// InvalidContentLength is the error when the content length is invalid.
+    /// The error when the content length is invalid.
     #[error("invalid content length")]
     InvalidContentLength,
 
-    /// InvalidPieceLength is the error when the piece length is invalid.
+    /// The error when the piece length is invalid.
     #[error("invalid piece length")]
     InvalidPieceLength,
 
-    /// InvalidParameter is the error when the parameter is invalid.
+    /// The error when the parameter is invalid.
     #[error("invalid parameter")]
     InvalidParameter,
 
-    /// NetAddrParseError is the error for net address parse.
+    /// The error for net address parse.
     #[error(transparent)]
     NetAddrParseError(#[from] std::net::AddrParseError),
 
-    /// ConvertInfallible is the error for infallible.
+    /// The error for infallible.
     #[error(transparent)]
     ConvertInfallible(#[from] std::convert::Infallible),
 
-    /// Utf8 is the error for utf8.
+    /// The error for utf8.
     #[error(transparent)]
     Utf8(#[from] std::str::Utf8Error),
 
-    /// Unknown is the error when the error is unknown.
+    /// The error when the error is unknown.
     #[error("unknown {0}")]
     Unknown(String),
 
-    /// Unimplemented is the error when the feature is not implemented.
+    /// The error when the feature is not implemented.
     #[error{"unimplemented"}]
     Unimplemented,
 
-    /// EmptyHTTPRangeError is the error when the range fallback error is empty.
+    /// The error when the range fallback error is empty.
     #[error{"RangeUnsatisfiable: Failed to parse range fallback error, please file an issue"}]
     EmptyHTTPRangeError,
 
-    /// Unauthorized is the error for unauthorized.
+    /// The error for unauthorized.
     #[error{"unauthorized"}]
     Unauthorized,
 
-    /// ArrayTryFromSliceError is the error for array try from slice.
+    /// The error for array try from slice.
     #[error(transparent)]
     ArrayTryFromSliceError(#[from] std::array::TryFromSliceError),
 
-    /// VortexProtocolStatus is the error for vortex protocol status.
+    /// The error for vortex protocol status.
     #[error("vortex protocol status: code={0:?}, message={1}")]
     VortexProtocolStatus(vortex_protocol::tlv::error::Code, String),
 
-    /// VortexProtocolError is the error for vortex protocol.
+    /// The error for vortex protocol.
     #[error(transparent)]
     VortexProtocolError(#[from] vortex_protocol::error::Error),
 
-    /// TonicStatus is the error for tonic status.
+    /// The error for tonic status.
     #[error(transparent)]
     TonicStatus(#[from] tonic::Status),
 
-    /// TonicTransportError is the error for tonic transport.
+    /// The error for tonic transport.
     #[error(transparent)]
     TonicTransportError(#[from] tonic::transport::Error),
 
-    /// TonicReflectionServerError is the error for tonic reflection server.
+    /// The error for tonic reflection server.
     #[error(transparent)]
     TonicReflectionServerError(#[from] tonic_reflection::server::Error),
 
-    /// TonicStreamElapsed is the error for tonic stream elapsed.
+    /// The error for tonic stream elapsed.
     #[error(transparent)]
     TokioStreamElapsed(#[from] tokio_stream::Elapsed),
 
@@ -198,7 +198,7 @@ pub enum DFError {
     #[error(transparent)]
     TokioTimeErrorElapsed(#[from] tokio::time::error::Elapsed),
 
-    /// HeadersError is the error for headers.
+    /// The error for headers.
     #[error(transparent)]
     HeadersError(#[from] headers::Error),
 
@@ -214,70 +214,70 @@ pub enum DFError {
     #[error(transparent)]
     HTTTHeaderToStrError(#[from] http::header::ToStrError),
 
-    /// URLParseError is the error for url parse.
+    /// The error for url parse.
     #[error(transparent)]
     URLParseError(#[from] url::ParseError),
 
-    /// ReqwestError is the error for reqwest.
+    /// The error for reqwest.
     #[error(transparent)]
     ReqwestError(#[from] reqwest::Error),
 
-    /// ReqwestMiddlewareError is the error for reqwest middleware.
+    /// The error for reqwest middleware.
     #[error(transparent)]
     ReqwestMiddlewareError(#[from] reqwest_middleware::Error),
 
-    /// OpenDALError is the error for opendal.
+    /// The error for opendal.
     #[error(transparent)]
     OpenDALError(#[from] opendal::Error),
 
-    /// HyperError is the error for hyper.
+    /// The error for hyper.
     #[error(transparent)]
     HyperError(#[from] hyper::Error),
 
-    /// BackendError is the error for backend.
+    /// The error for backend.
     #[error(transparent)]
     BackendError(Box<BackendError>),
 
-    /// HyperUtilClientLegacyError is the error for hyper util client legacy.
+    /// The error for hyper util client legacy.
     #[error(transparent)]
     HyperUtilClientLegacyError(#[from] hyper_util::client::legacy::Error),
 
-    /// ExternalError is the error for external error.
+    /// The error for external error.
     #[error(transparent)]
     ExternalError(#[from] ExternalError),
 
-    /// MaxDownloadFilesExceeded is the error for max download files exceeded.
+    /// The error for max download files exceeded.
     #[error(
         "exceeded the maximum download limit of {0} files. Use --max-files to increase this limit"
     )]
     MaxDownloadFilesExceeded(usize),
 
-    /// Unsupported is the error for unsupported.
+    /// The error for unsupported.
     #[error("unsupported {0}")]
     Unsupported(String),
 
-    /// TokioJoinError is the error for tokio join.
+    /// The error for tokio join.
     #[error(transparent)]
     TokioJoinError(tokio::task::JoinError),
 
-    /// ValidationError is the error for validate.
+    /// The error for validate.
     #[error("validate failed: {0}")]
     ValidationError(String),
 
-    /// CgroupsFSError is the error for cgroups fs.
+    /// The error for cgroups fs.
     #[cfg(target_os = "linux")]
     #[error(transparent)]
     CgroupsFSError(#[from] cgroups_rs::fs::error::Error),
 }
 
-/// SendError is the error for send.
+/// The error for send.
 impl<T> From<tokio::sync::mpsc::error::SendError<T>> for DFError {
     fn from(e: tokio::sync::mpsc::error::SendError<T>) -> Self {
         Self::MpscSend(e.to_string())
     }
 }
 
-/// SendTimeoutError is the error for send timeout.
+/// The error for send timeout.
 impl<T> From<tokio::sync::mpsc::error::SendTimeoutError<T>> for DFError {
     fn from(err: tokio::sync::mpsc::error::SendTimeoutError<T>) -> Self {
         match err {

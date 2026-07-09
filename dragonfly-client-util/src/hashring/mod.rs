@@ -30,7 +30,7 @@ pub struct VNode {
     name: String,
 }
 
-/// VNode implements virtual node for consistent hashing.
+/// Implements virtual node for consistent hashing.
 impl VNode {
     /// Creates a new virtual node with the given replica id and physical name.
     fn new(id: usize, name: String) -> Self {
@@ -38,7 +38,7 @@ impl VNode {
     }
 }
 
-/// VNode implements Display trait to format.
+/// Implements Display trait to format.
 impl fmt::Display for VNode {
     /// Formats the virtual node as "name|id" as the key for the hash ring.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -46,7 +46,7 @@ impl fmt::Display for VNode {
     }
 }
 
-/// VNode implements methods for hash ring operations.
+/// Implements methods for hash ring operations.
 impl VNode {
     /// Returns a reference to the physical node name associated with this vnode.
     pub fn name(&self) -> &str {
@@ -64,7 +64,7 @@ pub struct VNodeHashRing {
     ring: HashRing<VNode>,
 }
 
-/// VNodeHashRing implements methods for managing the hash ring.
+/// Implements methods for managing the hash ring.
 impl VNodeHashRing {
     /// Creates a new vnode-based hash ring.
     pub fn new(replica_count: usize) -> Self {

@@ -102,7 +102,7 @@ pub struct DfdaemonUploadServer {
     /// Persistent task manager.
     persistent_task: Arc<persistent_task::PersistentTask>,
 
-    /// Persistent cache task is the persistent cache task manager.
+    /// The persistent cache task manager.
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
 
     /// System interface for monitoring.
@@ -111,10 +111,10 @@ pub struct DfdaemonUploadServer {
     /// BBR rate limiter middleware for adaptive rate limiting based on system load.
     bbr: Option<Arc<BBR>>,
 
-    /// Shutdown is used to shutdown the grpc server.
+    /// Used to shutdown the grpc server.
     shutdown: shutdown::Shutdown,
 
-    /// Shutdown complete is used to notify the grpc server is shutdown.
+    /// Used to notify the grpc server is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
@@ -240,21 +240,21 @@ impl DfdaemonUploadServer {
     }
 }
 
-/// Dfdaemon upload server handler is the handler of the dfdaemon upload grpc service.
+/// The handler of the dfdaemon upload grpc service.
 pub struct DfdaemonUploadServerHandler {
-    /// Config is the configuration of the dfdaemon.
+    /// The configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// Socket path is the path of the unix domain socket.
+    /// The path of the unix domain socket.
     socket_path: PathBuf,
 
-    /// Task is the task manager.
+    /// The task manager.
     task: Arc<task::Task>,
 
-    /// Persistent task is the persistent task manager.
+    /// The persistent task manager.
     persistent_task: Arc<persistent_task::PersistentTask>,
 
-    /// Persistent cache task is the persistent cache task manager.
+    /// The persistent cache task manager.
     persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
 
     /// System interface for monitoring.
@@ -264,7 +264,7 @@ pub struct DfdaemonUploadServerHandler {
 /// Dfdaemon upload server handler implements the dfdaemon upload grpc service.
 #[async_trait::async_trait]
 impl DfdaemonUpload for DfdaemonUploadServerHandler {
-    /// Download task stream is the stream of the download task response.
+    /// The stream of the download task response.
     type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
 
     /// Downloads the task.
@@ -922,7 +922,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(()))
     }
 
-    /// SyncPiecesStream is the stream of the sync pieces response.
+    /// The stream of the sync pieces response.
     type SyncPiecesStream = ReceiverStream<Result<SyncPiecesResponse, Status>>;
 
     /// Sync pieces provides the piece metadata for parent. If the per-piece collection timeout is exceeded,
@@ -1115,7 +1115,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    /// Sync host stream is the stream of the sync host response.
+    /// The stream of the sync host response.
     type SyncHostStream = ReceiverStream<Result<Host, Status>>;
 
     /// Sync the host information.
@@ -1195,7 +1195,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    /// Download persistent task stream is the stream of the download persistent task response.
+    /// The stream of the download persistent task response.
     type DownloadPersistentTaskStream =
         ReceiverStream<Result<DownloadPersistentTaskResponse, Status>>;
 
@@ -1533,7 +1533,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    /// update_persistent_task update metadata of the persistent task.
+    /// Updates metadata of the persistent task.
     #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn update_persistent_task(
         &self,
@@ -1662,7 +1662,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(()))
     }
 
-    /// Sync persistent pieces stream is the stream of the sync pieces response.
+    /// The stream of the sync pieces response.
     type SyncPersistentPiecesStream = ReceiverStream<Result<SyncPersistentPiecesResponse, Status>>;
 
     /// Sync perisstent pieces provides the persistent piece metadata for parent.
@@ -2113,7 +2113,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    /// update_persistent_cache_task update metadata of the persistent cache task.
+    /// Updates metadata of the persistent cache task.
     #[instrument(skip_all, fields(host_id, task_id, remote_ip))]
     async fn update_persistent_cache_task(
         &self,
@@ -2242,7 +2242,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(()))
     }
 
-    /// SyncPiecesStream is the stream of the sync pieces response.
+    /// The stream of the sync persistent cache pieces response.
     type SyncPersistentCachePiecesStream =
         ReceiverStream<Result<SyncPersistentCachePiecesResponse, Status>>;
 
@@ -2435,7 +2435,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
 
-    /// Download cache task stream is the stream of the download cache task response.
+    /// The stream of the download cache task response.
     type DownloadCacheTaskStream = ReceiverStream<Result<DownloadCacheTaskResponse, Status>>;
 
     /// Downloads the cache task.
@@ -2468,7 +2468,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         todo!();
     }
 
-    /// Sync cache pieces stream is the stream of the sync cache pieces response.
+    /// The stream of the sync cache pieces response.
     type SyncCachePiecesStream = ReceiverStream<Result<SyncCachePiecesResponse, Status>>;
 
     /// Sync cache pieces provides the cache piece metadata for parent.
@@ -2493,10 +2493,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     }
 }
 
-/// Dfdaemon upload client is a wrapper of DfdaemonUploadGRPCClient.
+/// A wrapper of DfdaemonUploadGRPCClient.
 #[derive(Clone)]
 pub struct DfdaemonUploadClient {
-    /// Client is the grpc client of the dfdaemon upload.
+    /// The grpc client of the dfdaemon upload.
     pub client: DfdaemonUploadGRPCClient<InterceptedService<Channel, InjectTracingInterceptor>>,
 }
 

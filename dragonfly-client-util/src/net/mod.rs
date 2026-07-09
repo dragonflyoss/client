@@ -44,7 +44,7 @@ pub fn preferred_local_ip() -> Option<IpAddr> {
     local_ip().ok().or_else(|| local_ipv6().ok())
 }
 
-/// set_tcp_fastopen_connect enables TCP Fast Open for client connections on the given socket file
+/// Enables TCP Fast Open for client connections on the given socket file
 /// descriptor.
 #[cfg(target_os = "linux")]
 pub fn set_tcp_fastopen_connect(fd: RawFd) -> io::Result<()> {
@@ -68,7 +68,7 @@ pub fn set_tcp_fastopen_connect(fd: RawFd) -> io::Result<()> {
     Ok(())
 }
 
-/// set_tcp_fastopen enables TCP Fast Open for server connections on the given socket file
+/// Enables TCP Fast Open for server connections on the given socket file
 /// descriptor.
 #[cfg(target_os = "linux")]
 pub fn set_tcp_fastopen(fd: RawFd) -> io::Result<()> {

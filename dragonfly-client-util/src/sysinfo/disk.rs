@@ -22,7 +22,7 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 use tokio::sync::Mutex;
 use tracing::debug;
 
-/// DiskStats represents the disk statistics for a specific path.
+/// Represents the disk statistics for a specific path.
 #[derive(Debug, Clone, Default)]
 pub struct DiskStats {
     /// The total disk space in bytes.
@@ -38,7 +38,7 @@ pub struct DiskStats {
     pub used_percent: f64,
 }
 
-/// ProcessDiskStats represents the disk I/O statistics for a specific process.
+/// Represents the disk I/O statistics for a specific process.
 #[derive(Debug, Clone, Default)]
 pub struct ProcessDiskStats {
     /// The write bandwidth of the process in bytes per second.
@@ -48,7 +48,7 @@ pub struct ProcessDiskStats {
     pub read_bandwidth: u64,
 }
 
-/// Disk represents a disk interface for monitoring disk statistics.
+/// Represents a disk interface for monitoring disk statistics.
 #[derive(Debug, Clone, Default)]
 pub struct Disk {
     // Mutex to protect concurrent access to disk statistics.

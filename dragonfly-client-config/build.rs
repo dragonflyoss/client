@@ -19,19 +19,19 @@ use std::path::Path;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Commit represents the git commit information.
+/// Represents the git commit information.
 struct Commit {
-    /// hash is the full hash of the commit.
+    /// The full hash of the commit.
     hash: String,
 
-    /// short_hash is the short hash of the commit.
+    /// The short hash of the commit.
     short_hash: String,
 
-    /// date is the date of the commit.
+    /// The date of the commit.
     date: String,
 }
 
-/// get_commit_from_git returns the git commit information.
+/// Returns the git commit information.
 fn get_commit_from_git() -> Option<Commit> {
     if !Path::new("../.git").exists() {
         return None;

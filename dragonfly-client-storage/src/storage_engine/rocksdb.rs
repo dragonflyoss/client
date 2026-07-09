@@ -26,50 +26,50 @@ use std::{
 };
 use tracing::{info, warn};
 
-/// RocksdbStorageEngine is a storage engine based on rocksdb.
+/// A storage engine based on rocksdb.
 pub struct RocksdbStorageEngine {
     // inner is the inner rocksdb DB.
     inner: rocksdb::DB,
 }
 
-/// RocksdbStorageEngine implements deref of the storage engine.
+/// Implements deref of the storage engine.
 impl Deref for RocksdbStorageEngine {
-    /// Target is the inner rocksdb DB.
+    /// The inner rocksdb DB.
     type Target = rocksdb::DB;
 
-    /// deref returns the inner rocksdb DB.
+    /// Returns the inner rocksdb DB.
     fn deref(&self) -> &Self::Target {
         &self.inner
     }
 }
 
-/// RocksdbStorageEngine implements the storage engine of the rocksdb.
+/// Implements the storage engine of the rocksdb.
 impl RocksdbStorageEngine {
-    /// DEFAULT_DIR_NAME is the default directory name to store metadata.
+    /// The default directory name to store metadata.
     const DEFAULT_DIR_NAME: &'static str = "metadata";
 
-    /// DEFAULT_MEMTABLE_MEMORY_BUDGET is the default memory budget for memtable, default is 512MB.
+    /// The default memory budget for memtable, default is 512MB.
     const DEFAULT_MEMTABLE_MEMORY_BUDGET: usize = 512 * 1024 * 1024;
 
     // DEFAULT_MAX_BACKGROUND_JOBS is the default max background jobs for rocksdb, default is 2.
     const DEFAULT_MAX_BACKGROUND_JOBS: i32 = 2;
 
-    /// DEFAULT_BLOCK_SIZE is the default block size for rocksdb, default is 64KB.
+    /// The default block size for rocksdb, default is 64KB.
     const DEFAULT_BLOCK_SIZE: usize = 64 * 1024;
 
-    /// DEFAULT_CACHE_SIZE is the default cache size for rocksdb, default is 1GB.
+    /// The default cache size for rocksdb, default is 1GB.
     const DEFAULT_CACHE_SIZE: usize = 1024 * 1024 * 1024;
 
-    /// DEFAULT_LOG_MAX_SIZE is the default max log size for rocksdb, default is 64MB.
+    /// The default max log size for rocksdb, default is 64MB.
     const DEFAULT_LOG_MAX_SIZE: usize = 64 * 1024 * 1024;
 
-    /// DEFAULT_LOG_MAX_FILES is the default max log files for rocksdb.
+    /// The default max log files for rocksdb.
     const DEFAULT_LOG_MAX_FILES: usize = 10;
 
-    /// DEFAULT_BYTES_PER_SYNC is the default bytes per sync for rocksdb.
+    /// The default bytes per sync for rocksdb.
     const DEFAULT_BYTES_PER_SYNC: u64 = 2 * 1024 * 1024;
 
-    /// open opens a rocksdb storage engine with the given directory and column families.
+    /// Opens a rocksdb storage engine with the given directory and column families.
     pub fn open(dir: &Path, log_dir: &PathBuf, cf_names: &[&str], keep: bool) -> Result<Self> {
         info!("initializing metadata directory: {:?} {:?}", dir, cf_names);
         // Initialize rocksdb options.
@@ -137,9 +137,9 @@ impl RocksdbStorageEngine {
     }
 }
 
-/// RocksdbStorageEngine implements the storage engine operations.
+/// Implements the storage engine operations.
 impl Operations for RocksdbStorageEngine {
-    /// get gets the object by key.
+    /// Gets the object by key.
     fn get<O: DatabaseObject>(&self, key: &[u8]) -> Result<Option<O>> {
         let cf = cf_handle::<O>(self)?;
         let value = self.get_cf(cf, key).or_err(ErrorType::StorageError)?;
@@ -149,7 +149,7 @@ impl Operations for RocksdbStorageEngine {
         }
     }
 
-    /// exists checks if the object exists by key.
+    /// Checks if the object exists by key.
     fn exists<O: DatabaseObject>(&self, key: &[u8]) -> Result<bool> {
         let cf = cf_handle::<O>(self)?;
         Ok(self
@@ -158,7 +158,7 @@ impl Operations for RocksdbStorageEngine {
             .is_some())
     }
 
-    /// put puts the object by key.
+    /// Puts the object by key.
     fn put<O: DatabaseObject>(&self, key: &[u8], value: &O) -> Result<()> {
         let cf = cf_handle::<O>(self)?;
         let mut options = rocksdb::WriteOptions::default();
@@ -169,7 +169,7 @@ impl Operations for RocksdbStorageEngine {
         Ok(())
     }
 
-    /// delete deletes the object by key.
+    /// Deletes the object by key.
     fn delete<O: DatabaseObject>(&self, key: &[u8]) -> Result<()> {
         let cf = cf_handle::<O>(self)?;
         let mut options = WriteOptions::default();
@@ -180,7 +180,7 @@ impl Operations for RocksdbStorageEngine {
         Ok(())
     }
 
-    /// iter iterates all objects.
+    /// Iterates all objects.
     fn iter<O: DatabaseObject>(&self) -> Result<impl Iterator<Item = Result<(Box<[u8]>, O)>>> {
         let cf = cf_handle::<O>(self)?;
         let iter = self.iterator_cf(cf, rocksdb::IteratorMode::Start);
@@ -190,7 +190,7 @@ impl Operations for RocksdbStorageEngine {
         }))
     }
 
-    /// iter_raw iterates all objects without serialization.
+    /// Iterates all objects without serialization.
     fn iter_raw<O: DatabaseObject>(
         &self,
     ) -> Result<impl Iterator<Item = Result<(Box<[u8]>, Box<[u8]>)>>> {
@@ -203,7 +203,7 @@ impl Operations for RocksdbStorageEngine {
             }))
     }
 
-    /// prefix_iter iterates all objects with prefix.
+    /// Iterates all objects with prefix.
     fn prefix_iter<O: DatabaseObject>(
         &self,
         prefix: &[u8],
@@ -216,7 +216,7 @@ impl Operations for RocksdbStorageEngine {
         }))
     }
 
-    /// prefix_iter_raw iterates all objects with prefix without serialization.
+    /// Iterates all objects with prefix without serialization.
     fn prefix_iter_raw<O: DatabaseObject>(
         &self,
         prefix: &[u8],
@@ -228,7 +228,7 @@ impl Operations for RocksdbStorageEngine {
         }))
     }
 
-    /// batch_delete deletes objects by keys.
+    /// Deletes objects by keys.
     fn batch_delete<O: DatabaseObject>(&self, keys: Vec<&[u8]>) -> Result<()> {
         let cf = cf_handle::<O>(self)?;
         let mut batch = rocksdb::WriteBatch::default();
@@ -244,10 +244,10 @@ impl Operations for RocksdbStorageEngine {
     }
 }
 
-/// RocksdbStorageEngine implements the rocksdb of the storage engine.
+/// Implements the rocksdb of the storage engine.
 impl StorageEngine<'_> for RocksdbStorageEngine {}
 
-/// cf_handle returns the column family handle for the given object.
+/// Returns the column family handle for the given object.
 fn cf_handle<T>(db: &rocksdb::DB) -> Result<&rocksdb::ColumnFamily>
 where
     T: DatabaseObject,

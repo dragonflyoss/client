@@ -49,20 +49,20 @@ use tokio_util::io::StreamReader;
 use tracing::{debug, error, instrument};
 use url::Url;
 
-/// SCHEME is the scheme of the HDFS.
+/// The scheme of the HDFS.
 pub const SCHEME: &str = "hdfs";
 
-/// DEFAULT_NAMENODE_PORT is the default port of the HDFS namenode.
+/// The default port of the HDFS namenode.
 const DEFAULT_NAMENODE_PORT: u16 = 9870;
 
-/// Hdfs is a struct that implements the Backend trait.
+/// A struct that implements the Backend trait.
 #[derive(Default)]
 pub struct Hdfs {
-    /// Scheme is the scheme of the HDFS.
+    /// The scheme of the HDFS.
     scheme: String,
 }
 
-/// Hdfs implements the Backend trait.
+/// Implements the Backend trait.
 impl Hdfs {
     /// Create a new Hdfs instance.
     pub fn new() -> Self {
@@ -108,7 +108,7 @@ impl Hdfs {
 /// Implement the Backend trait for Hdfs.
 #[async_trait]
 impl Backend for Hdfs {
-    /// Scheme returns the scheme of the HDFS backend.
+    /// Returns the scheme of the HDFS backend.
     fn scheme(&self) -> String {
         self.scheme.clone()
     }

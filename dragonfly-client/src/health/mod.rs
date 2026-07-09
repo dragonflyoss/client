@@ -33,7 +33,7 @@ pub struct Health {
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
-/// Health implements the health server.
+/// Implements the health server.
 impl Health {
     /// Creates a new health server.
     pub fn new(

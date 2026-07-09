@@ -40,54 +40,54 @@ pub mod model_scope;
 pub mod object_storage;
 pub mod oci;
 
-/// POOL_MAX_IDLE_PER_HOST is the max idle connections per host.
+/// The max idle connections per host.
 const POOL_MAX_IDLE_PER_HOST: usize = 1024;
 
-/// KEEP_ALIVE_INTERVAL is the keep alive interval for TCP connection.
+/// The keep alive interval for TCP connection.
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(60);
 
-/// HTTP2_KEEP_ALIVE_INTERVAL is the interval for HTTP2 keep alive.
+/// The interval for HTTP2 keep alive.
 const HTTP2_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(300);
 
-/// HTTP2_KEEP_ALIVE_TIMEOUT is the timeout for HTTP2 keep alive.
+/// The timeout for HTTP2 keep alive.
 const HTTP2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// HTTP2_STREAM_WINDOW_SIZE is the stream window size for HTTP2 connection.
+/// The stream window size for HTTP2 connection.
 const HTTP2_STREAM_WINDOW_SIZE: u32 = 16 * 1024 * 1024;
 
-/// HTTP2_CONNECTION_WINDOW_SIZE is the connection window size for HTTP2 connection.
+/// The connection window size for HTTP2 connection.
 const HTTP2_CONNECTION_WINDOW_SIZE: u32 = 16 * 1024 * 1024;
 
-/// DEFAULT_USER_AGENT is the default user agent.
+/// The default user agent.
 const DEFAULT_USER_AGENT: &str = concat!("dragonfly", "/", env!("CARGO_PKG_VERSION"));
 
-/// NAME is the name of the package.
+/// The name of the package.
 pub const NAME: &str = "backend";
 
-/// Body is the body of the response.
+/// The body of the response.
 pub type Body = Box<dyn AsyncRead + Send + Unpin>;
 
-/// StatRequest is the stat request for backend.
+/// The stat request for backend.
 pub struct StatRequest {
-    /// Task id is the id of the task.
+    /// The id of the task.
     pub task_id: String,
 
-    /// URL is the url of the request.
+    /// The url of the request.
     pub url: String,
 
-    /// Http header is the headers of the request.
+    /// The headers of the request.
     pub http_header: Option<HeaderMap>,
 
-    /// Timeout is the timeout of the request.
+    /// The timeout of the request.
     pub timeout: Duration,
 
-    /// Client cert is the client certificates for the request.
+    /// The client certificates for the request.
     pub client_cert: Option<Vec<CertificateDer<'static>>>,
 
-    /// Object storage is the object storage related information.
+    /// The object storage related information.
     pub object_storage: Option<ObjectStorage>,
 
-    /// HDFS is the hdfs related information.
+    /// The hdfs related information.
     pub hdfs: Option<Hdfs>,
 
     /// Hugging Face is the hugging face related information.
@@ -97,56 +97,56 @@ pub struct StatRequest {
     pub model_scope: Option<ModelScope>,
 }
 
-/// StatResponse is the stat response for backend.
+/// The stat response for backend.
 #[derive(Debug)]
 pub struct StatResponse {
-    /// Success is the success of the response.
+    /// The success of the response.
     pub success: bool,
 
-    /// Content length is the content length of the response.
+    /// The content length of the response.
     pub content_length: Option<u64>,
 
-    /// HTTP header is the headers of the response.
+    /// The headers of the response.
     pub http_header: Option<HeaderMap>,
 
-    /// HTTP status code is the status code of the response.
+    /// The status code of the response.
     pub http_status_code: Option<reqwest::StatusCode>,
 
-    /// Entries is the information of the entries in the directory.
+    /// The information of the entries in the directory.
     pub entries: Vec<DirEntry>,
 
-    /// Error message is the error message of the response.
+    /// The error message of the response.
     pub error_message: Option<String>,
 }
 
-/// GetRequest is the get request for backend.
+/// The get request for backend.
 #[derive(Debug, Clone)]
 pub struct GetRequest {
-    /// Task id is the id of the task.
+    /// The id of the task.
     pub task_id: String,
 
-    /// Piece id is the id of the piece.
+    /// The id of the piece.
     pub piece_id: String,
 
-    /// URL is the url of the request.
+    /// The url of the request.
     pub url: String,
 
-    /// Range is the range of the request.
+    /// The range of the request.
     pub range: Option<Range>,
 
-    /// HTTP header is the headers of the request.
+    /// The headers of the request.
     pub http_header: Option<HeaderMap>,
 
-    /// Timeout is the timeout of the request.
+    /// The timeout of the request.
     pub timeout: Duration,
 
-    /// Client cert is the client certificates for the request.
+    /// The client certificates for the request.
     pub client_cert: Option<Vec<CertificateDer<'static>>>,
 
     /// Object storage related information.
     pub object_storage: Option<ObjectStorage>,
 
-    /// HDFS is the hdfs related information.
+    /// The hdfs related information.
     pub hdfs: Option<Hdfs>,
 
     /// Hugging Face is the hugging face related information.
@@ -156,28 +156,28 @@ pub struct GetRequest {
     pub model_scope: Option<ModelScope>,
 }
 
-/// GetResponse is the get response for backend.
+/// The get response for backend.
 pub struct GetResponse<R>
 where
     R: AsyncRead + Unpin,
 {
-    /// Success is the success of the response.
+    /// The success of the response.
     pub success: bool,
 
-    /// HTTP header is the headers of the response.
+    /// The headers of the response.
     pub http_header: Option<HeaderMap>,
 
-    /// HTTP status code is the status code of the response.
+    /// The status code of the response.
     pub http_status_code: Option<reqwest::StatusCode>,
 
-    /// Body is the content of the response.
+    /// The content of the response.
     pub reader: R,
 
-    /// Error message is the error message of the response.
+    /// The error message of the response.
     pub error_message: Option<String>,
 }
 
-/// GetResponse implements the response functions.
+/// Implements the response functions.
 impl<R> GetResponse<R>
 where
     R: AsyncRead + Unpin,
@@ -194,37 +194,37 @@ where
 /// The File Entry of a directory, including some relevant file metadata.
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct DirEntry {
-    /// URL is the url of the entry.
+    /// The url of the entry.
     pub url: String,
 
-    /// Content length is the content length of the entry.
+    /// The content length of the entry.
     pub content_length: usize,
 
-    /// Dir is the flag of the entry is a directory.
+    /// Indicates whether the entry is a directory.
     pub is_dir: bool,
 }
 
-/// ExistsRequest is the exists request for backend.
+/// The exists request for backend.
 pub struct ExistsRequest {
-    /// Task id is the id of the task.
+    /// The id of the task.
     pub task_id: String,
 
-    /// URL is the url of the request.
+    /// The url of the request.
     pub url: String,
 
-    /// HTTP header is the headers of the request.
+    /// The headers of the request.
     pub http_header: Option<HeaderMap>,
 
-    /// Timeout is the timeout of the request.
+    /// The timeout of the request.
     pub timeout: Duration,
 
-    /// Client cert is the client certificates for the request.
+    /// The client certificates for the request.
     pub client_cert: Option<Vec<CertificateDer<'static>>>,
 
-    /// Object storage is the object storage related information.
+    /// The object storage related information.
     pub object_storage: Option<ObjectStorage>,
 
-    /// HDFS is the hdfs related information.
+    /// The hdfs related information.
     pub hdfs: Option<Hdfs>,
 
     /// Hugging Face is the hugging face related information.
@@ -234,30 +234,30 @@ pub struct ExistsRequest {
     pub model_scope: Option<ModelScope>,
 }
 
-/// PutRequest is the put request for backend.
+/// The put request for backend.
 pub struct PutRequest {
-    /// Task id is the id of the task.
+    /// The id of the task.
     pub task_id: String,
 
-    /// URL is the url of the request.
+    /// The url of the request.
     pub url: String,
 
-    /// Path is the local file path of the request.
+    /// The local file path of the request.
     pub path: PathBuf,
 
-    /// HTTP header is the headers of the request.
+    /// The headers of the request.
     pub http_header: Option<HeaderMap>,
 
-    /// Timeout is the timeout of the request.
+    /// The timeout of the request.
     pub timeout: Duration,
 
-    /// Client cert is the client certificates for the request.
+    /// The client certificates for the request.
     pub client_cert: Option<Vec<CertificateDer<'static>>>,
 
-    /// Object storage is the object storage related information.
+    /// The object storage related information.
     pub object_storage: Option<ObjectStorage>,
 
-    /// HDFS is the hdfs related information.
+    /// The hdfs related information.
     pub hdfs: Option<Hdfs>,
 
     /// Hugging Face is the hugging face related information.
@@ -267,29 +267,29 @@ pub struct PutRequest {
     pub model_scope: Option<ModelScope>,
 }
 
-/// PutResponse is the put response for backend.
+/// The put response for backend.
 #[derive(Debug)]
 pub struct PutResponse {
-    /// Success is the success of the response.
+    /// The success of the response.
     pub success: bool,
 
-    /// Content length is the content length of the response.
+    /// The content length of the response.
     pub content_length: Option<u64>,
 
-    /// HTTP header is the headers of the response.
+    /// The headers of the response.
     pub http_header: Option<HeaderMap>,
 
-    /// HTTP status code is the status code of the response.
+    /// The status code of the response.
     pub http_status_code: Option<reqwest::StatusCode>,
 
-    /// Error message is the error message of the response.
+    /// The error message of the response.
     pub error_message: Option<String>,
 }
 
-/// Backend is the interface of the backend.
+/// The interface of the backend.
 #[async_trait]
 pub trait Backend {
-    /// Scheme returns the scheme of the backend.
+    /// Returns the scheme of the backend.
     fn scheme(&self) -> String;
 
     /// Stat gets the metadata from the backend.
@@ -305,22 +305,22 @@ pub trait Backend {
     async fn exists(&self, request: ExistsRequest) -> Result<bool>;
 }
 
-/// BackendFactory is the factory of the backend.
+/// The factory of the backend.
 #[derive(Default)]
 pub struct BackendFactory {
-    /// Config is the configuration of the dfdaemon.
+    /// The configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// Backends is the backends of the factory, including the plugin backends and
+    /// The backends of the factory, including the plugin backends and
     /// the builtin backends.
     backends: HashMap<String, Box<dyn Backend + Send + Sync>>,
 
-    /// Libraries are used to store the plugin's dynamic library, because when not saving the `Library`,
+    /// Used to store the plugin's dynamic library, because when not saving the `Library`,
     /// it will drop when out of scope, resulting in the null pointer error.
     libraries: Vec<Library>,
 }
 
-/// BackendFactory implements the factory of the backend. It supports loading builtin
+/// Implements the factory of the backend. It supports loading builtin
 /// backends and plugin backends.
 ///
 /// The builtin backends are http, https, etc., which are implemented
@@ -343,7 +343,7 @@ pub struct BackendFactory {
 /// The backend plugin implementation can refer to
 /// https://github.com/dragonflyoss/client/tree/main/dragonfly-client-backend/examples/plugin/.
 impl BackendFactory {
-    /// New returns a new BackendFactory.
+    /// Returns a new BackendFactory.
     pub fn new(config: Arc<Config>, plugin_dir: Option<&Path>) -> Result<Self> {
         let mut backend_factory = Self {
             config: config.clone(),
@@ -365,13 +365,13 @@ impl BackendFactory {
         Ok(backend_factory)
     }
 
-    /// Unsupported download directory returns whether the scheme does not support directory
+    /// Returns whether the scheme does not support directory
     /// download.
     pub fn unsupported_download_directory(scheme: &str) -> bool {
         scheme == http::HTTP_SCHEME || scheme == http::HTTPS_SCHEME
     }
 
-    /// Build returns the backend by the scheme of the url.
+    /// Returns the backend by the scheme of the url.
     pub fn build(&self, url: &str) -> Result<&(dyn Backend + Send + Sync)> {
         let url = Url::parse(url).or_err(ErrorType::ParseError)?;
         let scheme = url.scheme();

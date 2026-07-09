@@ -24,10 +24,10 @@ use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 
-/// DEFAULT_POOL_CAPACITY is the default capacity of the pool.
+/// The default capacity of the pool.
 const DEFAULT_POOL_CAPACITY: usize = usize::MAX;
 
-/// DEFAULT_POOL_IDLE_TIMEOUT is the default idle timeout for the pool.
+/// The default idle timeout for the pool.
 const DEFAULT_POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// RequestGuard automatically tracks active requests for a client.
@@ -35,7 +35,7 @@ pub struct RequestGuard {
     active_requests: Arc<AtomicUsize>,
 }
 
-/// RequestGuard implements the request guard pattern.
+/// Implements the request guard pattern.
 impl RequestGuard {
     /// Create a new request guard.
     fn new(active_requests: Arc<AtomicUsize>) -> Self {
@@ -55,13 +55,13 @@ impl Drop for RequestGuard {
 /// Entry wrapper for clients in the pool.
 #[derive(Clone)]
 pub struct Entry<T> {
-    /// client is the generic client instance.
+    /// The generic client instance.
     pub client: T,
 
-    /// active_requests is the number of the active requests.
+    /// The number of the active requests.
     active_requests: Arc<AtomicUsize>,
 
-    /// actived_at is the time when the client is the last active time.
+    /// The time when the client is the last active time.
     actived_at: Arc<std::sync::Mutex<Instant>>,
 }
 
@@ -109,24 +109,24 @@ pub trait Factory<A, T> {
 
 /// Generic client pool for managing reusable clients with automatic cleanup.
 pub struct Pool<K, A, T, F> {
-    /// factory is the factory for creating new clients.
+    /// The factory for creating new clients.
     factory: F,
 
-    /// clients is the map of clients.
+    /// The map of clients.
     clients: Arc<DashMap<K, Entry<T>>>,
 
-    /// capacity is the capacity of the clients. If the number of the
+    /// The capacity of the clients. If the number of the
     /// clients exceeds the capacity, it will clean up the idle clients.
     capacity: usize,
 
-    /// client_idle_timeout is the idle timeout for the client. If the client is idle for a long
+    /// The idle timeout for the client. If the client is idle for a long
     /// time, it will be removed when cleaning up the idle clients.
     idle_timeout: Duration,
 
-    /// cleanup_at is the time when the client is the last cleanup time.
+    /// The time when the client is the last cleanup time.
     cleanup_at: Arc<Mutex<Instant>>,
 
-    /// _phantom is the phantom data for the generic types.
+    /// The phantom data for the generic types.
     _phantom: PhantomData<A>,
 }
 

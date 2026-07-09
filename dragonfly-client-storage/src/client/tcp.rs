@@ -33,17 +33,17 @@ use vortex_protocol::{
     Header, Vortex, HEADER_SIZE,
 };
 
-/// TCPClient is a TCP-based client for tcp storage service.
+/// A TCP-based client for tcp storage service.
 #[derive(Clone)]
 pub struct TCPClient {
-    /// config is the configuration of the dfdaemon.
+    /// The configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// addr is the address of the TCP server.
+    /// The address of the TCP server.
     addr: String,
 }
 
-/// TCPClient implements the TCP-based client for tcp storage service.
+/// Implements the TCP-based client for tcp storage service.
 impl TCPClient {
     /// Creates a new TCPClient instance.
     pub fn new(config: Arc<Config>, addr: String) -> Self {

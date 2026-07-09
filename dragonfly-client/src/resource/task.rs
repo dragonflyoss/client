@@ -72,33 +72,33 @@ use tracing::{debug, error, info, instrument, warn, Instrument};
 
 use super::*;
 
-/// Task represents a task manager.
+/// Represents a task manager.
 pub struct Task {
-    /// config is the configuration of the dfdaemon.
+    /// The configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// id_generator is the id generator.
+    /// The id generator.
     pub id_generator: Arc<IDGenerator>,
 
-    /// storage is the local storage.
+    /// The local storage.
     storage: Arc<Storage>,
 
-    /// scheduler_client is the grpc client of the scheduler.
+    /// The grpc client of the scheduler.
     pub scheduler_client: Arc<SchedulerClient>,
 
-    /// backend_factory is the backend factory.
+    /// The backend factory.
     pub backend_factory: Arc<BackendFactory>,
 
-    /// piece is the piece manager.
+    /// The piece manager.
     pub piece: Arc<piece::Piece>,
 
-    /// parent_selector is the parent selector.
+    /// The parent selector.
     pub parent_selector: Arc<ParentSelector>,
 }
 
-/// Task implements the task manager.
+/// Implements the task manager.
 impl Task {
-    /// new returns a new Task.
+    /// Returns a new Task.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<Config>,
@@ -135,13 +135,13 @@ impl Task {
         })
     }
 
-    /// get gets the metadata of the task.
+    /// Gets the metadata of the task.
     #[instrument(skip_all)]
     pub fn get(&self, id: &str) -> ClientResult<Option<metadata::Task>> {
         self.storage.get_task(id)
     }
 
-    /// download_started updates the metadata of the task when the task downloads started.
+    /// Updates the metadata of the task when the task downloads started.
     #[instrument(skip_all)]
     pub async fn download_started(
         &self,
@@ -293,31 +293,31 @@ impl Task {
         task
     }
 
-    /// download_finished updates the metadata of the task when the task downloads finished.
+    /// Updates the metadata of the task when the task downloads finished.
     #[instrument(skip_all)]
     pub fn download_finished(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.download_task_finished(id)
     }
 
-    /// download_failed updates the metadata of the task when the task downloads failed.
+    /// Updates the metadata of the task when the task downloads failed.
     #[instrument(skip_all)]
     pub async fn download_failed(&self, id: &str) -> ClientResult<()> {
         self.storage.download_task_failed(id).await.map(|_| ())
     }
 
-    /// prefetch_task_started updates the metadata of the task when the task prefetch started.
+    /// Updates the metadata of the task when the task prefetch started.
     #[instrument(skip_all)]
     pub async fn prefetch_task_started(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.prefetch_task_started(id).await
     }
 
-    /// prefetch_task_failed updates the metadata of the task when the task prefetch failed.
+    /// Updates the metadata of the task when the task prefetch failed.
     #[instrument(skip_all)]
     pub async fn prefetch_task_failed(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.prefetch_task_failed(id).await
     }
 
-    /// is_same_dev_inode checks if the task is on the same device inode as the given path.
+    /// Checks if the task is on the same device inode as the given path.
     pub async fn is_same_dev_inode(&self, id: &str, to: &Path) -> ClientResult<bool> {
         self.storage.is_same_dev_inode_as_task(id, to).await
     }
@@ -328,7 +328,7 @@ impl Task {
         self.storage.copy_task(id, to).await
     }
 
-    /// download downloads a task.
+    /// Downloads a task.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     pub async fn download(
@@ -547,7 +547,7 @@ impl Task {
         Ok(())
     }
 
-    /// download_partial_with_scheduler downloads a partial task with scheduler.
+    /// Downloads a partial task with scheduler.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn download_partial_with_scheduler(
@@ -972,7 +972,7 @@ impl Task {
         Ok(finished_pieces)
     }
 
-    /// download_partial_with_scheduler_from_parent downloads a partial task with scheduler from a parent.
+    /// Downloads a partial task with scheduler from a parent.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn download_partial_with_scheduler_from_parent(
@@ -1329,7 +1329,7 @@ impl Task {
         Ok(finished_pieces)
     }
 
-    /// download_partial_with_scheduler_from_source downloads a partial task with scheduler from the source.
+    /// Downloads a partial task with scheduler from the source.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn download_partial_with_scheduler_from_source(
@@ -1653,7 +1653,7 @@ impl Task {
         Ok(finished_pieces)
     }
 
-    /// download_partial_from_local downloads a partial task from a local.
+    /// Downloads a partial task from a local.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn download_partial_from_local(
@@ -1791,7 +1791,7 @@ impl Task {
         Ok(finished_pieces)
     }
 
-    /// download_partial_from_source downloads a partial task from the source.
+    /// Downloads a partial task from the source.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn download_partial_from_source(
@@ -2022,7 +2022,7 @@ impl Task {
         return Ok(finished_pieces);
     }
 
-    /// stat_task returns the task metadata from scheduler.
+    /// Returns the task metadata from scheduler.
     #[instrument(skip_all)]
     pub async fn stat(&self, task_id: &str, host_id: &str) -> ClientResult<CommonTask> {
         self.scheduler_client
@@ -2036,7 +2036,7 @@ impl Task {
             })
     }
 
-    /// stat_local returns the task metadata from local storage.
+    /// Returns the task metadata from local storage.
     #[instrument(skip_all)]
     pub async fn stat_local(&self, task_id: &str) -> ClientResult<StatLocalTaskResponse> {
         let Some(task) = self.get(task_id).inspect_err(|err| {
@@ -2061,7 +2061,7 @@ impl Task {
         })
     }
 
-    /// list_local returns the tasks from local storage.
+    /// Returns the tasks from local storage.
     #[instrument(skip_all)]
     pub async fn list_local(&self) -> ClientResult<ListLocalTasksResponse> {
         let tasks = self.storage.get_tasks().inspect_err(|err| {

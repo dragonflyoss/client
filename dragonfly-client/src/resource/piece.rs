@@ -36,57 +36,57 @@ use std::time::Instant;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{error, info, instrument, warn, Span};
 
-/// MAX_PIECE_COUNT is the maximum piece count. If the piece count is upper
+/// The maximum piece count. If the piece count is upper
 /// than MAX_PIECE_COUNT, the piece length will be optimized by the file length.
 /// When piece length became the MAX_PIECE_LENGTH, the piece count
 /// probably will be upper than MAX_PIECE_COUNT.
 pub const MAX_PIECE_COUNT: u64 = 500;
 
-/// MIN_PIECE_LENGTH is the minimum piece length.
+/// The minimum piece length.
 pub const MIN_PIECE_LENGTH: u64 = 4 * 1024 * 1024;
 
-/// MAX_PIECE_LENGTH is the maximum piece length.
+/// The maximum piece length.
 pub const MAX_PIECE_LENGTH: u64 = 64 * 1024 * 1024;
 
-/// PieceLengthStrategy sets the optimization strategy of piece length.
+/// Sets the optimization strategy of piece length.
 pub enum PieceLengthStrategy {
     /// OptimizeByFileLength optimizes the piece length by the file length.
     OptimizeByFileLength(u64),
 
-    /// FixedPieceLength sets the fixed piece length.
+    /// Sets the fixed piece length.
     FixedPieceLength(u64),
 }
 
-/// Piece represents a piece manager.
+/// Represents a piece manager.
 pub struct Piece {
-    /// config is the configuration of the dfdaemon.
+    /// The configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// storage is the local storage.
+    /// The local storage.
     storage: Arc<Storage>,
 
-    /// tcp_downloader is the TCP piece downloader.
+    /// The TCP piece downloader.
     tcp_downloader: Arc<dyn piece_downloader::Downloader>,
 
-    /// quic_downloader is the QUIC piece downloader.
+    /// The QUIC piece downloader.
     quic_downloader: Arc<dyn piece_downloader::Downloader>,
 
-    /// backend_factory is the backend factory.
+    /// The backend factory.
     backend_factory: Arc<BackendFactory>,
 
-    /// download_bandwidth_limiter is the rate limiter of the download speed in bytes per second.
+    /// The rate limiter of the download speed in bytes per second.
     download_bandwidth_limiter: Arc<RateLimiter>,
 
-    /// prefetch_bandwidth_limiter is the rate limiter of the prefetch speed in bytes per second.
+    /// The rate limiter of the prefetch speed in bytes per second.
     prefetch_bandwidth_limiter: Arc<RateLimiter>,
 
-    /// back_to_source_bandwidth_limiter is the rate limiter of the back to source speed in bytes per second.
+    /// The rate limiter of the back to source speed in bytes per second.
     back_to_source_bandwidth_limiter: Arc<RateLimiter>,
 }
 
-/// Piece implements the piece manager.
+/// Implements the piece manager.
 impl Piece {
-    /// new returns a new Piece.
+    /// Returns a new Piece.
     pub fn new(
         config: Arc<Config>,
         storage: Arc<Storage>,
@@ -108,23 +108,23 @@ impl Piece {
         })
     }
 
-    /// id generates a new piece id.
+    /// Generates a new piece id.
     #[inline]
     pub fn id(&self, task_id: &str, number: u32) -> String {
         self.storage.piece_id(task_id, number)
     }
 
-    /// get gets a piece from the local storage.
+    /// Gets a piece from the local storage.
     pub fn get(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
         self.storage.get_piece(piece_id)
     }
 
-    /// get_all gets all pieces of a task from the local storage.
+    /// Gets all pieces of a task from the local storage.
     pub fn get_all(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
         self.storage.get_pieces(task_id)
     }
 
-    /// calculate_interested calculates the interested pieces by content_length and range.
+    /// Calculates the interested pieces by content_length and range.
     pub fn calculate_interested(
         &self,
         piece_length: u64,
@@ -245,7 +245,7 @@ impl Piece {
         Ok(pieces)
     }
 
-    /// remove_finished_from_interested removes the finished pieces from interested pieces.
+    /// Removes the finished pieces from interested pieces.
     #[instrument(skip_all)]
     pub fn remove_finished_from_interested(
         &self,
@@ -263,7 +263,7 @@ impl Piece {
             .collect::<Vec<metadata::Piece>>()
     }
 
-    /// merge_finished_pieces merges the finished pieces and has finished pieces.
+    /// Merges the finished pieces and has finished pieces.
     #[instrument(skip_all)]
     pub fn merge_finished_pieces(
         &self,
@@ -284,7 +284,7 @@ impl Piece {
         pieces.into_values().collect()
     }
 
-    /// calculate_piece_size calculates the piece size by content_length.
+    /// Calculates the piece size by content_length.
     pub fn calculate_piece_length(&self, strategy: PieceLengthStrategy) -> u64 {
         match strategy {
             PieceLengthStrategy::OptimizeByFileLength(content_length) => {
@@ -304,12 +304,12 @@ impl Piece {
         }
     }
 
-    /// calculate_piece_count calculates the piece count by piece_length and content_length.
+    /// Calculates the piece count by piece_length and content_length.
     pub fn calculate_piece_count(&self, piece_length: u64, content_length: u64) -> u32 {
         (content_length as f64 / piece_length as f64).ceil() as u32
     }
 
-    /// download_from_local_into_async_read downloads a single piece from local cache.
+    /// Downloads a single piece from local cache.
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_from_local_into_async_read(
         &self,
@@ -326,14 +326,14 @@ impl Piece {
         self.storage.upload_piece(piece_id, task_id, range).await
     }
 
-    /// download_from_local downloads a single piece from local cache. Fake the download piece
+    /// Downloads a single piece from local cache. Fake the download piece
     /// from the local cache, just collect the metrics.
     #[instrument(skip_all)]
     pub fn download_from_local(&self, length: u64) {
         collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
     }
 
-    /// download_from_parent downloads a single piece from a parent.
+    /// Downloads a single piece from a parent.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_from_parent(
@@ -458,7 +458,7 @@ impl Piece {
         }
     }
 
-    /// download_from_source downloads a single piece from the source.
+    /// Downloads a single piece from the source.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_from_source(
@@ -619,19 +619,19 @@ impl Piece {
         }
     }
 
-    /// persistent_id generates a new persistent piece id.
+    /// Generates a new persistent piece id.
     #[inline]
     pub fn persistent_id(&self, task_id: &str, number: u32) -> String {
         self.storage.persistent_piece_id(task_id, number)
     }
 
-    /// get_persistent gets a persistent piece from the local storage.
+    /// Gets a persistent piece from the local storage.
     #[instrument(skip_all)]
     pub fn get_persistent(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
         self.storage.get_persistent_piece(piece_id)
     }
 
-    /// create_persistent creates a new persistent piece.
+    /// Creates a new persistent piece.
     #[instrument(skip_all)]
     pub async fn create_persistent<R: AsyncRead + Unpin + ?Sized>(
         &self,
@@ -647,7 +647,7 @@ impl Piece {
             .await
     }
 
-    /// register_persistent registers a new persistent piece.
+    /// Registers a new persistent piece.
     #[instrument(skip_all)]
     pub fn register_persistent(
         &self,
@@ -660,7 +660,7 @@ impl Piece {
             .register_persistent_piece(piece_id, number, offset, length)
     }
 
-    /// download_persistent_from_local_into_async_read downloads a persistent piece from local cache.
+    /// Downloads a persistent piece from local cache.
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_persistent_from_local_into_async_read(
         &self,
@@ -679,14 +679,14 @@ impl Piece {
             .await
     }
 
-    /// download_persistent_from_local downloads a persistent piece from local cache. Fake the download
+    /// Downloads a persistent piece from local cache. Fake the download
     /// persistent piece from the local cache, just collect the metrics.
     #[instrument(skip_all)]
     pub fn download_persistent_from_local(&self, length: u64) {
         collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
     }
 
-    /// download_persistent_from_parent downloads a persistent piece from a parent.
+    /// Downloads a persistent piece from a parent.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_persistent_from_parent(
@@ -808,7 +808,7 @@ impl Piece {
         }
     }
 
-    /// download_persistent_from_source downloads a single persistent piece from the source.
+    /// Downloads a single persistent piece from the source.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_persistent_from_source(
@@ -964,19 +964,19 @@ impl Piece {
         }
     }
 
-    /// persistent_cache_id generates a new persistent cache piece id.
+    /// Generates a new persistent cache piece id.
     #[inline]
     pub fn persistent_cache_id(&self, task_id: &str, number: u32) -> String {
         self.storage.persistent_cache_piece_id(task_id, number)
     }
 
-    /// get_persistent_cache gets a persistent cache piece from the local storage.
+    /// Gets a persistent cache piece from the local storage.
     #[instrument(skip_all)]
     pub fn get_persistent_cache(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
         self.storage.get_persistent_cache_piece(piece_id)
     }
 
-    /// create_persistent_cache creates a new persistent cache piece.
+    /// Creates a new persistent cache piece.
     #[instrument(skip_all)]
     pub async fn create_persistent_cache<R: AsyncRead + Unpin + ?Sized>(
         &self,
@@ -992,7 +992,7 @@ impl Piece {
             .await
     }
 
-    /// register_persistent_cache registers a new persistent cache piece.
+    /// Registers a new persistent cache piece.
     #[instrument(skip_all)]
     pub fn register_persistent_cache(
         &self,
@@ -1005,7 +1005,7 @@ impl Piece {
             .register_persistent_cache_piece(piece_id, number, offset, length)
     }
 
-    /// download_persistent_cache_from_local_into_async_read downloads a persistent cache piece from local cache.
+    /// Downloads a persistent cache piece from local cache.
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_persistent_cache_from_local_into_async_read(
         &self,
@@ -1024,14 +1024,14 @@ impl Piece {
             .await
     }
 
-    /// download_persistent_cache_from_local downloads a persistent cache piece from local cache. Fake the download
+    /// Downloads a persistent cache piece from local cache. Fake the download
     /// persistent cache piece from the local cache, just collect the metrics.
     #[instrument(skip_all)]
     pub fn download_persistent_cache_from_local(&self, length: u64) {
         collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
     }
 
-    /// download_persistent_cache_from_parent downloads a persistent cache piece from a parent.
+    /// Downloads a persistent cache piece from a parent.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_persistent_cache_from_parent(

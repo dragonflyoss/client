@@ -49,22 +49,22 @@ use vortex_protocol::{
     Header, Vortex, HEADER_SIZE,
 };
 
-/// QUICServer is a QUIC-based server for dfdaemon upload service.
+/// A QUIC-based server for dfdaemon upload service.
 pub struct QUICServer {
-    /// addr is the address of the QUIC server.
+    /// The address of the QUIC server.
     addr: SocketAddr,
 
-    /// handler is the request handler.
+    /// The request handler.
     handler: QUICServerHandler,
 
-    /// shutdown is used to shutdown the QUIC server.
+    /// Used to shutdown the QUIC server.
     shutdown: shutdown::Shutdown,
 
-    /// _shutdown_complete is used to notify the QUIC server is shutdown.
+    /// Used to notify the QUIC server is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
-/// QUICServer implements the QUIC server.
+/// Implements the QUIC server.
 impl QUICServer {
     /// Creates a new QUICServer.
     pub fn new(
@@ -134,22 +134,22 @@ impl QUICServer {
     }
 }
 
-/// QUICServerHandler handles QUIC connections and requests.
+/// Handles QUIC connections and requests.
 #[derive(Clone)]
 pub struct QUICServerHandler {
-    /// id_generator is the id generator.
+    /// The id generator.
     id_generator: Arc<IDGenerator>,
 
-    /// storage is the local storage.
+    /// The local storage.
     storage: Arc<Storage>,
 
-    /// upload_bandwidth_limiter is the rate limiter of the upload speed in bytes per second.
+    /// The rate limiter of the upload speed in bytes per second.
     upload_bandwidth_limiter: Arc<RateLimiter>,
 }
 
-/// QUICServerHandler implements the request handler.
+/// Implements the request handler.
 impl QUICServerHandler {
-    /// handle handles a single QUIC connection.
+    /// Handles a single QUIC connection.
     #[instrument(skip_all)]
     async fn handle(
         &self,

@@ -14,5 +14,5 @@
  * limitations under the License.
  */
 
-/// SCHEME is the URL scheme for OCI(Open Container Initiative) artifacts.
+/// The URL scheme for OCI(Open Container Initiative) artifacts.
 pub const SCHEME: &str = "oci";

@@ -34,10 +34,10 @@ use tracing_subscriber::{
     EnvFilter, Registry,
 };
 
-/// SPAN_EXPORTER_TIMEOUT is the timeout for the span exporter.
+/// The timeout for the span exporter.
 const SPAN_EXPORTER_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// init_tracing initializes the tracing system.
+/// Initializes the tracing system.
 #[allow(clippy::too_many_arguments)]
 pub fn init_tracing(
     name: &str,
@@ -220,7 +220,7 @@ pub fn init_tracing(
     guards
 }
 
-/// init_command_tracing initializes the tracing system for command line tools.
+/// Initializes the tracing system for command line tools.
 #[allow(clippy::too_many_arguments)]
 pub fn init_command_tracing(log_level: Level, console: bool) -> Vec<WorkerGuard> {
     let mut guards = vec![];

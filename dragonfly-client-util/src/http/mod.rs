@@ -25,7 +25,7 @@ use std::collections::HashMap;
 pub mod basic_auth;
 pub mod query_params;
 
-/// headermap_to_hashmap converts a headermap to a hashmap.
+/// Converts a headermap to a hashmap.
 pub fn headermap_to_hashmap(header: &HeaderMap<HeaderValue>) -> HashMap<String, String> {
     let mut hashmap: HashMap<String, String> = HashMap::with_capacity(header.len());
     for (k, v) in header {
@@ -37,7 +37,7 @@ pub fn headermap_to_hashmap(header: &HeaderMap<HeaderValue>) -> HashMap<String, 
     hashmap
 }
 
-/// hashmap_to_headermap converts a hashmap to a headermap.
+/// Converts a hashmap to a headermap.
 pub fn hashmap_to_headermap(header: &HashMap<String, String>) -> Result<HeaderMap<HeaderValue>> {
     let mut headermap = HeaderMap::with_capacity(header.len());
     for (k, v) in header {
@@ -49,7 +49,7 @@ pub fn hashmap_to_headermap(header: &HashMap<String, String>) -> Result<HeaderMa
     Ok(headermap)
 }
 
-/// header_vec_to_hashmap converts a vector of header string to a hashmap.
+/// Converts a vector of header string to a hashmap.
 pub fn header_vec_to_hashmap(raw_header: Vec<String>) -> Result<HashMap<String, String>> {
     let mut header = HashMap::with_capacity(raw_header.len());
     for h in raw_header {
@@ -61,12 +61,12 @@ pub fn header_vec_to_hashmap(raw_header: Vec<String>) -> Result<HashMap<String, 
     Ok(header)
 }
 
-/// header_vec_to_headermap converts a vector of header string to a reqwest headermap.
+/// Converts a vector of header string to a reqwest headermap.
 pub fn header_vec_to_headermap(raw_header: Vec<String>) -> Result<HeaderMap> {
     hashmap_to_headermap(&header_vec_to_hashmap(raw_header)?)
 }
 
-/// get_range gets the range from http header.
+/// Gets the range from http header.
 pub fn get_range(header: &HeaderMap, content_length: u64) -> Result<Option<Range>> {
     match header.get(reqwest::header::RANGE) {
         Some(range) => {
@@ -77,7 +77,7 @@ pub fn get_range(header: &HeaderMap, content_length: u64) -> Result<Option<Range
     }
 }
 
-/// parse_range_header parses a Range header string as per RFC 7233,
+/// Parses a Range header string as per RFC 7233,
 /// supported Range Header: "Range": "bytes=100-200", "Range": "bytes=-50",
 /// "Range": "bytes=150-", "Range": "bytes=0-0,-1".
 pub fn parse_range_header(range_header_value: &str, content_length: u64) -> Result<Range> {

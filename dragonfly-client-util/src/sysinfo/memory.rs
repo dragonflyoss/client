@@ -56,7 +56,7 @@ pub struct CgroupMemoryStats {
     pub used_percent: f64,
 }
 
-/// Memory represents a memory interface for monitoring memory statistics.
+/// Represents a memory interface for monitoring memory statistics.
 #[derive(Debug, Clone, Default)]
 pub struct Memory {}
 

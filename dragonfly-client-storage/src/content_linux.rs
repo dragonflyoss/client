@@ -30,18 +30,18 @@ use tokio_util::io::InspectReader;
 use tracing::{debug, error, info, instrument, warn};
 use walkdir::WalkDir;
 
-/// Content is the content of a piece.
+/// The content of a piece.
 pub struct Content {
-    /// config is the configuration of the dfdaemon.
+    /// The configuration of the dfdaemon.
     pub config: Arc<Config>,
 
-    /// dir is the directory to store content.
+    /// The directory to store content.
     pub dir: PathBuf,
 }
 
-/// Content implements the content storage.
+/// Implements the content storage.
 impl Content {
-    /// new returns a new content.
+    /// Returns a new content.
     pub async fn new(config: Arc<Config>, dir: &Path) -> Result<Content> {
         let dir = dir.join(super::content::DEFAULT_CONTENT_DIR);
 
@@ -59,7 +59,7 @@ impl Content {
         Ok(Content { config, dir })
     }
 
-    /// available_space returns the available space of the disk.
+    /// Returns the available space of the disk.
     pub fn available_space(&self) -> Result<u64> {
         let disk_threshold = self.config.gc.policy.disk_threshold;
         if disk_threshold != ByteSize::default() {
@@ -86,7 +86,7 @@ impl Content {
         Ok(stat.available_space())
     }
 
-    /// total_space returns the total space of the disk.
+    /// Returns the total space of the disk.
     pub fn total_space(&self) -> Result<u64> {
         // If the disk_threshold is set, return it directly.
         let disk_threshold = self.config.gc.policy.disk_threshold;
@@ -98,7 +98,7 @@ impl Content {
         Ok(stat.total_space())
     }
 
-    /// has_enough_space checks if the storage has enough space to store the content.
+    /// Checks if the storage has enough space to store the content.
     pub fn has_enough_space(&self, content_length: u64) -> Result<bool> {
         let available_space = self.available_space()?;
         if available_space < content_length {
@@ -113,7 +113,7 @@ impl Content {
         Ok(true)
     }
 
-    /// is_same_dev_inode checks if the source and target are the same device and inode.
+    /// Checks if the source and target are the same device and inode.
     async fn is_same_dev_inode<P: AsRef<Path>, Q: AsRef<Path>>(
         &self,
         source: P,
@@ -126,13 +126,13 @@ impl Content {
             && source_metadata.ino() == target_metadata.ino())
     }
 
-    /// is_same_dev_inode_as_task checks if the task and target are the same device and inode.
+    /// Checks if the task and target are the same device and inode.
     pub async fn is_same_dev_inode_as_task(&self, task_id: &str, to: &Path) -> Result<bool> {
         let task_path = self.get_task_path(task_id);
         self.is_same_dev_inode(&task_path, to).await
     }
 
-    /// create_task creates a new task content.
+    /// Creates a new task content.
     ///
     /// Behavior of `create_task`:
     /// 1. If the task already exists, return the task path.
@@ -193,7 +193,7 @@ impl Content {
         Ok(())
     }
 
-    /// copy_task copies the task content to the destination.
+    /// Copies the task content to the destination.
     #[instrument(skip_all)]
     pub async fn copy_task(&self, task_id: &str, to: &Path) -> Result<()> {
         fs::copy(self.get_task_path(task_id), to).await?;
@@ -201,7 +201,7 @@ impl Content {
         Ok(())
     }
 
-    /// delete_task deletes the task content.
+    /// Deletes the task content.
     pub async fn delete_task(&self, task_id: &str) -> Result<()> {
         info!("delete task content: {}", task_id);
         let task_path = self.get_task_path(task_id);
@@ -213,7 +213,7 @@ impl Content {
         Ok(())
     }
 
-    /// read_piece reads the piece from the content.
+    /// Reads the piece from the content.
     #[instrument(skip_all)]
     pub async fn read_piece(
         &self,
@@ -243,7 +243,7 @@ impl Content {
         Ok(f_reader.take(target_length))
     }
 
-    /// read_piece_with_dual_read return two readers, one is the range reader, and the other is the
+    /// Returns two readers, one is the range reader, and the other is the
     /// full reader of the piece. It is used for cache the piece content to the proxy cache.
     #[instrument(skip_all)]
     pub async fn read_piece_with_dual_read(
@@ -289,7 +289,7 @@ impl Content {
         Ok((range_reader, reader))
     }
 
-    /// write_piece writes the piece to the content and calculates the hash of the piece by crc32.
+    /// Writes the piece to the content and calculates the hash of the piece by crc32.
     #[instrument(skip_all)]
     pub async fn write_piece<R: AsyncRead + Unpin + ?Sized>(
         &self,
@@ -346,7 +346,7 @@ impl Content {
         })
     }
 
-    /// get_task_path returns the task path by task id.
+    /// Returns the task path by task id.
     fn get_task_path(&self, task_id: &str) -> PathBuf {
         // The task needs split by the first 3 characters of task id(sha256) to
         // avoid too many files in one directory.
@@ -357,7 +357,7 @@ impl Content {
             .join(task_id)
     }
 
-    /// is_same_dev_inode_as_persistent_task checks if the persistent task and target
+    /// Checks if the persistent task and target
     /// are the same device and inode.
     pub async fn is_same_dev_inode_as_persistent_task(
         &self,
@@ -368,7 +368,7 @@ impl Content {
         self.is_same_dev_inode(&task_path, to).await
     }
 
-    /// create_persistent_task creates a new persistent task content.
+    /// Creates a new persistent task content.
     ///
     /// Behavior of `create_persistent_task`:
     /// 1. If the persistent task already exists, return the persistent task path.
@@ -401,7 +401,7 @@ impl Content {
         Ok(task_dir.join(task_id))
     }
 
-    /// create_persistent_task_dir only creates the directory for the persistent task.
+    /// Creates only the directory for the persistent task.
     #[instrument(skip_all)]
     pub async fn create_persistent_task_dir(&self, task_id: &str) -> Result<PathBuf> {
         let task_path = self.get_persistent_task_path(task_id);
@@ -476,7 +476,7 @@ impl Content {
         Ok(())
     }
 
-    /// copy_persistent_task copies the persistent task content to the destination.
+    /// Copies the persistent task content to the destination.
     #[instrument(skip_all)]
     pub async fn copy_persistent_task(&self, task_id: &str, to: &Path) -> Result<()> {
         fs::copy(self.get_persistent_task_path(task_id), to).await?;
@@ -484,7 +484,7 @@ impl Content {
         Ok(())
     }
 
-    /// read_persistent_piece reads the persistent piece from the content.
+    /// Reads the persistent piece from the content.
     #[instrument(skip_all)]
     pub async fn read_persistent_piece(
         &self,
@@ -514,7 +514,7 @@ impl Content {
         Ok(f_reader.take(target_length))
     }
 
-    /// write_persistent_piece writes the persistent piece to the content and
+    /// Writes the persistent piece to the content and
     /// calculates the hash of the piece by crc32.
     #[instrument(skip_all)]
     pub async fn write_persistent_piece<R: AsyncRead + Unpin + ?Sized>(
@@ -572,7 +572,7 @@ impl Content {
         })
     }
 
-    /// delete_task deletes the persistent task content.
+    /// Deletes the persistent task content.
     pub async fn delete_persistent_task(&self, task_id: &str) -> Result<()> {
         info!("delete persistent task content: {}", task_id);
         let persistent_task_path = self.get_persistent_task_path(task_id);
@@ -584,7 +584,7 @@ impl Content {
         Ok(())
     }
 
-    /// get_persistent_task_path returns the persistent task path by task id.
+    /// Returns the persistent task path by task id.
     fn get_persistent_task_path(&self, task_id: &str) -> PathBuf {
         // The persistent task needs split by the first 3 characters of task id(sha256) to
         // avoid too many files in one directory.
@@ -594,7 +594,7 @@ impl Content {
             .join(task_id)
     }
 
-    /// is_same_dev_inode_as_persistent_cache_task checks if the persistent cache task and target
+    /// Checks if the persistent cache task and target
     /// are the same device and inode.
     pub async fn is_same_dev_inode_as_persistent_cache_task(
         &self,
@@ -605,7 +605,7 @@ impl Content {
         self.is_same_dev_inode(&task_path, to).await
     }
 
-    /// create_persistent_cache_task creates a new persistent cache task content.
+    /// Creates a new persistent cache task content.
     ///
     /// Behavior of `create_persistent_cache_task`:
     /// 1. If the persistent cache task already exists, return the persistent cache task path.
@@ -642,7 +642,7 @@ impl Content {
         Ok(task_dir.join(task_id))
     }
 
-    /// create_persistent_cache_task_dir only creates the directory for the persistent cache task.
+    /// Creates only the directory for the persistent cache task.
     #[instrument(skip_all)]
     pub async fn create_persistent_cache_task_dir(&self, task_id: &str) -> Result<PathBuf> {
         let task_path = self.get_persistent_cache_task_path(task_id);
@@ -721,7 +721,7 @@ impl Content {
         Ok(())
     }
 
-    /// copy_persistent_cache_task copies the persistent cache task content to the destination.
+    /// Copies the persistent cache task content to the destination.
     #[instrument(skip_all)]
     pub async fn copy_persistent_cache_task(&self, task_id: &str, to: &Path) -> Result<()> {
         fs::copy(self.get_persistent_cache_task_path(task_id), to).await?;
@@ -729,7 +729,7 @@ impl Content {
         Ok(())
     }
 
-    /// read_persistent_cache_piece reads the persistent cache piece from the content.
+    /// Reads the persistent cache piece from the content.
     #[instrument(skip_all)]
     pub async fn read_persistent_cache_piece(
         &self,
@@ -759,7 +759,7 @@ impl Content {
         Ok(f_reader.take(target_length))
     }
 
-    /// write_persistent_cache_piece writes the persistent cache piece to the content and
+    /// Writes the persistent cache piece to the content and
     /// calculates the hash of the piece by crc32.
     #[instrument(skip_all)]
     pub async fn write_persistent_cache_piece<R: AsyncRead + Unpin + ?Sized>(
@@ -817,7 +817,7 @@ impl Content {
         })
     }
 
-    /// delete_task deletes the persistent cache task content.
+    /// Deletes the persistent cache task content.
     pub async fn delete_persistent_cache_task(&self, task_id: &str) -> Result<()> {
         info!("delete persistent cache task content: {}", task_id);
         let persistent_cache_task_path = self.get_persistent_cache_task_path(task_id);
@@ -829,7 +829,7 @@ impl Content {
         Ok(())
     }
 
-    /// get_persistent_cache_task_path returns the persistent cache task path by task id.
+    /// Returns the persistent cache task path by task id.
     fn get_persistent_cache_task_path(&self, task_id: &str) -> PathBuf {
         // The persistent cache task needs split by the first 3 characters of task id(sha256) to
         // avoid too many files in one directory.

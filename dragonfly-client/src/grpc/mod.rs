@@ -33,10 +33,10 @@ pub mod manager;
 pub mod middleware;
 pub mod scheduler;
 
-/// CONNECT_TIMEOUT is the timeout for GRPC connection.
+/// The timeout for GRPC connection.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// REQUEST_TIMEOUT is the timeout for GRPC requests, default is 10 second.
+/// The timeout for GRPC requests, default is 10 second.
 ///
 /// Note: This timeout is used for the whole request, including wait for scheduler
 /// scheduling, refer to https://d7y.io/docs/next/reference/configuration/scheduler/.
@@ -44,16 +44,16 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 /// is used for the scheduler to schedule the task.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// TCP_KEEPALIVE is the keepalive duration for TCP connection.
+/// The keepalive duration for TCP connection.
 pub const TCP_KEEPALIVE: Duration = Duration::from_secs(3600);
 
-/// HTTP2_KEEP_ALIVE_INTERVAL is the interval for HTTP2 keep alive.
+/// The interval for HTTP2 keep alive.
 pub const HTTP2_KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(300);
 
-/// HTTP2_KEEP_ALIVE_TIMEOUT is the timeout for HTTP2 keep alive.
+/// The timeout for HTTP2 keep alive.
 pub const HTTP2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// MAX_FRAME_SIZE is the max frame size for GRPC, default is 256KiB.
+/// The max frame size for GRPC, default is 256KiB.
 ///
 /// Note: A single HTTP/2 frame cannot be interrupted once it starts being
 /// written to the connection. If this value is set too large, a big DATA
@@ -62,19 +62,19 @@ pub const HTTP2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(20);
 /// behind it, which may cause head-of-line blocking and request timeouts.
 pub const MAX_FRAME_SIZE: u32 = 256 * 1024;
 
-/// BUFFER_SIZE is the buffer size for GRPC, default is 512KiB.
+/// The buffer size for GRPC, default is 512KiB.
 pub const BUFFER_SIZE: usize = 512 * 1024;
 
-/// INITIAL_WINDOW_SIZE is the initial window size for GRPC, default is 512KiB.
+/// The initial window size for GRPC, default is 512KiB.
 pub const INITIAL_WINDOW_SIZE: u32 = 512 * 1024;
 
-/// INITIAL_CONNECTION_WINDOW_SIZE is the initial connection window size for GRPC, default is 4MiB.
+/// The initial connection window size for GRPC, default is 4MiB.
 pub const INITIAL_CONNECTION_WINDOW_SIZE: u32 = 4 * 1024 * 1024;
 
-/// DOWNLOAD_STREAM_BUFFER_SIZE is the buffer size for download gRPC stream messages.
+/// The buffer size for download gRPC stream messages.
 pub const DOWNLOAD_STREAM_BUFFER_SIZE: usize = 12;
 
-/// prefetch_task prefetches the task if prefetch flag is true.
+/// Prefetches the task if prefetch flag is true.
 #[instrument(skip_all)]
 pub async fn prefetch_task(
     socket_path: PathBuf,

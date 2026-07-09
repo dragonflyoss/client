@@ -26,10 +26,10 @@ use std::path::PathBuf;
 use url::Url;
 use uuid::Uuid;
 
-/// SEED_PEER_SUFFIX is the suffix of the seed peer.
+/// The suffix of the seed peer.
 const SEED_PEER_SUFFIX: &str = "seed";
 
-/// TaskIDParameter is the parameter of the task id.
+/// The parameter of the task id.
 pub enum TaskIDParameter {
     /// Content uses the content to generate the task id.
     Content(String),
@@ -50,7 +50,7 @@ pub enum TaskIDParameter {
     BlobDigestBased(String),
 }
 
-/// PersistentTaskIDParameter is the parameter of the persistent task id.
+/// The parameter of the persistent task id.
 pub enum PersistentTaskIDParameter {
     /// FileContentBased uses the object storage url, region, endpoint, piece_length, tag and application
     /// to generate the persistent task id.
@@ -61,7 +61,7 @@ pub enum PersistentTaskIDParameter {
     },
 }
 
-/// PersistentCacheTaskIDParameter is the parameter of the persistent cache task id.
+/// The parameter of the persistent cache task id.
 pub enum PersistentCacheTaskIDParameter {
     /// Content uses the content to generate the persistent cache task id.
     Content(String),
@@ -74,22 +74,22 @@ pub enum PersistentCacheTaskIDParameter {
     },
 }
 
-/// IDGenerator is used to generate the id for the resources.
+/// Used to generate the id for the resources.
 #[derive(Debug)]
 pub struct IDGenerator {
-    /// ip is the ip of the host.
+    /// The ip of the host.
     ip: String,
 
-    /// hostname is the hostname of the host.
+    /// The hostname of the host.
     hostname: String,
 
-    /// is_seed_peer indicates whether the host is a seed peer.
+    /// Indicates whether the host is a seed peer.
     is_seed_peer: bool,
 }
 
-/// IDGenerator implements the IDGenerator.
+/// Implements the IDGenerator.
 impl IDGenerator {
-    /// new creates a new IDGenerator.
+    /// Creates a new IDGenerator.
     pub fn new(ip: String, hostname: String, is_seed_peer: bool) -> Self {
         IDGenerator {
             ip,
@@ -98,7 +98,7 @@ impl IDGenerator {
         }
     }
 
-    /// host_id generates the host id.
+    /// Generates the host id.
     #[inline]
     pub fn host_id(&self) -> String {
         if self.is_seed_peer {
@@ -108,7 +108,7 @@ impl IDGenerator {
         format!("{}-{}", self.ip, self.hostname)
     }
 
-    /// task_id generates the task id.
+    /// Generates the task id.
     #[inline]
     pub fn task_id(&self, parameter: TaskIDParameter) -> Result<String> {
         match parameter {
@@ -184,7 +184,7 @@ impl IDGenerator {
         }
     }
 
-    /// persistent_task_id generates the persistent task id.
+    /// Generates the persistent task id.
     #[inline]
     pub fn persistent_task_id(&self, parameter: PersistentTaskIDParameter) -> Result<String> {
         match parameter {
@@ -206,7 +206,7 @@ impl IDGenerator {
         }
     }
 
-    /// persistent_cache_task_id generates the persistent cache task id.
+    /// Generates the persistent cache task id.
     #[inline]
     pub fn persistent_cache_task_id(
         &self,
@@ -260,7 +260,7 @@ impl IDGenerator {
         }
     }
 
-    /// peer_id generates the peer id.
+    /// Generates the peer id.
     #[inline]
     pub fn peer_id(&self) -> String {
         if self.is_seed_peer {

@@ -27,51 +27,51 @@ pub type Content = super::content_linux::Content;
 #[cfg(target_os = "macos")]
 pub type Content = super::content_macos::Content;
 
-/// DEFAULT_CONTENT_DIR is the default directory for store content.
+/// The default directory for store content.
 pub const DEFAULT_CONTENT_DIR: &str = "content";
 
-/// DEFAULT_TASK_DIR is the default directory for store task.
+/// The default directory for store task.
 pub const DEFAULT_TASK_DIR: &str = "tasks";
 
-/// DEFAULT_PERSISTENT_TASK_DIR is the default directory for store persistent task.
+/// The default directory for store persistent task.
 pub const DEFAULT_PERSISTENT_TASK_DIR: &str = "persistent-tasks";
 
-/// DEFAULT_PERSISTENT_CACHE_TASK_DIR is the default directory for store persistent cache task.
+/// The default directory for store persistent cache task.
 pub const DEFAULT_PERSISTENT_CACHE_TASK_DIR: &str = "persistent-cache-tasks";
 
-/// WritePieceResponse is the response of writing a piece.
+/// The response of writing a piece.
 pub struct WritePieceResponse {
-    /// length is the length of the piece.
+    /// The length of the piece.
     pub length: u64,
 
-    /// hash is the hash of the piece.
+    /// The hash of the piece.
     pub hash: String,
 }
 
-/// WritePersistentTaskResponse is the response of writing a persistent task.
+/// The response of writing a persistent task.
 pub struct WritePersistentTaskResponse {
-    /// length is the length of the persistent task.
+    /// The length of the persistent task.
     pub length: u64,
 
-    /// hash is the hash of the persistent task.
+    /// The hash of the persistent task.
     pub hash: String,
 }
 
-/// WritePersistentCacheTaskResponse is the response of writing a persistent cache task.
+/// The response of writing a persistent cache task.
 pub struct WritePersistentCacheTaskResponse {
-    /// length is the length of the persistent cache task.
+    /// The length of the persistent cache task.
     pub length: u64,
 
-    /// hash is the hash of the persistent cache task.
+    /// The hash of the persistent cache task.
     pub hash: String,
 }
 
-/// new_content creates a new Content instance to support linux and macos.
+/// Creates a new Content instance to support linux and macos.
 pub async fn new_content(config: Arc<Config>, dir: &Path) -> Result<Content> {
     Content::new(config, dir).await
 }
 
-/// calculate_piece_range calculates the target offset and length based on the piece range and
+/// Calculates the target offset and length based on the piece range and
 /// request range.
 pub fn calculate_piece_range(offset: u64, length: u64, range: Option<Range>) -> (u64, u64) {
     if let Some(range) = range {

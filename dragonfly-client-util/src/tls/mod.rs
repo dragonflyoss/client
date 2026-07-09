@@ -27,32 +27,32 @@ use std::vec::Vec;
 use std::{fs, io};
 use tracing::instrument;
 
-/// DEFAULT_CERTS_CACHE_CAPACITY is the default capacity of the certificates cache.
+/// The default capacity of the certificates cache.
 const DEFAULT_CERTS_CACHE_CAPACITY: usize = 1000;
 
-/// CertKeyPair is the type of the certificate and private key pair.
+/// The type of the certificate and private key pair.
 type CertKeyPair = (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>);
 
 lazy_static! {
-    /// SELF_SIGNED_CERTS is a map that stores the self-signed certificates to avoid
+    /// A map that stores the self-signed certificates to avoid
     /// generating the same certificates multiple times.
     static ref SELF_SIGNED_CERTS: Arc<Mutex<LruCache<String, CertKeyPair>>> =
         Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(DEFAULT_CERTS_CACHE_CAPACITY).unwrap())));
 
-    /// SIMPLE_SELF_SIGNED_CERTS is a map that stores the simple self-signed certificates to avoid
+    /// A map that stores the simple self-signed certificates to avoid
     /// generating the same certificates multiple times.
     static ref SIMPLE_SELF_SIGNED_CERTS: Arc<Mutex<LruCache<String, CertKeyPair>>> =
         Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(DEFAULT_CERTS_CACHE_CAPACITY).unwrap())));
 }
 
-/// NoVerifier is a verifier that does not verify the server certificate.
+/// A verifier that does not verify the server certificate.
 /// It is used for testing and should not be used in production.
 #[derive(Debug)]
 pub struct NoVerifier(Arc<rustls::crypto::CryptoProvider>);
 
 /// Implement the NoVerifier.
 impl NoVerifier {
-    /// new creates a new NoVerifier.
+    /// Creates a new NoVerifier.
     pub fn new() -> Arc<Self> {
         Arc::new(Self(Arc::new(rustls::crypto::ring::default_provider())))
     }
@@ -60,7 +60,7 @@ impl NoVerifier {
 
 /// Implement the ServerCertVerifier trait for NoVerifier.
 impl rustls::client::danger::ServerCertVerifier for NoVerifier {
-    /// verify_server_cert verifies the server certificate.
+    /// Verifies the server certificate.
     fn verify_server_cert(
         &self,
         _end_entity: &CertificateDer<'_>,
@@ -72,7 +72,7 @@ impl rustls::client::danger::ServerCertVerifier for NoVerifier {
         Ok(rustls::client::danger::ServerCertVerified::assertion())
     }
 
-    /// verify_tls12_signature verifies the TLS 1.2 signature.
+    /// Verifies the TLS 1.2 signature.
     fn verify_tls12_signature(
         &self,
         message: &[u8],
@@ -87,7 +87,7 @@ impl rustls::client::danger::ServerCertVerifier for NoVerifier {
         )
     }
 
-    /// verify_tls13_signature verifies the TLS 1.3 signature.
+    /// Verifies the TLS 1.3 signature.
     fn verify_tls13_signature(
         &self,
         message: &[u8],
@@ -102,7 +102,7 @@ impl rustls::client::danger::ServerCertVerifier for NoVerifier {
         )
     }
 
-    /// supported_verify_schemes returns the supported signature schemes.
+    /// Returns the supported signature schemes.
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
         self.0.signature_verification_algorithms.supported_schemes()
     }
@@ -140,7 +140,7 @@ pub fn generate_cert_from_pem(cert_path: &PathBuf) -> ClientResult<Vec<Certifica
     Ok(certs)
 }
 
-/// generate_self_signed_certs_by_ca_cert generates a self-signed certificates
+/// Generates a self-signed certificates
 /// by given subject alternative names with CA certificate.
 #[instrument(skip_all)]
 pub fn generate_self_signed_certs_by_ca_cert(
@@ -176,7 +176,7 @@ pub fn generate_self_signed_certs_by_ca_cert(
     Ok((certs, key))
 }
 
-/// generate_simple_self_signed_certs generates a simple self-signed certificates
+/// Generates a simple self-signed certificates
 #[instrument(skip_all)]
 pub fn generate_simple_self_signed_certs(
     host: &str,
@@ -201,7 +201,7 @@ pub fn generate_simple_self_signed_certs(
     Ok((certs, key))
 }
 
-/// certs_to_raw_certs converts DER format of the certificates to raw certificates.
+/// Converts DER format of the certificates to raw certificates.
 #[instrument(skip_all)]
 pub fn certs_to_raw_certs(certs: Vec<CertificateDer<'static>>) -> Vec<Vec<u8>> {
     certs
@@ -210,13 +210,13 @@ pub fn certs_to_raw_certs(certs: Vec<CertificateDer<'static>>) -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// raw_certs_to_certs converts raw certificates to DER format of certificates.
+/// Converts raw certificates to DER format of certificates.
 #[instrument(skip_all)]
 pub fn raw_certs_to_certs(raw_certs: Vec<Vec<u8>>) -> Vec<CertificateDer<'static>> {
     raw_certs.into_iter().map(|cert| cert.into()).collect()
 }
 
-/// load_certs_from_pem loads certificates from PEM format string.
+/// Loads certificates from PEM format string.
 #[instrument(skip_all)]
 pub fn load_certs_from_pem(cert_pem: &str) -> ClientResult<Vec<CertificateDer<'static>>> {
     let certs = rustls_pemfile::certs(&mut cert_pem.as_bytes()).collect::<Result<Vec<_>, _>>()?;
@@ -224,7 +224,7 @@ pub fn load_certs_from_pem(cert_pem: &str) -> ClientResult<Vec<CertificateDer<'s
     Ok(certs)
 }
 
-/// load_key_from_pem loads private key from PEM format string.
+/// Loads private key from PEM format string.
 #[instrument(skip_all)]
 pub fn load_key_from_pem(key_pem: &str) -> ClientResult<PrivateKeyDer<'static>> {
     let key = rustls_pemfile::private_key(&mut key_pem.as_bytes())?

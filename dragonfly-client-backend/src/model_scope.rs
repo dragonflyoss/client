@@ -55,13 +55,13 @@ use tokio_util::io::StreamReader;
 use tracing::{debug, error};
 use url::Url;
 
-/// SCHEME is the URL scheme for ModelScope backend.
+/// The URL scheme for ModelScope backend.
 pub const SCHEME: &str = "modelscope";
 
-/// MODEL_SCOPE_BASE_URL is the base URL for ModelScope Hub.
+/// The base URL for ModelScope Hub.
 const MODEL_SCOPE_BASE_URL: &str = "https://modelscope.cn";
 
-/// Response represents the top-level response from the ModelScope API.
+/// Represents the top-level response from the ModelScope API.
 #[derive(Debug, Deserialize)]
 struct Response<T> {
     /// The status code of the API response, where 200 indicates success.
@@ -86,7 +86,7 @@ struct FileList {
     files: Option<Vec<File>>,
 }
 
-/// File represents a file entry returned by the ModelScope API.
+/// Represents a file entry returned by the ModelScope API.
 #[derive(Debug, Deserialize)]
 struct File {
     /// The relative path within the repository.
@@ -113,7 +113,7 @@ pub enum RepositoryType {
     Dataset,
 }
 
-/// RepositoryType implements methods for getting string representations and API paths.
+/// Implements methods for getting string representations and API paths.
 impl RepositoryType {
     /// Returns the canonical string identifier (e.g., `"models"`, `"datasets"`).
     pub fn as_str(&self) -> &'static str {
@@ -151,7 +151,7 @@ pub struct ParsedURL {
 impl TryFrom<Url> for ParsedURL {
     type Error = Error;
 
-    /// try_from parses the URL and returns a ParsedURL.
+    /// Parses the URL and returns a ParsedURL.
     fn try_from(url: Url) -> std::result::Result<Self, Self::Error> {
         let host = url
             .host_str()
@@ -187,7 +187,7 @@ impl TryFrom<Url> for ParsedURL {
     }
 }
 
-/// ParsedURL implements TryFrom for &str.
+/// Implements TryFrom for &str.
 impl TryFrom<&str> for ParsedURL {
     type Error = Error;
 
@@ -198,16 +198,16 @@ impl TryFrom<&str> for ParsedURL {
     }
 }
 
-/// ModelScope is the ModelScope backend implementation.
+/// The ModelScope backend implementation.
 pub struct ModelScope {
-    /// Scheme is the scheme of the ModelScope backend.
+    /// The scheme of the ModelScope backend.
     scheme: String,
 
     /// HTTP client for making requests.
     client: Client,
 }
 
-/// ModelScope implements the ModelScope interface.
+/// Implements the ModelScope interface.
 impl ModelScope {
     /// Create a new ModelScope backend.
     pub fn new(config: Arc<Config>) -> Result<Self> {
@@ -329,7 +329,7 @@ impl ModelScope {
 /// Backend implementation for ModelScope.
 #[async_trait]
 impl Backend for ModelScope {
-    /// Scheme returns the scheme of the backend.
+    /// Returns the scheme of the backend.
     fn scheme(&self) -> String {
         self.scheme.clone()
     }

@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-/// NAME is the name of dfstore.
+/// The name of dfstore.
 pub const NAME: &str = "dfstore";
 
-/// DEFAULT_OUTPUT_FILE_MODE defines the default file mode for output files when downloading with
+/// Defines the default file mode for output files when downloading with
 /// dfstore using the `--transfer-from-dfdaemon=true` option.
 pub const DEFAULT_OUTPUT_FILE_MODE: u32 = 0o644;
 
-/// default_dfstore_persistent_replica_count is the default replica count of the persistent cache task.
+/// Returns the default replica count of the persistent cache task.
 #[inline]
 pub fn default_dfstore_persistent_replica_count() -> u64 {
     2

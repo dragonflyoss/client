@@ -82,29 +82,29 @@ use url::Url;
 /// Default region for S3 if not specified.
 const DEFAULT_REGION: &str = "us-east-1";
 
-/// Scheme is the scheme of the object storage.
+/// The scheme of the object storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scheme {
-    /// S3 is the Amazon Simple Storage Service.
+    /// The Amazon Simple Storage Service.
     S3,
 
-    /// GCS is the Google Cloud Storage Service.
+    /// The Google Cloud Storage Service.
     GCS,
 
-    /// ABS is the Azure Blob Storage Service.
+    /// The Azure Blob Storage Service.
     ABS,
 
-    /// OSS is the Aliyun Object Storage Service.
+    /// The Aliyun Object Storage Service.
     OSS,
 
-    /// OBS is the Huawei Cloud Object Storage Service.
+    /// The Huawei Cloud Object Storage Service.
     OBS,
 
-    /// COS is the Tencent Cloud Object Storage Service.
+    /// The Tencent Cloud Object Storage Service.
     COS,
 }
 
-/// Scheme implements the Scheme trait.
+/// Implements the Scheme trait.
 impl Scheme {
     /// Returns true if the given string is a supported scheme.
     pub fn is_supported(scheme: &str) -> bool {
@@ -112,7 +112,7 @@ impl Scheme {
     }
 }
 
-/// Scheme implements the Display.
+/// Implements the Display.
 impl fmt::Display for Scheme {
     /// Fmt formats the value using the given formatter.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -127,7 +127,7 @@ impl fmt::Display for Scheme {
     }
 }
 
-/// Scheme implements the FromStr.
+/// Implements the FromStr.
 impl FromStr for Scheme {
     type Err = String;
 
@@ -145,23 +145,23 @@ impl FromStr for Scheme {
     }
 }
 
-/// ParsedURL is a struct that contains the parsed URL, bucket, and path.
+/// A struct that contains the parsed URL, bucket, and path.
 #[derive(Debug)]
 pub struct ParsedURL {
-    /// URL is the requested URL of the object storage.
+    /// The requested URL of the object storage.
     pub url: Url,
 
-    /// Scheme is the scheme of the object storage.
+    /// The scheme of the object storage.
     pub scheme: Scheme,
 
-    /// Bucket is the bucket of the object storage.
+    /// The bucket of the object storage.
     pub bucket: String,
 
-    /// Key is the key of the object storage.
+    /// The key of the object storage.
     pub key: String,
 }
 
-/// ParsedURL implements the ParsedURL trait.
+/// Implements the ParsedURL trait.
 impl ParsedURL {
     /// Returns true if the URL path is a directory, which means it ends with a slash.
     pub fn is_dir(&self) -> bool {
@@ -177,7 +177,7 @@ impl ParsedURL {
     }
 }
 
-/// ParsedURL implements the TryFrom trait for the URL.
+/// Implements the TryFrom trait for the URL.
 ///
 /// The object storage URL should be in the format of `scheme://<bucket>/<path>`.
 impl TryFrom<Url> for ParsedURL {
@@ -231,22 +231,22 @@ macro_rules! make_need_fields_message {
        }};
 }
 
-/// ObjectStorage is a struct that implements the backend trait.
+/// A struct that implements the backend trait.
 pub struct ObjectStorage {
-    /// Scheme is the scheme of the object storage.
+    /// The scheme of the object storage.
     scheme: Scheme,
 
-    /// Config is the configuration of the dfdaemon.
+    /// The configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// Client is the reqwest client.
+    /// The reqwest client.
     client: reqwest::Client,
 
     // Danger client is the reqwest dangerous client, which skips certificate verification.
     danger_client: reqwest::Client,
 }
 
-/// ObjectStorage implements the ObjectStorage trait.
+/// Implements the ObjectStorage trait.
 impl ObjectStorage {
     /// Returns ObjectStorage that implements the Backend trait.
     pub fn new(scheme: Scheme, config: Arc<Config>) -> ClientResult<ObjectStorage> {
@@ -599,10 +599,10 @@ impl ObjectStorage {
     }
 }
 
-/// Backend implements the Backend trait.
+/// Implements the Backend trait.
 #[async_trait]
 impl crate::Backend for ObjectStorage {
-    /// Scheme returns the scheme of the object storage.
+    /// Returns the scheme of the object storage.
     fn scheme(&self) -> String {
         self.scheme.to_string()
     }

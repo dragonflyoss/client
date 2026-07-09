@@ -49,26 +49,26 @@ use vortex_protocol::{
     Header, Vortex, HEADER_SIZE,
 };
 
-/// TCPServer is a TCP-based server for dfdaemon upload service.
+/// A TCP-based server for dfdaemon upload service.
 pub struct TCPServer {
-    /// config is the configuration of the dfdaemon.
+    /// The configuration of the dfdaemon.
     #[allow(dead_code)]
     config: Arc<Config>,
 
-    /// addr is the address of the TCP server.
+    /// The address of the TCP server.
     addr: SocketAddr,
 
-    /// handler is the request handler.
+    /// The request handler.
     handler: TCPServerHandler,
 
-    /// shutdown is used to shutdown the TCP server.
+    /// Used to shutdown the TCP server.
     shutdown: shutdown::Shutdown,
 
-    /// _shutdown_complete is used to notify the TCP server is shutdown.
+    /// Used to notify the TCP server is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
-/// TCPServer implements the TCP server.
+/// Implements the TCP server.
 impl TCPServer {
     /// Creates a new TCPServer.
     pub fn new(
@@ -163,20 +163,20 @@ impl TCPServer {
     }
 }
 
-/// TCPServerHandler handles TCP connections and requests.
+/// Handles TCP connections and requests.
 #[derive(Clone)]
 pub struct TCPServerHandler {
-    /// id_generator is the id generator.
+    /// The id generator.
     id_generator: Arc<IDGenerator>,
 
-    /// storage is the local storage.
+    /// The local storage.
     storage: Arc<Storage>,
 
-    /// upload_bandwidth_limiter is the rate limiter of the upload speed in bytes per second.
+    /// The rate limiter of the upload speed in bytes per second.
     upload_bandwidth_limiter: Arc<RateLimiter>,
 }
 
-/// TCPServerHandler implements the request handler.
+/// Implements the request handler.
 impl TCPServerHandler {
     /// Handles a single TCP connection for the Dragonfly P2P protocol.
     ///

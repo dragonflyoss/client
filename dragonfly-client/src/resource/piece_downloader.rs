@@ -24,17 +24,17 @@ use std::time::Duration;
 use tokio::io::AsyncRead;
 use tracing::{error, instrument};
 
-/// DEFAULT_DOWNLOADER_CAPACITY is the default capacity of the downloader to store the clients.
+/// The default capacity of the downloader to store the clients.
 const DEFAULT_DOWNLOADER_CAPACITY: usize = 2000;
 
-/// DEFAULT_DOWNLOADER_IDLE_TIMEOUT is the default idle timeout for the downloader.
+/// The default idle timeout for the downloader.
 const DEFAULT_DOWNLOADER_IDLE_TIMEOUT: Duration = Duration::from_secs(420);
 
-/// Downloader is the interface for downloading pieces, which is implemented by different
+/// The interface for downloading pieces, which is implemented by different
 /// protocols. The downloader is used to download pieces from the other peers.
 #[async_trait]
 pub trait Downloader: Send + Sync {
-    /// download_piece downloads a piece from the other peer by different protocols.
+    /// Downloads a piece from the other peer by different protocols.
     async fn download_piece(
         &self,
         addr: &str,
@@ -43,7 +43,7 @@ pub trait Downloader: Send + Sync {
         task_id: &str,
     ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)>;
 
-    /// download_persistent_piece downloads a persistent piece from the other peer by different
+    /// Downloads a persistent piece from the other peer by different
     /// protocols.
     async fn download_persistent_piece(
         &self,
@@ -53,7 +53,7 @@ pub trait Downloader: Send + Sync {
         task_id: &str,
     ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)>;
 
-    /// download_persistent_cache_piece downloads a persistent cache piece from the other peer by different
+    /// Downloads a persistent cache piece from the other peer by different
     /// protocols.
     async fn download_persistent_cache_piece(
         &self,
@@ -64,16 +64,16 @@ pub trait Downloader: Send + Sync {
     ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)>;
 }
 
-/// DownloaderFactory is the factory for creating different downloaders by different protocols.
+/// The factory for creating different downloaders by different protocols.
 pub struct DownloaderFactory {
-    /// downloader is the downloader for downloading pieces, which is implemented by different
+    /// The downloader for downloading pieces, which is implemented by different
     /// protocols.
     downloader: Arc<dyn Downloader + Send + Sync>,
 }
 
 /// DownloadFactory implements the DownloadFactory trait.
 impl DownloaderFactory {
-    /// new returns a new DownloadFactory.
+    /// Returns a new DownloadFactory.
     pub fn new(protocol: &str, config: Arc<Config>) -> Result<Self> {
         let downloader: Arc<dyn Downloader> = match protocol {
             "tcp" => Arc::new(TCPDownloader::new(
@@ -95,17 +95,17 @@ impl DownloaderFactory {
         Ok(Self { downloader })
     }
 
-    /// build returns the downloader.
+    /// Returns the downloader.
     pub fn build(&self) -> Arc<dyn Downloader> {
         self.downloader.clone()
     }
 }
 
-/// QUICDownloader is the downloader for downloading pieces by the QUIC protocol.
+/// The downloader for downloading pieces by the QUIC protocol.
 /// It will reuse the quic clients to download pieces from the other peers by
 /// peer's address.
 pub struct QUICDownloader {
-    /// client_pool is the pool of the quic clients.
+    /// The pool of the quic clients.
     client_pool: Pool<String, String, QUICClient, QUICClientFactory>,
 }
 
@@ -114,7 +114,7 @@ struct QUICClientFactory {
     config: Arc<Config>,
 }
 
-/// QUICClientFactory implements the Factory trait for creating QUICClient instances.
+/// Implements the Factory trait for creating QUICClient instances.
 #[async_trait]
 impl Factory<String, QUICClient> for QUICClientFactory {
     type Error = Error;
@@ -125,12 +125,12 @@ impl Factory<String, QUICClient> for QUICClientFactory {
     }
 }
 
-/// QUICDownloader implements the downloader with the QUIC protocol.
+/// Implements the downloader with the QUIC protocol.
 impl QUICDownloader {
-    /// MAX_CONNECTIONS_PER_ADDRESS is the maximum number of connections per address.
+    /// The maximum number of connections per address.
     const MAX_CONNECTIONS_PER_ADDRESS: usize = 32;
 
-    /// new returns a new QUICDownloader.
+    /// Returns a new QUICDownloader.
     pub fn new(config: Arc<Config>, capacity: usize, idle_timeout: Duration) -> Self {
         Self {
             client_pool: PoolBuilder::new(QUICClientFactory {
@@ -142,16 +142,16 @@ impl QUICDownloader {
         }
     }
 
-    /// get_client_entry returns a client entry by the address.
+    /// Returns a client entry by the address.
     async fn get_client_entry(&self, key: String, addr: String) -> Result<Entry<QUICClient>> {
         self.client_pool.entry(&key, &addr).await
     }
 
-    /// remove_client_entry removes the client if it is idle.
+    /// Removes the client if it is idle.
     async fn remove_client_entry(&self, key: String) {
         self.client_pool.remove_entry(&key).await;
     }
-    /// get_entry_key generates a semi-random key by combining the client address with
+    /// Generates a semi-random key by combining the client address with
     /// a random number. The randomization helps distribute connections across multiple
     /// slots when the same address attempts to establish multiple concurrent connections.
     fn get_entry_key(&self, addr: &str) -> String {
@@ -163,10 +163,10 @@ impl QUICDownloader {
     }
 }
 
-/// QUICDownloader implements the Downloader trait.
+/// Implements the Downloader trait.
 #[async_trait]
 impl Downloader for QUICDownloader {
-    /// download_piece downloads a piece from the other peer by the QUIC protocol.
+    /// Downloads a piece from the other peer by the QUIC protocol.
     #[instrument(skip_all)]
     async fn download_piece(
         &self,
@@ -191,7 +191,7 @@ impl Downloader for QUICDownloader {
         }
     }
 
-    /// download_persistent_piece downloads a persistent piece from the other peer by
+    /// Downloads a persistent piece from the other peer by
     /// the QUIC protocol.
     #[instrument(skip_all)]
     async fn download_persistent_piece(
@@ -221,7 +221,7 @@ impl Downloader for QUICDownloader {
         }
     }
 
-    /// download_persistent_cache_piece downloads a persistent cache piece from the other peer by
+    /// Downloads a persistent cache piece from the other peer by
     /// the QUIC protocol.
     #[instrument(skip_all)]
     async fn download_persistent_cache_piece(
@@ -252,11 +252,11 @@ impl Downloader for QUICDownloader {
     }
 }
 
-/// TCPDownloader is the downloader for downloading pieces by the TCP protocol.
+/// The downloader for downloading pieces by the TCP protocol.
 /// It will reuse the tcp clients to download pieces from the other peers by
 /// peer's address.
 pub struct TCPDownloader {
-    /// client_pool is the pool of the tcp clients.
+    /// The pool of the tcp clients.
     client_pool: Pool<String, String, TCPClient, TCPClientFactory>,
 }
 
@@ -265,7 +265,7 @@ struct TCPClientFactory {
     config: Arc<Config>,
 }
 
-/// TCPClientFactory implements the Factory trait for creating TCPClient instances.
+/// Implements the Factory trait for creating TCPClient instances.
 #[async_trait]
 impl Factory<String, TCPClient> for TCPClientFactory {
     type Error = Error;
@@ -276,12 +276,12 @@ impl Factory<String, TCPClient> for TCPClientFactory {
     }
 }
 
-/// TCPDownloader implements the downloader with the TCP protocol.
+/// Implements the downloader with the TCP protocol.
 impl TCPDownloader {
-    /// MAX_CONNECTIONS_PER_ADDRESS is the maximum number of connections per address.
+    /// The maximum number of connections per address.
     const MAX_CONNECTIONS_PER_ADDRESS: usize = 32;
 
-    /// new returns a new TCPDownloader.
+    /// Returns a new TCPDownloader.
     pub fn new(config: Arc<Config>, capacity: usize, idle_timeout: Duration) -> Self {
         Self {
             client_pool: PoolBuilder::new(TCPClientFactory {
@@ -293,17 +293,17 @@ impl TCPDownloader {
         }
     }
 
-    /// get_client_entry returns a client entry by the address.
+    /// Returns a client entry by the address.
     async fn get_client_entry(&self, key: String, addr: String) -> Result<Entry<TCPClient>> {
         self.client_pool.entry(&key, &addr).await
     }
 
-    /// remove_client_entry removes the client if it is idle.
+    /// Removes the client if it is idle.
     async fn remove_client_entry(&self, key: String) {
         self.client_pool.remove_entry(&key).await;
     }
 
-    /// get_entry_key generates a semi-random key by combining the client address with
+    /// Generates a semi-random key by combining the client address with
     /// a random number. The randomization helps distribute connections across multiple
     /// slots when the same address attempts to establish multiple concurrent connections.
     fn get_entry_key(&self, addr: &str) -> String {
@@ -315,10 +315,10 @@ impl TCPDownloader {
     }
 }
 
-/// TCPDownloader implements the Downloader trait.
+/// Implements the Downloader trait.
 #[async_trait]
 impl Downloader for TCPDownloader {
-    /// download_piece downloads a piece from the other peer by the TCP protocol.
+    /// Downloads a piece from the other peer by the TCP protocol.
     #[instrument(skip_all)]
     async fn download_piece(
         &self,
@@ -343,7 +343,7 @@ impl Downloader for TCPDownloader {
         }
     }
 
-    /// download_persistent_piece downloads a persistent piece from the other peer by
+    /// Downloads a persistent piece from the other peer by
     /// the TCP protocol.
     #[instrument(skip_all)]
     async fn download_persistent_piece(
@@ -373,7 +373,7 @@ impl Downloader for TCPDownloader {
         }
     }
 
-    /// download_persistent_cache_piece downloads a persistent cache piece from the other peer by
+    /// Downloads a persistent cache piece from the other peer by
     /// the TCP protocol.
     #[instrument(skip_all)]
     async fn download_persistent_cache_piece(

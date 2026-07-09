@@ -51,14 +51,14 @@ use url::Url;
 
 use super::*;
 
-/// TaskCommand is the subcommand of task.
+/// The subcommand of task.
 #[derive(Debug, Clone, Parser)]
 pub struct TaskCommand {
     #[command(subcommand)]
     pub subcommand: TaskSubCommand,
 }
 
-/// TaskSubCommand is the subcommand of task.
+/// The subcommand of task.
 #[derive(Debug, Clone, Subcommand)]
 pub enum TaskSubCommand {
     #[command(
@@ -102,7 +102,7 @@ impl TaskCommand {
     }
 }
 
-/// LsCommand is the subcommand of task ls.
+/// The subcommand of task ls.
 #[derive(Debug, Clone, Parser)]
 pub struct LsCommand {
     #[arg(
@@ -487,7 +487,7 @@ impl LsCommand {
     }
 }
 
-/// RmCommand is the subcommand of task rm.
+/// The subcommand of task rm.
 #[derive(Debug, Clone, Parser)]
 pub struct RmCommand {
     #[arg(help = "Specify the task ID to remove")]
@@ -803,7 +803,7 @@ impl RmCommand {
     }
 }
 
-/// PreheatCommand is the subcommand of task preheat.
+/// The subcommand of task preheat.
 #[derive(Debug, Clone, Parser)]
 pub struct PreheatCommand {
     #[arg(

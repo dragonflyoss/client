@@ -20,7 +20,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 /// Tracing metadata map container for span context.
 struct MetadataMap<'a>(&'a mut metadata::MetadataMap);
 
-/// MetadataMap implements the otel tracing Extractor.
+/// Implements the otel tracing Extractor.
 impl opentelemetry::propagation::Extractor for MetadataMap<'_> {
     /// Gets a value for a key from the `MetadataMap`.  If the value can't be converted to &str, returns None
     fn get(&self, key: &str) -> Option<&str> {
@@ -39,7 +39,7 @@ impl opentelemetry::propagation::Extractor for MetadataMap<'_> {
     }
 }
 
-/// MetadataMap implements the otel tracing Injector.
+/// Implements the otel tracing Injector.
 impl opentelemetry::propagation::Injector for MetadataMap<'_> {
     /// Sets a key-value pair to the injector.
     fn set(&mut self, key: &str, value: String) {
@@ -55,7 +55,7 @@ impl opentelemetry::propagation::Injector for MetadataMap<'_> {
 #[derive(Clone)]
 pub struct InjectTracingInterceptor;
 
-/// InjectTracingInterceptor implements the tonic Interceptor interface.
+/// Implements the tonic Interceptor interface.
 impl Interceptor for InjectTracingInterceptor {
     /// Calls and injects tracing context into global propagator.
     fn call(&mut self, mut request: Request<()>) -> std::result::Result<Request<()>, Status> {
@@ -72,7 +72,7 @@ impl Interceptor for InjectTracingInterceptor {
 #[derive(Clone)]
 pub struct ExtractTracingInterceptor;
 
-/// ExtractTracingInterceptor implements the tonic Interceptor interface.
+/// Implements the tonic Interceptor interface.
 impl Interceptor for ExtractTracingInterceptor {
     /// Calls and injects tracing context into global propagator.
     fn call(&mut self, mut request: Request<()>) -> std::result::Result<Request<()>, Status> {

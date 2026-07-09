@@ -24,7 +24,7 @@ use sysinfo::Networks;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
-/// NetworkStats represents the network statistics for a specific interface.
+/// Represents the network statistics for a specific interface.
 #[derive(Debug, Clone, Default)]
 pub struct NetworkStats {
     /// The maximum receive bandwidth of the interface in bps.
@@ -40,7 +40,7 @@ pub struct NetworkStats {
     pub tx_bandwidth: Option<u64>,
 }
 
-/// Network represents a network interface with its information.
+/// Represents a network interface with its information.
 #[derive(Debug, Clone, Default)]
 pub struct Network {
     // The name of the network interface.

@@ -54,7 +54,7 @@ pub struct SchedulerAnnouncer {
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
-/// SchedulerAnnouncer implements the scheduler announcer of the dfdaemon.
+/// Implements the scheduler announcer of the dfdaemon.
 impl SchedulerAnnouncer {
     /// Creates a new scheduler announcer.
     pub async fn new(

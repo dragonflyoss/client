@@ -77,33 +77,33 @@ use tracing::{debug, error, info, instrument, warn, Instrument};
 
 use super::*;
 
-/// PersistentTask represents a persistent task manager.
+/// Represents a persistent task manager.
 pub struct PersistentTask {
-    /// config is the configuration of the dfdaemon.
+    /// The configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// id_generator is the id generator.
+    /// The id generator.
     pub id_generator: Arc<IDGenerator>,
 
-    /// storage is the local storage.
+    /// The local storage.
     storage: Arc<Storage>,
 
-    /// backend_factory is the backend factory.
+    /// The backend factory.
     backend_factory: Arc<BackendFactory>,
 
-    /// scheduler_client is the grpc client of the scheduler.
+    /// The grpc client of the scheduler.
     pub scheduler_client: Arc<SchedulerClient>,
 
-    /// piece is the piece manager.
+    /// The piece manager.
     pub piece: Arc<piece::Piece>,
 
-    /// parent_selector is the parent selector.
+    /// The parent selector.
     pub parent_selector: Arc<PersistentParentSelector>,
 }
 
-/// PersistentTask is the implementation of PersistentTask.
+/// The implementation of PersistentTask.
 impl PersistentTask {
-    /// new creates a new PersistentTask.
+    /// Creates a new PersistentTask.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<Config>,
@@ -140,13 +140,13 @@ impl PersistentTask {
         })
     }
 
-    /// get gets a persistent task from local.
+    /// Gets a persistent task from local.
     #[instrument(skip_all)]
     pub fn get(&self, task_id: &str) -> ClientResult<Option<metadata::PersistentTask>> {
         self.storage.get_persistent_task(task_id)
     }
 
-    /// upload creates a persistent task from local.
+    /// Creates a persistent task from local.
     #[instrument(skip_all)]
     pub async fn upload(
         &self,
@@ -626,7 +626,7 @@ impl PersistentTask {
         Ok(())
     }
 
-    /// download_started updates the metadata of the persistent task when the persistent task downloads started.
+    /// Updates the metadata of the persistent task when the persistent task downloads started.
     #[instrument(skip_all)]
     pub async fn download_started(
         &self,
@@ -741,7 +741,7 @@ impl PersistentTask {
         Ok(task)
     }
 
-    /// download_started_for_replication updates the metadata of the persistent task when the
+    /// Updates the metadata of the persistent task when the
     /// persistent task downloads started for replication.
     #[instrument(skip_all)]
     pub async fn download_started_for_replication(
@@ -805,20 +805,20 @@ impl PersistentTask {
         Ok(task)
     }
 
-    /// download_finished updates the metadata of the persistent task when the task downloads finished.
+    /// Updates the metadata of the persistent task when the task downloads finished.
     #[instrument(skip_all)]
     pub fn download_finished(&self, id: &str) -> ClientResult<metadata::PersistentTask> {
         self.storage.download_persistent_task_finished(id)
     }
 
-    /// download_failed updates the metadata of the persistent task when the task downloads failed.
+    /// Updates the metadata of the persistent task when the task downloads failed.
     #[instrument(skip_all)]
     pub async fn download_failed(&self, id: &str) -> ClientResult<()> {
         let _ = self.storage.download_persistent_task_failed(id).await?;
         Ok(())
     }
 
-    /// is_same_dev_inode checks if the persistent task is on the same device inode as the given path.
+    /// Checks if the persistent task is on the same device inode as the given path.
     pub async fn is_same_dev_inode(&self, id: &str, to: &Path) -> ClientResult<bool> {
         self.storage
             .is_same_dev_inode_as_persistent_task(id, to)
@@ -831,7 +831,7 @@ impl PersistentTask {
         self.storage.copy_persistent_task(id, to).await
     }
 
-    /// download_for_replication downloads a persistent task for replication.
+    /// Downloads a persistent task for replication.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     pub async fn download_for_replication(
@@ -987,7 +987,7 @@ impl PersistentTask {
         Ok(())
     }
 
-    /// download_partial_for_replication_with_scheduler downloads a partial task for replication
+    /// Downloads a partial task for replication
     /// with scheduler.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
@@ -1324,7 +1324,7 @@ impl PersistentTask {
         Ok(finished_pieces)
     }
 
-    /// download downloads a persistent task.
+    /// Downloads a persistent task.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     pub async fn download(
@@ -1512,7 +1512,7 @@ impl PersistentTask {
         Ok(())
     }
 
-    /// download_partial_with_scheduler downloads a partial task with scheduler.
+    /// Downloads a partial task with scheduler.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn download_partial_with_scheduler(
@@ -1950,7 +1950,7 @@ impl PersistentTask {
         Ok(finished_pieces)
     }
 
-    /// download_partial_with_scheduler_from_parent downloads a partial task with scheduler from a parent.
+    /// Downloads a partial task with scheduler from a parent.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn download_partial_with_scheduler_from_parent(
@@ -2305,7 +2305,7 @@ impl PersistentTask {
         Ok(finished_pieces)
     }
 
-    /// download_partial_with_scheduler_from_source downloads a partial task with scheduler from the source.
+    /// Downloads a partial task with scheduler from the source.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn download_partial_with_scheduler_from_source(
@@ -2619,7 +2619,7 @@ impl PersistentTask {
         Ok(finished_pieces)
     }
 
-    /// download_partial_from_local downloads a partial task from a local.
+    /// Downloads a partial task from a local.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn download_partial_from_local(
@@ -2752,7 +2752,7 @@ impl PersistentTask {
         Ok(finished_pieces)
     }
 
-    /// download_partial_from_source downloads a partial task from the source.
+    /// Downloads a partial task from the source.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn download_partial_from_source(
@@ -2973,12 +2973,12 @@ impl PersistentTask {
         return Ok(finished_pieces);
     }
 
-    /// persist persists the persistent task.
+    /// Persists the persistent task.
     pub fn persist(&self, task_id: &str) -> ClientResult<metadata::PersistentTask> {
         self.storage.persist_persistent_task(task_id)
     }
 
-    /// exists checks if the persistent task exists in the source.
+    /// Checks if the persistent task exists in the source.
     #[instrument(skip_all)]
     pub async fn exists(
         &self,
@@ -3005,7 +3005,7 @@ impl PersistentTask {
             })
     }
 
-    /// stat_source stats the persistent task in the source.
+    /// Stats the persistent task in the source.
     #[instrument(skip_all)]
     pub async fn stat_source(
         &self,
@@ -3032,7 +3032,7 @@ impl PersistentTask {
             })
     }
 
-    /// stat stats the persistent task from the scheduler.
+    /// Stats the persistent task from the scheduler.
     #[instrument(skip_all)]
     pub async fn stat(&self, task_id: &str, host_id: &str) -> ClientResult<CommonPersistentTask> {
         self.scheduler_client
@@ -3043,7 +3043,7 @@ impl PersistentTask {
             .await
     }
 
-    /// stat_local stats the local persistent task from the scheduler.
+    /// Stats the local persistent task from the scheduler.
     #[instrument(skip_all)]
     pub async fn stat_local(&self, task_id: &str) -> ClientResult<StatLocalPersistentTaskResponse> {
         let Some(task) = self.get(task_id).inspect_err(|err| {
@@ -3071,7 +3071,7 @@ impl PersistentTask {
         })
     }
 
-    /// list_local returns the persistent tasks from local storage.
+    /// Returns the persistent tasks from local storage.
     #[instrument(skip_all)]
     pub async fn list_local(&self) -> ClientResult<ListLocalPersistentTasksResponse> {
         let tasks = self.storage.get_persistent_tasks().inspect_err(|err| {
@@ -3103,7 +3103,7 @@ impl PersistentTask {
         Ok(ListLocalPersistentTasksResponse { tasks })
     }
 
-    /// delete_persistent_task deletes a persistent task.
+    /// Deletes a persistent task.
     #[instrument(skip_all)]
     pub async fn delete(&self, task_id: &str) {
         self.storage.delete_persistent_task(task_id).await

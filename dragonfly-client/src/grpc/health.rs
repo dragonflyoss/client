@@ -32,16 +32,16 @@ use tracing::{error, instrument};
 
 use super::interceptor::InjectTracingInterceptor;
 
-/// HealthClient is a wrapper of HealthGRPCClient.
+/// A wrapper of HealthGRPCClient.
 #[derive(Clone)]
 pub struct HealthClient {
-    /// client is the grpc client of the certificate.
+    /// The grpc client of the certificate.
     client: HealthGRPCClient<InterceptedService<Channel, InjectTracingInterceptor>>,
 }
 
-/// HealthClient implements the grpc client of the health.
+/// Implements the grpc client of the health.
 impl HealthClient {
-    /// new creates a new HealthClient.
+    /// Creates a new HealthClient.
     pub async fn new(addr: &str, client_tls_config: Option<ClientTlsConfig>) -> Result<Self> {
         let channel = match client_tls_config {
             Some(client_tls_config) => Channel::from_shared(addr.to_string())
@@ -79,7 +79,7 @@ impl HealthClient {
         Ok(Self { client })
     }
 
-    /// new_unix creates a new HealthClient with unix domain socket.
+    /// Creates a new HealthClient with unix domain socket.
     pub async fn new_unix(socket_path: PathBuf) -> Result<Self> {
         // Ignore the uri because it is not used.
         let channel = Endpoint::try_from("http://[::]:50051")
@@ -109,7 +109,7 @@ impl HealthClient {
         Ok(Self { client })
     }
 
-    /// check checks the health of the grpc service without service name.
+    /// Checks the health of the grpc service without service name.
     #[instrument(skip_all)]
     pub async fn check(&self) -> Result<HealthCheckResponse> {
         let request = Self::make_request(HealthCheckRequest {
@@ -119,7 +119,7 @@ impl HealthClient {
         Ok(response.into_inner())
     }
 
-    /// check_service checks the health of the grpc service with service name.
+    /// Checks the health of the grpc service with service name.
     #[instrument(skip_all)]
     pub async fn check_service(&self, service: String) -> Result<HealthCheckResponse> {
         let request = Self::make_request(HealthCheckRequest { service });
@@ -127,21 +127,21 @@ impl HealthClient {
         Ok(response.into_inner())
     }
 
-    /// check_dfdaemon_download checks the health of the dfdaemon download service.
+    /// Checks the health of the dfdaemon download service.
     #[instrument(skip_all)]
     pub async fn check_dfdaemon_download(&self) -> Result<HealthCheckResponse> {
         self.check_service("dfdaemon.v2.DfdaemonDownload".to_string())
             .await
     }
 
-    /// check_dfdaemon_upload checks the health of the dfdaemon upload service.
+    /// Checks the health of the dfdaemon upload service.
     #[instrument(skip_all)]
     pub async fn check_dfdaemon_upload(&self) -> Result<HealthCheckResponse> {
         self.check_service("dfdaemon.v2.DfdaemonUpload".to_string())
             .await
     }
 
-    /// make_request creates a new request with timeout.
+    /// Creates a new request with timeout.
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);

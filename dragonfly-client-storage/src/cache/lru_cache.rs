@@ -16,13 +16,13 @@
 
 use std::{borrow::Borrow, collections::HashMap, hash::Hash, hash::Hasher};
 
-/// KeyRef is a reference to the key.
+/// A reference to the key.
 #[derive(Debug, Clone, Copy)]
 struct KeyRef<K> {
     k: *const K,
 }
 
-/// KeyRef implements Hash for KeyRef.
+/// Implements Hash for KeyRef.
 impl<K: Hash> Hash for KeyRef<K> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         unsafe {
@@ -32,7 +32,7 @@ impl<K: Hash> Hash for KeyRef<K> {
     }
 }
 
-/// KeyRef implements PartialEq for KeyRef.
+/// Implements PartialEq for KeyRef.
 impl<K: PartialEq> PartialEq for KeyRef<K> {
     fn eq(&self, other: &Self) -> bool {
         unsafe {
@@ -43,29 +43,29 @@ impl<K: PartialEq> PartialEq for KeyRef<K> {
     }
 }
 
-/// KeyRef implements Eq for KeyRef.
+/// Implements Eq for KeyRef.
 impl<K: Eq> Eq for KeyRef<K> {}
 
-/// KeyWrapper is a wrapper for the key.
+/// A wrapper for the key.
 #[repr(transparent)]
 struct KeyWrapper<K: ?Sized>(K);
 
-/// KeyWrapper implements reference conversion.
+/// Implements reference conversion.
 impl<K: ?Sized> KeyWrapper<K> {
-    /// from_ref creates a new KeyWrapper from a reference to the key.
+    /// Creates a new KeyWrapper from a reference to the key.
     fn from_ref(key: &K) -> &Self {
         unsafe { &*(key as *const K as *const KeyWrapper<K>) }
     }
 }
 
-/// KeyWrapper implements Hash for KeyWrapper.
+/// Implements Hash for KeyWrapper.
 impl<K: ?Sized + Hash> Hash for KeyWrapper<K> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.0.hash(state)
     }
 }
 
-/// KeyWrapper implements PartialEq for KeyWrapper.
+/// Implements PartialEq for KeyWrapper.
 impl<K: ?Sized + PartialEq> PartialEq for KeyWrapper<K> {
     #![allow(unknown_lints)]
     #[allow(clippy::unconditional_recursion)]
@@ -74,10 +74,10 @@ impl<K: ?Sized + PartialEq> PartialEq for KeyWrapper<K> {
     }
 }
 
-/// KeyWrapper implements Eq for KeyWrapper.
+/// Implements Eq for KeyWrapper.
 impl<K: ?Sized + Eq> Eq for KeyWrapper<K> {}
 
-/// KeyWrapper implements Borrow for KeyWrapper.
+/// Implements Borrow for KeyWrapper.
 impl<K, Q> Borrow<KeyWrapper<Q>> for KeyRef<K>
 where
     K: Borrow<Q>,
@@ -92,7 +92,7 @@ where
     }
 }
 
-/// Entry is a cache entry.
+/// A cache entry.
 struct Entry<K, V> {
     key: K,
     value: V,
@@ -100,9 +100,9 @@ struct Entry<K, V> {
     next: Option<*mut Entry<K, V>>,
 }
 
-/// Entry implements Drop for Entry.
+/// Implements Drop for Entry.
 impl<K, V> Entry<K, V> {
-    /// new creates a new Entry.
+    /// Creates a new Entry.
     fn new(key: K, value: V) -> Self {
         Self {
             key,
@@ -113,7 +113,7 @@ impl<K, V> Entry<K, V> {
     }
 }
 
-/// LruCache is a least recently used cache.
+/// A least recently used cache.
 pub struct LruCache<K, V> {
     capacity: usize,
     map: HashMap<KeyRef<K>, Box<Entry<K, V>>>,
@@ -122,9 +122,9 @@ pub struct LruCache<K, V> {
     _marker: std::marker::PhantomData<K>,
 }
 
-/// LruCache implements LruCache.
+/// Implements LruCache.
 impl<K: Hash + Eq, V> LruCache<K, V> {
-    /// new creates a new LruCache.
+    /// Creates a new LruCache.
     pub fn new(capacity: usize) -> Self {
         Self {
             capacity,
@@ -135,7 +135,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         }
     }
 
-    /// get gets the value of the key.
+    /// Gets the value of the key.
     pub fn get<'a, Q>(&'a mut self, k: &Q) -> Option<&'a V>
     where
         K: Borrow<Q>,
@@ -152,7 +152,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         }
     }
 
-    /// put puts the key and value into the cache.
+    /// Puts the key and value into the cache.
     pub fn put(&mut self, key: K, mut value: V) -> Option<V> {
         if let Some(existing_entry) = self.map.get_mut(KeyWrapper::from_ref(&key)) {
             let entry = existing_entry.as_mut();
@@ -229,7 +229,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         }
     }
 
-    /// contains checks whether the key exists in the cache.
+    /// Checks whether the key exists in the cache.
     pub fn contains<Q>(&self, k: &Q) -> bool
     where
         K: Borrow<Q>,
@@ -249,7 +249,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
             .map(|entry| &entry.value)
     }
 
-    /// pop_lru pops the least recently used value from the cache.
+    /// Pops the least recently used value from the cache.
     pub fn pop_lru(&mut self) -> Option<(K, V)> {
         if self.is_empty() {
             return None;
@@ -265,7 +265,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         }
     }
 
-    /// pop removes and returns the value for a given key, if it does not exist, it returns None.
+    /// Removes and returns the value for a given key, if it does not exist, it returns None.
     pub fn pop<Q>(&mut self, k: &Q) -> Option<(K, V)>
     where
         K: Borrow<Q>,
@@ -285,7 +285,7 @@ impl<K: Hash + Eq, V> LruCache<K, V> {
         }
     }
 
-    /// is_empty checks whether the cache is empty.
+    /// Checks whether the cache is empty.
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }

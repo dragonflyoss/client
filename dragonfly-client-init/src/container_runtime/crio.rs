@@ -24,20 +24,20 @@ use toml_edit::{value, Array, ArrayOfTables, Item, Table, Value};
 use tracing::{info, instrument};
 use url::Url;
 
-/// CRIO represents the cri-o runtime manager.
+/// Represents the cri-o runtime manager.
 #[derive(Debug, Clone)]
 pub struct CRIO {
-    /// config is the configuration for initializing
+    /// The configuration for initializing
     /// runtime environment for the dfdaemon.
     config: dfinit::CRIO,
 
-    /// proxy_config is the configuration for the dfdaemon's proxy server.
+    /// The configuration for the dfdaemon's proxy server.
     proxy_config: dfinit::Proxy,
 }
 
-/// CRIO implements the cri-o runtime manager.
+/// Implements the cri-o runtime manager.
 impl CRIO {
-    /// new creates a new cri-o runtime manager.
+    /// Creates a new cri-o runtime manager.
     #[instrument(skip_all)]
     pub fn new(config: dfinit::CRIO, proxy_config: dfinit::Proxy) -> Self {
         Self {
@@ -46,7 +46,7 @@ impl CRIO {
         }
     }
 
-    /// run runs the cri-o runtime to initialize
+    /// Runs the cri-o runtime to initialize
     /// runtime environment for the dfdaemon.
     #[instrument(skip_all)]
     pub async fn run(&self) -> Result<()> {

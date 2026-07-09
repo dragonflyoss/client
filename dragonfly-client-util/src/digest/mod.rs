@@ -50,7 +50,7 @@ pub enum Algorithm {
     Sha512,
 }
 
-/// Algorithm implements the Display.
+/// Implements the Display.
 impl fmt::Display for Algorithm {
     /// Formats the value using the given formatter.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -62,7 +62,7 @@ impl fmt::Display for Algorithm {
     }
 }
 
-/// Algorithm implements the FromStr.
+/// Implements the FromStr.
 impl FromStr for Algorithm {
     type Err = String;
 
@@ -86,7 +86,7 @@ pub struct Digest {
     encoded: String,
 }
 
-/// Digest implements the Digest.
+/// Implements the Digest.
 impl Digest {
     /// Creates a new digest with the specified algorithm and encoded value.
     pub fn new(algorithm: Algorithm, encoded: String) -> Self {
@@ -114,7 +114,7 @@ impl Digest {
     }
 }
 
-/// Digest implements the Display.
+/// Implements the Display.
 impl fmt::Display for Digest {
     /// Formats the value using the given formatter.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -122,7 +122,7 @@ impl fmt::Display for Digest {
     }
 }
 
-/// Digest implements the FromStr.
+/// Implements the FromStr.
 impl FromStr for Digest {
     type Err = String;
 
