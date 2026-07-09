@@ -637,8 +637,10 @@ pub async fn upgraded_handler(
     Span::current().record("url", request.uri().to_string().as_str());
     Span::current().record("method", request.method().as_str());
 
-    // If the request rate limit is exceeded, return a 429 Too Many Requests
-    // response to the client.
+    // HTTPS requests are tunneled over a single upgraded connection, so a
+    // per-connection check is not enough. The rate limit must be enforced on
+    // every request. If the limit is exceeded, return 429 Too Many Requests
+    // to the client.
     if !request_rate_limiter.try_acquire(1) {
         error!("proxy request rate limit exceeded");
         return Ok(make_error_response(
