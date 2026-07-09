@@ -332,6 +332,12 @@ pub fn default_proxy_server_port() -> u16 {
     4001
 }
 
+/// default_proxy_request_rate_limit is the default rate limit of the proxy request in the
+/// proxy server, default is 4000 req/s.
+pub fn default_proxy_request_rate_limit() -> u64 {
+    4000
+}
+
 /// default_proxy_read_buffer_size is the default buffer size for reading piece, default is 4MB.
 #[inline]
 pub fn default_proxy_read_buffer_size() -> usize {
@@ -1163,6 +1169,11 @@ pub struct ProxyServer {
     #[serde(default = "default_proxy_server_port")]
     pub port: u16,
 
+    /// request_rate_limit is the rate limit of the proxy request in the proxy server,
+    /// default is 4000 req/s.
+    #[serde(default = "default_proxy_request_rate_limit")]
+    pub request_rate_limit: u64,
+
     /// CA cert is the root CA cert path with PEM format for the proxy server to generate the server cert.
     ///
     /// If CA cert is empty, proxy will generate a smaple CA cert by rcgen::generate_simple_self_signed.
@@ -1202,6 +1213,7 @@ impl Default for ProxyServer {
         Self {
             ip: None,
             port: default_proxy_server_port(),
+            request_rate_limit: default_proxy_request_rate_limit(),
             ca_cert: None,
             ca_key: None,
             basic_auth: None,
@@ -2187,6 +2199,7 @@ key: /etc/ssl/private/client.pem
         {
             "server": {
                 "port": 8080,
+                "requestRateLimit": 4000,
                 "caCert": "/path/to/ca_cert.pem",
                 "caKey": "/path/to/ca_key.pem",
                 "basicAuth": {
@@ -2218,6 +2231,7 @@ key: /etc/ssl/private/client.pem
 
         let proxy: Proxy = serde_json::from_str(json_data).unwrap();
         assert_eq!(proxy.server.port, 8080);
+        assert_eq!(proxy.server.request_rate_limit, 4000);
         assert_eq!(
             proxy.server.ca_cert,
             Some(PathBuf::from("/path/to/ca_cert.pem"))
