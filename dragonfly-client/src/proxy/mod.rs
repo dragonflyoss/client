@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-use crate::dynconfig::Dynconfig;
-use crate::grpc::{dfdaemon_download::DownloadTaskHandler, REQUEST_TIMEOUT};
+use crate::grpc::REQUEST_TIMEOUT;
 use crate::resource::{piece::MIN_PIECE_LENGTH, task::Task};
 use bytes::Bytes;
 use dragonfly_api::common::v2::{Download, TaskType};
@@ -81,10 +80,6 @@ pub struct Proxy {
     /// Task manager.
     task: Arc<Task>,
 
-    /// Download task handler for downloading tasks by direct method calls,
-    /// which avoids the gRPC overhead.
-    download_task_handler: Arc<DownloadTaskHandler>,
-
     /// Address of the proxy server.
     addr: SocketAddr,
 
@@ -106,7 +101,6 @@ impl Proxy {
     /// new creates a new Proxy.
     pub fn new(
         config: Arc<Config>,
-        dynconfig: Arc<Dynconfig>,
         task: Arc<Task>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
@@ -114,12 +108,6 @@ impl Proxy {
         let mut proxy = Self {
             config: config.clone(),
             task: task.clone(),
-            download_task_handler: Arc::new(DownloadTaskHandler::new(
-                config.clone(),
-                dynconfig,
-                config.download.server.socket_path.clone(),
-                task,
-            )),
             addr: SocketAddr::new(config.proxy.server.ip.unwrap(), config.proxy.server.port),
             registry_cert: Arc::new(None),
             server_ca_cert: Arc::new(None),
@@ -177,7 +165,6 @@ impl Proxy {
         struct Context {
             config: Arc<Config>,
             task: Arc<Task>,
-            download_task_handler: Arc<DownloadTaskHandler>,
             registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
             server_ca_cert: Arc<Option<Certificate>>,
         }
@@ -185,7 +172,6 @@ impl Proxy {
         let context = Context {
             config: self.config.clone(),
             task: self.task.clone(),
-            download_task_handler: self.download_task_handler.clone(),
             registry_cert: self.registry_cert.clone(),
             server_ca_cert: self.server_ca_cert.clone(),
         };
@@ -216,7 +202,7 @@ impl Proxy {
                                 service_fn(move |request|{
                                     let context = context.clone();
                                     async move {
-                                        handler(context.config, context.task, request, context.download_task_handler, context.registry_cert, context.server_ca_cert, remote_address.ip()).await
+                                        handler(context.config, context.task, request, context.registry_cert, context.server_ca_cert, remote_address.ip()).await
                                     }
                                 } ),
                                 )
@@ -244,7 +230,6 @@ pub async fn handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
-    download_task_handler: Arc<DownloadTaskHandler>,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
     remote_ip: std::net::IpAddr,
@@ -267,22 +252,13 @@ pub async fn handler(
                 task,
                 request,
                 remote_ip,
-                download_task_handler,
                 registry_cert,
                 server_ca_cert,
             )
             .await;
         }
 
-        return registry_mirror_http_handler(
-            config,
-            task,
-            request,
-            remote_ip,
-            download_task_handler,
-            registry_cert,
-        )
-        .await;
+        return registry_mirror_http_handler(config, task, request, remote_ip, registry_cert).await;
     }
 
     // Handle CONNECT request.
@@ -292,22 +268,13 @@ pub async fn handler(
             task,
             request,
             remote_ip,
-            download_task_handler,
             registry_cert,
             server_ca_cert,
         )
         .await;
     }
 
-    http_handler(
-        config,
-        task,
-        request,
-        remote_ip,
-        download_task_handler,
-        registry_cert,
-    )
-    .await
+    http_handler(config, task, request, remote_ip, registry_cert).await
 }
 
 /// registry_mirror_http_handler handles the http request for the registry mirror by client.
@@ -317,19 +284,10 @@ pub async fn registry_mirror_http_handler(
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    download_task_handler: Arc<DownloadTaskHandler>,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
     let request = make_registry_mirror_request(config.clone(), request)?;
-    return http_handler(
-        config,
-        task,
-        request,
-        remote_ip,
-        download_task_handler,
-        registry_cert,
-    )
-    .await;
+    return http_handler(config, task, request, remote_ip, registry_cert).await;
 }
 
 /// registry_mirror_https_handler handles the https request for the registry mirror by client.
@@ -339,7 +297,6 @@ pub async fn registry_mirror_https_handler(
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    download_task_handler: Arc<DownloadTaskHandler>,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<Response> {
@@ -349,7 +306,6 @@ pub async fn registry_mirror_https_handler(
         task,
         request,
         remote_ip,
-        download_task_handler,
         registry_cert,
         server_ca_cert,
     )
@@ -363,7 +319,6 @@ pub async fn http_handler(
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    download_task_handler: Arc<DownloadTaskHandler>,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
     // Authenticate the request with the basic auth.
@@ -403,15 +358,7 @@ pub async fn http_handler(
                 request
             );
 
-            return proxy_via_dfdaemon(
-                config,
-                task,
-                &rule,
-                request,
-                remote_ip,
-                download_task_handler,
-            )
-            .await;
+            return proxy_via_dfdaemon(config, task, &rule, request, remote_ip).await;
         }
 
         debug!(
@@ -429,15 +376,7 @@ pub async fn http_handler(
         );
 
         if request.method() == Method::GET {
-            return proxy_via_dfdaemon(
-                config,
-                task,
-                &Rule::default(),
-                request,
-                remote_ip,
-                download_task_handler,
-            )
-            .await;
+            return proxy_via_dfdaemon(config, task, &Rule::default(), request, remote_ip).await;
         }
 
         debug!(
@@ -470,7 +409,6 @@ pub async fn https_handler(
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    download_task_handler: Arc<DownloadTaskHandler>,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<Response> {
@@ -490,7 +428,6 @@ pub async fn https_handler(
                         host,
                         port,
                         remote_ip,
-                        download_task_handler,
                         registry_cert,
                         server_ca_cert,
                     )
@@ -525,7 +462,6 @@ async fn upgraded_tunnel(
     host: String,
     port: u16,
     remote_ip: std::net::IpAddr,
-    download_task_handler: Arc<DownloadTaskHandler>,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<()> {
@@ -574,7 +510,6 @@ async fn upgraded_tunnel(
                     port,
                     request,
                     remote_ip,
-                    download_task_handler.clone(),
                     registry_cert.clone(),
                 )
             }),
@@ -598,7 +533,6 @@ pub async fn upgraded_handler(
     port: u16,
     mut request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    download_task_handler: Arc<DownloadTaskHandler>,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
     // Span record the url and method.
@@ -659,15 +593,7 @@ pub async fn upgraded_handler(
                 request,
             );
 
-            return proxy_via_dfdaemon(
-                config,
-                task,
-                &rule,
-                request,
-                remote_ip,
-                download_task_handler,
-            )
-            .await;
+            return proxy_via_dfdaemon(config, task, &rule, request, remote_ip).await;
         }
 
         debug!(
@@ -685,15 +611,7 @@ pub async fn upgraded_handler(
                 request,
             );
 
-            return proxy_via_dfdaemon(
-                config,
-                task,
-                &Rule::default(),
-                request,
-                remote_ip,
-                download_task_handler,
-            )
-            .await;
+            return proxy_via_dfdaemon(config, task, &Rule::default(), request, remote_ip).await;
         }
 
         debug!(
@@ -727,7 +645,6 @@ async fn proxy_via_dfdaemon(
     rule: &Rule,
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    download_task_handler: Arc<DownloadTaskHandler>,
 ) -> ClientResult<Response> {
     // Collect the metrics for the proxy request via dfdaemon.
     collect_proxy_request_via_dfdaemon_metrics();
@@ -746,12 +663,9 @@ async fn proxy_via_dfdaemon(
             }
         };
 
-    // Download the task by the download task handler directly, which avoids
-    // the gRPC overhead.
-    let mut out_stream = match download_task_handler
-        .download_task(download_task_request)
-        .await
-    {
+    // Download the task by the task manager directly, which avoids the gRPC
+    // overhead.
+    let mut out_stream = match task.clone().download_task(download_task_request).await {
         Ok(out_stream) => out_stream,
         Err(err) if err.code() == tonic::Code::ResourceExhausted => {
             return Ok(make_error_response(
@@ -788,7 +702,7 @@ async fn proxy_via_dfdaemon(
         },
     };
 
-    // Handle the response from the download task handler.
+    // Handle the response from the task manager.
     let Some(Ok(message)) = out_stream.recv().await else {
         error!("response message failed");
         return Ok(make_error_response(

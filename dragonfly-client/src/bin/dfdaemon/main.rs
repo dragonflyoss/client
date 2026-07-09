@@ -274,6 +274,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize task manager.
     let task = Task::new(
         config.clone(),
+        dynconfig.clone(),
         id_generator.clone(),
         storage.clone(),
         scheduler_client.clone(),
@@ -367,7 +368,6 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize proxy server.
     let proxy = Proxy::new(
         config.clone(),
-        dynconfig.clone(),
         task.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),

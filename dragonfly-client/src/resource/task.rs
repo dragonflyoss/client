@@ -14,16 +14,21 @@
  * limitations under the License.
  */
 
-use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
+use crate::dynconfig::Dynconfig;
+use crate::grpc::block_list::{BlockList, DownloadBlockListCheckParams};
+use crate::grpc::{
+    prefetch_task, scheduler::SchedulerClient, DOWNLOAD_STREAM_BUFFER_SIZE, REQUEST_TIMEOUT,
+};
 use crate::resource::parent_selector::ParentSelector;
 use dragonfly_api::common::v2::{
     Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, Peer, Piece, Task as CommonTask,
-    TrafficType,
+    TaskType, TrafficType,
 };
 use dragonfly_api::dfdaemon::{
     self,
     v2::{
-        download_task_response, DownloadTaskResponse, ListLocalTasksResponse, StatLocalTaskResponse,
+        download_task_response, DownloadTaskRequest, DownloadTaskResponse, ListLocalTasksResponse,
+        StatLocalTaskResponse,
     },
 };
 use dragonfly_api::errordetails::v2::{Backend, Unknown};
@@ -44,13 +49,17 @@ use dragonfly_client_core::{
 };
 use dragonfly_client_metric::{
     collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
-    collect_backend_request_started_metrics,
+    collect_backend_request_started_metrics, collect_download_task_blocked_metrics,
+    collect_download_task_failure_metrics, collect_download_task_finished_metrics,
+    collect_download_task_started_metrics,
 };
 use dragonfly_client_storage::{metadata, Storage};
 use dragonfly_client_util::{
-    http::{hashmap_to_headermap, headermap_to_hashmap},
-    id_generator::IDGenerator,
+    digest::{is_blob_url, verify_file_digest, Digest},
+    http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
+    id_generator::{IDGenerator, TaskIDParameter},
     shutdown,
+    types::redacted::RedactedDownload,
 };
 use leaky_bucket::RateLimiter;
 use reqwest::header::HeaderMap;
@@ -67,8 +76,8 @@ use tokio::sync::{
 };
 use tokio::task::JoinSet;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
-use tonic::{Request, Status};
-use tracing::{debug, error, info, instrument, warn, Instrument};
+use tonic::{Code, Request, Status};
+use tracing::{debug, error, info, instrument, warn, Instrument, Span};
 
 use super::*;
 
@@ -76,6 +85,9 @@ use super::*;
 pub struct Task {
     /// config is the configuration of the dfdaemon.
     config: Arc<Config>,
+
+    /// block_list is the block list for download tasks.
+    block_list: BlockList,
 
     /// id_generator is the id generator.
     pub id_generator: Arc<IDGenerator>,
@@ -102,6 +114,7 @@ impl Task {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<Config>,
+        dynconfig: Arc<Dynconfig>,
         id_generator: Arc<IDGenerator>,
         storage: Arc<Storage>,
         scheduler_client: Arc<SchedulerClient>,
@@ -114,6 +127,7 @@ impl Task {
     ) -> ClientResult<Self> {
         Ok(Self {
             config: config.clone(),
+            block_list: BlockList::new(config.clone(), dynconfig),
             id_generator: id_generator.clone(),
             storage: storage.clone(),
             scheduler_client: scheduler_client.clone(),
@@ -133,6 +147,468 @@ impl Task {
                 shutdown_complete_tx.clone(),
             )),
         })
+    }
+
+    /// download_task downloads the task from remote peers or the source and
+    /// returns the stream receiver of the download progress. It is shared by
+    /// the dfdaemon download gRPC service and the proxy server, so that the
+    /// proxy server can download tasks by direct method calls without the
+    /// gRPC overhead.
+    #[instrument(
+        skip_all,
+        fields(host_id, task_id, peer_id, url, remote_ip, content_length)
+    )]
+    pub async fn download_task(
+        self: Arc<Self>,
+        request: DownloadTaskRequest,
+    ) -> Result<mpsc::Receiver<Result<DownloadTaskResponse, Status>>, Status> {
+        // Record the start time.
+        let start_time = Instant::now();
+
+        // Check whether the download is empty.
+        let mut download = request.download.ok_or_else(|| {
+            error!("missing download");
+            Status::invalid_argument("missing download")
+        })?;
+
+        // Check whether rejected by blocklist policy.
+        let check_params = DownloadBlockListCheckParams {
+            application: download.application.clone(),
+            url: Some(download.url.clone()),
+            tag: download.tag.clone(),
+            priority: Some(download.priority),
+        };
+        if self
+            .block_list
+            .is_task_download_blocked(&check_params)
+            .await
+        {
+            warn!("download rejected by blocklist policy: {:?}", check_params);
+            collect_download_task_blocked_metrics(TaskType::Standard as i32);
+            return Err(Status::permission_denied(
+                "download rejected by blocklist policy",
+            ));
+        }
+
+        // If concurrent_piece_count is not set in the request, use the default value in the config.
+        download.concurrent_piece_count = Some(self.config.download.concurrent_piece_count);
+
+        // Generate the task id.
+        let task_id = self
+            .id_generator
+            .task_id(
+                if let Some(content) = download.content_for_calculating_task_id.clone() {
+                    TaskIDParameter::Content(content)
+                } else if download.enable_task_id_based_blob_digest && is_blob_url(&download.url) {
+                    TaskIDParameter::BlobDigestBased(download.url.clone())
+                } else {
+                    let revision = download
+                        .hugging_face
+                        .as_ref()
+                        .map(|hf| hf.revision.clone())
+                        .or_else(|| download.model_scope.as_ref().map(|ms| ms.revision.clone()));
+
+                    TaskIDParameter::URLBased {
+                        url: download.url.clone(),
+                        piece_length: download.piece_length,
+                        tag: download.tag.clone(),
+                        application: download.application.clone(),
+                        filtered_query_params: download.filtered_query_params.clone(),
+                        revision,
+                    }
+                },
+            )
+            .map_err(|e| {
+                error!("generate task id: {}", e);
+                Status::invalid_argument(e.to_string())
+            })?;
+
+        // Generate the host id.
+        let host_id = self.id_generator.host_id();
+
+        // Generate the peer id.
+        let peer_id = self.id_generator.peer_id();
+
+        // Span record the host id, task id and peer id.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("task_id", task_id.as_str());
+        Span::current().record("peer_id", peer_id.as_str());
+        Span::current().record("url", download.url.clone());
+        Span::current().record(
+            "remote_ip",
+            download.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+
+        // Download task started.
+        info!("download task started: {:?}", RedactedDownload(&download));
+        let task = match self
+            .download_started(task_id.as_str(), download.clone())
+            .await
+        {
+            Err(Error::BackendError(err)) => {
+                error!("download started failed by error: {}", err);
+                self.download_failed(task_id.as_str())
+                    .await
+                    .unwrap_or_else(|err| error!("download task failed: {}", err));
+
+                match serde_json::to_vec::<Backend>(&Backend {
+                    message: err.message.clone(),
+                    header: headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
+                    status_code: err.status_code.map(|code| code.as_u16() as i32),
+                }) {
+                    Ok(json) => {
+                        return Err(Status::with_details(
+                            Code::Internal,
+                            err.to_string(),
+                            json.into(),
+                        ));
+                    }
+                    Err(err) => {
+                        error!("serialize error: {}", err);
+                        return Err(Status::internal(err.to_string()));
+                    }
+                }
+            }
+            Err(err) => {
+                error!("download started failed: {}", err);
+                return Err(Status::internal(err.to_string()));
+            }
+            Ok(task) => {
+                // Collect download task started metrics.
+                collect_download_task_started_metrics(
+                    download.r#type,
+                    download.tag.clone().unwrap_or_default().as_str(),
+                    download.application.clone().unwrap_or_default().as_str(),
+                    download.priority.to_string().as_str(),
+                );
+
+                task
+            }
+        };
+        Span::current().record("content_length", task.content_length().unwrap_or_default());
+
+        // Update the actual content length, actual piece length and actual
+        // piece count of the download.
+        download.actual_content_length = task.content_length();
+        download.actual_piece_length = task.piece_length();
+        download.actual_piece_count = task.piece_count();
+
+        // Download's range priority is higher than the request header's range.
+        // If download protocol is http, use the range of the request header.
+        // If download protocol is not http, use the range of the download.
+        if download.range.is_none() {
+            // Convert the header.
+            let request_header = match hashmap_to_headermap(&download.request_header) {
+                Ok(header) => header,
+                Err(err) => {
+                    // Download task failed.
+                    self.download_failed(task_id.as_str())
+                        .await
+                        .unwrap_or_else(|err| error!("download task failed: {}", err));
+
+                    // Collect download task failure metrics.
+                    collect_download_task_failure_metrics(
+                        download.r#type,
+                        download.tag.clone().unwrap_or_default().as_str(),
+                        download.application.clone().unwrap_or_default().as_str(),
+                        download.priority.to_string().as_str(),
+                    );
+
+                    error!("convert header: {}", err);
+                    return Err(Status::invalid_argument(err.to_string()));
+                }
+            };
+
+            download.range =
+                match get_range(&request_header, task.content_length().unwrap_or_default()) {
+                    Ok(range) => range,
+                    Err(err) => {
+                        // Download task failed.
+                        self.download_failed(task_id.as_str())
+                            .await
+                            .unwrap_or_else(|err| error!("download task failed: {}", err));
+
+                        // Collect download task failure metrics.
+                        collect_download_task_failure_metrics(
+                            download.r#type,
+                            download.tag.clone().unwrap_or_default().as_str(),
+                            download.application.clone().unwrap_or_default().as_str(),
+                            download.priority.to_string().as_str(),
+                        );
+
+                        error!("get range failed: {}", err);
+                        return Err(Status::failed_precondition(err.to_string()));
+                    }
+                };
+        }
+
+        // Initialize stream channel.
+        let download_clone = download.clone();
+        let task_manager_clone = self.clone();
+        let task_clone = task.clone();
+        let (out_stream_tx, out_stream_rx) = mpsc::channel(DOWNLOAD_STREAM_BUFFER_SIZE);
+
+        // Define the error handler to send the error to the stream.
+        async fn handle_error(
+            out_stream_tx: &Sender<Result<DownloadTaskResponse, Status>>,
+            err: impl std::error::Error,
+        ) {
+            out_stream_tx
+                .send_timeout(Err(Status::internal(err.to_string())), REQUEST_TIMEOUT)
+                .await
+                .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
+        }
+
+        // Define the backend error handler to send the error to the stream.
+        async fn handle_backend_error(
+            out_stream_tx: &Sender<Result<DownloadTaskResponse, Status>>,
+            err: Status,
+        ) {
+            out_stream_tx
+                .send_timeout(Err(err), REQUEST_TIMEOUT)
+                .await
+                .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
+        }
+
+        tokio::spawn(
+            async move {
+                match task_manager_clone
+                    .download(
+                        &task_clone,
+                        host_id.as_str(),
+                        peer_id.as_str(),
+                        download_clone.clone(),
+                        out_stream_tx.clone(),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        // Collect download task finished metrics.
+                        collect_download_task_finished_metrics(
+                            download_clone.r#type,
+                            download_clone.tag.clone().unwrap_or_default().as_str(),
+                            download_clone
+                                .application
+                                .clone()
+                                .unwrap_or_default()
+                                .as_str(),
+                            download_clone.priority.to_string().as_str(),
+                            task_clone.content_length().unwrap_or_default(),
+                            download_clone.range,
+                            start_time.elapsed(),
+                        );
+
+                        // Download task succeeded.
+                        info!("download task succeeded");
+                        if let Err(err) =
+                            task_manager_clone.download_finished(task_clone.id.as_str())
+                        {
+                            error!("download task finished: {}", err);
+                            handle_error(&out_stream_tx, err).await;
+                            return;
+                        }
+
+                        if download_clone.range.is_none() {
+                            if let Some(output_path) = &download_clone.output_path {
+                                if !download_clone.force_hard_link {
+                                    let output_path = Path::new(output_path.as_str());
+                                    if output_path.exists() {
+                                        match task_manager_clone
+                                            .is_same_dev_inode(task_clone.id.as_str(), output_path)
+                                            .await
+                                        {
+                                            Ok(true) => {}
+                                            Ok(false) => {
+                                                if download_clone.overwrite {
+                                                    if let Err(err) = task_manager_clone
+                                                        .copy_task(
+                                                            task_clone.id.as_str(),
+                                                            output_path,
+                                                        )
+                                                        .await
+                                                    {
+                                                        error!("copy task: {}", err);
+                                                        handle_error(&out_stream_tx, err).await;
+                                                        return;
+                                                    };
+
+                                                    return;
+                                                }
+
+                                                error!(
+                                                    "output path {} is already exists",
+                                                    output_path.display()
+                                                );
+
+                                                handle_error(
+                                                    &out_stream_tx,
+                                                    Status::internal(format!(
+                                                        "output path {} is already exists",
+                                                        output_path.display()
+                                                    )),
+                                                )
+                                                .await;
+                                                return;
+                                            }
+                                            Err(err) => {
+                                                error!("check output path: {}", err);
+                                                handle_error(&out_stream_tx, err).await;
+                                                return;
+                                            }
+                                        }
+                                    } else if let Err(err) = task_manager_clone
+                                        .copy_task(task_clone.id.as_str(), output_path)
+                                        .await
+                                    {
+                                        error!("copy task: {}", err);
+                                        handle_error(&out_stream_tx, err).await;
+                                        return;
+                                    }
+                                }
+
+                                // Verify the file digest if it is provided.
+                                if let Some(raw_digest) = &download_clone.digest {
+                                    let digest = match raw_digest.parse::<Digest>() {
+                                        Ok(digest) => digest,
+                                        Err(err) => {
+                                            error!("parse digest: {}", err);
+                                            handle_error(
+                                                &out_stream_tx,
+                                                Status::invalid_argument(format!(
+                                                    "invalid digest({raw_digest}): {err}"
+                                                )),
+                                            )
+                                            .await;
+                                            return;
+                                        }
+                                    };
+
+                                    if let Err(err) =
+                                        verify_file_digest(digest, Path::new(output_path.as_str()))
+                                    {
+                                        error!("verify file digest: {}", err);
+                                        handle_error(&out_stream_tx, err).await;
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(Error::BackendError(err)) => {
+                        // Collect download task failure metrics.
+                        collect_download_task_failure_metrics(
+                            download_clone.r#type,
+                            download_clone.tag.clone().unwrap_or_default().as_str(),
+                            download_clone
+                                .application
+                                .clone()
+                                .unwrap_or_default()
+                                .as_str(),
+                            download_clone.priority.to_string().as_str(),
+                        );
+
+                        task_manager_clone
+                            .download_failed(task_clone.id.as_str())
+                            .await
+                            .unwrap_or_else(|err| error!("download task failed: {}", err));
+
+                        match serde_json::to_vec::<Backend>(&Backend {
+                            message: err.message.clone(),
+                            header: headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
+                            status_code: err.status_code.map(|code| code.as_u16() as i32),
+                        }) {
+                            Ok(json) => {
+                                handle_backend_error(
+                                    &out_stream_tx,
+                                    Status::with_details(
+                                        Code::Internal,
+                                        err.to_string(),
+                                        json.into(),
+                                    ),
+                                )
+                                .await;
+                            }
+                            Err(err) => {
+                                error!("serialize error: {}", err);
+                                handle_error(&out_stream_tx, err).await;
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        error!("download failed: {}", err);
+
+                        // Collect download task failure metrics.
+                        collect_download_task_failure_metrics(
+                            download_clone.r#type,
+                            download_clone.tag.clone().unwrap_or_default().as_str(),
+                            download_clone
+                                .application
+                                .clone()
+                                .unwrap_or_default()
+                                .as_str(),
+                            download_clone.priority.to_string().as_str(),
+                        );
+
+                        // Download task failed.
+                        task_manager_clone
+                            .download_failed(task_clone.id.as_str())
+                            .await
+                            .unwrap_or_else(|err| error!("download task failed: {}", err));
+
+                        handle_error(&out_stream_tx, err).await;
+                    }
+                }
+
+                drop(out_stream_tx);
+            }
+            .in_current_span(),
+        );
+
+        // If prefetch flag is true, prefetch the full task.
+        if download.prefetch {
+            match self.prefetch_task_started(task_id.as_str()).await {
+                Ok(_) => {
+                    info!("prefetch task started");
+                    let socket_path = self.config.download.server.socket_path.clone();
+                    let task_manager_clone = self.clone();
+                    tokio::spawn(
+                        async move {
+                            if let Err(err) = prefetch_task(
+                                socket_path.clone(),
+                                Request::new(DownloadTaskRequest {
+                                    download: Some(download.clone()),
+                                }),
+                            )
+                            .await
+                            {
+                                match task_manager_clone
+                                    .prefetch_task_failed(task_id.clone().as_str())
+                                    .await
+                                {
+                                    Ok(_) => {
+                                        error!("prefetch task failed: {}", err);
+                                    }
+                                    Err(err) => {
+                                        error!(
+                                            "prefetch succeeded, but failed to update metadata: {}",
+                                            err
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        .in_current_span(),
+                    );
+                }
+                // If the task is already prefetched, ignore the error.
+                Err(Error::InvalidState(_)) => info!("task is already prefetched"),
+                Err(err) => {
+                    error!("prefetch task started: {}", err);
+                }
+            }
+        }
+
+        Ok(out_stream_rx)
     }
 
     /// get gets the metadata of the task.
