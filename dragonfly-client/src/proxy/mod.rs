@@ -47,12 +47,14 @@ use hyper_util::{
     rt::{tokio::TokioIo, TokioExecutor},
 };
 use lazy_static::lazy_static;
+use leaky_bucket::RateLimiter;
 use rcgen::Certificate;
 use rustls::{RootCertStore, ServerConfig};
 use rustls_pki_types::CertificateDer;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
@@ -89,6 +91,9 @@ pub struct Proxy {
     /// CA certificate of the proxy server to sign the self-signed certificate.
     server_ca_cert: Arc<Option<Certificate>>,
 
+    /// Request rate limiter of the proxy server.
+    request_rate_limiter: Arc<RateLimiter>,
+
     /// Used to shut down the proxy server.
     shutdown: shutdown::Shutdown,
 
@@ -111,6 +116,15 @@ impl Proxy {
             addr: SocketAddr::new(config.proxy.server.ip.unwrap(), config.proxy.server.port),
             registry_cert: Arc::new(None),
             server_ca_cert: Arc::new(None),
+            request_rate_limiter: Arc::new(
+                RateLimiter::builder()
+                    .initial(config.proxy.server.request_rate_limit as usize)
+                    .refill(config.proxy.server.request_rate_limit as usize)
+                    .max(config.proxy.server.request_rate_limit as usize)
+                    .interval(Duration::from_secs(1))
+                    .fair(false)
+                    .build(),
+            ),
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         };
@@ -172,6 +186,7 @@ impl Proxy {
             dfdaemon_download_client: DfdaemonDownloadClient,
             registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
             server_ca_cert: Arc<Option<Certificate>>,
+            request_rate_limiter: Arc<RateLimiter>,
         }
 
         let context = Context {
@@ -180,6 +195,7 @@ impl Proxy {
             dfdaemon_download_client,
             registry_cert: self.registry_cert.clone(),
             server_ca_cert: self.server_ca_cert.clone(),
+            request_rate_limiter: self.request_rate_limiter.clone(),
         };
 
         let listener = TcpListener::bind(self.addr).await?;
@@ -208,7 +224,7 @@ impl Proxy {
                                 service_fn(move |request|{
                                     let context = context.clone();
                                     async move {
-                                        handler(context.config, context.task, request, context.dfdaemon_download_client, context.registry_cert, context.server_ca_cert, remote_address.ip()).await
+                                        handler(context.config, context.task, request, context.dfdaemon_download_client, context.registry_cert, context.server_ca_cert, context.request_rate_limiter, remote_address.ip()).await
                                     }
                                 } ),
                                 )
@@ -231,6 +247,7 @@ impl Proxy {
 }
 
 /// handler handles the request from the client.
+#[allow(clippy::too_many_arguments)]
 #[instrument(skip_all, fields(url, method, remote_ip))]
 pub async fn handler(
     config: Arc<Config>,
@@ -239,6 +256,7 @@ pub async fn handler(
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
+    request_rate_limiter: Arc<RateLimiter>,
     remote_ip: std::net::IpAddr,
 ) -> ClientResult<Response> {
     // Span record the url and method.
@@ -249,6 +267,17 @@ pub async fn handler(
     // Record the proxy request started metrics. The metrics will be recorded
     // when the request is kept alive.
     collect_proxy_request_started_metrics();
+
+    // If the request rate limit is exceeded, return a 429 Too Many Requests
+    // response to the client.
+    if !request_rate_limiter.try_acquire(1) {
+        error!("proxy request rate limit exceeded");
+        return Ok(make_error_response(
+            header::ErrorType::Proxy,
+            http::StatusCode::TOO_MANY_REQUESTS,
+            None,
+        ));
+    }
 
     // If host is not set, it is the mirror request.
     if request.uri().host().is_none() {
@@ -262,6 +291,7 @@ pub async fn handler(
                 dfdaemon_download_client,
                 registry_cert,
                 server_ca_cert,
+                request_rate_limiter,
             )
             .await;
         }
@@ -287,6 +317,7 @@ pub async fn handler(
             dfdaemon_download_client,
             registry_cert,
             server_ca_cert,
+            request_rate_limiter,
         )
         .await;
     }
@@ -325,6 +356,7 @@ pub async fn registry_mirror_http_handler(
 }
 
 /// registry_mirror_https_handler handles the https request for the registry mirror by client.
+#[allow(clippy::too_many_arguments)]
 #[instrument(skip_all)]
 pub async fn registry_mirror_https_handler(
     config: Arc<Config>,
@@ -334,6 +366,7 @@ pub async fn registry_mirror_https_handler(
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
+    request_rate_limiter: Arc<RateLimiter>,
 ) -> ClientResult<Response> {
     let request = make_registry_mirror_request(config.clone(), request)?;
     return https_handler(
@@ -344,6 +377,7 @@ pub async fn registry_mirror_https_handler(
         dfdaemon_download_client,
         registry_cert,
         server_ca_cert,
+        request_rate_limiter,
     )
     .await;
 }
@@ -456,6 +490,7 @@ pub async fn http_handler(
 }
 
 /// https_handler handles the https request by client.
+#[allow(clippy::too_many_arguments)]
 #[instrument(skip_all)]
 pub async fn https_handler(
     config: Arc<Config>,
@@ -465,6 +500,7 @@ pub async fn https_handler(
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
+    request_rate_limiter: Arc<RateLimiter>,
 ) -> ClientResult<Response> {
     info!("handle HTTPS request: {:?}", request);
 
@@ -485,6 +521,7 @@ pub async fn https_handler(
                         dfdaemon_download_client,
                         registry_cert,
                         server_ca_cert,
+                        request_rate_limiter,
                     )
                     .await
                     {
@@ -520,6 +557,7 @@ async fn upgraded_tunnel(
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
+    request_rate_limiter: Arc<RateLimiter>,
 ) -> ClientResult<()> {
     // Generate the self-signed certificate by the given host. If the ca_cert
     // is not set, use the self-signed certificate. Otherwise, use the CA
@@ -568,6 +606,7 @@ async fn upgraded_tunnel(
                     remote_ip,
                     dfdaemon_download_client.clone(),
                     registry_cert.clone(),
+                    request_rate_limiter.clone(),
                 )
             }),
         )
@@ -592,10 +631,22 @@ pub async fn upgraded_handler(
     remote_ip: std::net::IpAddr,
     dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
+    request_rate_limiter: Arc<RateLimiter>,
 ) -> ClientResult<Response> {
     // Span record the url and method.
     Span::current().record("url", request.uri().to_string().as_str());
     Span::current().record("method", request.method().as_str());
+
+    // If the request rate limit is exceeded, return a 429 Too Many Requests
+    // response to the client.
+    if !request_rate_limiter.try_acquire(1) {
+        error!("proxy request rate limit exceeded");
+        return Ok(make_error_response(
+            header::ErrorType::Proxy,
+            http::StatusCode::TOO_MANY_REQUESTS,
+            None,
+        ));
+    }
 
     // Authenticate the request with the basic auth.
     if let Some(basic_auth) = config.proxy.server.basic_auth.as_ref() {
