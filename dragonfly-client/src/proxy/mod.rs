@@ -14,25 +14,30 @@
  * limitations under the License.
  */
 
-use crate::grpc::{dfdaemon_download::DfdaemonDownloadClient, REQUEST_TIMEOUT};
+use crate::grpc::{DOWNLOAD_STREAM_BUFFER_SIZE, REQUEST_TIMEOUT};
 use crate::resource::{piece::MIN_PIECE_LENGTH, task::Task};
 use bytes::Bytes;
 use dragonfly_api::common::v2::{Download, TaskType};
 use dragonfly_api::dfdaemon::v2::{
-    download_task_response, DownloadTaskRequest, DownloadTaskStartedResponse,
+    download_task_response, DownloadTaskRequest, DownloadTaskResponse, DownloadTaskStartedResponse,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client_config::dfdaemon::{Config, Rule};
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_metric::{
-    collect_proxy_request_failure_metrics, collect_proxy_request_started_metrics,
-    collect_proxy_request_via_dfdaemon_metrics,
+    collect_download_task_failure_metrics, collect_download_task_finished_metrics,
+    collect_download_task_started_metrics, collect_prefetch_task_failure_metrics,
+    collect_prefetch_task_started_metrics, collect_proxy_request_failure_metrics,
+    collect_proxy_request_started_metrics, collect_proxy_request_via_dfdaemon_metrics,
 };
 use dragonfly_client_util::{
-    http::{hashmap_to_headermap, headermap_to_hashmap},
+    digest::{is_blob_url, verify_file_digest, Digest},
+    http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
+    id_generator::TaskIDParameter,
     shutdown,
     tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
+    types::redacted::RedactedDownload,
 };
 use futures::TryStreamExt;
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, StreamBody};
@@ -52,13 +57,17 @@ use rustls::{RootCertStore, ServerConfig};
 use rustls_pki_types::CertificateDer;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::io::{AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
+use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, Barrier};
 use tokio_rustls::TlsAcceptor;
 use tokio_util::io::ReaderStream;
+use tonic::Status;
 use tracing::{debug, error, info, instrument, Instrument, Span};
 
 pub mod header;
@@ -161,15 +170,10 @@ impl Proxy {
             }
         }
 
-        let dfdaemon_download_client =
-            DfdaemonDownloadClient::new_unix(self.config.download.server.socket_path.clone())
-                .await?;
-
         #[derive(Clone)]
         struct Context {
             config: Arc<Config>,
             task: Arc<Task>,
-            dfdaemon_download_client: DfdaemonDownloadClient,
             registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
             server_ca_cert: Arc<Option<Certificate>>,
         }
@@ -177,7 +181,6 @@ impl Proxy {
         let context = Context {
             config: self.config.clone(),
             task: self.task.clone(),
-            dfdaemon_download_client,
             registry_cert: self.registry_cert.clone(),
             server_ca_cert: self.server_ca_cert.clone(),
         };
@@ -208,7 +211,7 @@ impl Proxy {
                                 service_fn(move |request|{
                                     let context = context.clone();
                                     async move {
-                                        handler(context.config, context.task, request, context.dfdaemon_download_client, context.registry_cert, context.server_ca_cert, remote_address.ip()).await
+                                        handler(context.config, context.task, request, context.registry_cert, context.server_ca_cert, remote_address.ip()).await
                                     }
                                 } ),
                                 )
@@ -236,7 +239,6 @@ pub async fn handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
-    dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
     remote_ip: std::net::IpAddr,
@@ -259,22 +261,13 @@ pub async fn handler(
                 task,
                 request,
                 remote_ip,
-                dfdaemon_download_client,
                 registry_cert,
                 server_ca_cert,
             )
             .await;
         }
 
-        return registry_mirror_http_handler(
-            config,
-            task,
-            request,
-            remote_ip,
-            dfdaemon_download_client,
-            registry_cert,
-        )
-        .await;
+        return registry_mirror_http_handler(config, task, request, remote_ip, registry_cert).await;
     }
 
     // Handle CONNECT request.
@@ -284,22 +277,13 @@ pub async fn handler(
             task,
             request,
             remote_ip,
-            dfdaemon_download_client,
             registry_cert,
             server_ca_cert,
         )
         .await;
     }
 
-    http_handler(
-        config,
-        task,
-        request,
-        remote_ip,
-        dfdaemon_download_client,
-        registry_cert,
-    )
-    .await
+    http_handler(config, task, request, remote_ip, registry_cert).await
 }
 
 /// registry_mirror_http_handler handles the http request for the registry mirror by client.
@@ -309,19 +293,10 @@ pub async fn registry_mirror_http_handler(
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
     let request = make_registry_mirror_request(config.clone(), request)?;
-    return http_handler(
-        config,
-        task,
-        request,
-        remote_ip,
-        dfdaemon_download_client,
-        registry_cert,
-    )
-    .await;
+    return http_handler(config, task, request, remote_ip, registry_cert).await;
 }
 
 /// registry_mirror_https_handler handles the https request for the registry mirror by client.
@@ -331,7 +306,6 @@ pub async fn registry_mirror_https_handler(
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<Response> {
@@ -341,7 +315,6 @@ pub async fn registry_mirror_https_handler(
         task,
         request,
         remote_ip,
-        dfdaemon_download_client,
         registry_cert,
         server_ca_cert,
     )
@@ -355,7 +328,6 @@ pub async fn http_handler(
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
     // Authenticate the request with the basic auth.
@@ -395,15 +367,7 @@ pub async fn http_handler(
                 request
             );
 
-            return proxy_via_dfdaemon(
-                config,
-                task,
-                &rule,
-                request,
-                remote_ip,
-                dfdaemon_download_client,
-            )
-            .await;
+            return proxy_via_dfdaemon(config, task, &rule, request, remote_ip).await;
         }
 
         debug!(
@@ -421,15 +385,7 @@ pub async fn http_handler(
         );
 
         if request.method() == Method::GET {
-            return proxy_via_dfdaemon(
-                config,
-                task,
-                &Rule::default(),
-                request,
-                remote_ip,
-                dfdaemon_download_client,
-            )
-            .await;
+            return proxy_via_dfdaemon(config, task, &Rule::default(), request, remote_ip).await;
         }
 
         debug!(
@@ -462,7 +418,6 @@ pub async fn https_handler(
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<Response> {
@@ -482,7 +437,6 @@ pub async fn https_handler(
                         host,
                         port,
                         remote_ip,
-                        dfdaemon_download_client,
                         registry_cert,
                         server_ca_cert,
                     )
@@ -517,7 +471,6 @@ async fn upgraded_tunnel(
     host: String,
     port: u16,
     remote_ip: std::net::IpAddr,
-    dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
 ) -> ClientResult<()> {
@@ -566,7 +519,6 @@ async fn upgraded_tunnel(
                     port,
                     request,
                     remote_ip,
-                    dfdaemon_download_client.clone(),
                     registry_cert.clone(),
                 )
             }),
@@ -590,7 +542,6 @@ pub async fn upgraded_handler(
     port: u16,
     mut request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
 ) -> ClientResult<Response> {
     // Span record the url and method.
@@ -651,15 +602,7 @@ pub async fn upgraded_handler(
                 request,
             );
 
-            return proxy_via_dfdaemon(
-                config,
-                task,
-                &rule,
-                request,
-                remote_ip,
-                dfdaemon_download_client,
-            )
-            .await;
+            return proxy_via_dfdaemon(config, task, &rule, request, remote_ip).await;
         }
 
         debug!(
@@ -677,15 +620,7 @@ pub async fn upgraded_handler(
                 request,
             );
 
-            return proxy_via_dfdaemon(
-                config,
-                task,
-                &Rule::default(),
-                request,
-                remote_ip,
-                dfdaemon_download_client,
-            )
-            .await;
+            return proxy_via_dfdaemon(config, task, &Rule::default(), request, remote_ip).await;
         }
 
         debug!(
@@ -719,7 +654,6 @@ async fn proxy_via_dfdaemon(
     rule: &Rule,
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    dfdaemon_download_client: DfdaemonDownloadClient,
 ) -> ClientResult<Response> {
     // Collect the metrics for the proxy request via dfdaemon.
     collect_proxy_request_via_dfdaemon_metrics();
@@ -738,51 +672,20 @@ async fn proxy_via_dfdaemon(
             }
         };
 
-    // Download the task by the dfdaemon download client.
-    let response = match dfdaemon_download_client
-        .download_task(download_task_request)
-        .await
-    {
-        Ok(response) => response,
-        Err(err) => match err {
-            ClientError::TonicStatus(err) if err.code() == tonic::Code::ResourceExhausted => {
+    // Download the task by the local task manager.
+    let mut out_stream =
+        match download_task(config.clone(), task.clone(), download_task_request).await {
+            Ok(out_stream) => out_stream,
+            Err(ClientError::BackendError(err)) => {
+                error!("download task failed: {:?}", err);
                 return Ok(make_error_response(
-                    header::ErrorType::Proxy,
-                    http::StatusCode::TOO_MANY_REQUESTS,
-                    None,
+                    header::ErrorType::Backend,
+                    err.status_code
+                        .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
+                    err.header.clone(),
                 ));
             }
-            ClientError::TonicStatus(err) if err.code() == tonic::Code::PermissionDenied => {
-                return Ok(make_error_response(
-                    header::ErrorType::Proxy,
-                    http::StatusCode::FORBIDDEN,
-                    None,
-                ));
-            }
-            ClientError::TonicStatus(err) => {
-                match serde_json::from_slice::<Backend>(err.details()) {
-                    Ok(backend) => {
-                        error!("download task failed: {:?}", backend);
-                        return Ok(make_error_response(
-                            header::ErrorType::Backend,
-                            http::StatusCode::from_u16(
-                                backend.status_code.unwrap_or_default() as u16
-                            )
-                            .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
-                            Some(hashmap_to_headermap(&backend.header)?),
-                        ));
-                    }
-                    Err(_) => {
-                        error!("download task failed: {}", err);
-                        return Ok(make_error_response(
-                            header::ErrorType::Dfdaemon,
-                            http::StatusCode::INTERNAL_SERVER_ERROR,
-                            None,
-                        ));
-                    }
-                };
-            }
-            _ => {
+            Err(err) => {
                 error!("download task failed: {}", err);
                 return Ok(make_error_response(
                     header::ErrorType::Dfdaemon,
@@ -790,12 +693,10 @@ async fn proxy_via_dfdaemon(
                     None,
                 ));
             }
-        },
-    };
+        };
 
-    // Handle the response from the download grpc server.
-    let mut out_stream = response.into_inner();
-    let Ok(Some(message)) = out_stream.message().await else {
+    // Handle the response from the download task.
+    let Some(Ok(message)) = out_stream.recv().await else {
         error!("response message failed");
         return Ok(make_error_response(
             header::ErrorType::Dfdaemon,
@@ -884,8 +785,8 @@ async fn proxy_via_dfdaemon(
             // not in order, store it in the hashmap, and write it to the pipe
             // when the previous piece data is written.
             loop {
-                match out_stream.message().await {
-                    Ok(Some(message)) => {
+                match out_stream.recv().await {
+                    Some(Ok(message)) => {
                         if let Some(
                             download_task_response::Response::DownloadPieceFinishedResponse(
                                 download_task_response,
@@ -966,7 +867,7 @@ async fn proxy_via_dfdaemon(
                             return;
                         }
                     }
-                    Ok(None) => {
+                    None => {
                         info!("message is none");
                         if let Err(err) = writer.flush().await {
                             error!("writer flush error: {}", err);
@@ -974,7 +875,7 @@ async fn proxy_via_dfdaemon(
 
                         return;
                     }
-                    Err(err) => {
+                    Some(Err(err)) => {
                         if initialized {
                             error!("stream error: {}", err);
                             if let Err(err) = writer.flush().await {
@@ -1038,6 +939,524 @@ async fn proxy_via_dfdaemon(
             None,
         )),
     }
+}
+
+/// DownloadTaskStream is the stream of the download task responses.
+type DownloadTaskStream = mpsc::Receiver<Result<DownloadTaskResponse, Status>>;
+
+/// download_task downloads the task by the task manager directly. It is similar to the
+/// download_task of the dfdaemon download gRPC server, but removes the gRPC-related
+/// content to avoid the gRPC overhead in the proxy.
+///
+/// It returns a boxed future to avoid the infinitely sized future caused by the
+/// recursion between download_task and prefetch_task.
+fn download_task(
+    config: Arc<Config>,
+    task_manager: Arc<Task>,
+    request: DownloadTaskRequest,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ClientResult<DownloadTaskStream>> + Send>> {
+    Box::pin(download_task_inner(config, task_manager, request))
+}
+
+/// download_task_inner implements the download task logic for download_task.
+#[instrument(
+    skip_all,
+    fields(host_id, task_id, peer_id, url, remote_ip, content_length)
+)]
+async fn download_task_inner(
+    config: Arc<Config>,
+    task_manager: Arc<Task>,
+    request: DownloadTaskRequest,
+) -> ClientResult<DownloadTaskStream> {
+    // Record the start time.
+    let start_time = Instant::now();
+
+    // Check whether the download is empty.
+    let mut download = request.download.ok_or_else(|| {
+        error!("missing download");
+        ClientError::InvalidParameter
+    })?;
+
+    // If concurrent_piece_count is not set in the request, use the default value in the config.
+    download.concurrent_piece_count = Some(config.download.concurrent_piece_count);
+
+    // Generate the task id.
+    let task_id = task_manager
+        .id_generator
+        .task_id(
+            if let Some(content) = download.content_for_calculating_task_id.clone() {
+                TaskIDParameter::Content(content)
+            } else if download.enable_task_id_based_blob_digest && is_blob_url(&download.url) {
+                TaskIDParameter::BlobDigestBased(download.url.clone())
+            } else {
+                let revision = download
+                    .hugging_face
+                    .as_ref()
+                    .map(|hf| hf.revision.clone())
+                    .or_else(|| download.model_scope.as_ref().map(|ms| ms.revision.clone()));
+
+                TaskIDParameter::URLBased {
+                    url: download.url.clone(),
+                    piece_length: download.piece_length,
+                    tag: download.tag.clone(),
+                    application: download.application.clone(),
+                    filtered_query_params: download.filtered_query_params.clone(),
+                    revision,
+                }
+            },
+        )
+        .inspect_err(|err| {
+            error!("generate task id: {}", err);
+        })?;
+
+    // Generate the host id.
+    let host_id = task_manager.id_generator.host_id();
+
+    // Generate the peer id.
+    let peer_id = task_manager.id_generator.peer_id();
+
+    // Span record the host id, task id and peer id.
+    Span::current().record("host_id", host_id.as_str());
+    Span::current().record("task_id", task_id.as_str());
+    Span::current().record("peer_id", peer_id.as_str());
+    Span::current().record("url", download.url.clone());
+    Span::current().record(
+        "remote_ip",
+        download.remote_ip.clone().unwrap_or_default().as_str(),
+    );
+
+    // Download task started.
+    info!("download task started: {:?}", RedactedDownload(&download));
+    let task = match task_manager
+        .download_started(task_id.as_str(), download.clone())
+        .await
+    {
+        Err(err @ ClientError::BackendError(_)) => {
+            error!("download started failed by error: {}", err);
+            task_manager
+                .download_failed(task_id.as_str())
+                .await
+                .unwrap_or_else(|err| error!("download task failed: {}", err));
+
+            return Err(err);
+        }
+        Err(err) => {
+            error!("download started failed: {}", err);
+            return Err(err);
+        }
+        Ok(task) => {
+            // Collect download task started metrics.
+            collect_download_task_started_metrics(
+                download.r#type,
+                download.tag.clone().unwrap_or_default().as_str(),
+                download.application.clone().unwrap_or_default().as_str(),
+                download.priority.to_string().as_str(),
+            );
+
+            task
+        }
+    };
+    Span::current().record("content_length", task.content_length().unwrap_or_default());
+
+    // Update the actual content length, actual piece length and actual
+    // piece count of the download.
+    download.actual_content_length = task.content_length();
+    download.actual_piece_length = task.piece_length();
+    download.actual_piece_count = task.piece_count();
+
+    // Download's range priority is higher than the request header's range.
+    // If download protocol is http, use the range of the request header.
+    // If download protocol is not http, use the range of the download.
+    if download.range.is_none() {
+        // Convert the header.
+        let request_header = match hashmap_to_headermap(&download.request_header) {
+            Ok(header) => header,
+            Err(err) => {
+                // Download task failed.
+                task_manager
+                    .download_failed(task_id.as_str())
+                    .await
+                    .unwrap_or_else(|err| error!("download task failed: {}", err));
+
+                // Collect download task failure metrics.
+                collect_download_task_failure_metrics(
+                    download.r#type,
+                    download.tag.clone().unwrap_or_default().as_str(),
+                    download.application.clone().unwrap_or_default().as_str(),
+                    download.priority.to_string().as_str(),
+                );
+
+                error!("convert header: {}", err);
+                return Err(err);
+            }
+        };
+
+        download.range = match get_range(&request_header, task.content_length().unwrap_or_default())
+        {
+            Ok(range) => range,
+            Err(err) => {
+                // Download task failed.
+                task_manager
+                    .download_failed(task_id.as_str())
+                    .await
+                    .unwrap_or_else(|err| error!("download task failed: {}", err));
+
+                // Collect download task failure metrics.
+                collect_download_task_failure_metrics(
+                    download.r#type,
+                    download.tag.clone().unwrap_or_default().as_str(),
+                    download.application.clone().unwrap_or_default().as_str(),
+                    download.priority.to_string().as_str(),
+                );
+
+                error!("get range failed: {}", err);
+                return Err(err);
+            }
+        };
+    }
+
+    // Initialize stream channel.
+    let download_clone = download.clone();
+    let task_manager_clone = task_manager.clone();
+    let task_clone = task.clone();
+    let (out_stream_tx, out_stream_rx) = mpsc::channel(DOWNLOAD_STREAM_BUFFER_SIZE);
+
+    // Define the error handler to send the error to the stream.
+    async fn handle_error(
+        out_stream_tx: &Sender<Result<DownloadTaskResponse, Status>>,
+        err: impl std::error::Error,
+    ) {
+        out_stream_tx
+            .send_timeout(Err(Status::internal(err.to_string())), REQUEST_TIMEOUT)
+            .await
+            .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
+    }
+
+    // Define the backend error handler to send the error to the stream.
+    async fn handle_backend_error(
+        out_stream_tx: &Sender<Result<DownloadTaskResponse, Status>>,
+        err: Status,
+    ) {
+        out_stream_tx
+            .send_timeout(Err(err), REQUEST_TIMEOUT)
+            .await
+            .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
+    }
+
+    tokio::spawn(
+        async move {
+            match task_manager_clone
+                .download(
+                    &task_clone,
+                    host_id.as_str(),
+                    peer_id.as_str(),
+                    download_clone.clone(),
+                    out_stream_tx.clone(),
+                )
+                .await
+            {
+                Ok(_) => {
+                    // Collect download task finished metrics.
+                    collect_download_task_finished_metrics(
+                        download_clone.r#type,
+                        download_clone.tag.clone().unwrap_or_default().as_str(),
+                        download_clone
+                            .application
+                            .clone()
+                            .unwrap_or_default()
+                            .as_str(),
+                        download_clone.priority.to_string().as_str(),
+                        task_clone.content_length().unwrap_or_default(),
+                        download_clone.range,
+                        start_time.elapsed(),
+                    );
+
+                    // Download task succeeded.
+                    info!("download task succeeded");
+                    if let Err(err) = task_manager_clone.download_finished(task_clone.id.as_str()) {
+                        error!("download task finished: {}", err);
+                        handle_error(&out_stream_tx, err).await;
+                        return;
+                    }
+
+                    if download_clone.range.is_none() {
+                        if let Some(output_path) = &download_clone.output_path {
+                            if !download_clone.force_hard_link {
+                                let output_path = Path::new(output_path.as_str());
+                                if output_path.exists() {
+                                    match task_manager_clone
+                                        .is_same_dev_inode(task_clone.id.as_str(), output_path)
+                                        .await
+                                    {
+                                        Ok(true) => {}
+                                        Ok(false) => {
+                                            if download_clone.overwrite {
+                                                if let Err(err) = task_manager_clone
+                                                    .copy_task(task_clone.id.as_str(), output_path)
+                                                    .await
+                                                {
+                                                    error!("copy task: {}", err);
+                                                    handle_error(&out_stream_tx, err).await;
+                                                    return;
+                                                };
+
+                                                return;
+                                            }
+
+                                            error!(
+                                                "output path {} is already exists",
+                                                output_path.display()
+                                            );
+
+                                            handle_error(
+                                                &out_stream_tx,
+                                                Status::internal(format!(
+                                                    "output path {} is already exists",
+                                                    output_path.display()
+                                                )),
+                                            )
+                                            .await;
+                                            return;
+                                        }
+                                        Err(err) => {
+                                            error!("check output path: {}", err);
+                                            handle_error(&out_stream_tx, err).await;
+                                            return;
+                                        }
+                                    }
+                                } else if let Err(err) = task_manager_clone
+                                    .copy_task(task_clone.id.as_str(), output_path)
+                                    .await
+                                {
+                                    error!("copy task: {}", err);
+                                    handle_error(&out_stream_tx, err).await;
+                                    return;
+                                }
+                            }
+
+                            // Verify the file digest if it is provided.
+                            if let Some(raw_digest) = &download_clone.digest {
+                                let digest = match raw_digest.parse::<Digest>() {
+                                    Ok(digest) => digest,
+                                    Err(err) => {
+                                        error!("parse digest: {}", err);
+                                        handle_error(
+                                            &out_stream_tx,
+                                            Status::invalid_argument(format!(
+                                                "invalid digest({raw_digest}): {err}"
+                                            )),
+                                        )
+                                        .await;
+                                        return;
+                                    }
+                                };
+
+                                if let Err(err) =
+                                    verify_file_digest(digest, Path::new(output_path.as_str()))
+                                {
+                                    error!("verify file digest: {}", err);
+                                    handle_error(&out_stream_tx, err).await;
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(ClientError::BackendError(err)) => {
+                    // Collect download task failure metrics.
+                    collect_download_task_failure_metrics(
+                        download_clone.r#type,
+                        download_clone.tag.clone().unwrap_or_default().as_str(),
+                        download_clone
+                            .application
+                            .clone()
+                            .unwrap_or_default()
+                            .as_str(),
+                        download_clone.priority.to_string().as_str(),
+                    );
+
+                    task_manager_clone
+                        .download_failed(task_clone.id.as_str())
+                        .await
+                        .unwrap_or_else(|err| error!("download task failed: {}", err));
+
+                    match serde_json::to_vec::<Backend>(&Backend {
+                        message: err.message.clone(),
+                        header: headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
+                        status_code: err.status_code.map(|code| code.as_u16() as i32),
+                    }) {
+                        Ok(json) => {
+                            handle_backend_error(
+                                &out_stream_tx,
+                                Status::with_details(
+                                    tonic::Code::Internal,
+                                    err.to_string(),
+                                    json.into(),
+                                ),
+                            )
+                            .await;
+                        }
+                        Err(err) => {
+                            error!("serialize error: {}", err);
+                            handle_error(&out_stream_tx, err).await;
+                        }
+                    }
+                }
+                Err(err) => {
+                    error!("download failed: {}", err);
+
+                    // Collect download task failure metrics.
+                    collect_download_task_failure_metrics(
+                        download_clone.r#type,
+                        download_clone.tag.clone().unwrap_or_default().as_str(),
+                        download_clone
+                            .application
+                            .clone()
+                            .unwrap_or_default()
+                            .as_str(),
+                        download_clone.priority.to_string().as_str(),
+                    );
+
+                    // Download task failed.
+                    task_manager_clone
+                        .download_failed(task_clone.id.as_str())
+                        .await
+                        .unwrap_or_else(|err| error!("download task failed: {}", err));
+
+                    handle_error(&out_stream_tx, err).await;
+                }
+            }
+
+            drop(out_stream_tx);
+        }
+        .in_current_span(),
+    );
+
+    // If prefetch flag is true, prefetch the full task.
+    if download.prefetch {
+        match task_manager.prefetch_task_started(task_id.as_str()).await {
+            Ok(_) => {
+                info!("prefetch task started");
+                let config_clone = config.clone();
+                let task_manager_clone = task_manager.clone();
+                tokio::spawn(
+                    async move {
+                        if let Err(err) = prefetch_task(
+                            config_clone,
+                            task_manager_clone.clone(),
+                            DownloadTaskRequest {
+                                download: Some(download.clone()),
+                            },
+                        )
+                        .await
+                        {
+                            match task_manager_clone
+                                .prefetch_task_failed(task_id.clone().as_str())
+                                .await
+                            {
+                                Ok(_) => {
+                                    error!("prefetch task failed: {}", err);
+                                }
+                                Err(err) => {
+                                    error!(
+                                        "prefetch succeeded, but failed to update metadata: {}",
+                                        err
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    .in_current_span(),
+                );
+            }
+            // If the task is already prefetched, ignore the error.
+            Err(ClientError::InvalidState(_)) => info!("task is already prefetched"),
+            Err(err) => {
+                error!("prefetch task started: {}", err);
+            }
+        }
+    }
+
+    Ok(out_stream_rx)
+}
+
+/// prefetch_task prefetches the full task by the task manager directly. It is similar to the
+/// prefetch_task of the dfdaemon gRPC module, but downloads the task by the task manager
+/// instead of the dfdaemon download gRPC client.
+#[instrument(skip_all)]
+async fn prefetch_task(
+    config: Arc<Config>,
+    task_manager: Arc<Task>,
+    mut request: DownloadTaskRequest,
+) -> ClientResult<()> {
+    // Make the prefetch request.
+    let Some(download) = request.download.as_mut() else {
+        error!("request download is missing");
+        return Err(ClientError::InvalidParameter);
+    };
+
+    // Remove the range flag for download full task.
+    download.range = None;
+
+    // Remove the prefetch flag for prevent the infinite loop.
+    download.prefetch = false;
+
+    // Mark the is_prefetch flag as true to represents it is a prefetch request.
+    download.is_prefetch = true;
+
+    // Remove the range header for download full task.
+    download
+        .request_header
+        .remove(reqwest::header::RANGE.as_str());
+
+    // Get the fields from the download task.
+    let task_type = download.r#type;
+    let tag = download.tag.clone();
+    let application = download.application.clone();
+    let priority = download.priority;
+
+    // Download the task by the task manager.
+    let mut out_stream_rx = download_task(config, task_manager, request)
+        .await
+        .inspect_err(|err| {
+            error!("prefetch task failed: {}", err);
+        })?;
+
+    // Collect the prefetch task started metrics.
+    collect_prefetch_task_started_metrics(
+        task_type,
+        tag.clone().unwrap_or_default().as_str(),
+        application.clone().unwrap_or_default().as_str(),
+        priority.to_string().as_str(),
+    );
+
+    // Spawn to handle the download task.
+    tokio::spawn(
+        async move {
+            while let Some(message) = out_stream_rx.recv().await {
+                match message {
+                    Ok(_) => debug!("prefetch piece finished"),
+                    Err(err) => {
+                        // Collect the prefetch task failure metrics.
+                        collect_prefetch_task_failure_metrics(
+                            task_type,
+                            tag.clone().unwrap_or_default().as_str(),
+                            application.clone().unwrap_or_default().as_str(),
+                            priority.to_string().as_str(),
+                        );
+
+                        error!("prefetch piece failed: {}", err);
+                        return;
+                    }
+                }
+            }
+
+            info!("prefetch task finished");
+        }
+        .in_current_span(),
+    );
+
+    Ok(())
 }
 
 /// proxy_via_http proxies the HTTP request directly to the remote server.
