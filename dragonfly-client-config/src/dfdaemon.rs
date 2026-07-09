@@ -210,6 +210,12 @@ fn default_backend_enable_hickory_dns() -> bool {
     true
 }
 
+/// default_backend_enable_range_compliance_check is the default value for range compliance check, default is false.
+#[inline]
+fn default_backend_enable_range_compliance_check() -> bool {
+    false
+}
+
 /// default_download_max_schedule_count is the default max count of schedule.
 #[inline]
 fn default_download_max_schedule_count() -> u32 {
@@ -1583,6 +1589,12 @@ pub struct Backend {
         rename = "enableHickoryDNS"
     )]
     pub enable_hickory_dns: bool,
+
+    /// Enable range compliance check controls whether to validate that the origin
+    /// server honors HTTP Range requests for non-zero-offset pieces. When enabled,
+    /// responses that ignore Range are rejected to prevent silent data corruption.
+    #[serde(default = "default_backend_enable_range_compliance_check")]
+    pub enable_range_compliance_check: bool,
 }
 
 /// Backend implements Default.
@@ -1597,6 +1609,7 @@ impl Default for Backend {
             put_chunk_size: default_backend_put_chunk_size(),
             put_timeout: default_backend_put_timeout(),
             enable_hickory_dns: default_backend_enable_hickory_dns(),
+            enable_range_compliance_check: default_backend_enable_range_compliance_check(),
         }
     }
 }
