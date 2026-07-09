@@ -38,17 +38,17 @@ use vortex_protocol::{
     Header, Vortex, HEADER_SIZE,
 };
 
-/// QUICClient is a QUIC-based client for quic storage service.
+/// A QUIC-based client for quic storage service.
 #[derive(Clone)]
 pub struct QUICClient {
-    /// config is the configuration of the dfdaemon.
+    /// The configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// addr is the address of the QUIC server.
+    /// The address of the QUIC server.
     addr: String,
 }
 
-/// QUICClient implements the QUIC-based client for quic storage service.
+/// Implements the QUIC-based client for quic storage service.
 impl QUICClient {
     /// Creates a new QUICClient instance.
     pub fn new(config: Arc<Config>, addr: String) -> Self {
@@ -369,12 +369,12 @@ impl QUICClient {
     }
 }
 
-/// NoVerifier is a verifier for QUIC Client that does not verify the server certificate.
+/// A verifier for QUIC Client that does not verify the server certificate.
 /// It is used for testing and should not be used in production.
 #[derive(Debug)]
 pub struct NoVerifier(Arc<quinn::rustls::crypto::CryptoProvider>);
 
-/// NoVerifier implements a no-op server certificate verifier.
+/// Implements a no-op server certificate verifier.
 impl NoVerifier {
     /// Creates a new NoVerifier instance.
     pub fn new() -> Arc<Self> {
@@ -384,7 +384,7 @@ impl NoVerifier {
     }
 }
 
-/// NoVerifier implements the ServerCertVerifier trait to skip certificate verification.
+/// Implements the ServerCertVerifier trait to skip certificate verification.
 impl quinn::rustls::client::danger::ServerCertVerifier for NoVerifier {
     /// Verifies the server certificate.
     fn verify_server_cert(

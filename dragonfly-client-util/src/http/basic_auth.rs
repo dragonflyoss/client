@@ -21,18 +21,18 @@ use dragonfly_client_core::{
 };
 use http::header::{self, HeaderMap};
 
-/// Credentials is the credentials for the basic auth.
+/// The credentials for the basic auth.
 pub struct Credentials {
-    /// username is the username.
+    /// The username.
     pub username: String,
 
-    /// password is the password.
+    /// The password.
     pub password: String,
 }
 
-/// Credentials is the basic auth.
+/// The basic auth.
 impl Credentials {
-    /// new returns a new Credentials.
+    /// Returns a new Credentials.
     pub fn new(username: &str, password: &str) -> Credentials {
         Self {
             username: username.to_string(),
@@ -40,7 +40,7 @@ impl Credentials {
         }
     }
 
-    /// verify verifies the basic auth with the header.
+    /// Verifies the basic auth with the header.
     pub fn verify(&self, header: &HeaderMap) -> Result<()> {
         let Some(auth_header) = header.get(header::AUTHORIZATION) else {
             return Err(Error::Unauthorized);

@@ -1126,7 +1126,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         Ok(Response::new(()))
     }
 
-    /// Download persistent task stream is the stream of the download persistent task response.
+    /// The stream of the download persistent task response.
     type DownloadPersistentTaskStream =
         ReceiverStream<Result<DownloadPersistentTaskResponse, Status>>;
 
@@ -1732,7 +1732,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         }
     }
 
-    /// Download persistent cache task stream is the stream of the download persistent cache task response.
+    /// The stream of the download persistent cache task response.
     type DownloadPersistentCacheTaskStream =
         ReceiverStream<Result<DownloadPersistentCacheTaskResponse, Status>>;
 
@@ -2274,7 +2274,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         }
     }
 
-    /// Download cache task stream is the stream of the download cache task response.
+    /// The stream of the download cache task response.
     type DownloadCacheTaskStream = ReceiverStream<Result<DownloadCacheTaskResponse, Status>>;
 
     /// Downloads the cache task.
@@ -2308,10 +2308,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     }
 }
 
-/// Dfdaemon download client is a wrapper of DfdaemonDownloadGRPCClient.
+/// A wrapper of DfdaemonDownloadGRPCClient.
 #[derive(Clone)]
 pub struct DfdaemonDownloadClient {
-    /// Client is the grpc client of the dfdaemon.
+    /// The grpc client of the dfdaemon.
     pub client: DfdaemonDownloadGRPCClient<InterceptedService<Channel, InjectTracingInterceptor>>,
 }
 

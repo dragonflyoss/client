@@ -24,24 +24,24 @@ use tokio::sync::mpsc;
 use tracing::{error, info, instrument};
 use warp::{Filter, Rejection, Reply};
 
-/// DEFAULT_PROFILER_SECONDS is the default seconds to start profiling.
+/// The default seconds to start profiling.
 const DEFAULT_PROFILER_SECONDS: u64 = 10;
 
-/// DEFAULT_PROFILER_FREQUENCY is the default frequency to start profiling.
+/// The default frequency to start profiling.
 const DEFAULT_PROFILER_FREQUENCY: i32 = 1000;
 
-/// PProfProfileQueryParams is the query params to start profiling.
+/// The query params to start profiling.
 #[derive(Deserialize, Serialize)]
 #[serde(default)]
 pub struct PProfProfileQueryParams {
-    /// seconds is the seconds to start profiling.
+    /// The seconds to start profiling.
     pub seconds: u64,
 
-    /// frequency is the frequency to start profiling.
+    /// The frequency to start profiling.
     pub frequency: i32,
 }
 
-/// PProfProfileQueryParams implements the default.
+/// Implements the default.
 impl Default for PProfProfileQueryParams {
     fn default() -> Self {
         Self {
@@ -51,22 +51,22 @@ impl Default for PProfProfileQueryParams {
     }
 }
 
-/// Stats is the stats server.
+/// The stats server.
 #[derive(Debug)]
 pub struct Stats {
-    /// addr is the address of the stats server.
+    /// The address of the stats server.
     addr: SocketAddr,
 
-    /// shutdown is used to shutdown the stats server.
+    /// Used to shutdown the stats server.
     shutdown: shutdown::Shutdown,
 
-    /// _shutdown_complete is used to notify the stats server is shutdown.
+    /// Used to notify the stats server is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
-/// Stats implements the stats server.
+/// Implements the stats server.
 impl Stats {
-    /// new creates a new Stats.
+    /// Creates a new Stats.
     pub fn new(
         addr: SocketAddr,
         shutdown: shutdown::Shutdown,
@@ -79,7 +79,7 @@ impl Stats {
         }
     }
 
-    /// run starts the stats server.
+    /// Starts the stats server.
     pub async fn run(&self) {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -112,7 +112,7 @@ impl Stats {
         }
     }
 
-    /// stats_handler handles the stats request.
+    /// Handles the stats request.
     #[instrument(skip_all)]
     async fn pprof_profile_handler(
         query_params: PProfProfileQueryParams,
@@ -147,7 +147,7 @@ impl Stats {
         Ok(body)
     }
 
-    /// pprof_heap_handler handles the pprof heap request.
+    /// Handles the pprof heap request.
     #[instrument(skip_all)]
     async fn pprof_heap_handler() -> Result<impl Reply, Rejection> {
         info!("start heap profiling");

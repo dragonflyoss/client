@@ -42,322 +42,322 @@ use tonic::transport::{
 use tracing::{error, instrument};
 use validator::Validate;
 
-/// NAME is the name of dfdaemon.
+/// The name of dfdaemon.
 pub const NAME: &str = "dfdaemon";
 
-/// default_dfdaemon_config_path is the default config path for dfdaemon.
+/// Returns the default config path for dfdaemon.
 #[inline]
 pub fn default_dfdaemon_config_path() -> PathBuf {
     crate::default_config_dir().join("dfdaemon.yaml")
 }
 
-/// default_dfdaemon_log_dir is the default log directory for dfdaemon.
+/// Returns the default log directory for dfdaemon.
 #[inline]
 pub fn default_dfdaemon_log_dir() -> PathBuf {
     crate::default_log_dir().join(NAME)
 }
 
-/// default_download_unix_socket_path is the default unix socket path for download gRPC service.
+/// Returns the default unix socket path for download gRPC service.
 pub fn default_download_unix_socket_path() -> PathBuf {
     crate::default_root_dir().join("dfdaemon.sock")
 }
 
-/// default_download_protocol is the default protocol of downloading.
+/// Returns the default protocol of downloading.
 #[inline]
 fn default_download_protocol() -> String {
     "tcp".to_string()
 }
 
-/// default_download_request_rate_limit is the default rate limit of the download request in the
+/// Returns the default rate limit of the download request in the
 /// download grpc server, default is 400 req/s.
 pub fn default_download_request_rate_limit() -> u64 {
     400
 }
 
-// default_download_request_buffer_size is the default buffer size for download request channel,
-// default is 50.
+/// Returns the default buffer size for download request channel,
+/// default is 50.
 pub fn default_download_request_buffer_size() -> usize {
     50
 }
 
-/// default_host_hostname is the default hostname of the host.
+/// Returns the default hostname of the host.
 #[inline]
 fn default_host_hostname() -> String {
     hostname::get().unwrap().to_string_lossy().to_string()
 }
 
-/// default_dfdaemon_plugin_dir is the default plugin directory for dfdaemon.
+/// Returns the default plugin directory for dfdaemon.
 #[inline]
 fn default_dfdaemon_plugin_dir() -> PathBuf {
     crate::default_plugin_dir().join(NAME)
 }
 
-/// default_dfdaemon_cache_dir is the default cache directory for dfdaemon.
+/// Returns the default cache directory for dfdaemon.
 #[inline]
 fn default_dfdaemon_cache_dir() -> PathBuf {
     crate::default_cache_dir().join(NAME)
 }
 
-/// default_upload_grpc_server_port is the default port of the upload gRPC server.
+/// Returns the default port of the upload gRPC server.
 #[inline]
 fn default_upload_grpc_server_port() -> u16 {
     4000
 }
 
-/// default_upload_request_rate_limit is the default rate limit of the upload request in the
+/// Returns the default rate limit of the upload request in the
 /// upload grpc server, default is 400 req/s.
 pub fn default_upload_request_rate_limit() -> u64 {
     400
 }
 
-/// default_upload_request_buffer_size is the default buffer size for upload request channel,
+/// Returns the default buffer size for upload request channel,
 /// default is 50.
 pub fn default_upload_request_buffer_size() -> usize {
     50
 }
 
-/// default_upload_bandwidth_limit is the default rate limit of the upload speed in GB/MB/KB per second, default is 50GB/s.
+/// Returns the default rate limit of the upload speed in GB/MB/KB per second, default is 50GB/s.
 #[inline]
 fn default_upload_bandwidth_limit() -> ByteSize {
     ByteSize::gb(50)
 }
 
-/// default_health_server_port is the default port of the health server.
+/// Returns the default port of the health server.
 #[inline]
 fn default_health_server_port() -> u16 {
     4003
 }
 
-/// default_metrics_server_port is the default port of the metrics server.
+/// Returns the default port of the metrics server.
 #[inline]
 fn default_metrics_server_port() -> u16 {
     4002
 }
 
-/// default_stats_server_port is the default port of the stats server.
+/// Returns the default port of the stats server.
 #[inline]
 fn default_stats_server_port() -> u16 {
     4004
 }
 
-/// default_download_bandwidth_limit is the default rate limit of the download speed in GB/MB/KB per second, default is 50GB/s.
+/// Returns the default rate limit of the download speed in GB/MB/KB per second, default is 50GB/s.
 #[inline]
 fn default_download_bandwidth_limit() -> ByteSize {
     ByteSize::gb(50)
 }
 
-/// default_back_to_source_bandwidth_limit is the default rate limit of the back to source speed in GB/MB/KB per second, default is 50GB/s.
+/// Returns the default rate limit of the back to source speed in GB/MB/KB per second, default is 50GB/s.
 #[inline]
 fn default_back_to_source_bandwidth_limit() -> ByteSize {
     ByteSize::gb(50)
 }
 
-/// default_download_piece_timeout is the default timeout for downloading a piece from source.
+/// Returns the default timeout for downloading a piece from source.
 #[inline]
 fn default_download_piece_timeout() -> Duration {
     Duration::from_secs(360)
 }
 
-/// default_collected_download_piece_timeout is the default timeout for collecting one piece from the parent in the stream.
+/// Returns the default timeout for collecting one piece from the parent in the stream.
 #[inline]
 fn default_collected_download_piece_timeout() -> Duration {
     Duration::from_secs(360)
 }
 
-/// default_download_concurrent_piece_count is the default number of concurrent pieces to download.
+/// Returns the default number of concurrent pieces to download.
 #[inline]
 fn default_download_concurrent_piece_count() -> u32 {
     8
 }
 
-/// default_backend_max_retries is the default max retries for backend request, default is 1.
+/// Returns the default max retries for backend request, default is 1.
 #[inline]
 fn default_backend_max_retries() -> u32 {
     1
 }
 
-/// default_backend_enable_cache_temporary_redirect is the default value for caching temporary redirects.
+/// Returns the default value for caching temporary redirects.
 #[inline]
 fn default_backend_enable_cache_temporary_redirect() -> bool {
     true
 }
 
-/// default_backend_cache_temporary_redirect_ttl is the default TTL for cached 307 redirects, default is 10 minutes.
+/// Returns the default TTL for cached 307 redirects, default is 10 minutes.
 #[inline]
 fn default_backend_cache_temporary_redirect_ttl() -> Duration {
     Duration::from_secs(600)
 }
 
-/// default_backend_put_concurrent_chunk_count is the default number of concurrent chunks to upload.
+/// Returns the default number of concurrent chunks to upload.
 #[inline]
 fn default_backend_put_concurrent_chunk_count() -> u32 {
     16
 }
 
-/// default_backend_put_chunk_size is the default chunk size for uploading, default is 8MiB.
+/// Returns the default chunk size for uploading, default is 8MiB.
 fn default_backend_put_chunk_size() -> ByteSize {
     ByteSize::mib(8)
 }
 
-/// default_backend_put_timeout is the default timeout for uploading a file to backend, default is
+/// Returns the default timeout for uploading a file to backend, default is
 /// 15 minutes.
 fn default_backend_put_timeout() -> Duration {
     Duration::from_secs(900)
 }
 
-// default_backend_enable_hickory_dnss the default options for using hickory_dns in backend.
+/// Returns the default options for using hickory_dns in backend.
 fn default_backend_enable_hickory_dns() -> bool {
     true
 }
 
-/// default_download_max_schedule_count is the default max count of schedule.
+/// Returns the default max count of schedule.
 #[inline]
 fn default_download_max_schedule_count() -> u32 {
     5
 }
 
-/// default_tracing_path is the default tracing path for dfdaemon.
+/// Returns the default tracing path for dfdaemon.
 #[inline]
 fn default_tracing_path() -> Option<PathBuf> {
     Some(PathBuf::from("/v1/traces"))
 }
 
-/// default_scheduler_announce_interval is the default interval to announce peer to the scheduler.
+/// Returns the default interval to announce peer to the scheduler.
 #[inline]
 fn default_scheduler_announce_interval() -> Duration {
     Duration::from_secs(300)
 }
 
-/// default_scheduler_schedule_timeout is the default timeout for scheduling.
+/// Returns the default timeout for scheduling.
 #[inline]
 fn default_scheduler_schedule_timeout() -> Duration {
     Duration::from_secs(3 * 60 * 60)
 }
 
-/// default_dynconfig_refresh_interval is the default interval to refresh dynamic configuration from manager.
+/// Returns the default interval to refresh dynamic configuration from manager.
 #[inline]
 fn default_dynconfig_refresh_interval() -> Duration {
     Duration::from_secs(300)
 }
 
-/// default_storage_server_tcp_port is the default port of the storage tcp server.
+/// Returns the default port of the storage tcp server.
 #[inline]
 fn default_storage_server_tcp_port() -> u16 {
     4005
 }
 
-/// default_storage_server_quic_port is the default port of the storage quic server.
+/// Returns the default port of the storage quic server.
 #[inline]
 fn default_storage_server_quic_port() -> u16 {
     4006
 }
 
-/// default_storage_keep is the default keep of the task's metadata and content when the dfdaemon restarts.
+/// Returns the default keep of the task's metadata and content when the dfdaemon restarts.
 #[inline]
 fn default_storage_keep() -> bool {
     false
 }
 
-/// default_storage_write_piece_timeout is the default timeout for writing a piece to storage(e.g., disk
+/// Returns the default timeout for writing a piece to storage(e.g., disk
 /// or cache).
 #[inline]
 fn default_storage_write_piece_timeout() -> Duration {
     Duration::from_secs(360)
 }
 
-/// default_storage_write_buffer_size is the default buffer size for writing piece to disk, default is 4MB.
+/// Returns the default buffer size for writing piece to disk, default is 4MB.
 #[inline]
 fn default_storage_write_buffer_size() -> usize {
     4 * 1024 * 1024
 }
 
-/// default_storage_read_buffer_size is the default buffer size for reading piece from disk, default is 4MB.
+/// Returns the default buffer size for reading piece from disk, default is 4MB.
 #[inline]
 fn default_storage_read_buffer_size() -> usize {
     4 * 1024 * 1024
 }
 
-/// default_storage_cache_capacity is the default cache capacity for the storage server, default is
+/// Returns the default cache capacity for the storage server, default is
 /// 64MiB.
 #[inline]
 fn default_storage_cache_capacity() -> ByteSize {
     ByteSize::mib(64)
 }
 
-/// default_gc_interval is the default interval to do gc.
+/// Returns the default interval to do gc.
 #[inline]
 fn default_gc_interval() -> Duration {
     Duration::from_secs(900)
 }
 
-/// default_gc_policy_task_ttl is the default ttl of the task, default is 30 day.
+/// Returns the default ttl of the task, default is 30 days.
 #[inline]
 fn default_gc_policy_task_ttl() -> Duration {
     Duration::from_secs(2_592_000)
 }
 
-/// default_gc_policy_task_ttl is the default ttl of the task, default is 1 day.
+/// Returns the default ttl of the persistent task, default is 1 day.
 #[inline]
 fn default_gc_policy_persistent_task_ttl() -> Duration {
     Duration::from_secs(86_400)
 }
 
-/// default_gc_policy_task_ttl is the default ttl of the task, default is 1 day.
+/// Returns the default ttl of the persistent cache task, default is 1 day.
 #[inline]
 fn default_gc_policy_persistent_cache_task_ttl() -> Duration {
     Duration::from_secs(86_400)
 }
 
-/// default_gc_policy_disk_threshold is the default threshold of the disk usage to do gc.
+/// Returns the default threshold of the disk usage to do gc.
 #[inline]
 fn default_gc_policy_disk_threshold() -> ByteSize {
     ByteSize::default()
 }
 
-/// default_gc_policy_disk_high_threshold_percent is the default high threshold percent of the disk usage.
+/// Returns the default high threshold percent of the disk usage.
 #[inline]
 fn default_gc_policy_disk_high_threshold_percent() -> u8 {
     80
 }
 
-/// default_gc_policy_disk_low_threshold_percent is the default low threshold percent of the disk usage.
+/// Returns the default low threshold percent of the disk usage.
 #[inline]
 fn default_gc_policy_disk_low_threshold_percent() -> u8 {
     60
 }
 
-/// default_proxy_server_port is the default port of the proxy server.
+/// Returns the default port of the proxy server.
 #[inline]
 pub fn default_proxy_server_port() -> u16 {
     4001
 }
 
-/// default_proxy_request_rate_limit is the default rate limit of the proxy request in the
+/// Returns the default rate limit of the proxy request in the
 /// proxy server, default is 4000 req/s.
 pub fn default_proxy_request_rate_limit() -> u64 {
     4000
 }
 
-/// default_proxy_read_buffer_size is the default buffer size for reading piece, default is 4MB.
+/// Returns the default buffer size for reading piece, default is 4MB.
 #[inline]
 pub fn default_proxy_read_buffer_size() -> usize {
     4 * 1024 * 1024
 }
 
-/// default_prefetch_bandwidth_limit is the default rate limit of the prefetch speed in GB/MB/KB per second, default is 10GB/s. The prefetch request
+/// Returns the default rate limit of the prefetch speed in GB/MB/KB per second, default is 10GB/s. The prefetch request
 /// has lower priority so limit the rate to avoid occupying the bandwidth impact other download tasks.
 #[inline]
 fn default_prefetch_bandwidth_limit() -> ByteSize {
     ByteSize::gb(10)
 }
 
-/// default_proxy_registry_mirror_addr is the default registry mirror address.
+/// Returns the default registry mirror address.
 #[inline]
 fn default_proxy_registry_mirror_addr() -> String {
     "https://index.docker.io".to_string()
 }
 
-/// default_enable_task_id_based_blob_digest is the default value for enable_task_id_based_blob_digest.
+/// Returns the default value for enable_task_id_based_blob_digest.
 /// It indicates whether to calculate the task ID based on the blob's SHA256 digest for OCI registry
 /// blob download URLs.
 #[inline]
@@ -365,31 +365,31 @@ fn default_enable_task_id_based_blob_digest() -> bool {
     false
 }
 
-/// Host is the host configuration for dfdaemon.
+/// The host configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Host {
-    /// IDC is the idc of the host.
+    /// The idc of the host.
     pub idc: Option<String>,
 
-    /// Location is the location of the host.
+    /// The location of the host.
     pub location: Option<String>,
 
-    /// Hostname is the hostname of the host.
+    /// The hostname of the host.
     #[serde(default = "default_host_hostname")]
     pub hostname: String,
 
-    /// IP is the advertise ip of the host.
+    /// The advertise ip of the host.
     pub ip: Option<IpAddr>,
 
-    /// Scheduler cluster ID is the ID of the cluster to which the scheduler belongs.
+    /// The ID of the cluster to which the scheduler belongs.
     /// NOTE: This field is used to identify the cluster to which the scheduler belongs.
     /// If this flag is set, the idc, location, hostname and ip will be ignored when listing schedulers.
     #[serde(rename = "schedulerClusterID")]
     pub scheduler_cluster_id: Option<u64>,
 }
 
-/// Host implements Default.
+/// Implement Default for Host.
 impl Default for Host {
     fn default() -> Self {
         Host {
@@ -402,15 +402,15 @@ impl Default for Host {
     }
 }
 
-/// Server is the server configuration for dfdaemon.
+/// The server configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Server {
-    /// Plugin directory is the directory to store plugins.
+    /// The directory to store plugins.
     #[serde(default = "default_dfdaemon_plugin_dir")]
     pub plugin_dir: PathBuf,
 
-    /// Cache directory is the directory to store cache files.
+    /// The directory to store cache files.
     #[serde(default = "default_dfdaemon_cache_dir")]
     pub cache_dir: PathBuf,
 
@@ -423,7 +423,7 @@ pub struct Server {
     pub adaptive_rate_limit: Option<BBRConfig>,
 }
 
-/// Server implements Default.
+/// Implement Default for Server.
 impl Default for Server {
     fn default() -> Self {
         Server {
@@ -434,11 +434,11 @@ impl Default for Server {
     }
 }
 
-/// DownloadServer is the download server configuration for dfdaemon.
+/// The download server configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct DownloadServer {
-    /// Socket path is the unix socket path for dfdaemon gRPC service.
+    /// The unix socket path for dfdaemon gRPC service.
     #[serde(default = "default_download_unix_socket_path")]
     pub socket_path: PathBuf,
 
@@ -460,7 +460,7 @@ pub struct DownloadServer {
     pub request_buffer_size: usize,
 }
 
-/// DownloadServer implements Default.
+/// Implement Default for DownloadServer.
 impl Default for DownloadServer {
     fn default() -> Self {
         DownloadServer {
@@ -471,35 +471,35 @@ impl Default for DownloadServer {
     }
 }
 
-/// Download is the download configuration for dfdaemon.
+/// The download configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Download {
-    /// Server is the download server configuration for dfdaemon.
+    /// The download server configuration for dfdaemon.
     pub server: DownloadServer,
 
-    /// Protocol that peers use to download piece (e.g., "tcp", "quic").
+    /// The protocol that peers use to download piece (e.g., "tcp", "quic").
     /// When dfdaemon acts as a parent, it announces this protocol so downstream
     /// peers fetch pieces using it.
     #[serde(default = "default_download_protocol")]
     pub protocol: String,
 
-    /// Bandwidth limit is the rate limit of the download speed in GB/MB/KB per second.
+    /// The rate limit of the download speed in GB/MB/KB per second.
     #[serde(with = "bytesize_serde", default = "default_download_bandwidth_limit")]
     pub bandwidth_limit: ByteSize,
 
-    /// Back to source bandwidth limit is the rate limit of the back to source speed in GB/MB/KB per second.
+    /// The rate limit of the back to source speed in GB/MB/KB per second.
     #[serde(
         with = "bytesize_serde",
         default = "default_back_to_source_bandwidth_limit"
     )]
     pub back_to_source_bandwidth_limit: ByteSize,
 
-    /// Piece timeout is the timeout for downloading a piece from source.
+    /// The timeout for downloading a piece from source.
     #[serde(default = "default_download_piece_timeout", with = "humantime_serde")]
     pub piece_timeout: Duration,
 
-    /// Collected piece timeout is the timeout for collecting one piece from the parent in the
+    /// The timeout for collecting one piece from the parent in the
     /// stream.
     #[serde(
         default = "default_collected_download_piece_timeout",
@@ -507,13 +507,13 @@ pub struct Download {
     )]
     pub collected_piece_timeout: Duration,
 
-    /// Concurrent piece count is the number of concurrent pieces to download.
+    /// The number of concurrent pieces to download.
     #[serde(default = "default_download_concurrent_piece_count")]
     #[validate(range(min = 1))]
     pub concurrent_piece_count: u32,
 }
 
-/// Download implements Default.
+/// Implement Default for Download.
 impl Default for Download {
     fn default() -> Self {
         Download {
@@ -528,26 +528,26 @@ impl Default for Download {
     }
 }
 
-/// UploadServer is the upload server configuration for dfdaemon.
+/// The upload server configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UploadServer {
-    /// IP is the listen ip of the gRPC server.
+    /// The listen ip of the gRPC server.
     pub ip: Option<IpAddr>,
 
-    /// Port is the port to the gRPC server.
+    /// The port to the gRPC server.
     #[serde(default = "default_upload_grpc_server_port")]
     pub port: u16,
 
-    /// CA cert is the root CA cert path with PEM format for the upload server, and it is used
+    /// The root CA cert path with PEM format for the upload server, and it is used
     /// for mutual TLS.
     pub ca_cert: Option<PathBuf>,
 
-    /// Cert is the server cert path with PEM format for the upload server and it is used for
+    /// The server cert path with PEM format for the upload server and it is used for
     /// mutual TLS.
     pub cert: Option<PathBuf>,
 
-    /// Key is the server key path with PEM format for the upload server and it is used for
+    /// The server key path with PEM format for the upload server and it is used for
     /// mutual TLS.
     pub key: Option<PathBuf>,
 
@@ -569,7 +569,7 @@ pub struct UploadServer {
     pub request_buffer_size: usize,
 }
 
-/// UploadServer implements Default.
+/// Implement Default for UploadServer.
 impl Default for UploadServer {
     fn default() -> Self {
         UploadServer {
@@ -584,7 +584,7 @@ impl Default for UploadServer {
     }
 }
 
-/// UploadServer is the implementation of UploadServer.
+/// Implement UploadServer.
 impl UploadServer {
     /// Load the server tls config.
     pub async fn load_server_tls_config(&self) -> Result<Option<ServerTlsConfig>> {
@@ -609,24 +609,24 @@ impl UploadServer {
     }
 }
 
-/// UploadClient is the upload client configuration for dfdaemon.
+/// The upload client configuration for dfdaemon.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UploadClient {
-    /// CA cert is the root CA cert path with PEM format for the upload client, and it is used
+    /// The root CA cert path with PEM format for the upload client, and it is used
     /// for mutual TLS.
     pub ca_cert: Option<PathBuf>,
 
-    /// Cert is the client cert path with PEM format for the upload client and it is used for
+    /// The client cert path with PEM format for the upload client and it is used for
     /// mutual TLS.
     pub cert: Option<PathBuf>,
 
-    /// Key is the client key path with PEM format for the upload client and it is used for
+    /// The client key path with PEM format for the upload client and it is used for
     /// mutual TLS.
     pub key: Option<PathBuf>,
 }
 
-/// UploadClient is the implementation of UploadClient.
+/// Implement UploadClient.
 impl UploadClient {
     // Load the client tls config.
     pub async fn load_client_tls_config(
@@ -656,25 +656,25 @@ impl UploadClient {
     }
 }
 
-/// Upload is the upload configuration for dfdaemon.
+/// The upload configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Upload {
-    /// Server is the upload server configuration for dfdaemon.
+    /// The upload server configuration for dfdaemon.
     pub server: UploadServer,
 
-    /// Client is the upload client configuration for dfdaemon.
+    /// The upload client configuration for dfdaemon.
     pub client: UploadClient,
 
-    /// Disable shared indicates whether disable to share data for other peers.
+    /// Indicates whether disable to share data for other peers.
     pub disable_shared: bool,
 
-    /// Bandwidth limit is the rate limit of the upload speed in GB/MB/KB per second.
+    /// The rate limit of the upload speed in GB/MB/KB per second.
     #[serde(with = "bytesize_serde", default = "default_upload_bandwidth_limit")]
     pub bandwidth_limit: ByteSize,
 }
 
-/// Upload implements Default.
+/// Implement Default for Upload.
 impl Default for Upload {
     fn default() -> Self {
         Upload {
@@ -686,27 +686,27 @@ impl Default for Upload {
     }
 }
 
-/// Manager is the manager configuration for dfdaemon.
+/// The manager configuration for dfdaemon.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Manager {
-    /// Address is the manager address.
+    /// The manager address.
     pub addr: String,
 
-    /// CA cert is the root CA cert path with PEM format for the manager, and it is used
+    /// The root CA cert path with PEM format for the manager, and it is used
     /// for mutual TLS.
     pub ca_cert: Option<PathBuf>,
 
-    /// Cert is the client cert path with PEM format for the manager and it is used for
+    /// The client cert path with PEM format for the manager and it is used for
     /// mutual TLS.
     pub cert: Option<PathBuf>,
 
-    /// Key is the client key path with PEM format for the manager and it is used for
+    /// The client key path with PEM format for the manager and it is used for
     /// mutual TLS.
     pub key: Option<PathBuf>,
 }
 
-/// Manager is the implementation of Manager.
+/// Implement Manager.
 impl Manager {
     /// Load the client tls config.
     pub async fn load_client_tls_config(
@@ -736,11 +736,11 @@ impl Manager {
     }
 }
 
-/// Scheduler is the scheduler configuration for dfdaemon.
+/// The scheduler configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Scheduler {
-    /// Announce interval is the interval to announce peer to the scheduler.
+    /// The interval to announce peer to the scheduler.
     /// Announcer will provide the scheduler with peer information for scheduling,
     /// peer information includes cpu, memory, etc.
     #[serde(
@@ -749,7 +749,7 @@ pub struct Scheduler {
     )]
     pub announce_interval: Duration,
 
-    /// Schedule timeout is timeout for the scheduler to respond to a scheduling request from dfdaemon, default is 3 hours.
+    /// The timeout for the scheduler to respond to a scheduling request from dfdaemon, default is 3 hours.
     ///
     /// If the scheduler's response time for a scheduling decision exceeds this timeout,
     /// dfdaemon will encounter a `TokioStreamElapsed(Elapsed(()))` error.
@@ -784,25 +784,25 @@ pub struct Scheduler {
     )]
     pub schedule_timeout: Duration,
 
-    /// Max schedule count is the max count of schedule.
+    /// The max count of schedule.
     #[serde(default = "default_download_max_schedule_count")]
     #[validate(range(min = 1))]
     pub max_schedule_count: u32,
 
-    /// CA cert is the root CA cert path with PEM format for the scheduler, and it is used
+    /// The root CA cert path with PEM format for the scheduler, and it is used
     /// for mutual TLS.
     pub ca_cert: Option<PathBuf>,
 
-    /// Cert is the client cert path with PEM format for the scheduler and it is used for
+    /// The client cert path with PEM format for the scheduler and it is used for
     /// mutual TLS.
     pub cert: Option<PathBuf>,
 
-    /// Key is the client key path with PEM format for the scheduler and it is used for
+    /// The client key path with PEM format for the scheduler and it is used for
     /// mutual TLS.
     pub key: Option<PathBuf>,
 }
 
-/// Scheduler implements Default.
+/// Implement Default for Scheduler.
 impl Default for Scheduler {
     fn default() -> Self {
         Scheduler {
@@ -816,7 +816,7 @@ impl Default for Scheduler {
     }
 }
 
-/// Scheduler is the implementation of Scheduler.
+/// Implement Scheduler.
 impl Scheduler {
     /// Load the client tls config.
     pub async fn load_client_tls_config(
@@ -846,20 +846,20 @@ impl Scheduler {
     }
 }
 
-/// HostType is the type of the host.
+/// The type of the host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 pub enum HostType {
-    /// Normal indicates the peer is normal peer.
+    /// Indicates the peer is normal peer.
     #[serde(rename = "normal")]
     Normal,
 
-    /// Super indicates the peer is super seed peer.
+    /// Indicates the peer is super seed peer.
     #[default]
     #[serde(rename = "super")]
     Super,
 }
 
-/// HostType implements Display.
+/// Implement Display for HostType.
 impl fmt::Display for HostType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -869,19 +869,19 @@ impl fmt::Display for HostType {
     }
 }
 
-/// SeedPeer is the seed peer configuration for dfdaemon.
+/// The seed peer configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SeedPeer {
-    /// Enable indicates whether enable seed peer.
+    /// Indicates whether enable seed peer.
     pub enable: bool,
 
-    /// Kind is the type of seed peer.
+    /// The type of seed peer.
     #[serde(default, rename = "type")]
     pub kind: HostType,
 }
 
-/// SeedPeer implements Default.
+/// Implement Default for SeedPeer.
 impl Default for SeedPeer {
     fn default() -> Self {
         SeedPeer {
@@ -891,11 +891,11 @@ impl Default for SeedPeer {
     }
 }
 
-/// Dynconfig is the dynconfig configuration for dfdaemon.
+/// The dynconfig configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Dynconfig {
-    /// Refresh interval is the interval to refresh dynamic configuration from manager.
+    /// The interval to refresh dynamic configuration from manager.
     #[serde(
         default = "default_dynconfig_refresh_interval",
         with = "humantime_serde"
@@ -903,7 +903,7 @@ pub struct Dynconfig {
     pub refresh_interval: Duration,
 }
 
-/// Dynconfig implements Default.
+/// Implement Default for Dynconfig.
 impl Default for Dynconfig {
     fn default() -> Self {
         Dynconfig {
@@ -912,28 +912,28 @@ impl Default for Dynconfig {
     }
 }
 
-/// StorageServer is the storage server configuration for dfdaemon.
+/// The storage server configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct StorageServer {
-    /// IP is the listen ip of the storage server.
+    /// The listen ip of the storage server.
     pub ip: Option<IpAddr>,
 
-    /// Port is the port to the tcp server.
+    /// The port to the tcp server.
     #[serde(default = "default_storage_server_tcp_port")]
     pub tcp_port: u16,
 
-    /// TCP fastopen indicates whether enable tcp fast open, refer to https://datatracker.ietf.org/doc/html/rfc7413.
+    /// Indicates whether enable tcp fast open, refer to https://datatracker.ietf.org/doc/html/rfc7413.
     /// Please check `net.ipv4.tcp_fastopen` sysctl is set to `3` to enable tcp fast open for both
     /// client and server.
     pub tcp_fastopen: bool,
 
-    /// Port is the port to the quic server.
+    /// The port to the quic server.
     #[serde(default = "default_storage_server_quic_port")]
     pub quic_port: u16,
 }
 
-/// Storage implements Default.
+/// Implement Default for StorageServer.
 impl Default for StorageServer {
     fn default() -> Self {
         StorageServer {
@@ -945,22 +945,22 @@ impl Default for StorageServer {
     }
 }
 
-/// Storage is the storage configuration for dfdaemon.
+/// The storage configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Storage {
-    /// Server is the storage server configuration for dfdaemon.
+    /// The storage server configuration for dfdaemon.
     pub server: StorageServer,
 
-    /// Dir is the directory to store task's metadata and content.
+    /// The directory to store task's metadata and content.
     #[serde(default = "crate::default_storage_dir")]
     pub dir: PathBuf,
 
-    /// Keep indicates whether keep the task's metadata and content when the dfdaemon restarts.
+    /// Indicates whether keep the task's metadata and content when the dfdaemon restarts.
     #[serde(default = "default_storage_keep")]
     pub keep: bool,
 
-    /// Write piece timeout is the timeout for writing a piece to storage(e.g., disk
+    /// The timeout for writing a piece to storage(e.g., disk
     /// or cache).
     #[serde(
         default = "default_storage_write_piece_timeout",
@@ -968,7 +968,7 @@ pub struct Storage {
     )]
     pub write_piece_timeout: Duration,
 
-    /// Write buffer size specifies the buffer size for writing piece data to disk.
+    /// Specifies the buffer size for writing piece data to disk.
     /// Larger buffers improve write throughput by batching disk I/O operations and reducing
     /// system call overhead, but consume more memory. Smaller buffers reduce memory usage
     /// but may degrade write performance due to frequent I/O operations.
@@ -976,7 +976,7 @@ pub struct Storage {
     #[serde(default = "default_storage_write_buffer_size")]
     pub write_buffer_size: usize,
 
-    /// Read buffer size specifies the buffer size for reading piece data from disk.
+    /// Specifies the buffer size for reading piece data from disk.
     /// Larger buffers improve read throughput by reducing I/O system calls and better
     /// utilizing disk sequential read performance, but increase memory consumption.
     /// Smaller buffers reduce memory footprint but may cause more frequent I/O operations.
@@ -984,7 +984,7 @@ pub struct Storage {
     #[serde(default = "default_storage_read_buffer_size")]
     pub read_buffer_size: usize,
 
-    /// Cache capacity is the cache capacity for downloading, default is 100.
+    /// The cache capacity for downloading, default is 100.
     ///
     /// Cache storage:
     /// 1. Users can preheat task by caching to memory (via CacheTask) or to disk (via Task).
@@ -1018,7 +1018,7 @@ pub struct Storage {
     pub cache_capacity: ByteSize,
 }
 
-/// Storage implements Default.
+/// Implement Default for Storage.
 impl Default for Storage {
     fn default() -> Self {
         Storage {
@@ -1033,11 +1033,11 @@ impl Default for Storage {
     }
 }
 
-/// Policy is the policy configuration for gc.
+/// The policy configuration for gc.
 #[derive(Debug, Clone, Validate, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Policy {
-    /// Task ttl is the ttl of the task. If the task's access time exceeds the ttl, dfdaemon
+    /// The ttl of the task. If the task's access time exceeds the ttl, dfdaemon
     /// will delete the task cache.
     #[serde(
         default = "default_gc_policy_task_ttl",
@@ -1046,7 +1046,7 @@ pub struct Policy {
     )]
     pub task_ttl: Duration,
 
-    /// Persistent task ttl is the ttl of the persistent task. If the persistent task's ttl is None
+    /// The ttl of the persistent task. If the persistent task's ttl is None
     /// in DownloadPersistentTask grpc request, dfdaemon will use persistent_task_ttl as the
     /// persistent task's ttl.
     #[serde(
@@ -1056,7 +1056,7 @@ pub struct Policy {
     )]
     pub persistent_task_ttl: Duration,
 
-    /// Persistent cache task ttl is the ttl of the persistent cache task. If the persistent cache
+    /// The ttl of the persistent cache task. If the persistent cache
     /// task's ttl is None in DownloadPersistentTask grpc request, dfdaemon will use
     /// persistent_cache_task_ttl as the persistent cache task's ttl.
     #[serde(
@@ -1066,7 +1066,7 @@ pub struct Policy {
     )]
     pub persistent_cache_task_ttl: Duration,
 
-    /// Disk threshold optionally defines a specific disk capacity to be used as the base for
+    /// Optionally defines a specific disk capacity to be used as the base for
     /// calculating GC trigger points with `disk_high_threshold_percent` and `disk_low_threshold_percent`.
     ///
     /// - If a value is provided (e.g., "500GB"), the percentage-based thresholds (`disk_high_threshold_percent`,
@@ -1083,7 +1083,7 @@ pub struct Policy {
     )]
     pub disk_threshold: ByteSize,
 
-    /// Disk high threshold percent is the high threshold percent of the disk usage.
+    /// The high threshold percent of the disk usage.
     /// If the disk usage is greater than the threshold, dfdaemon will do gc.
     #[serde(
         default = "default_gc_policy_disk_high_threshold_percent",
@@ -1092,7 +1092,7 @@ pub struct Policy {
     #[validate(range(min = 1, max = 99))]
     pub disk_high_threshold_percent: u8,
 
-    /// Disk low threshold percent is the low threshold percent of the disk usage.
+    /// The low threshold percent of the disk usage.
     /// If the disk usage is less than the threshold, dfdaemon will stop gc.
     #[serde(
         default = "default_gc_policy_disk_low_threshold_percent",
@@ -1102,7 +1102,7 @@ pub struct Policy {
     pub disk_low_threshold_percent: u8,
 }
 
-/// Policy implements Default.
+/// Implement Default for Policy.
 impl Default for Policy {
     fn default() -> Self {
         Policy {
@@ -1116,19 +1116,19 @@ impl Default for Policy {
     }
 }
 
-/// GC is the gc configuration for dfdaemon.
+/// The gc configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct GC {
-    /// Interval is the interval to do gc.
+    /// The interval to do gc.
     #[serde(default = "default_gc_interval", with = "humantime_serde")]
     pub interval: Duration,
 
-    /// Policy is the gc policy.
+    /// The gc policy.
     pub policy: Policy,
 }
 
-/// GC implements Default.
+/// Implement Default for GC.
 impl Default for GC {
     fn default() -> Self {
         GC {
@@ -1138,43 +1138,43 @@ impl Default for GC {
     }
 }
 
-/// BasicAuth is the basic auth configuration for HTTP proxy in dfdaemon.
+/// The basic auth configuration for HTTP proxy in dfdaemon.
 #[derive(Default, Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct BasicAuth {
-    /// Username is the username of the basic auth.
+    /// The username of the basic auth.
     #[validate(length(min = 1, max = 20))]
     pub username: String,
 
-    /// Passwork is the passwork of the basic auth.
+    /// The password of the basic auth.
     #[validate(length(min = 1, max = 20))]
     pub password: String,
 }
 
 impl BasicAuth {
-    /// Credentials loads the credentials.
+    /// Loads the credentials.
     pub fn credentials(&self) -> basic_auth::Credentials {
         basic_auth::Credentials::new(&self.username, &self.password)
     }
 }
 
-/// ProxyServer is the proxy server configuration for dfdaemon.
+/// The proxy server configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ProxyServer {
-    /// IP is the listen ip of the proxy server.
+    /// The listen ip of the proxy server.
     pub ip: Option<IpAddr>,
 
-    /// Port is the port to the proxy server.
+    /// The port to the proxy server.
     #[serde(default = "default_proxy_server_port")]
     pub port: u16,
 
-    /// request_rate_limit is the rate limit of the proxy request in the proxy server,
+    /// The rate limit of the proxy request in the proxy server,
     /// default is 4000 req/s.
     #[serde(default = "default_proxy_request_rate_limit")]
     pub request_rate_limit: u64,
 
-    /// CA cert is the root CA cert path with PEM format for the proxy server to generate the server cert.
+    /// The root CA cert path with PEM format for the proxy server to generate the server cert.
     ///
     /// If CA cert is empty, proxy will generate a smaple CA cert by rcgen::generate_simple_self_signed.
     /// When client requests via the proxy, the client should not verify the server cert and set
@@ -1187,7 +1187,7 @@ pub struct ProxyServer {
     /// the proxy can intercept the request by the server cert.
     pub ca_cert: Option<PathBuf>,
 
-    /// CA key is the root CA key path with PEM format for the proxy server to generate the server cert.
+    /// The root CA key path with PEM format for the proxy server to generate the server cert.
     ///
     /// If CA key is empty, proxy will generate a smaple CA key by rcgen::generate_simple_self_signed.
     /// When client requests via the proxy, the client should not verify the server cert and set
@@ -1200,14 +1200,14 @@ pub struct ProxyServer {
     /// the proxy can intercept the request by the server cert.
     pub ca_key: Option<PathBuf>,
 
-    /// Basic auth is the basic auth configuration for HTTP proxy in dfdaemon. If basic_auth is not
+    /// The basic auth configuration for HTTP proxy in dfdaemon. If basic_auth is not
     /// empty, the proxy will use the basic auth to authenticate the client by Authorization
     /// header. The value of the Authorization header is "Basic base64(username:password)", refer
     /// to https://en.wikipedia.org/wiki/Basic_access_authentication.
     pub basic_auth: Option<BasicAuth>,
 }
 
-/// ProxyServer implements Default.
+/// Implement Default for ProxyServer.
 impl Default for ProxyServer {
     fn default() -> Self {
         Self {
@@ -1221,7 +1221,7 @@ impl Default for ProxyServer {
     }
 }
 
-/// ProxyServer is the implementation of ProxyServer.
+/// Implement ProxyServer.
 impl ProxyServer {
     /// Load the cert.
     pub fn load_cert(&self) -> Result<Option<Certificate>> {
@@ -1241,22 +1241,22 @@ impl ProxyServer {
     }
 }
 
-/// Rule is the proxy rule configuration.
+/// The proxy rule configuration.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Rule {
-    /// Regex is the regex of the request url.
+    /// The regex of the request url.
     #[serde(with = "serde_regex")]
     pub regex: Regex,
 
-    /// Use tls indicates whether use tls for the proxy backend.
+    /// Indicates whether use tls for the proxy backend.
     #[serde(rename = "useTLS")]
     pub use_tls: bool,
 
-    /// redirect is the redirect url.
+    /// The redirect url.
     pub redirect: Option<String>,
 
-    /// Filtered query params specifies which URL query parameters should be ignored when generating task IDs.
+    /// Specifies which URL query parameters should be ignored when generating task IDs.
     /// When filter is ["Signature", "Expires", "ns"], for example:
     /// http://example.com/xyz?Expires=e1&Signature=s1&ns=docker.io and http://example.com/xyz?Expires=e2&Signature=s2&ns=docker.io
     /// will generate the same task id.
@@ -1265,7 +1265,7 @@ pub struct Rule {
     pub filtered_query_params: Vec<String>,
 }
 
-/// Rule implements Default.
+/// Implement Default for Rule.
 impl Default for Rule {
     fn default() -> Self {
         Self {
@@ -1277,23 +1277,23 @@ impl Default for Rule {
     }
 }
 
-/// RegistryMirror is the registry mirror configuration.
+/// The registry mirror configuration.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct RegistryMirror {
-    /// Address is the default address of the registry mirror. Proxy will start a registry mirror service for the
+    /// The default address of the registry mirror. Proxy will start a registry mirror service for the
     /// client to pull the image. The client can use the default address of the registry mirror in
     /// configuration to pull the image. The `X-Dragonfly-Registry` header can instead of the default address
     /// of registry mirror.
     #[serde(default = "default_proxy_registry_mirror_addr")]
     pub addr: String,
 
-    /// Cert is the client cert path with PEM format for the registry.
+    /// The client cert path with PEM format for the registry.
     /// If registry use self-signed cert, the client should set the
     /// cert for the registry mirror.
     pub cert: Option<PathBuf>,
 
-    /// Enable indicates whether to use the blob's content digest (e.g., SHA-256 hash) for task ID calculation,
+    /// Indicates whether to use the blob's content digest (e.g., SHA-256 hash) for task ID calculation,
     /// when downloading from OCI registries. When enabled for OCI blob URLs (e.g., /v2/<name>/blobs/sha256:<digest>),
     /// the task ID is derived from the blob digest rather than the full URL. This enables deduplication across
     /// registries - the same blob from different registries shares one task ID, eliminating redundant downloads
@@ -1305,7 +1305,7 @@ pub struct RegistryMirror {
     pub enable_task_id_based_blob_digest: bool,
 }
 
-/// RegistryMirror implements Default.
+/// Implement Default for RegistryMirror.
 impl Default for RegistryMirror {
     fn default() -> Self {
         Self {
@@ -1316,7 +1316,7 @@ impl Default for RegistryMirror {
     }
 }
 
-/// RegistryMirror is the implementation of RegistryMirror.
+/// Implement RegistryMirror.
 impl RegistryMirror {
     /// Load the cert in DER format.
     pub fn load_cert_der(&self) -> Result<Option<Vec<CertificateDer<'static>>>> {
@@ -1334,31 +1334,31 @@ impl RegistryMirror {
     }
 }
 
-/// Proxy is the proxy configuration for dfdaemon.
+/// The proxy configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Proxy {
-    /// Server is the proxy server configuration for dfdaemon.
+    /// The proxy server configuration for dfdaemon.
     pub server: ProxyServer,
 
-    /// Rules is the proxy rules.
+    /// The proxy rules.
     pub rules: Option<Vec<Rule>>,
 
-    /// Registry mirror is implementation of the registry mirror in the proxy.
+    /// The implementation of the registry mirror in the proxy.
     pub registry_mirror: RegistryMirror,
 
-    /// Disable indicates whether to prevent fallback to source downloads when a download fails.
+    /// Indicates whether to prevent fallback to source downloads when a download fails.
     pub disable_back_to_source: bool,
 
-    /// Prefetch pre-downloads full of the task when download with range request.
+    /// Pre-downloads full of the task when download with range request.
     pub prefetch: bool,
 
-    /// Prefetch bandwidth limit is the rate limit of the prefetch speed in GB/MB/KB per second. The prefetch request
+    /// The rate limit of the prefetch speed in GB/MB/KB per second. The prefetch request
     /// has lower priority so limit the rate to avoid occupying the bandwidth impact other download tasks.
     #[serde(with = "bytesize_serde", default = "default_prefetch_bandwidth_limit")]
     pub prefetch_bandwidth_limit: ByteSize,
 
-    /// Read buffer size specifies the buffer size for reading piece data from disk.
+    /// Specifies the buffer size for reading piece data from disk.
     /// Larger buffers can improve throughput for sequential reads but consume more memory.
     /// Smaller buffers reduce memory usage but may increase I/O overhead.
     /// Default value is 1KB. Adjust based on your disk I/O characteristics and memory constraints.
@@ -1366,7 +1366,7 @@ pub struct Proxy {
     pub read_buffer_size: usize,
 }
 
-/// Proxy implements Default.
+/// Implement Default for Proxy.
 impl Default for Proxy {
     fn default() -> Self {
         Self {
@@ -1381,36 +1381,36 @@ impl Default for Proxy {
     }
 }
 
-/// Security is the security configuration for dfdaemon.
+/// The security configuration for dfdaemon.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Security {
-    /// Enable indicates whether enable security.
+    /// Indicates whether enable security.
     pub enable: bool,
 }
 
-/// Network is the network configuration for dfdaemon.
+/// The network configuration for dfdaemon.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Network {
-    /// enable_ipv6 indicates whether enable ipv6.
+    /// Indicates whether enable ipv6.
     #[serde(rename = "enableIPv6")]
     pub enable_ipv6: bool,
 }
 
-/// HealthServer is the health server configuration for dfdaemon.
+/// The health server configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct HealthServer {
-    /// IP is the listen ip of the health server.
+    /// The listen ip of the health server.
     pub ip: Option<IpAddr>,
 
-    /// Port is the port to the health server.
+    /// The port to the health server.
     #[serde(default = "default_health_server_port")]
     pub port: u16,
 }
 
-/// HealthServer implements Default.
+/// Implement Default for HealthServer.
 impl Default for HealthServer {
     fn default() -> Self {
         Self {
@@ -1420,27 +1420,27 @@ impl Default for HealthServer {
     }
 }
 
-/// Health is the health configuration for dfdaemon.
+/// The health configuration for dfdaemon.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Health {
-    /// Server is the health server configuration for dfdaemon.
+    /// The health server configuration for dfdaemon.
     pub server: HealthServer,
 }
 
-/// MetricsServer is the metrics server configuration for dfdaemon.
+/// The metrics server configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct MetricsServer {
-    /// IP is the listen ip of the metrics server.
+    /// The listen ip of the metrics server.
     pub ip: Option<IpAddr>,
 
-    /// Port is the port to the metrics server.
+    /// The port to the metrics server.
     #[serde(default = "default_metrics_server_port")]
     pub port: u16,
 }
 
-/// MetricsServer implements Default.
+/// Implement Default for MetricsServer.
 impl Default for MetricsServer {
     fn default() -> Self {
         Self {
@@ -1450,27 +1450,27 @@ impl Default for MetricsServer {
     }
 }
 
-/// Metrics is the metrics configuration for dfdaemon.
+/// The metrics configuration for dfdaemon.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Metrics {
-    /// Server is the metrics server configuration for dfdaemon.
+    /// The metrics server configuration for dfdaemon.
     pub server: MetricsServer,
 }
 
-/// StatsServer is the stats server configuration for dfdaemon.
+/// The stats server configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct StatsServer {
-    /// IP is the listen ip of the stats server.
+    /// The listen ip of the stats server.
     pub ip: Option<IpAddr>,
 
-    /// Port is the port to the stats server.
+    /// The port to the stats server.
     #[serde(default = "default_stats_server_port")]
     pub port: u16,
 }
 
-/// StatsServer implements Default.
+/// Implement Default for StatsServer.
 impl Default for StatsServer {
     fn default() -> Self {
         Self {
@@ -1480,37 +1480,37 @@ impl Default for StatsServer {
     }
 }
 
-/// Stats is the stats configuration for dfdaemon.
+/// The stats configuration for dfdaemon.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Stats {
-    /// Server is the stats server configuration for dfdaemon.
+    /// The stats server configuration for dfdaemon.
     pub server: StatsServer,
 }
 
-/// Tracing is the tracing configuration for dfdaemon.
+/// The tracing configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Tracing {
-    /// Protocol specifies the communication protocol for the tracing server.
+    /// Specifies the communication protocol for the tracing server.
     /// Supported values: "http", "https", "grpc" (default: None).
     /// This determines how tracing logs are transmitted to the server.
     pub protocol: Option<String>,
 
-    /// Endpoint is the endpoint to report tracing log, example: "localhost:4317".
+    /// The endpoint to report tracing log, example: "localhost:4317".
     pub endpoint: Option<String>,
 
-    /// Path is the path to report tracing log, example: "/v1/traces" if the protocol is "http" or
+    /// The path to report tracing log, example: "/v1/traces" if the protocol is "http" or
     /// "https".
     #[serde(default = "default_tracing_path")]
     pub path: Option<PathBuf>,
 
-    /// Headers is the headers to report tracing log.
+    /// The headers to report tracing log.
     #[serde(with = "http_serde::header_map")]
     pub headers: reqwest::header::HeaderMap,
 }
 
-/// Tracing implements Default.
+/// Implement Default for Tracing.
 impl Default for Tracing {
     fn default() -> Self {
         Self {
@@ -1522,11 +1522,11 @@ impl Default for Tracing {
     }
 }
 
-/// Backend is the backend configuration for dfdaemon.
+/// The backend configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Backend {
-    /// Request header is the request header of backend.
+    /// The request header of backend.
     pub request_header: Option<HashMap<String, String>>,
 
     /// The maximum number of retry attempts when a chunk request to the backend
@@ -1535,7 +1535,7 @@ pub struct Backend {
     #[serde(default = "default_backend_max_retries")]
     pub max_retries: u32,
 
-    /// Enable cache temporary redirect controls whether to cache HTTP 307 (Temporary Redirect) response URLs.
+    /// Controls whether to cache HTTP 307 (Temporary Redirect) response URLs.
     ///
     /// Motivation: Dragonfly splits a download URL into multiple pieces and performs multiple
     /// requests. Without caching, each piece request may trigger the same 307 redirect again,
@@ -1544,7 +1544,7 @@ pub struct Backend {
     #[serde(default = "default_backend_enable_cache_temporary_redirect")]
     pub enable_cache_temporary_redirect: bool,
 
-    /// Cache temporary redirect TTL specifies the time-to-live for cached HTTP 307 redirect URLs.
+    /// Specifies the time-to-live for cached HTTP 307 redirect URLs.
     /// After this duration, the cached redirect target will expire and be re-resolved.
     #[serde(
         default = "default_backend_cache_temporary_redirect_ttl",
@@ -1553,14 +1553,14 @@ pub struct Backend {
     )]
     pub cache_temporary_redirect_ttl: Duration,
 
-    /// Put concurrent chunk count specifies the maximum number of chunks to upload in parallel
+    /// Specifies the maximum number of chunks to upload in parallel
     /// to backend storage. Higher values can improve upload throughput by maximizing bandwidth utilization,
     /// but increase memory usage and backend load. Lower values reduce resource consumption but may
     /// underutilize available bandwidth. Tune based on your network capacity and backend concurrency limits.
     #[serde(default = "default_backend_put_concurrent_chunk_count")]
     pub put_concurrent_chunk_count: u32,
 
-    /// Put chunk size specifies the size of each chunk when uploading data to backend storage.
+    /// Specifies the size of each chunk when uploading data to backend storage.
     /// Larger chunks reduce the total number of requests and API overhead, but require more memory
     /// for buffering and may delay upload start. Smaller chunks reduce memory footprint and provide
     /// faster initial response, but increase request overhead and API costs. Choose based on your
@@ -1568,7 +1568,7 @@ pub struct Backend {
     #[serde(default = "default_backend_put_chunk_size", with = "bytesize_serde")]
     pub put_chunk_size: ByteSize,
 
-    /// Put timeout specifies the maximum duration allowed for uploading a single object
+    /// Specifies the maximum duration allowed for uploading a single object
     /// (potentially consisting of multiple chunks) to the backend storage. If the upload
     /// does not complete within this time window, the operation will be canceled and
     /// treated as a failure.
@@ -1585,7 +1585,7 @@ pub struct Backend {
     pub enable_hickory_dns: bool,
 }
 
-/// Backend implements Default.
+/// Implement Default for Backend.
 impl Default for Backend {
     fn default() -> Self {
         Self {
@@ -1601,86 +1601,86 @@ impl Default for Backend {
     }
 }
 
-/// Config is the configuration for dfdaemon.
+/// The configuration for dfdaemon.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Config {
-    /// Host is the host configuration for dfdaemon.
+    /// The host configuration for dfdaemon.
     #[validate]
     pub host: Host,
 
-    /// Server is the server configuration for dfdaemon.
+    /// The server configuration for dfdaemon.
     #[validate]
     pub server: Server,
 
-    /// Download is the download configuration for dfdaemon.
+    /// The download configuration for dfdaemon.
     #[validate]
     pub download: Download,
 
-    /// Upload is the upload configuration for dfdaemon.
+    /// The upload configuration for dfdaemon.
     #[validate]
     pub upload: Upload,
 
-    /// Manager is the manager configuration for dfdaemon.
+    /// The manager configuration for dfdaemon.
     #[validate]
     pub manager: Manager,
 
-    /// Scheduler is the scheduler configuration for dfdaemon.
+    /// The scheduler configuration for dfdaemon.
     #[validate]
     pub scheduler: Scheduler,
 
-    /// Seed peer is the seed peer configuration for dfdaemon.
+    /// The seed peer configuration for dfdaemon.
     #[validate]
     pub seed_peer: SeedPeer,
 
-    /// Dynconfig is the dynconfig configuration for dfdaemon.
+    /// The dynconfig configuration for dfdaemon.
     #[validate]
     pub dynconfig: Dynconfig,
 
-    /// Storage is the storage configuration for dfdaemon.
+    /// The storage configuration for dfdaemon.
     #[validate]
     pub storage: Storage,
 
-    /// Backend is the backend configuration for dfdaemon.
+    /// The backend configuration for dfdaemon.
     #[validate]
     pub backend: Backend,
 
-    /// GC is the gc configuration for dfdaemon.
+    /// The gc configuration for dfdaemon.
     #[validate]
     pub gc: GC,
 
-    /// Proxy is the proxy configuration for dfdaemon.
+    /// The proxy configuration for dfdaemon.
     #[validate]
     pub proxy: Proxy,
 
-    /// Security is the security configuration for dfdaemon.
+    /// The security configuration for dfdaemon.
     #[validate]
     pub security: Security,
 
-    /// Health is the health configuration for dfdaemon.
+    /// The health configuration for dfdaemon.
     #[validate]
     pub health: Health,
 
-    /// Metrics is the metrics configuration for dfdaemon.
+    /// The metrics configuration for dfdaemon.
     #[validate]
     pub metrics: Metrics,
 
-    /// Stats is the stats configuration for dfdaemon.
+    /// The stats configuration for dfdaemon.
     #[validate]
     pub stats: Stats,
 
-    /// Tracing is the tracing configuration for dfdaemon.
+    /// The tracing configuration for dfdaemon.
     #[validate]
     pub tracing: Tracing,
 
-    /// Network is the network configuration for dfdaemon.
+    /// The network configuration for dfdaemon.
     #[validate]
     pub network: Network,
 }
 
-/// Config implements the config operation of dfdaemon.
+/// Implement the config operation of dfdaemon.
 impl Config {
-    /// Load the configuration from file.
+    /// The configuration from file.
     #[instrument(skip_all)]
     pub async fn load(path: &PathBuf) -> Result<Config> {
         // Load configuration from file.
@@ -1695,7 +1695,7 @@ impl Config {
         Ok(config)
     }
 
-    /// Convert converts the configuration.
+    /// Converts the configuration.
     #[instrument(skip_all)]
     fn convert(&mut self) {
         // Convert advertise ip.

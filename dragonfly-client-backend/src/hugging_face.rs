@@ -55,13 +55,13 @@ use tokio_util::io::StreamReader;
 use tracing::{debug, error};
 use url::Url;
 
-/// SCHEME is the URL scheme for Hugging Face backend.
+/// The URL scheme for Hugging Face backend.
 pub const SCHEME: &str = "hf";
 
-/// HUGGING_FACE_BASE_URL is the base URL for Hugging Face Hub.
+/// The base URL for Hugging Face Hub.
 const HUGGING_FACE_BASE_URL: &str = "https://huggingface.co";
 
-/// Repository represents the Hugging Face repository information returned by the API.
+/// Represents the Hugging Face repository information returned by the API.
 #[derive(Default, Debug, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 #[allow(dead_code)]
@@ -73,7 +73,7 @@ struct Repository {
     siblings: Option<Vec<Sibling>>,
 }
 
-/// Sibling represents a file or directory in the Hugging Face repository.
+/// Represents a file or directory in the Hugging Face repository.
 #[derive(Default, Debug, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct Sibling {
@@ -82,7 +82,7 @@ struct Sibling {
     lfs: Option<Lfs>,
 }
 
-/// Lfs represents Git LFS metadata for large files in the Hugging Face repository.
+/// Represents Git LFS metadata for large files in the Hugging Face repository.
 #[derive(Default, Debug, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 #[allow(dead_code)]
@@ -124,7 +124,7 @@ pub enum RepositoryType {
     Space,
 }
 
-/// RepositoryType implements methods for getting string representations and API paths.
+/// Implements methods for getting string representations and API paths.
 impl RepositoryType {
     /// Returns the canonical string identifier (e.g., `"models"`, `"datasets"`, `"spaces"`).
     #[allow(dead_code)]
@@ -146,7 +146,7 @@ impl RepositoryType {
 impl TryFrom<Url> for ParsedURL {
     type Error = Error;
 
-    /// try_from parses the URL and returns a ParsedURL.
+    /// Parses the URL and returns a ParsedURL.
     fn try_from(url: Url) -> std::result::Result<Self, Self::Error> {
         let host = url
             .host_str()
@@ -183,7 +183,7 @@ impl TryFrom<Url> for ParsedURL {
     }
 }
 
-/// ParsedURL implements TryFrom for &str.
+/// Implements TryFrom for &str.
 impl TryFrom<&str> for ParsedURL {
     type Error = Error;
 
@@ -194,16 +194,16 @@ impl TryFrom<&str> for ParsedURL {
     }
 }
 
-/// HuggingFace is the Hugging Face backend implementation.
+/// The Hugging Face backend implementation.
 pub struct HuggingFace {
-    /// Scheme is the scheme of the Hugging Face backend.
+    /// The scheme of the Hugging Face backend.
     scheme: String,
 
     /// HTTP client for making requests.
     client: Client,
 }
 
-/// HuggingFace implements the hugging face interface.
+/// Implements the hugging face interface.
 impl HuggingFace {
     /// Create a new HuggingFace backend.
     pub fn new(config: Arc<Config>) -> Result<Self> {
@@ -353,7 +353,7 @@ impl HuggingFace {
 /// Backend implementation for Hugging Face.
 #[async_trait]
 impl Backend for HuggingFace {
-    /// Scheme returns the scheme of the backend.
+    /// Returns the scheme of the backend.
     fn scheme(&self) -> String {
         self.scheme.clone()
     }

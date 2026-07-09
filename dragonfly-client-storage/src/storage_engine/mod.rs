@@ -26,7 +26,7 @@ pub mod rocksdb;
 /// The namespace is used to separate different types of objects, for example
 /// column families in rocksdb.
 pub trait DatabaseObject: Serialize + DeserializeOwned {
-    /// NAMESPACE is the namespace of the object.
+    /// The namespace of the object.
     const NAMESPACE: &'static str;
 
     /// serialized serializes the object to bytes.
@@ -34,49 +34,49 @@ pub trait DatabaseObject: Serialize + DeserializeOwned {
         Ok(bincode::serialize(self).or_err(ErrorType::SerializeError)?)
     }
 
-    /// deserialize_from deserializes the object from bytes.
+    /// Deserializes the object from bytes.
     fn deserialize_from(bytes: &[u8]) -> Result<Self> {
         Ok(bincode::deserialize(bytes).or_err(ErrorType::SerializeError)?)
     }
 }
 
-/// StorageEngine defines basic storage engine operations.
+/// Defines basic storage engine operations.
 pub trait StorageEngine<'db>: Operations {}
 
-/// StorageEngineOwned is a marker trait to indicate the storage engine is owned.
+/// A marker trait to indicate the storage engine is owned.
 pub trait StorageEngineOwned: for<'db> StorageEngine<'db> {}
 impl<T: for<'db> StorageEngine<'db>> StorageEngineOwned for T {}
 
-/// Operations defines basic crud operations.
+/// Defines basic crud operations.
 pub trait Operations {
-    /// get gets the object by key.
+    /// Gets the object by key.
     fn get<O: DatabaseObject>(&self, key: &[u8]) -> Result<Option<O>>;
 
-    /// exists checks if the object exists by key.
+    /// Checks if the object exists by key.
     fn exists<O: DatabaseObject>(&self, key: &[u8]) -> Result<bool>;
 
-    /// put puts the object by key.
+    /// Puts the object by key.
     fn put<O: DatabaseObject>(&self, key: &[u8], value: &O) -> Result<()>;
 
-    /// delete deletes the object by key.
+    /// Deletes the object by key.
     fn delete<O: DatabaseObject>(&self, key: &[u8]) -> Result<()>;
 
-    /// iter iterates all objects.
+    /// Iterates all objects.
     fn iter<O: DatabaseObject>(&self) -> Result<impl Iterator<Item = Result<(Box<[u8]>, O)>>>;
 
-    /// iter_raw iterates all objects without serialization.
+    /// Iterates all objects without serialization.
     #[allow(clippy::type_complexity)]
     fn iter_raw<O: DatabaseObject>(
         &self,
     ) -> Result<impl Iterator<Item = Result<(Box<[u8]>, Box<[u8]>)>>>;
 
-    /// prefix_iter iterates all objects with prefix.
+    /// Iterates all objects with prefix.
     fn prefix_iter<O: DatabaseObject>(
         &self,
         prefix: &[u8],
     ) -> Result<impl Iterator<Item = Result<(Box<[u8]>, O)>>>;
 
-    /// prefix_iter_raw iterates all objects with prefix without serialization.
+    /// Iterates all objects with prefix without serialization.
     #[allow(clippy::type_complexity)]
     fn prefix_iter_raw<O: DatabaseObject>(
         &self,

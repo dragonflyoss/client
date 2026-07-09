@@ -49,7 +49,7 @@ pub struct BBRLayer {
     bbr: Arc<BBR>,
 }
 
-/// BBRLayer is a simple wrapper around a shared BBR instance. It implements the Tower Layer trait
+/// A simple wrapper around a shared BBR instance. It implements the Tower Layer trait
 /// to create a BBRService for each inner service. The BBRService is where the actual rate limiting
 /// logic is applied to incoming gRPC requests.
 impl BBRLayer {

@@ -39,7 +39,7 @@ use url::Url;
 
 use super::*;
 
-/// ExportCommand is the subcommand of export.
+/// The subcommand of export.
 #[derive(Debug, Clone, Parser)]
 pub struct ExportCommand {
     #[arg(

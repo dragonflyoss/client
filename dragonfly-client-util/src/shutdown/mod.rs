@@ -31,7 +31,7 @@ pub struct Shutdown {
     receiver: broadcast::Receiver<()>,
 }
 
-/// Shutdown implements the shutdown signal.
+/// Implements the shutdown signal.
 impl Shutdown {
     /// Creates a new shutdown signal.
     pub fn new() -> Shutdown {
@@ -68,7 +68,7 @@ impl Shutdown {
     }
 }
 
-/// Default implements the Default trait.
+/// Implements the Default trait.
 impl Default for Shutdown {
     /// Returns a new default shutdown signal.
     fn default() -> Self {
@@ -76,7 +76,7 @@ impl Default for Shutdown {
     }
 }
 
-/// Clone implements the Clone trait.
+/// Implements the Clone trait.
 impl Clone for Shutdown {
     /// Returns a cloned shutdown signal.
     fn clone(&self) -> Self {

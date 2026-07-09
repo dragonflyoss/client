@@ -30,19 +30,19 @@ use tracing::{error, info};
 
 pub mod lru_cache;
 
-/// Task is the task content in the cache.
+/// The task content in the cache.
 #[derive(Clone, Debug)]
 struct Task {
-    /// content_length is the length of the task content.
+    /// The length of the task content.
     content_length: u64,
 
-    /// pieces is the pieces content of the task.
+    /// The pieces content of the task.
     pieces: Arc<RwLock<HashMap<String, Bytes>>>,
 }
 
-/// Task implements the task content in the cache.
+/// Implements the task content in the cache.
 impl Task {
-    /// new creates a new task.
+    /// Creates a new task.
     fn new(content_length: u64) -> Self {
         Self {
             content_length,
@@ -50,31 +50,31 @@ impl Task {
         }
     }
 
-    /// write_piece writes the piece content to the task.
+    /// Writes the piece content to the task.
     async fn write_piece(&self, id: &str, piece: Bytes) {
         let mut pieces = self.pieces.write().await;
         pieces.insert(id.to_string(), piece);
     }
 
-    /// read_piece reads the piece content from the task.
+    /// Reads the piece content from the task.
     async fn read_piece(&self, id: &str) -> Option<Bytes> {
         let pieces = self.pieces.read().await;
         pieces.get(id).cloned()
     }
 
-    /// contains checks whether the piece exists in the task.
+    /// Checks whether the piece exists in the task.
     async fn contains(&self, id: &str) -> bool {
         let pieces = self.pieces.read().await;
         pieces.contains_key(id)
     }
 
-    /// content_length returns the content length of the task.
+    /// Returns the content length of the task.
     fn content_length(&self) -> u64 {
         self.content_length
     }
 }
 
-/// Cache is the cache for storing piece content by LRU algorithm.
+/// The cache for storing piece content by LRU algorithm.
 ///
 /// Cache storage:
 /// 1. Users can preheat task by caching to memory (via CacheTask) or to disk (via Task).
@@ -107,22 +107,22 @@ impl Task {
 /// Task is the metadata of the task.
 #[derive(Clone)]
 pub struct Cache {
-    /// config is the configuration of the dfdaemon.
+    /// The configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// size is the size of the cache in bytes.
+    /// The size of the cache in bytes.
     size: Arc<AtomicU64>,
 
-    /// capacity is the maximum capacity of the cache in bytes.
+    /// The maximum capacity of the cache in bytes.
     capacity: u64,
 
-    /// tasks stores the tasks with their task id.
+    /// Stores the tasks with their task id.
     tasks: Arc<RwLock<LruCache<String, Task>>>,
 }
 
-/// Cache implements the cache for storing piece content by LRU algorithm.
+/// Implements the cache for storing piece content by LRU algorithm.
 impl Cache {
-    /// new creates a new cache with the specified capacity.
+    /// Creates a new cache with the specified capacity.
     pub fn new(config: Arc<Config>) -> Self {
         Cache {
             config: config.clone(),
@@ -135,7 +135,7 @@ impl Cache {
         }
     }
 
-    /// read_piece reads the piece from the cache.
+    /// Reads the piece from the cache.
     pub async fn read_piece(
         &self,
         task_id: &str,
@@ -189,7 +189,7 @@ impl Cache {
         Ok(reader)
     }
 
-    /// write_piece writes the piece content to the cache.
+    /// Writes the piece content to the cache.
     pub async fn write_piece(&self, task_id: &str, piece_id: &str, content: Bytes) -> Result<()> {
         let mut tasks = self.tasks.write().await;
         let Some(task) = tasks.get(task_id) else {
@@ -204,7 +204,7 @@ impl Cache {
         Ok(())
     }
 
-    /// put_task puts a new task into the cache, constrained by the capacity of the cache.
+    /// Puts a new task into the cache, constrained by the capacity of the cache.
     pub async fn put_task(&mut self, task_id: &str, content_length: u64) {
         // If the content length is 0, we don't cache the task.
         if content_length == 0 {
@@ -250,13 +250,13 @@ impl Cache {
         Ok(())
     }
 
-    /// contains_task checks whether the task exists in the cache.
+    /// Checks whether the task exists in the cache.
     pub async fn contains_task(&self, id: &str) -> bool {
         let tasks = self.tasks.read().await;
         tasks.contains(id)
     }
 
-    /// contains_piece checks whether the piece exists in the specified task.
+    /// Checks whether the piece exists in the specified task.
     pub async fn contains_piece(&self, task_id: &str, piece_id: &str) -> bool {
         let tasks = self.tasks.read().await;
         if let Some(task) = tasks.peek(task_id) {

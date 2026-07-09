@@ -24,20 +24,20 @@ use toml_edit::{value, Array, ArrayOfTables, Item, Table, Value};
 use tracing::{info, instrument};
 use url::Url;
 
-/// Podman represents the podman runtime manager.
+/// Represents the podman runtime manager.
 #[derive(Debug, Clone)]
 pub struct Podman {
-    /// config is the configuration for initializing
+    /// The configuration for initializing
     /// runtime environment for the dfdaemon.
     config: dfinit::Podman,
 
-    /// proxy_config is the configuration for the dfdaemon's proxy server.
+    /// The configuration for the dfdaemon's proxy server.
     proxy_config: dfinit::Proxy,
 }
 
-/// Podman implements the podman runtime manager.
+/// Implements the podman runtime manager.
 impl Podman {
-    /// new creates a new podman runtime manager.
+    /// Creates a new podman runtime manager.
     #[instrument(skip_all)]
     pub fn new(config: dfinit::Podman, proxy_config: dfinit::Proxy) -> Self {
         Self {
@@ -46,7 +46,7 @@ impl Podman {
         }
     }
 
-    /// run runs the podman runtime to initialize
+    /// Runs the podman runtime to initialize
     /// runtime environment for the dfdaemon.
     #[instrument(skip_all)]
     pub async fn run(&self) -> Result<()> {
