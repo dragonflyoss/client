@@ -101,9 +101,9 @@ pub struct Proxy {
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
-/// Proxy implements the proxy server.
+/// Implements the proxy server.
 impl Proxy {
-    /// new creates a new Proxy.
+    /// Creates a new Proxy.
     pub fn new(
         config: Arc<Config>,
         task: Arc<Task>,
@@ -156,7 +156,7 @@ impl Proxy {
         proxy
     }
 
-    /// run starts the proxy server.
+    /// Starts the proxy server.
     pub async fn run(&self, grpc_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
         let mut shutdown = self.shutdown.clone();
         let read_buffer_size = self.config.proxy.read_buffer_size;
@@ -246,7 +246,7 @@ impl Proxy {
     }
 }
 
-/// handler handles the request from the client.
+/// Handles the request from the client.
 #[allow(clippy::too_many_arguments)]
 #[instrument(skip_all, fields(url, method, remote_ip))]
 pub async fn handler(
@@ -333,7 +333,7 @@ pub async fn handler(
     .await
 }
 
-/// registry_mirror_http_handler handles the http request for the registry mirror by client.
+/// Handles the http request for the registry mirror by client.
 #[instrument(skip_all)]
 pub async fn registry_mirror_http_handler(
     config: Arc<Config>,
@@ -355,7 +355,7 @@ pub async fn registry_mirror_http_handler(
     .await;
 }
 
-/// registry_mirror_https_handler handles the https request for the registry mirror by client.
+/// Handles the https request for the registry mirror by client.
 #[allow(clippy::too_many_arguments)]
 #[instrument(skip_all)]
 pub async fn registry_mirror_https_handler(
@@ -382,7 +382,7 @@ pub async fn registry_mirror_https_handler(
     .await;
 }
 
-/// http_handler handles the http request by client.
+/// Handles the http request by client.
 #[instrument(skip_all)]
 pub async fn http_handler(
     config: Arc<Config>,
@@ -489,7 +489,7 @@ pub async fn http_handler(
     return proxy_via_http(request).await;
 }
 
-/// https_handler handles the https request by client.
+/// Handles the https request by client.
 #[allow(clippy::too_many_arguments)]
 #[instrument(skip_all)]
 pub async fn https_handler(
@@ -542,7 +542,7 @@ pub async fn https_handler(
     }
 }
 
-/// upgraded_tunnel handles the upgraded connection. If the ca_cert is not set, use the
+/// Handles the upgraded connection. If the ca_cert is not set, use the
 /// self-signed certificate. Otherwise, use the CA certificate to sign the
 /// self-signed certificate.
 #[allow(clippy::too_many_arguments)]
@@ -619,7 +619,7 @@ async fn upgraded_tunnel(
     Ok(())
 }
 
-/// upgraded_handler handles the upgraded https request from the client.
+/// Handles the upgraded https request from the client.
 #[allow(clippy::too_many_arguments)]
 #[instrument(skip_all, fields(url, method))]
 pub async fn upgraded_handler(
@@ -764,7 +764,7 @@ pub async fn upgraded_handler(
     return proxy_via_http(request).await;
 }
 
-/// proxy_via_dfdaemon proxies the request via the dfdaemon.
+/// Proxies the request via the dfdaemon.
 #[instrument(skip_all, fields(host_id, task_id, peer_id))]
 async fn proxy_via_dfdaemon(
     config: Arc<Config>,
@@ -1093,7 +1093,7 @@ async fn proxy_via_dfdaemon(
     }
 }
 
-/// proxy_via_http proxies the HTTP request directly to the remote server.
+/// Proxies the HTTP request directly to the remote server.
 #[instrument(skip_all)]
 async fn proxy_via_http(mut request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
     let Some(host) = request.uri().host() else {
@@ -1136,7 +1136,7 @@ async fn proxy_via_http(mut request: Request<hyper::body::Incoming>) -> ClientRe
     Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
 }
 
-/// proxy_via_https proxies the HTTPS request directly to the remote server.
+/// Proxies the HTTPS request directly to the remote server.
 #[instrument(skip_all)]
 async fn proxy_via_https(
     mut request: Request<hyper::body::Incoming>,
@@ -1224,7 +1224,7 @@ fn make_registry_mirror_request(
     Ok(request)
 }
 
-/// make_download_task_request makes a download task request by the request.
+/// Makes a download task request by the request.
 fn make_download_task_request(
     config: Arc<Config>,
     rule: &Rule,
@@ -1295,7 +1295,7 @@ fn make_download_task_request(
     })
 }
 
-/// need_prefetch returns whether the prefetch is needed by the configuration and the request
+/// Returns whether the prefetch is needed by the configuration and the request
 /// header.
 fn need_prefetch(config: Arc<Config>, header: &http::HeaderMap) -> bool {
     // If the header not contains the range header, the request does not need prefetch.
@@ -1313,7 +1313,7 @@ fn need_prefetch(config: Arc<Config>, header: &http::HeaderMap) -> bool {
     config.proxy.prefetch
 }
 
-/// make_download_url makes a download url by the given uri.
+/// Makes a download url by the given uri.
 fn make_download_url(
     uri: &hyper::Uri,
     use_tls: bool,
@@ -1337,7 +1337,7 @@ fn make_download_url(
         .to_string())
 }
 
-/// make_response_headers makes the response headers.
+/// Makes the response headers.
 fn make_response_headers(
     task_id: &str,
     server_ip: std::net::IpAddr,
@@ -1381,7 +1381,7 @@ fn make_response_headers(
     hashmap_to_headermap(&download_task_started_response.response_header)
 }
 
-/// find_matching_rule returns whether the dfdaemon should be used to download the task.
+/// Returns whether the dfdaemon should be used to download the task.
 /// If the dfdaemon should be used, return the matched rule.
 fn find_matching_rule(rules: Option<&[Rule]>, mut url: url::Url) -> Option<Rule> {
     // Remove query params and fragment.
@@ -1395,7 +1395,7 @@ fn find_matching_rule(rules: Option<&[Rule]>, mut url: url::Url) -> Option<Rule>
         .cloned()
 }
 
-/// make_error_response makes an error response with the given status and message.
+/// Makes an error response with the given status and message.
 fn make_error_response(
     error_type: header::ErrorType,
     status: http::StatusCode,
@@ -1418,7 +1418,7 @@ fn make_error_response(
     response
 }
 
-/// empty returns an empty body.
+/// Returns an empty body.
 fn empty() -> BoxBody<Bytes, ClientError> {
     Empty::<Bytes>::new()
         .map_err(|never| match never {})

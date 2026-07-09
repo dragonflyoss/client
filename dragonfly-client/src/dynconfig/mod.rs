@@ -167,7 +167,7 @@ pub struct Dynconfig {
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
-/// Dynconfig is the implementation of Dynconfig.
+/// The implementation of Dynconfig.
 impl Dynconfig {
     // Create a new Dynconfig instance.
     pub async fn new(

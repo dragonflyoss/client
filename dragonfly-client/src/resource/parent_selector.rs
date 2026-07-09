@@ -82,7 +82,7 @@ impl Connection {
     }
 }
 
-/// ParentSelector is the download parent selector configuration for dfdaemon. It will synchronize
+/// The download parent selector configuration for dfdaemon. It will synchronize
 /// the host info in real-time from the parents and then select the parents for downloading.
 ///
 /// The workflow diagram is as follows:
@@ -110,7 +110,7 @@ impl Connection {
 /// +-------------------------------------------------------------------+
 /// ```
 pub struct ParentSelector {
-    /// Config is the configuration of the dfdaemon.
+    /// The configuration of the dfdaemon.
     config: Arc<Config>,
 
     /// Generator for host and peer identifiers.
@@ -125,7 +125,7 @@ pub struct ParentSelector {
     /// Global shutdown signal for the entire daemon.
     shutdown: shutdown::Shutdown,
 
-    /// _shutdown_complete is used to notify the garbage collector is shutdown.
+    /// Used to notify the garbage collector is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
@@ -403,7 +403,7 @@ impl ParentSelector {
     }
 }
 
-/// PersistentParentSelector is the download persistent parent selector configuration for dfdaemon. It will synchronize
+/// The download persistent parent selector configuration for dfdaemon. It will synchronize
 /// the host info in real-time from the parents and then select the parents for downloading.
 ///
 /// The workflow diagram is as follows:
@@ -431,7 +431,7 @@ impl ParentSelector {
 /// +-------------------------------------------------------------------+
 /// ```
 pub struct PersistentParentSelector {
-    /// Config is the configuration of the dfdaemon.
+    /// The configuration of the dfdaemon.
     config: Arc<Config>,
 
     /// Generator for host and peer identifiers.
@@ -446,7 +446,7 @@ pub struct PersistentParentSelector {
     /// Global shutdown signal for the entire daemon.
     shutdown: shutdown::Shutdown,
 
-    /// _shutdown_complete is used to notify the garbage collector is shutdown.
+    /// Used to notify the garbage collector is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
@@ -725,7 +725,7 @@ impl PersistentParentSelector {
     }
 }
 
-/// PersistentCacheParentSelector is the download persistent cache parent selector configuration for dfdaemon. It will synchronize
+/// The download persistent cache parent selector configuration for dfdaemon. It will synchronize
 /// the host info in real-time from the parents and then select the parents for downloading.
 ///
 /// The workflow diagram is as follows:
@@ -753,7 +753,7 @@ impl PersistentParentSelector {
 /// +-------------------------------------------------------------------+
 /// ```
 pub struct PersistentCacheParentSelector {
-    /// Config is the configuration of the dfdaemon.
+    /// The configuration of the dfdaemon.
     config: Arc<Config>,
 
     /// Generator for host and peer identifiers.
@@ -768,7 +768,7 @@ pub struct PersistentCacheParentSelector {
     /// Global shutdown signal for the entire daemon.
     shutdown: shutdown::Shutdown,
 
-    /// _shutdown_complete is used to notify the garbage collector is shutdown.
+    /// Used to notify the garbage collector is shutdown.
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 

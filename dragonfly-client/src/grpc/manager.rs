@@ -40,7 +40,7 @@ pub struct ManagerClient {
     pub client: ManagerGRPCClient<InterceptedService<Channel, InjectTracingInterceptor>>,
 }
 
-/// ManagerClient implements the grpc client of the manager.
+/// Implements the grpc client of the manager.
 impl ManagerClient {
     /// Creates a new manager client.
     pub async fn new(config: Arc<Config>, addr: String) -> Result<Self> {
@@ -105,7 +105,7 @@ impl ManagerClient {
         Ok(Self { client })
     }
 
-    /// list_schedulers lists all schedulers that best match the client.
+    /// Lists all schedulers that best match the client.
     #[instrument(skip_all)]
     pub async fn list_schedulers(
         &self,
@@ -116,7 +116,7 @@ impl ManagerClient {
         Ok(response.into_inner())
     }
 
-    /// update_seed_peer updates the seed peer information.
+    /// Updates the seed peer information.
     #[instrument(skip_all)]
     pub async fn update_seed_peer(&self, request: UpdateSeedPeerRequest) -> Result<SeedPeer> {
         let request = Self::make_request(request);
@@ -124,7 +124,7 @@ impl ManagerClient {
         Ok(response.into_inner())
     }
 
-    /// delete_seed_peer deletes the seed peer information.
+    /// Deletes the seed peer information.
     #[instrument(skip_all)]
     pub async fn delete_seed_peer(&self, request: DeleteSeedPeerRequest) -> Result<()> {
         let request = Self::make_request(request);
@@ -132,7 +132,7 @@ impl ManagerClient {
         Ok(())
     }
 
-    /// make_request creates a new request with timeout.
+    /// Creates a new request with timeout.
     fn make_request<T>(request: T) -> tonic::Request<T> {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);

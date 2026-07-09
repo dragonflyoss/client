@@ -54,26 +54,26 @@ use tracing::{debug, error, warn};
 pub mod errors;
 mod selector;
 
-/// POOL_MAX_IDLE_PER_HOST is the max idle connections per host.
+/// The max idle connections per host.
 const POOL_MAX_IDLE_PER_HOST: usize = 1024;
 
-/// KEEP_ALIVE_INTERVAL is the keep alive interval for TCP connection.
+/// The keep alive interval for TCP connection.
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(60);
 
-/// DEFAULT_CLIENT_POOL_IDLE_TIMEOUT is the default idle timeout(30 minutes) for clients in the pool.
+/// The default idle timeout(30 minutes) for clients in the pool.
 const DEFAULT_CLIENT_POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
-/// DEFAULT_CLIENT_POOL_CAPACITY is the default capacity of the client pool.
+/// The default capacity of the client pool.
 const DEFAULT_CLIENT_POOL_CAPACITY: usize = 128;
 
-/// DEFAULT_SCHEDULER_REQUEST_TIMEOUT is the default timeout(5 seconds) for requests to the
+/// The default timeout(5 seconds) for requests to the
 /// scheduler service.
 const DEFAULT_SCHEDULER_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Result is a specialized Result type for the proxy module.
+/// A specialized Result type for the proxy module.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Body is the type alias for the response body reader.
+/// The type alias for the response body reader.
 pub type Body = Box<dyn AsyncRead + Send + Unpin>;
 
 /// Defines the interface for sending requests via the Dragonfly.
@@ -113,12 +113,12 @@ pub trait Request {
     async fn preheat(&self, request: &PreheatRequest) -> Result<()>;
 }
 
-/// GetRequest represents a GET request to be sent via the Dragonfly.
+/// Represents a GET request to be sent via the Dragonfly.
 pub struct GetRequest {
-    /// url is the url of the request.
+    /// The url of the request.
     pub url: String,
 
-    /// header is the headers of the request.
+    /// The headers of the request.
     pub header: HeaderMap,
 
     /// Task piece length.
@@ -152,16 +152,16 @@ pub struct GetRequest {
     /// Refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L67
     pub priority: Option<i32>,
 
-    /// timeout is the timeout of the request, default is 300s.
+    /// The timeout of the request, default is 300s.
     pub timeout: Duration,
 
-    /// Client cert is the client certificates for the request.
+    /// The client certificates for the request.
     pub client_cert: Option<Vec<CertificateDer<'static>>>,
 }
 
 /// Default implementation for GetRequest.
 impl Default for GetRequest {
-    /// Default returns a default GetRequest with empty url and default values for other fields.
+    /// Returns a default GetRequest with empty url and default values for other fields.
     fn default() -> Self {
         Self {
             url: String::new(),
@@ -179,30 +179,30 @@ impl Default for GetRequest {
     }
 }
 
-/// GetResponse represents a GET response received via the Dragonfly.
+/// Represents a GET response received via the Dragonfly.
 pub struct GetResponse<R = Body>
 where
     R: AsyncRead + Unpin,
 {
-    /// success is the success of the response.
+    /// The success of the response.
     pub success: bool,
 
-    /// header is the headers of the response.
+    /// The headers of the response.
     pub header: HeaderMap,
 
-    /// status_code is the status code of the response.
+    /// The status code of the response.
     pub status_code: Option<reqwest::StatusCode>,
 
-    /// body is the content of the response.
+    /// The content of the response.
     pub reader: Option<R>,
 }
 
-/// PreheatRequest represents a request to preheat an OCI image through the
+/// Represents a request to preheat an OCI image through the
 /// Dragonfly seed client. The preheat downloads all blobs (config and layers)
 /// of the specified image via the Dragonfly proxy, effectively caching them
 /// in the P2P network for faster downloading.
 pub struct PreheatRequest {
-    /// Image is the OCI image reference (e.g., "docker.io/library/nginx:latest").
+    /// The OCI image reference (e.g., "docker.io/library/nginx:latest").
     pub image: String,
 
     /// Username for registry authentication. If not provided, anonymous access is used.
@@ -216,7 +216,7 @@ pub struct PreheatRequest {
     /// manifest from a multi-platform image index, default is current platform.
     pub platform: Option<String>,
 
-    /// Piece length is the optional piece length for the Dragonfly task.
+    /// The optional piece length for the Dragonfly task.
     pub piece_length: Option<u64>,
 
     /// Tag identifies different tasks for the same URL.
@@ -247,16 +247,16 @@ pub struct PreheatRequest {
     /// Refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L67
     pub priority: Option<i32>,
 
-    /// Timeout is the timeout for each blob download request, default is 300s.
+    /// The timeout for each blob download request, default is 300s.
     pub timeout: Duration,
 
-    /// Client cert is the optional client certificates for the request.
+    /// The optional client certificates for the request.
     pub client_cert: Option<Vec<CertificateDer<'static>>>,
 }
 
 /// Default implementation for PreheatRequest.
 impl Default for PreheatRequest {
-    /// Default returns a default PreheatRequest with empty image and default values for other
+    /// Returns a default PreheatRequest with empty image and default values for other
     /// fields.
     fn default() -> Self {
         Self {
@@ -281,7 +281,7 @@ impl Default for PreheatRequest {
 #[derive(Debug, Clone, Default)]
 struct HTTPClientFactory {}
 
-/// HTTPClientFactory implements Factory for creating reqwest::Client instances with proxy support.
+/// Implements Factory for creating reqwest::Client instances with proxy support.
 #[async_trait]
 impl Factory<String, ClientWithMiddleware> for HTTPClientFactory {
     type Error = Error;
@@ -307,24 +307,24 @@ impl Factory<String, ClientWithMiddleware> for HTTPClientFactory {
     }
 }
 
-/// Builder is the builder for Proxy.
+/// The builder for Proxy.
 pub struct Builder {
-    /// scheduler_endpoint is the endpoint of the scheduler service.
+    /// The endpoint of the scheduler service.
     scheduler_endpoint: String,
 
-    /// scheduler_request_timeout is the timeout of the request to the scheduler service.
+    /// The timeout of the request to the scheduler service.
     scheduler_request_timeout: Duration,
 
-    /// health_check_interval is the interval of health check for selector(seed peers).
+    /// The interval of health check for selector(seed peers).
     health_check_interval: Duration,
 
-    /// max_retries is the number of times to retry a request.
+    /// The number of times to retry a request.
     max_retries: u8,
 }
 
-/// Builder implements Default trait.
+/// Implements Default trait.
 impl Default for Builder {
-    /// default returns a default Builder.
+    /// Returns a default Builder.
     fn default() -> Self {
         Self {
             scheduler_endpoint: "".to_string(),
@@ -335,7 +335,7 @@ impl Default for Builder {
     }
 }
 
-/// Builder implements the builder pattern for Proxy.
+/// Implements the builder pattern for Proxy.
 impl Builder {
     /// Sets the scheduler endpoint.
     pub fn scheduler_endpoint(mut self, endpoint: String) -> Self {
@@ -423,7 +423,7 @@ impl Builder {
         Ok(proxy)
     }
 
-    /// validate validates the input parameters.
+    /// Validates the input parameters.
     fn validate(&self) -> Result<()> {
         if let Err(err) = url::Url::parse(&self.scheduler_endpoint) {
             return Err(Error::InvalidArgument(err.to_string()));
@@ -451,24 +451,24 @@ impl Builder {
     }
 }
 
-/// Proxy is the HTTP proxy client that sends requests via Dragonfly.
+/// The HTTP proxy client that sends requests via Dragonfly.
 pub struct Proxy {
-    /// seed_peer_selector is the selector service for selecting seed peers.
+    /// The selector service for selecting seed peers.
     seed_peer_selector: Arc<SeedPeerSelector>,
 
-    /// max_retries is the number of times to retry a request.
+    /// The number of times to retry a request.
     max_retries: u8,
 
-    /// client_pool is the pool of clients.
+    /// The pool of clients.
     client_pool: Pool<String, String, ClientWithMiddleware, HTTPClientFactory>,
 
-    /// id_generator is the task id generator.
+    /// The task id generator.
     id_generator: Arc<IDGenerator>,
 }
 
-/// Proxy implements the proxy client that sends requests via Dragonfly.
+/// Implements the proxy client that sends requests via Dragonfly.
 impl Proxy {
-    /// builder returns a new Builder for Proxy.
+    /// Returns a new Builder for Proxy.
     pub fn builder() -> Builder {
         Builder::default()
     }
@@ -640,7 +640,7 @@ impl Request for Proxy {
     }
 }
 
-/// Proxy implements proxy request logic.
+/// Implements proxy request logic.
 impl Proxy {
     /// Creates reqwest clients with proxy configuration for the given request.
     async fn client_entries(

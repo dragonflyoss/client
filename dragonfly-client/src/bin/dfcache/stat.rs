@@ -33,7 +33,7 @@ use tracing::error;
 
 use super::*;
 
-/// StatCommand is the subcommand of stat.
+/// The subcommand of stat.
 #[derive(Debug, Clone, Parser)]
 pub struct StatCommand {
     #[arg(help = "Specify the persistent cache task ID to stat")]

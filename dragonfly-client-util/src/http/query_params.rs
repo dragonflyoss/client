@@ -16,7 +16,7 @@
 
 use std::collections::HashSet;
 
-/// default_s3_filtered_query_params is the default filtered query params with s3 protocol to generate the task id.
+/// The default filtered query params with s3 protocol to generate the task id.
 #[inline]
 fn s3_filtered_query_params() -> Vec<String> {
     vec![
@@ -31,7 +31,7 @@ fn s3_filtered_query_params() -> Vec<String> {
     ]
 }
 
-/// gcs_filtered_query_params is the filtered query params with gcs protocol to generate the task id.
+/// The filtered query params with gcs protocol to generate the task id.
 #[inline]
 fn gcs_filtered_query_params() -> Vec<String> {
     vec![
@@ -44,7 +44,7 @@ fn gcs_filtered_query_params() -> Vec<String> {
     ]
 }
 
-/// oss_filtered_query_params is the filtered query params with oss protocol to generate the task id.
+/// The filtered query params with oss protocol to generate the task id.
 #[inline]
 fn oss_filtered_query_params() -> Vec<String> {
     vec![
@@ -55,7 +55,7 @@ fn oss_filtered_query_params() -> Vec<String> {
     ]
 }
 
-/// obs_filtered_query_params is the filtered query params with obs protocol to generate the task id.
+/// The filtered query params with obs protocol to generate the task id.
 #[inline]
 fn obs_filtered_query_params() -> Vec<String> {
     vec![
@@ -67,7 +67,7 @@ fn obs_filtered_query_params() -> Vec<String> {
     ]
 }
 
-/// cos_filtered_query_params is the filtered query params with cos protocol to generate the task id.
+/// The filtered query params with cos protocol to generate the task id.
 #[inline]
 fn cos_filtered_query_params() -> Vec<String> {
     vec![
@@ -82,13 +82,13 @@ fn cos_filtered_query_params() -> Vec<String> {
     ]
 }
 
-/// containerd_filtered_query_params is the filtered query params with containerd to generate the task id.
+/// The filtered query params with containerd to generate the task id.
 #[inline]
 fn containerd_filtered_query_params() -> Vec<String> {
     vec!["ns".to_string()]
 }
 
-/// default_proxy_rule_filtered_query_params is the default filtered query params to generate the task id.
+/// The default filtered query params to generate the task id.
 #[inline]
 pub fn default_proxy_rule_filtered_query_params() -> Vec<String> {
     let mut visited = HashSet::new();

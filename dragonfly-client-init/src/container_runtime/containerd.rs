@@ -27,20 +27,20 @@ use tokio::{self, fs};
 use toml_edit::{value, Array, DocumentMut, Item, Table, Value};
 use tracing::{info, instrument};
 
-/// Containerd represents the containerd runtime manager.
+/// Represents the containerd runtime manager.
 #[derive(Debug, Clone)]
 pub struct Containerd {
-    /// config is the configuration for initializing
+    /// The configuration for initializing
     /// runtime environment for the dfdaemon.
     config: dfinit::Containerd,
 
-    /// proxy_config is the configuration for the dfdaemon's proxy server.
+    /// The configuration for the dfdaemon's proxy server.
     proxy_config: dfinit::Proxy,
 }
 
-/// Containerd implements the containerd runtime manager.
+/// Implements the containerd runtime manager.
 impl Containerd {
-    /// new creates a new containerd runtime manager.
+    /// Creates a new containerd runtime manager.
     #[instrument(skip_all)]
     pub fn new(config: dfinit::Containerd, proxy_config: dfinit::Proxy) -> Self {
         Self {
@@ -49,7 +49,7 @@ impl Containerd {
         }
     }
 
-    /// run runs the containerd runtime to initialize
+    /// Runs the containerd runtime to initialize
     /// runtime environment for the dfdaemon.
     #[instrument(skip_all)]
     pub async fn run(&self) -> Result<()> {
@@ -142,7 +142,7 @@ impl Containerd {
         Ok(())
     }
 
-    /// add_registries adds registries to the containerd configuration, when containerd supports
+    /// Adds registries to the containerd configuration, when containerd supports
     /// config_path mode and config_path is not empty.
     #[instrument(skip_all)]
     pub async fn add_registries(
@@ -204,7 +204,7 @@ impl Containerd {
         Ok(())
     }
 
-    /// add_default_registry writes a catch-all `_default/hosts.toml` under the containerd
+    /// Writes a catch-all `_default/hosts.toml` under the containerd
     /// config_path so that registries not explicitly listed in `registries` are still
     /// proxied through dfdaemon. The dfdaemon infers the upstream registry from the `ns=`
     /// query parameter that containerd appends when resolving via the `_default` fallback,
