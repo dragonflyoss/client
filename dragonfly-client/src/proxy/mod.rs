@@ -246,7 +246,7 @@ impl Proxy {
     }
 }
 
-/// Handles the request from the client.
+/// handler handles the request from the client.
 #[allow(clippy::too_many_arguments)]
 #[instrument(skip_all, fields(url, method, remote_ip))]
 pub async fn handler(
