@@ -166,10 +166,15 @@ impl DfdaemonDownloadServer {
             DfdaemonDownloadServerHandler {
                 config: self.config.clone(),
                 block_list: BlockList::new(self.config.clone(), self.dynconfig.clone()),
-                socket_path: self.socket_path.clone(),
                 task: self.task.clone(),
                 persistent_task: self.persistent_task.clone(),
                 persistent_cache_task: self.persistent_cache_task.clone(),
+                download_task_handler: Arc::new(DownloadTaskHandler::new(
+                    self.config.clone(),
+                    self.dynconfig.clone(),
+                    self.socket_path.clone(),
+                    self.task.clone(),
+                )),
             },
             ExtractTracingInterceptor,
         );
@@ -268,8 +273,11 @@ impl DfdaemonDownloadServer {
     }
 }
 
-/// Handler for the dfdaemon download gRPC service.
-pub struct DfdaemonDownloadServerHandler {
+/// Handler for downloading tasks, which downloads tasks from remote peers or
+/// the source. It is shared by the dfdaemon download gRPC service and the
+/// proxy server, so that the proxy server can download tasks by direct method
+/// calls without the gRPC overhead.
+pub struct DownloadTaskHandler {
     /// Configuration of the dfdaemon.
     config: Arc<Config>,
 
@@ -281,39 +289,37 @@ pub struct DfdaemonDownloadServerHandler {
 
     /// Task manager.
     task: Arc<task::Task>,
-
-    /// Persistent task manager.
-    persistent_task: Arc<persistent_task::PersistentTask>,
-
-    /// Persistent cache task manager.
-    persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
 }
 
-/// Dfdaemon download server handler implements the dfdaemon download grpc service.
-#[async_trait::async_trait]
-impl DfdaemonDownload for DfdaemonDownloadServerHandler {
-    /// Stream of download task responses.
-    type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
+/// DownloadTaskHandler implements the download task handler.
+impl DownloadTaskHandler {
+    /// Creates a new DownloadTaskHandler.
+    pub fn new(
+        config: Arc<Config>,
+        dynconfig: Arc<Dynconfig>,
+        socket_path: PathBuf,
+        task: Arc<task::Task>,
+    ) -> Self {
+        Self {
+            block_list: BlockList::new(config.clone(), dynconfig),
+            config,
+            socket_path,
+            task,
+        }
+    }
 
-    /// Download the task.
+    /// download_task downloads the task and returns the stream receiver of the
+    /// download progress.
     #[instrument(
         skip_all,
         fields(host_id, task_id, peer_id, url, remote_ip, content_length)
     )]
-    async fn download_task(
+    pub async fn download_task(
         &self,
-        request: Request<DownloadTaskRequest>,
-    ) -> Result<Response<Self::DownloadTaskStream>, Status> {
-        // If the parent context is set, use it as the parent context for the span.
-        if let Some(parent_ctx) = request.extensions().get::<Context>() {
-            let _ = Span::current().set_parent(parent_ctx.clone());
-        };
-
+        request: DownloadTaskRequest,
+    ) -> Result<mpsc::Receiver<Result<DownloadTaskResponse, Status>>, Status> {
         // Record the start time.
         let start_time = Instant::now();
-
-        // Clone the request.
-        let request = request.into_inner();
 
         // Check whether the download is empty.
         let mut download = request.download.ok_or_else(|| {
@@ -765,6 +771,55 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 }
             }
         }
+
+        Ok(out_stream_rx)
+    }
+}
+
+/// Handler for the dfdaemon download gRPC service.
+pub struct DfdaemonDownloadServerHandler {
+    /// Configuration of the dfdaemon.
+    config: Arc<Config>,
+
+    /// Block list for download tasks.
+    block_list: BlockList,
+
+    /// Task manager.
+    task: Arc<task::Task>,
+
+    /// Persistent task manager.
+    persistent_task: Arc<persistent_task::PersistentTask>,
+
+    /// Persistent cache task manager.
+    persistent_cache_task: Arc<persistent_cache_task::PersistentCacheTask>,
+
+    /// Download task handler.
+    download_task_handler: Arc<DownloadTaskHandler>,
+}
+
+/// Dfdaemon download server handler implements the dfdaemon download grpc service.
+#[async_trait::async_trait]
+impl DfdaemonDownload for DfdaemonDownloadServerHandler {
+    /// Stream of download task responses.
+    type DownloadTaskStream = ReceiverStream<Result<DownloadTaskResponse, Status>>;
+
+    /// Download the task.
+    #[instrument(skip_all)]
+    async fn download_task(
+        &self,
+        request: Request<DownloadTaskRequest>,
+    ) -> Result<Response<Self::DownloadTaskStream>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            let _ = Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Download the task by the download task handler and return the stream
+        // of the download progress.
+        let out_stream_rx = self
+            .download_task_handler
+            .download_task(request.into_inner())
+            .await?;
 
         Ok(Response::new(ReceiverStream::new(out_stream_rx)))
     }
