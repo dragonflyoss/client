@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+use crate::dynconfig::Dynconfig;
+use crate::grpc::block_list::{BlockList, DownloadBlockListCheckParams};
 use crate::grpc::REQUEST_TIMEOUT;
 use crate::resource::{piece::MIN_PIECE_LENGTH, task::Task};
 use bytes::Bytes;
@@ -26,8 +28,8 @@ use dragonfly_client_config::dfdaemon::{Config, Rule};
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_metric::{
-    collect_proxy_request_failure_metrics, collect_proxy_request_started_metrics,
-    collect_proxy_request_via_dfdaemon_metrics,
+    collect_download_task_blocked_metrics, collect_proxy_request_failure_metrics,
+    collect_proxy_request_started_metrics, collect_proxy_request_via_dfdaemon_metrics,
 };
 use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
@@ -61,7 +63,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Barrier};
 use tokio_rustls::TlsAcceptor;
 use tokio_util::io::ReaderStream;
-use tracing::{debug, error, info, instrument, Instrument, Span};
+use tracing::{debug, error, info, instrument, warn, Instrument, Span};
 
 pub mod header;
 pub mod query;
@@ -95,6 +97,9 @@ pub struct Proxy {
     /// Request rate limiter of the proxy server.
     request_rate_limiter: Arc<RateLimiter>,
 
+    /// Block list to check whether the download task is blocked.
+    block_list: Arc<BlockList>,
+
     /// Used to shut down the proxy server.
     shutdown: shutdown::Shutdown,
 
@@ -108,6 +113,7 @@ impl Proxy {
     pub fn new(
         config: Arc<Config>,
         task: Arc<Task>,
+        dynconfig: Arc<Dynconfig>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
@@ -126,6 +132,7 @@ impl Proxy {
                     .fair(false)
                     .build(),
             ),
+            block_list: Arc::new(BlockList::new(config.clone(), dynconfig.clone())),
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         };
@@ -183,6 +190,7 @@ impl Proxy {
             registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
             server_ca_cert: Arc<Option<Certificate>>,
             request_rate_limiter: Arc<RateLimiter>,
+            block_list: Arc<BlockList>,
         }
 
         let context = Context {
@@ -191,6 +199,7 @@ impl Proxy {
             registry_cert: self.registry_cert.clone(),
             server_ca_cert: self.server_ca_cert.clone(),
             request_rate_limiter: self.request_rate_limiter.clone(),
+            block_list: self.block_list.clone(),
         };
 
         let listener = TcpListener::bind(self.addr).await?;
@@ -219,7 +228,7 @@ impl Proxy {
                                 service_fn(move |request|{
                                     let context = context.clone();
                                     async move {
-                                        handler(context.config, context.task, request, context.registry_cert, context.server_ca_cert, context.request_rate_limiter, remote_address.ip()).await
+                                        handler(context.config, context.task, request, context.registry_cert, context.server_ca_cert, context.request_rate_limiter, context.block_list, remote_address.ip()).await
                                     }
                                 } ),
                                 )
@@ -251,6 +260,7 @@ pub async fn handler(
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
     request_rate_limiter: Arc<RateLimiter>,
+    block_list: Arc<BlockList>,
     remote_ip: std::net::IpAddr,
 ) -> ClientResult<Response> {
     // Span record the url and method.
@@ -285,11 +295,20 @@ pub async fn handler(
                 registry_cert,
                 server_ca_cert,
                 request_rate_limiter,
+                block_list,
             )
             .await;
         }
 
-        return registry_mirror_http_handler(config, task, request, remote_ip, registry_cert).await;
+        return registry_mirror_http_handler(
+            config,
+            task,
+            request,
+            remote_ip,
+            registry_cert,
+            block_list,
+        )
+        .await;
     }
 
     // Handle CONNECT request.
@@ -302,11 +321,12 @@ pub async fn handler(
             registry_cert,
             server_ca_cert,
             request_rate_limiter,
+            block_list,
         )
         .await;
     }
 
-    http_handler(config, task, request, remote_ip, registry_cert).await
+    http_handler(config, task, request, remote_ip, registry_cert, block_list).await
 }
 
 /// Handles the http request for the registry mirror by client.
@@ -317,9 +337,10 @@ pub async fn registry_mirror_http_handler(
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
+    block_list: Arc<BlockList>,
 ) -> ClientResult<Response> {
     let request = make_registry_mirror_request(config.clone(), request)?;
-    return http_handler(config, task, request, remote_ip, registry_cert).await;
+    return http_handler(config, task, request, remote_ip, registry_cert, block_list).await;
 }
 
 /// Handles the https request for the registry mirror by client.
@@ -333,6 +354,7 @@ pub async fn registry_mirror_https_handler(
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
     request_rate_limiter: Arc<RateLimiter>,
+    block_list: Arc<BlockList>,
 ) -> ClientResult<Response> {
     let request = make_registry_mirror_request(config.clone(), request)?;
     return https_handler(
@@ -343,6 +365,7 @@ pub async fn registry_mirror_https_handler(
         registry_cert,
         server_ca_cert,
         request_rate_limiter,
+        block_list,
     )
     .await;
 }
@@ -355,6 +378,7 @@ pub async fn http_handler(
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
+    block_list: Arc<BlockList>,
 ) -> ClientResult<Response> {
     // Authenticate the request with the basic auth.
     if let Some(basic_auth) = config.proxy.server.basic_auth.as_ref() {
@@ -393,7 +417,7 @@ pub async fn http_handler(
                 request
             );
 
-            return proxy_via_dfdaemon(config, task, &rule, request, remote_ip).await;
+            return proxy_via_dfdaemon(config, task, block_list, &rule, request, remote_ip).await;
         }
 
         debug!(
@@ -411,7 +435,15 @@ pub async fn http_handler(
         );
 
         if request.method() == Method::GET {
-            return proxy_via_dfdaemon(config, task, &Rule::default(), request, remote_ip).await;
+            return proxy_via_dfdaemon(
+                config,
+                task,
+                block_list,
+                &Rule::default(),
+                request,
+                remote_ip,
+            )
+            .await;
         }
 
         debug!(
@@ -448,6 +480,7 @@ pub async fn https_handler(
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
     request_rate_limiter: Arc<RateLimiter>,
+    block_list: Arc<BlockList>,
 ) -> ClientResult<Response> {
     info!("handle HTTPS request: {:?}", request);
 
@@ -468,6 +501,7 @@ pub async fn https_handler(
                         registry_cert,
                         server_ca_cert,
                         request_rate_limiter,
+                        block_list,
                     )
                     .await
                     {
@@ -503,6 +537,7 @@ async fn upgraded_tunnel(
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
     request_rate_limiter: Arc<RateLimiter>,
+    block_list: Arc<BlockList>,
 ) -> ClientResult<()> {
     // Generate the self-signed certificate by the given host. If the ca_cert
     // is not set, use the self-signed certificate. Otherwise, use the CA
@@ -551,6 +586,7 @@ async fn upgraded_tunnel(
                     remote_ip,
                     registry_cert.clone(),
                     request_rate_limiter.clone(),
+                    block_list.clone(),
                 )
             }),
         )
@@ -575,6 +611,7 @@ pub async fn upgraded_handler(
     remote_ip: std::net::IpAddr,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     request_rate_limiter: Arc<RateLimiter>,
+    block_list: Arc<BlockList>,
 ) -> ClientResult<Response> {
     // Span record the url and method.
     Span::current().record("url", request.uri().to_string().as_str());
@@ -647,7 +684,7 @@ pub async fn upgraded_handler(
                 request,
             );
 
-            return proxy_via_dfdaemon(config, task, &rule, request, remote_ip).await;
+            return proxy_via_dfdaemon(config, task, block_list, &rule, request, remote_ip).await;
         }
 
         debug!(
@@ -665,7 +702,15 @@ pub async fn upgraded_handler(
                 request,
             );
 
-            return proxy_via_dfdaemon(config, task, &Rule::default(), request, remote_ip).await;
+            return proxy_via_dfdaemon(
+                config,
+                task,
+                block_list,
+                &Rule::default(),
+                request,
+                remote_ip,
+            )
+            .await;
         }
 
         debug!(
@@ -696,6 +741,7 @@ pub async fn upgraded_handler(
 async fn proxy_via_dfdaemon(
     config: Arc<Config>,
     task: Arc<Task>,
+    block_list: Arc<BlockList>,
     rule: &Rule,
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
@@ -716,6 +762,25 @@ async fn proxy_via_dfdaemon(
                 ));
             }
         };
+
+    // Check whether rejected by blocklist policy.
+    if let Some(download) = download_task_request.download.as_ref() {
+        let check_params = DownloadBlockListCheckParams {
+            application: download.application.clone(),
+            url: Some(download.url.clone()),
+            tag: download.tag.clone(),
+            priority: Some(download.priority),
+        };
+        if block_list.is_task_download_blocked(&check_params).await {
+            warn!("download rejected by blocklist policy: {:?}", check_params);
+            collect_download_task_blocked_metrics(TaskType::Standard as i32);
+            return Ok(make_error_response(
+                header::ErrorType::Proxy,
+                http::StatusCode::FORBIDDEN,
+                None,
+            ));
+        }
+    }
 
     // Clone the download task request for prefetching the full task, because
     // the download task request is moved into the download task.
