@@ -712,7 +712,7 @@ async fn proxy_via_dfdaemon(
 
     // Handle the download task started response.
     let Some(download_task_response::Response::DownloadTaskStartedResponse(
-        download_task_started_response,
+        mut download_task_started_response,
     )) = message.response
     else {
         error!("response is not started");
@@ -743,7 +743,7 @@ async fn proxy_via_dfdaemon(
     *response.headers_mut() = make_response_headers(
         message.task_id.as_str(),
         config.host.ip.unwrap(),
-        download_task_started_response.clone(),
+        &mut download_task_started_response,
     )?;
     // Return 206 Partial Content for range requests to match the Content-Range header set by
     // make_response_headers. Returning 200 for a partial body breaks range-aware clients (e.g. the
@@ -947,23 +947,11 @@ type DownloadTaskStream = mpsc::Receiver<Result<DownloadTaskResponse, Status>>;
 /// download_task downloads the task by the task manager directly. It is similar to the
 /// download_task of the dfdaemon download gRPC server, but removes the gRPC-related
 /// content to avoid the gRPC overhead in the proxy.
-///
-/// It returns a boxed future to avoid the infinitely sized future caused by the
-/// recursion between download_task and prefetch_task.
-fn download_task(
-    config: Arc<Config>,
-    task_manager: Arc<Task>,
-    request: DownloadTaskRequest,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = ClientResult<DownloadTaskStream>> + Send>> {
-    Box::pin(download_task_inner(config, task_manager, request))
-}
-
-/// download_task_inner implements the download task logic for download_task.
 #[instrument(
     skip_all,
     fields(host_id, task_id, peer_id, url, remote_ip, content_length)
 )]
-async fn download_task_inner(
+async fn download_task(
     config: Arc<Config>,
     task_manager: Arc<Task>,
     request: DownloadTaskRequest,
@@ -1383,8 +1371,21 @@ async fn download_task_inner(
 /// prefetch_task prefetches the full task by the task manager directly. It is similar to the
 /// prefetch_task of the dfdaemon gRPC module, but downloads the task by the task manager
 /// instead of the dfdaemon download gRPC client.
+///
+/// It returns a boxed future to break the infinitely sized future caused by the recursion
+/// between download_task and prefetch_task, keeping the extra allocation off the proxy
+/// hot path.
+fn prefetch_task(
+    config: Arc<Config>,
+    task_manager: Arc<Task>,
+    request: DownloadTaskRequest,
+) -> futures::future::BoxFuture<'static, ClientResult<()>> {
+    Box::pin(prefetch_task_inner(config, task_manager, request))
+}
+
+/// prefetch_task_inner implements the prefetch task logic for prefetch_task.
 #[instrument(skip_all)]
-async fn prefetch_task(
+async fn prefetch_task_inner(
     config: Arc<Config>,
     task_manager: Arc<Task>,
     mut request: DownloadTaskRequest,
@@ -1707,7 +1708,7 @@ fn make_download_url(
 fn make_response_headers(
     task_id: &str,
     server_ip: std::net::IpAddr,
-    mut download_task_started_response: DownloadTaskStartedResponse,
+    download_task_started_response: &mut DownloadTaskStartedResponse,
 ) -> ClientResult<hyper::header::HeaderMap> {
     // Insert the content range header to the response header.
     if let Some(range) = download_task_started_response.range.as_ref() {
