@@ -14,16 +14,18 @@
  * limitations under the License.
  */
 
+use crate::grpc::block_list::{BlockList, DownloadBlockListCheckParams};
 use crate::grpc::{DOWNLOAD_STREAM_BUFFER_SIZE, REQUEST_TIMEOUT};
 use crate::resource::task::Task;
+use dragonfly_api::common::v2::TaskType;
 use dragonfly_api::dfdaemon::v2::{DownloadTaskRequest, DownloadTaskResponse};
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_metric::{
-    collect_download_task_failure_metrics, collect_download_task_finished_metrics,
-    collect_download_task_started_metrics, collect_prefetch_task_failure_metrics,
-    collect_prefetch_task_started_metrics,
+    collect_download_task_blocked_metrics, collect_download_task_failure_metrics,
+    collect_download_task_finished_metrics, collect_download_task_started_metrics,
+    collect_prefetch_task_failure_metrics, collect_prefetch_task_started_metrics,
 };
 use dragonfly_client_util::{
     digest::is_blob_url,
@@ -36,7 +38,7 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 use tonic::Status;
-use tracing::{debug, error, info, instrument, Instrument, Span};
+use tracing::{debug, error, info, instrument, warn, Instrument, Span};
 
 /// DownloadTaskStream is the stream of the download task responses.
 type DownloadTaskStream = mpsc::Receiver<Result<DownloadTaskResponse, Status>>;
@@ -51,6 +53,7 @@ type DownloadTaskStream = mpsc::Receiver<Result<DownloadTaskResponse, Status>>;
 pub async fn download(
     config: Arc<Config>,
     task_manager: Arc<Task>,
+    block_list: Arc<BlockList>,
     request: DownloadTaskRequest,
 ) -> ClientResult<DownloadTaskStream> {
     // Record the start time.
@@ -61,6 +64,19 @@ pub async fn download(
         error!("missing download");
         ClientError::InvalidParameter
     })?;
+
+    // Check whether rejected by blocklist policy.
+    let check_params = DownloadBlockListCheckParams {
+        application: download.application.clone(),
+        url: Some(download.url.clone()),
+        tag: download.tag.clone(),
+        priority: Some(download.priority),
+    };
+    if block_list.is_task_download_blocked(&check_params).await {
+        warn!("download rejected by blocklist policy: {:?}", check_params);
+        collect_download_task_blocked_metrics(TaskType::Standard as i32);
+        return Err(ClientError::Unauthorized);
+    }
 
     // If concurrent_piece_count is not set in the request, use the default value in the config.
     download.concurrent_piece_count = Some(config.download.concurrent_piece_count);
@@ -344,6 +360,7 @@ pub async fn download(
 pub async fn prefetch(
     config: Arc<Config>,
     task_manager: Arc<Task>,
+    block_list: Arc<BlockList>,
     mut request: DownloadTaskRequest,
 ) -> ClientResult<()> {
     // Make the prefetch request.
@@ -373,7 +390,7 @@ pub async fn prefetch(
     let priority = download.priority;
 
     // Download the task by the task manager.
-    let mut out_stream_rx = self::download(config, task_manager, request)
+    let mut out_stream_rx = self::download(config, task_manager, block_list, request)
         .await
         .inspect_err(|err| {
             error!("prefetch task failed: {}", err);

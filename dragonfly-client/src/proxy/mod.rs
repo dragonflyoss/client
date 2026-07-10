@@ -15,7 +15,7 @@
  */
 
 use crate::dynconfig::Dynconfig;
-use crate::grpc::block_list::{BlockList, DownloadBlockListCheckParams};
+use crate::grpc::block_list::BlockList;
 use crate::grpc::REQUEST_TIMEOUT;
 use crate::resource::{piece::MIN_PIECE_LENGTH, task::Task};
 use bytes::Bytes;
@@ -28,8 +28,8 @@ use dragonfly_client_config::dfdaemon::{Config, Rule};
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_metric::{
-    collect_download_task_blocked_metrics, collect_proxy_request_failure_metrics,
-    collect_proxy_request_started_metrics, collect_proxy_request_via_dfdaemon_metrics,
+    collect_proxy_request_failure_metrics, collect_proxy_request_started_metrics,
+    collect_proxy_request_via_dfdaemon_metrics,
 };
 use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
@@ -63,7 +63,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Barrier};
 use tokio_rustls::TlsAcceptor;
 use tokio_util::io::ReaderStream;
-use tracing::{debug, error, info, instrument, warn, Instrument, Span};
+use tracing::{debug, error, info, instrument, Instrument, Span};
 
 pub mod header;
 pub mod query;
@@ -763,25 +763,6 @@ async fn proxy_via_dfdaemon(
             }
         };
 
-    // Check whether rejected by blocklist policy.
-    if let Some(download) = download_task_request.download.as_ref() {
-        let check_params = DownloadBlockListCheckParams {
-            application: download.application.clone(),
-            url: Some(download.url.clone()),
-            tag: download.tag.clone(),
-            priority: Some(download.priority),
-        };
-        if block_list.is_task_download_blocked(&check_params).await {
-            warn!("download rejected by blocklist policy: {:?}", check_params);
-            collect_download_task_blocked_metrics(TaskType::Standard as i32);
-            return Ok(make_error_response(
-                header::ErrorType::Proxy,
-                http::StatusCode::FORBIDDEN,
-                None,
-            ));
-        }
-    }
-
     // Clone the download task request for prefetching the full task, because
     // the download task request is moved into the download task.
     let prefetch_download_task_request = download_task_request
@@ -791,27 +772,41 @@ async fn proxy_via_dfdaemon(
         .then(|| download_task_request.clone());
 
     // Download the task by the local task manager.
-    let mut out_stream =
-        match task::download(config.clone(), task.clone(), download_task_request).await {
-            Ok(out_stream) => out_stream,
-            Err(ClientError::BackendError(err)) => {
-                error!("download task failed: {:?}", err);
-                return Ok(make_error_response(
-                    header::ErrorType::Backend,
-                    err.status_code
-                        .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
-                    err.header.clone(),
-                ));
-            }
-            Err(err) => {
-                error!("download task failed: {}", err);
-                return Ok(make_error_response(
-                    header::ErrorType::Dfdaemon,
-                    http::StatusCode::INTERNAL_SERVER_ERROR,
-                    None,
-                ));
-            }
-        };
+    let mut out_stream = match task::download(
+        config.clone(),
+        task.clone(),
+        block_list.clone(),
+        download_task_request,
+    )
+    .await
+    {
+        Ok(out_stream) => out_stream,
+        Err(ClientError::Unauthorized) => {
+            error!("download task rejected by blocklist policy");
+            return Ok(make_error_response(
+                header::ErrorType::Proxy,
+                http::StatusCode::FORBIDDEN,
+                None,
+            ));
+        }
+        Err(ClientError::BackendError(err)) => {
+            error!("download task failed: {:?}", err);
+            return Ok(make_error_response(
+                header::ErrorType::Backend,
+                err.status_code
+                    .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
+                err.header.clone(),
+            ));
+        }
+        Err(err) => {
+            error!("download task failed: {}", err);
+            return Ok(make_error_response(
+                header::ErrorType::Dfdaemon,
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                None,
+            ));
+        }
+    };
 
     // Handle the response from the download task.
     let Some(Ok(message)) = out_stream.recv().await else {
@@ -849,11 +844,13 @@ async fn proxy_via_dfdaemon(
                 info!("prefetch task started");
                 let config = config.clone();
                 let task_manager = task.clone();
+                let block_list = block_list.clone();
                 tokio::spawn(
                     async move {
                         if let Err(err) = task::prefetch(
                             config,
                             task_manager.clone(),
+                            block_list,
                             prefetch_download_task_request,
                         )
                         .await
