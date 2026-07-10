@@ -23,7 +23,7 @@ pub mod crio;
 pub mod docker;
 pub mod podman;
 
-/// Engine represents config of the container runtime engine.
+/// Represents config of the container runtime engine.
 #[derive(Debug, Clone)]
 enum Engine {
     Containerd(containerd::Containerd),
@@ -32,14 +32,14 @@ enum Engine {
     Podman(podman::Podman),
 }
 
-/// ContainerRuntime represents the container runtime manager.
+/// Represents the container runtime manager.
 pub struct ContainerRuntime {
     engine: Option<Engine>,
 }
 
-/// ContainerRuntime implements the container runtime manager.
+/// Implements the container runtime manager.
 impl ContainerRuntime {
-    /// new creates a new container runtime manager.
+    /// Creates a new container runtime manager.
     #[instrument(skip_all)]
     pub fn new(config: &Config) -> Self {
         Self {
@@ -47,7 +47,7 @@ impl ContainerRuntime {
         }
     }
 
-    /// run runs the container runtime to initialize runtime environment for the dfdaemon.
+    /// Runs the container runtime to initialize runtime environment for the dfdaemon.
     #[instrument(skip_all)]
     pub async fn run(&self) -> Result<()> {
         match &self.engine {
@@ -59,7 +59,7 @@ impl ContainerRuntime {
         }
     }
 
-    /// get_engine returns the runtime engine from the config.
+    /// Returns the runtime engine from the config.
     #[instrument(skip_all)]
     fn get_engine(config: &Config) -> Option<Engine> {
         if let Some(ref container_runtime_config) = config.container_runtime.config {

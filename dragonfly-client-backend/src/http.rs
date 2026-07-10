@@ -78,34 +78,34 @@ use tokio_util::io::StreamReader;
 use tracing::{debug, error, info, instrument};
 use url::Url;
 
-/// HTTP_SCHEME is the HTTP scheme.
+/// The HTTP scheme.
 pub const HTTP_SCHEME: &str = "http";
 
-/// HTTPS_SCHEME is the HTTPS scheme.
+/// The HTTPS scheme.
 pub const HTTPS_SCHEME: &str = "https";
 
-/// USER_AGENT_HEADER is the user agent header.
+/// The user agent header.
 pub const USER_AGENT_HEADER: &str = "user-agent";
 
-/// TemporaryRedirectEntry stores a temporary redirect entry with its creation time.
+/// Stores a temporary redirect entry with its creation time.
 #[derive(Clone, Debug)]
 struct TemporaryRedirectEntry {
-    /// URL is the redirect Location URL.
+    /// The redirect Location URL.
     url: String,
 
-    /// Created at is the time when the entry was created.
+    /// The time when the entry was created.
     created_at: Instant,
 }
 
-/// HTTP is the HTTP backend.
+/// The HTTP backend.
 pub struct HTTP {
-    /// Scheme is the scheme of the HTTP backend.
+    /// The scheme of the HTTP backend.
     scheme: String,
 
-    /// Clients is a pool of reqwest clients (each has its own connection pool).
+    /// A pool of reqwest clients (each has its own connection pool).
     clients: Arc<DashMap<usize, ClientWithMiddleware>>,
 
-    /// Request headers is the custom request headers configurated in the dfdaemon config,
+    /// The custom request headers configurated in the dfdaemon config,
     /// which will insert to the each request if original header is not already set.
     request_header: Option<HashMap<String, String>>,
 
@@ -130,12 +130,12 @@ pub struct HTTP {
     enable_hickory_dns: bool,
 }
 
-/// HTTP implements the http interface.
+/// Implements the http interface.
 impl HTTP {
-    /// MAX_CONNECTIONS_PER_ADDRESS is the maximum number of connections per address.
+    /// The maximum number of connections per address.
     const MAX_CONNECTIONS_PER_ADDRESS: usize = 32;
 
-    /// DEFAULT_CACHE_TEMPORARY_REDIRECT_CAPACITY is the default capacity for temporary redirect cache.
+    /// The default capacity for temporary redirect cache.
     const DEFAULT_CACHE_TEMPORARY_REDIRECT_CAPACITY: usize = 1000;
 
     /// Create a new HTTP backend.
@@ -217,7 +217,7 @@ impl HTTP {
         })
     }
 
-    /// Client returns a new reqwest client.
+    /// Returns a new reqwest client.
     fn client(
         &self,
         client_cert: Option<Vec<CertificateDer<'static>>>,
@@ -375,10 +375,10 @@ impl HTTP {
     }
 }
 
-/// Backend implements the Backend trait.
+/// Implements the Backend trait.
 #[async_trait]
 impl Backend for HTTP {
-    /// Scheme returns the scheme of the HTTP backend.
+    /// Returns the scheme of the HTTP backend.
     fn scheme(&self) -> String {
         self.scheme.clone()
     }

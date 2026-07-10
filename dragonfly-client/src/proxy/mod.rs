@@ -52,6 +52,7 @@ use hyper_util::{
     rt::{tokio::TokioIo, TokioExecutor},
 };
 use lazy_static::lazy_static;
+use leaky_bucket::RateLimiter;
 use rcgen::Certificate;
 use rustls::{RootCertStore, ServerConfig};
 use rustls_pki_types::CertificateDer;
@@ -59,7 +60,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
@@ -98,6 +99,9 @@ pub struct Proxy {
     /// CA certificate of the proxy server to sign the self-signed certificate.
     server_ca_cert: Arc<Option<Certificate>>,
 
+    /// Request rate limiter of the proxy server.
+    request_rate_limiter: Arc<RateLimiter>,
+
     /// Used to shut down the proxy server.
     shutdown: shutdown::Shutdown,
 
@@ -105,9 +109,9 @@ pub struct Proxy {
     _shutdown_complete: mpsc::UnboundedSender<()>,
 }
 
-/// Proxy implements the proxy server.
+/// Implements the proxy server.
 impl Proxy {
-    /// new creates a new Proxy.
+    /// Creates a new Proxy.
     pub fn new(
         config: Arc<Config>,
         task: Arc<Task>,
@@ -120,6 +124,15 @@ impl Proxy {
             addr: SocketAddr::new(config.proxy.server.ip.unwrap(), config.proxy.server.port),
             registry_cert: Arc::new(None),
             server_ca_cert: Arc::new(None),
+            request_rate_limiter: Arc::new(
+                RateLimiter::builder()
+                    .initial(config.proxy.server.request_rate_limit as usize)
+                    .refill(config.proxy.server.request_rate_limit as usize)
+                    .max(config.proxy.server.request_rate_limit as usize)
+                    .interval(Duration::from_secs(1))
+                    .fair(false)
+                    .build(),
+            ),
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         };
@@ -151,7 +164,7 @@ impl Proxy {
         proxy
     }
 
-    /// run starts the proxy server.
+    /// Starts the proxy server.
     pub async fn run(&self, grpc_server_started_barrier: Arc<Barrier>) -> ClientResult<()> {
         let mut shutdown = self.shutdown.clone();
         let read_buffer_size = self.config.proxy.read_buffer_size;
@@ -176,6 +189,7 @@ impl Proxy {
             task: Arc<Task>,
             registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
             server_ca_cert: Arc<Option<Certificate>>,
+            request_rate_limiter: Arc<RateLimiter>,
         }
 
         let context = Context {
@@ -183,6 +197,7 @@ impl Proxy {
             task: self.task.clone(),
             registry_cert: self.registry_cert.clone(),
             server_ca_cert: self.server_ca_cert.clone(),
+            request_rate_limiter: self.request_rate_limiter.clone(),
         };
 
         let listener = TcpListener::bind(self.addr).await?;
@@ -211,7 +226,7 @@ impl Proxy {
                                 service_fn(move |request|{
                                     let context = context.clone();
                                     async move {
-                                        handler(context.config, context.task, request, context.registry_cert, context.server_ca_cert, remote_address.ip()).await
+                                        handler(context.config, context.task, request, context.registry_cert, context.server_ca_cert, context.request_rate_limiter, remote_address.ip()).await
                                     }
                                 } ),
                                 )
@@ -234,6 +249,7 @@ impl Proxy {
 }
 
 /// handler handles the request from the client.
+#[allow(clippy::too_many_arguments)]
 #[instrument(skip_all, fields(url, method, remote_ip))]
 pub async fn handler(
     config: Arc<Config>,
@@ -241,6 +257,7 @@ pub async fn handler(
     request: Request<hyper::body::Incoming>,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
+    request_rate_limiter: Arc<RateLimiter>,
     remote_ip: std::net::IpAddr,
 ) -> ClientResult<Response> {
     // Span record the url and method.
@@ -251,6 +268,17 @@ pub async fn handler(
     // Record the proxy request started metrics. The metrics will be recorded
     // when the request is kept alive.
     collect_proxy_request_started_metrics();
+
+    // If the request rate limit is exceeded, return a 429 Too Many Requests
+    // response to the client.
+    if !request_rate_limiter.try_acquire(1) {
+        error!("proxy request rate limit exceeded");
+        return Ok(make_error_response(
+            header::ErrorType::Proxy,
+            http::StatusCode::TOO_MANY_REQUESTS,
+            None,
+        ));
+    }
 
     // If host is not set, it is the mirror request.
     if request.uri().host().is_none() {
@@ -263,6 +291,7 @@ pub async fn handler(
                 remote_ip,
                 registry_cert,
                 server_ca_cert,
+                request_rate_limiter,
             )
             .await;
         }
@@ -279,6 +308,7 @@ pub async fn handler(
             remote_ip,
             registry_cert,
             server_ca_cert,
+            request_rate_limiter,
         )
         .await;
     }
@@ -286,7 +316,7 @@ pub async fn handler(
     http_handler(config, task, request, remote_ip, registry_cert).await
 }
 
-/// registry_mirror_http_handler handles the http request for the registry mirror by client.
+/// Handles the http request for the registry mirror by client.
 #[instrument(skip_all)]
 pub async fn registry_mirror_http_handler(
     config: Arc<Config>,
@@ -299,7 +329,8 @@ pub async fn registry_mirror_http_handler(
     return http_handler(config, task, request, remote_ip, registry_cert).await;
 }
 
-/// registry_mirror_https_handler handles the https request for the registry mirror by client.
+/// Handles the https request for the registry mirror by client.
+#[allow(clippy::too_many_arguments)]
 #[instrument(skip_all)]
 pub async fn registry_mirror_https_handler(
     config: Arc<Config>,
@@ -308,6 +339,7 @@ pub async fn registry_mirror_https_handler(
     remote_ip: std::net::IpAddr,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
+    request_rate_limiter: Arc<RateLimiter>,
 ) -> ClientResult<Response> {
     let request = make_registry_mirror_request(config.clone(), request)?;
     return https_handler(
@@ -317,11 +349,12 @@ pub async fn registry_mirror_https_handler(
         remote_ip,
         registry_cert,
         server_ca_cert,
+        request_rate_limiter,
     )
     .await;
 }
 
-/// http_handler handles the http request by client.
+/// Handles the http request by client.
 #[instrument(skip_all)]
 pub async fn http_handler(
     config: Arc<Config>,
@@ -411,7 +444,8 @@ pub async fn http_handler(
     return proxy_via_http(request).await;
 }
 
-/// https_handler handles the https request by client.
+/// Handles the https request by client.
+#[allow(clippy::too_many_arguments)]
 #[instrument(skip_all)]
 pub async fn https_handler(
     config: Arc<Config>,
@@ -420,6 +454,7 @@ pub async fn https_handler(
     remote_ip: std::net::IpAddr,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
+    request_rate_limiter: Arc<RateLimiter>,
 ) -> ClientResult<Response> {
     info!("handle HTTPS request: {:?}", request);
 
@@ -439,6 +474,7 @@ pub async fn https_handler(
                         remote_ip,
                         registry_cert,
                         server_ca_cert,
+                        request_rate_limiter,
                     )
                     .await
                     {
@@ -459,7 +495,7 @@ pub async fn https_handler(
     }
 }
 
-/// upgraded_tunnel handles the upgraded connection. If the ca_cert is not set, use the
+/// Handles the upgraded connection. If the ca_cert is not set, use the
 /// self-signed certificate. Otherwise, use the CA certificate to sign the
 /// self-signed certificate.
 #[allow(clippy::too_many_arguments)]
@@ -473,6 +509,7 @@ async fn upgraded_tunnel(
     remote_ip: std::net::IpAddr,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
+    request_rate_limiter: Arc<RateLimiter>,
 ) -> ClientResult<()> {
     // Generate the self-signed certificate by the given host. If the ca_cert
     // is not set, use the self-signed certificate. Otherwise, use the CA
@@ -520,6 +557,7 @@ async fn upgraded_tunnel(
                     request,
                     remote_ip,
                     registry_cert.clone(),
+                    request_rate_limiter.clone(),
                 )
             }),
         )
@@ -532,7 +570,7 @@ async fn upgraded_tunnel(
     Ok(())
 }
 
-/// upgraded_handler handles the upgraded https request from the client.
+/// Handles the upgraded https request from the client.
 #[allow(clippy::too_many_arguments)]
 #[instrument(skip_all, fields(url, method))]
 pub async fn upgraded_handler(
@@ -543,10 +581,24 @@ pub async fn upgraded_handler(
     mut request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
+    request_rate_limiter: Arc<RateLimiter>,
 ) -> ClientResult<Response> {
     // Span record the url and method.
     Span::current().record("url", request.uri().to_string().as_str());
     Span::current().record("method", request.method().as_str());
+
+    // HTTPS requests are tunneled over a single upgraded connection, so a
+    // per-connection check is not enough. The rate limit must be enforced on
+    // every request. If the limit is exceeded, return 429 Too Many Requests
+    // to the client.
+    if !request_rate_limiter.try_acquire(1) {
+        error!("proxy request rate limit exceeded");
+        return Ok(make_error_response(
+            header::ErrorType::Proxy,
+            http::StatusCode::TOO_MANY_REQUESTS,
+            None,
+        ));
+    }
 
     // Authenticate the request with the basic auth.
     if let Some(basic_auth) = config.proxy.server.basic_auth.as_ref() {
@@ -646,7 +698,7 @@ pub async fn upgraded_handler(
     return proxy_via_http(request).await;
 }
 
-/// proxy_via_dfdaemon proxies the request via the dfdaemon.
+/// Proxies the request via the dfdaemon.
 #[instrument(skip_all, fields(host_id, task_id, peer_id))]
 async fn proxy_via_dfdaemon(
     config: Arc<Config>,
@@ -671,6 +723,14 @@ async fn proxy_via_dfdaemon(
                 ));
             }
         };
+
+    // Clone the download task request for prefetching the full task, because
+    // the download task request is moved into the download task.
+    let prefetch_download_task_request = download_task_request
+        .download
+        .as_ref()
+        .is_some_and(|download| download.prefetch)
+        .then(|| download_task_request.clone());
 
     // Download the task by the local task manager.
     let mut out_stream =
@@ -722,6 +782,47 @@ async fn proxy_via_dfdaemon(
             None,
         ));
     };
+
+    // If prefetch flag is true, prefetch the full task.
+    if let Some(prefetch_download_task_request) = prefetch_download_task_request {
+        let task_id = message.task_id.clone();
+        match task.prefetch_task_started(task_id.as_str()).await {
+            Ok(_) => {
+                info!("prefetch task started");
+                let config = config.clone();
+                let task_manager = task.clone();
+                tokio::spawn(
+                    async move {
+                        if let Err(err) = prefetch_task(
+                            config,
+                            task_manager.clone(),
+                            prefetch_download_task_request,
+                        )
+                        .await
+                        {
+                            match task_manager.prefetch_task_failed(task_id.as_str()).await {
+                                Ok(_) => {
+                                    error!("prefetch task failed: {}", err);
+                                }
+                                Err(err) => {
+                                    error!(
+                                        "prefetch succeeded, but failed to update metadata: {}",
+                                        err
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    .in_current_span(),
+                );
+            }
+            // If the task is already prefetched, ignore the error.
+            Err(ClientError::InvalidState(_)) => info!("task is already prefetched"),
+            Err(err) => {
+                error!("prefetch task started: {}", err);
+            }
+        }
+    }
 
     // Write the status code to the writer.
     let (sender, mut receiver) = mpsc::channel(4);
@@ -1320,72 +1421,14 @@ async fn download_task(
         .in_current_span(),
     );
 
-    // If prefetch flag is true, prefetch the full task.
-    if download.prefetch {
-        match task_manager.prefetch_task_started(task_id.as_str()).await {
-            Ok(_) => {
-                info!("prefetch task started");
-                let config_clone = config.clone();
-                let task_manager_clone = task_manager.clone();
-                tokio::spawn(
-                    async move {
-                        if let Err(err) = prefetch_task(
-                            config_clone,
-                            task_manager_clone.clone(),
-                            DownloadTaskRequest {
-                                download: Some(download.clone()),
-                            },
-                        )
-                        .await
-                        {
-                            match task_manager_clone
-                                .prefetch_task_failed(task_id.clone().as_str())
-                                .await
-                            {
-                                Ok(_) => {
-                                    error!("prefetch task failed: {}", err);
-                                }
-                                Err(err) => {
-                                    error!(
-                                        "prefetch succeeded, but failed to update metadata: {}",
-                                        err
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    .in_current_span(),
-                );
-            }
-            // If the task is already prefetched, ignore the error.
-            Err(ClientError::InvalidState(_)) => info!("task is already prefetched"),
-            Err(err) => {
-                error!("prefetch task started: {}", err);
-            }
-        }
-    }
-
     Ok(out_stream_rx)
 }
 
 /// prefetch_task prefetches the full task by the task manager directly. It is similar to the
 /// prefetch_task of the dfdaemon gRPC module, but downloads the task by the task manager
 /// instead of the dfdaemon download gRPC client.
-///
-/// It returns a boxed future to break the infinitely sized future caused by the recursion
-/// between download_task and prefetch_task, keeping the extra allocation off the proxy
-/// hot path.
-fn prefetch_task(
-    config: Arc<Config>,
-    task_manager: Arc<Task>,
-    request: DownloadTaskRequest,
-) -> futures::future::BoxFuture<'static, ClientResult<()>> {
-    Box::pin(prefetch_task_inner(config, task_manager, request))
-}
-
-/// prefetch_task_inner implements the prefetch task logic for prefetch_task.
 #[instrument(skip_all)]
-async fn prefetch_task_inner(
+async fn prefetch_task(
     config: Arc<Config>,
     task_manager: Arc<Task>,
     mut request: DownloadTaskRequest,
@@ -1460,7 +1503,7 @@ async fn prefetch_task_inner(
     Ok(())
 }
 
-/// proxy_via_http proxies the HTTP request directly to the remote server.
+/// Proxies the HTTP request directly to the remote server.
 #[instrument(skip_all)]
 async fn proxy_via_http(mut request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
     let Some(host) = request.uri().host() else {
@@ -1503,7 +1546,7 @@ async fn proxy_via_http(mut request: Request<hyper::body::Incoming>) -> ClientRe
     Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
 }
 
-/// proxy_via_https proxies the HTTPS request directly to the remote server.
+/// Proxies the HTTPS request directly to the remote server.
 #[instrument(skip_all)]
 async fn proxy_via_https(
     mut request: Request<hyper::body::Incoming>,
@@ -1591,7 +1634,7 @@ fn make_registry_mirror_request(
     Ok(request)
 }
 
-/// make_download_task_request makes a download task request by the request.
+/// Makes a download task request by the request.
 fn make_download_task_request(
     config: Arc<Config>,
     rule: &Rule,
@@ -1662,7 +1705,7 @@ fn make_download_task_request(
     })
 }
 
-/// need_prefetch returns whether the prefetch is needed by the configuration and the request
+/// Returns whether the prefetch is needed by the configuration and the request
 /// header.
 fn need_prefetch(config: Arc<Config>, header: &http::HeaderMap) -> bool {
     // If the header not contains the range header, the request does not need prefetch.
@@ -1680,7 +1723,7 @@ fn need_prefetch(config: Arc<Config>, header: &http::HeaderMap) -> bool {
     config.proxy.prefetch
 }
 
-/// make_download_url makes a download url by the given uri.
+/// Makes a download url by the given uri.
 fn make_download_url(
     uri: &hyper::Uri,
     use_tls: bool,
@@ -1704,7 +1747,7 @@ fn make_download_url(
         .to_string())
 }
 
-/// make_response_headers makes the response headers.
+/// Makes the response headers.
 fn make_response_headers(
     task_id: &str,
     server_ip: std::net::IpAddr,
@@ -1748,7 +1791,7 @@ fn make_response_headers(
     hashmap_to_headermap(&download_task_started_response.response_header)
 }
 
-/// find_matching_rule returns whether the dfdaemon should be used to download the task.
+/// Returns whether the dfdaemon should be used to download the task.
 /// If the dfdaemon should be used, return the matched rule.
 fn find_matching_rule(rules: Option<&[Rule]>, mut url: url::Url) -> Option<Rule> {
     // Remove query params and fragment.
@@ -1762,7 +1805,7 @@ fn find_matching_rule(rules: Option<&[Rule]>, mut url: url::Url) -> Option<Rule>
         .cloned()
 }
 
-/// make_error_response makes an error response with the given status and message.
+/// Makes an error response with the given status and message.
 fn make_error_response(
     error_type: header::ErrorType,
     status: http::StatusCode,
@@ -1785,7 +1828,7 @@ fn make_error_response(
     response
 }
 
-/// empty returns an empty body.
+/// Returns an empty body.
 fn empty() -> BoxBody<Bytes, ClientError> {
     Empty::<Bytes>::new()
         .map_err(|never| match never {})

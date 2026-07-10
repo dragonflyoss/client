@@ -41,7 +41,7 @@ pub enum Error {
     DfdaemonError(#[from] DfdaemonError),
 }
 
-/// BackendError is error detail for Backend.
+/// The error detail for Backend.
 #[derive(Debug, thiserror::Error)]
 #[error(
     "backend server error, message: {message:?}, header: {header:?}, status_code: {status_code:?}"
@@ -57,7 +57,7 @@ pub struct BackendError {
     pub status_code: Option<reqwest::StatusCode>,
 }
 
-/// ProxyError is error detail for Proxy.
+/// The error detail for Proxy.
 #[derive(Debug, thiserror::Error)]
 #[error(
     "proxy server error, message: {message:?}, header: {header:?}, status_code: {status_code:?}"
@@ -73,7 +73,7 @@ pub struct ProxyError {
     pub status_code: Option<reqwest::StatusCode>,
 }
 
-/// DfdaemonError is error detail for Dfdaemon.
+/// The error detail for Dfdaemon.
 #[derive(Debug, thiserror::Error)]
 #[error("dfdaemon error, message: {message:?}")]
 pub struct DfdaemonError {

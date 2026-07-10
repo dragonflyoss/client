@@ -54,7 +54,7 @@ pub struct CgroupCPUStats {
     pub used_percent: f64,
 }
 
-/// CPU represents a cpu interface with its information.
+/// Represents a cpu interface with its information.
 #[derive(Debug, Clone, Default)]
 pub struct CPU {
     /// Number of physical CPU cores available on the system.

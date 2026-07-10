@@ -30,14 +30,14 @@ use tracing::Level;
 
 use super::*;
 
-/// PersistentCacheTaskCommand is the subcommand of persistent-cache-task.
+/// The subcommand of persistent-cache-task.
 #[derive(Debug, Clone, Parser)]
 pub struct PersistentCacheTaskCommand {
     #[command(subcommand)]
     pub subcommand: PersistentCacheTaskSubCommand,
 }
 
-/// PersistentCacheTaskSubCommand is the subcommand of persistent-cache-task.
+/// The subcommand of persistent-cache-task.
 #[derive(Debug, Clone, Subcommand)]
 pub enum PersistentCacheTaskSubCommand {
     #[command(
@@ -59,7 +59,7 @@ impl PersistentCacheTaskCommand {
     }
 }
 
-/// LsCommand is the subcommand of persistent-cache-task ls.
+/// The subcommand of persistent-cache-task ls.
 #[derive(Debug, Clone, Parser)]
 pub struct LsCommand {
     #[arg(

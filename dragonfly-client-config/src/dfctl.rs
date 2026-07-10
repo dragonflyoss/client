@@ -14,5 +14,5 @@
  * limitations under the License.
  */
 
-/// NAME is the name of dfctl.
+/// The name of dfctl.
 pub const NAME: &str = "dfctl";

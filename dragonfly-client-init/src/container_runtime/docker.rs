@@ -24,20 +24,20 @@ use tokio::{self, fs};
 use tracing::{info, instrument};
 use url::Url;
 
-/// Docker represents the docker runtime manager.
+/// Represents the docker runtime manager.
 #[derive(Debug, Clone)]
 pub struct Docker {
-    /// config is the configuration for initializing
+    /// The configuration for initializing
     /// runtime environment for the dfdaemon.
     config: dfinit::Docker,
 
-    /// proxy_config is the configuration for the dfdaemon's proxy server.
+    /// The configuration for the dfdaemon's proxy server.
     proxy_config: dfinit::Proxy,
 }
 
-/// Docker implements the docker runtime manager.
+/// Implements the docker runtime manager.
 impl Docker {
-    /// new creates a new docker runtime manager.
+    /// Creates a new docker runtime manager.
     #[instrument(skip_all)]
     pub fn new(config: dfinit::Docker, proxy_config: dfinit::Proxy) -> Self {
         Self {
@@ -46,7 +46,7 @@ impl Docker {
         }
     }
 
-    /// run runs the docker runtime to initialize
+    /// Runs the docker runtime to initialize
     /// runtime environment for the dfdaemon.
     #[instrument(skip_all)]
     pub async fn run(&self) -> Result<()> {

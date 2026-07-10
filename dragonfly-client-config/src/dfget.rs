@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-/// NAME is the name of dfget.
+/// The name of dfget.
 pub const NAME: &str = "dfget";
 
-/// DEFAULT_OUTPUT_FILE_MODE defines the default file mode for output files when downloading with dfget
+/// Defines the default file mode for output files when downloading with dfget
 /// using the `--transfer-from-dfdaemon=true` option.
 pub const DEFAULT_OUTPUT_FILE_MODE: u32 = 0o644;

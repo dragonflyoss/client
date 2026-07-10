@@ -20,20 +20,20 @@ use reqwest::header::HeaderMap;
 use std::{fmt, str::FromStr};
 use tracing::error;
 
-/// DRAGONFLY_TAG_HEADER is the header key of tag in http request.
+/// The header key of tag in http request.
 pub const DRAGONFLY_TAG_HEADER: &str = "X-Dragonfly-Tag";
 
-/// DRAGONFLY_APPLICATION_HEADER is the header key of application in http request.
+/// The header key of application in http request.
 pub const DRAGONFLY_APPLICATION_HEADER: &str = "X-Dragonfly-Application";
 
-/// DRAGONFLY_PRIORITY_HEADER is the header key of priority in http request,
+/// The header key of priority in http request,
 /// refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L67.
 pub const DRAGONFLY_PRIORITY_HEADER: &str = "X-Dragonfly-Priority";
 
-/// DRAGONFLY_REGISTRY_HEADER is the header key of custom address of container registry.
+/// The header key of custom address of container registry.
 pub const DRAGONFLY_REGISTRY_HEADER: &str = "X-Dragonfly-Registry";
 
-/// DRAGONFLY_FILTERS_HEADER is the header key of filters in http request,
+/// The header key of filters in http request,
 /// it is the filtered query params to generate the task id.
 /// When filter is "X-Dragonfly-Filtered-Query-Params: Signature,Expires,ns" for example:
 /// http://example.com/xyz?Expires=e1&Signature=s1&ns=docker.io and http://example.com/xyz?Expires=e2&Signature=s2&ns=docker.io
@@ -41,19 +41,19 @@ pub const DRAGONFLY_REGISTRY_HEADER: &str = "X-Dragonfly-Registry";
 /// Default value includes the filtered query params of s3, gcs, oss, obs, cos.
 pub const DRAGONFLY_FILTERED_QUERY_PARAMS_HEADER: &str = "X-Dragonfly-Filtered-Query-Params";
 
-/// DRAGONFLY_USE_P2P_HEADER is the header key of use p2p in http request.
+/// The header key of use p2p in http request.
 /// If the value is "true", the request will use P2P technology to distribute
 /// the content. If the value is "false", but url matches the regular expression in proxy config.
 /// The request will also use P2P technology to distribute the content.
 pub const DRAGONFLY_USE_P2P_HEADER: &str = "X-Dragonfly-Use-P2P";
 
-/// DRAGONFLY_PREFETCH_HEADER is the header key of prefetch in http request.
+/// The header key of prefetch in http request.
 /// X-Dragonfly-Prefetch priority is higher than prefetch in config.
 /// If the value is "true", the range request will prefetch the entire file.
 /// If the value is "false", the range request will fetch the range content.
 pub const DRAGONFLY_PREFETCH_HEADER: &str = "X-Dragonfly-Prefetch";
 
-/// DRAGONFLY_OUTPUT_PATH_HEADER is the header key of absolute output path in http request.
+/// The header key of absolute output path in http request.
 ///
 /// If `X-Dragonfly-Output-Path` is set, the downloaded file will be saved to the specified path.
 /// Dfdaemon will try to create hard link to the output path before starting the download. If hard link creation fails,
@@ -61,26 +61,26 @@ pub const DRAGONFLY_PREFETCH_HEADER: &str = "X-Dragonfly-Prefetch";
 /// For more details refer to https://github.com/dragonflyoss/design/blob/main/systems-analysis/file-download-workflow-with-hard-link/README.md.
 pub const DRAGONFLY_OUTPUT_PATH_HEADER: &str = "X-Dragonfly-Output-Path";
 
-/// DRAGONFLY_FORCE_HARD_LINK_HEADER is the header key of force hard link in http request.
+/// The header key of force hard link in http request.
 ///
 /// `X-Dragonfly-Force-Hard-Link` is the flag to indicate whether the download file must be hard linked to the output path.
 /// For more details refer to https://github.com/dragonflyoss/design/blob/main/systems-analysis/file-download-workflow-with-hard-link/README.md.
 pub const DRAGONFLY_FORCE_HARD_LINK_HEADER: &str = "X-Dragonfly-Force-Hard-Link";
 
-/// DRAGONFLY_PIECE_LENGTH_HEADER is the header key of piece length in http request.
+/// The header key of piece length in http request.
 /// If the value is set, the piece length will be used to download the file.
 /// Different piece length will generate different task id. The value needs to
 /// be set with human readable format and needs to be greater than or equal
 /// to 4mib, for example: 4mib, 1gib
 pub const DRAGONFLY_PIECE_LENGTH_HEADER: &str = "X-Dragonfly-Piece-Length";
 
-/// DRAGONFLY_CONTENT_FOR_CALCULATING_TASK_ID_HEADER is the header key of content for calculating task id.
+/// The header key of content for calculating task id.
 /// If DRAGONFLY_CONTENT_FOR_CALCULATING_TASK_ID_HEADER is set, use its value to calculate the task ID.
 /// Otherwise, calculate the task ID based on `url`, `piece_length`, `tag`, `application`, and `filtered_query_params`.
 pub const DRAGONFLY_CONTENT_FOR_CALCULATING_TASK_ID_HEADER: &str =
     "X-Dragonfly-Content-For-Calculating-Task-ID";
 
-/// DRAGONFLY_ENABLE_TASK_ID_BASED_BLOB_DIGEST is the header key to indicate whether to use the blob's content
+/// The header key to indicate whether to use the blob's content
 /// digest (e.g., SHA-256 hash) for task ID calculation, when downloading from OCI registries. When enabled
 /// for OCI blob URLs (e.g., /v2/<name>/blobs/sha256:<digest>), the task ID is derived from the blob digest
 /// rather than the full URL. This enables deduplication across registries - the same blob from different
@@ -88,20 +88,20 @@ pub const DRAGONFLY_CONTENT_FOR_CALCULATING_TASK_ID_HEADER: &str =
 pub const DRAGONFLY_ENABLE_TASK_ID_BASED_BLOB_DIGEST: &str =
     "X-Dragonfly-Enable-Task-ID-Based-Blob-Digest";
 
-/// DRAGONFLY_TASK_DOWNLOAD_FINISHED_HEADER is the response header key to indicate whether the task download finished.
+/// The response header key to indicate whether the task download finished.
 /// When the task download is finished, the response will include this header with the value `"true"`,
 /// indicating that the download hit the local cache.
 pub const DRAGONFLY_TASK_DOWNLOAD_FINISHED_HEADER: &str = "X-Dragonfly-Task-Download-Finished";
 
-/// DRAGONFLY_TASK_ID_HEADER is the response header key of task id. Client will calculate the task ID
+/// The response header key of task id. Client will calculate the task ID
 /// based on `url`, `piece_length`, `tag`, `application`, and `filtered_query_params`.
 pub const DRAGONFLY_TASK_ID_HEADER: &str = "X-Dragonfly-Task-ID";
 
-/// DRAGONFLY_SERVER_IP_HEADER is the response header key of server IP.
+/// The response header key of server IP.
 /// It is used to indicate the IP address of the server that handled the request.
 pub const DRAGONFLY_SERVER_IP_HEADER: &str = "X-Dragonfly-Server-IP";
 
-/// DRAGONFLY_ERROR_TYPE_HEADER is the response header key of error type.
+/// The response header key of error type.
 /// It is used to indicate the type of error that occurred during the request.
 /// The value of this header can be one of the following:
 /// - "backend": Indicates an upstream error occurred during the request.
@@ -109,16 +109,16 @@ pub const DRAGONFLY_SERVER_IP_HEADER: &str = "X-Dragonfly-Server-IP";
 /// - "dfdaemon": Indicates a dfdaemon error occurred during the request.
 pub const DRAGONFLY_ERROR_TYPE_HEADER: &str = "X-Dragonfly-Error-Type";
 
-/// ErrorType represents the type of error that occurred during the request.
+/// Represents the type of error that occurred during the request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorType {
-    /// Backend indicates an upstream error occurred during the request.
+    /// Indicates an upstream error occurred during the request.
     Backend,
 
-    /// Proxy indicates a proxy error occurred during the request.
+    /// Indicates a proxy error occurred during the request.
     Proxy,
 
-    /// Dfdaemon indicates a dfdaemon error occurred during the request.
+    /// Indicates a dfdaemon error occurred during the request.
     Dfdaemon,
 }
 
@@ -140,7 +140,7 @@ impl fmt::Display for ErrorType {
     }
 }
 
-/// ErrorType implements std::str::FromStr.
+/// Implements std::str::FromStr.
 impl FromStr for ErrorType {
     type Err = String;
 

@@ -33,46 +33,46 @@ use tonic_health::pb::{
 };
 use tracing::{debug, error, info, Instrument};
 
-/// Selector is the interface for selecting item from a list of items by a specific criteria.
+/// The interface for selecting item from a list of items by a specific criteria.
 #[async_trait]
 pub trait Selector: Send + Sync {
     /// select selects items based on the given task_id and number of replicas.
     async fn select(&self, task_id: String, replicas: u32) -> Result<Vec<Host>>;
 }
 
-/// SEED_PEERS_HEALTH_CHECK_TIMEOUT is the health check timeout for seed peers.
+/// The health check timeout for seed peers.
 const SEED_PEERS_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// DEFAULT_VNODES_PER_HOST is the default number of virtual nodes per host.
+/// The default number of virtual nodes per host.
 const DEFAULT_VNODES_PER_HOST: usize = 512;
 
-/// SeedPeers holds the data of seed peers.
+/// Holds the data of seed peers.
 struct SeedPeers {
-    /// hosts is the list of seed peers.
+    /// The list of seed peers.
     hosts: HashMap<String, Host>,
 
-    /// hashring is the hashring constructed from the hosts.
+    /// The hashring constructed from the hosts.
     hashring: VNodeHashRing,
 }
 
-/// SeedPeerSelector is the implementation of Selector for seed peers.
+/// The implementation of Selector for seed peers.
 pub struct SeedPeerSelector {
-    /// health_check_interval is the interval of health check for seed peers.
+    /// The interval of health check for seed peers.
     health_check_interval: Duration,
 
-    /// scheduler_client is the client to communicate with the scheduler service.
+    /// The client to communicate with the scheduler service.
     scheduler_client: SchedulerClient<Channel>,
 
-    /// seed_peers is the data of the seed peer selector.
+    /// The data of the seed peer selector.
     seed_peers: RwLock<SeedPeers>,
 
-    /// mutex is used to protect hot refresh.
+    /// Used to protect hot refresh.
     mutex: Mutex<()>,
 }
 
-/// SeedPeerSelector implements a selector that selects seed peers from the scheduler service.
+/// Implements a selector that selects seed peers from the scheduler service.
 impl SeedPeerSelector {
-    /// new creates a new seed peer selector.
+    /// Creates a new seed peer selector.
     pub async fn new(
         scheduler_client: SchedulerClient<Channel>,
         health_check_interval: Duration,
@@ -91,7 +91,7 @@ impl SeedPeerSelector {
         Ok(seed_peer_selector)
     }
 
-    /// run starts the seed peer selector service.
+    /// Starts the seed peer selector service.
     pub async fn run(&self) {
         let mut interval = tokio::time::interval(self.health_check_interval);
         loop {
@@ -110,7 +110,7 @@ impl SeedPeerSelector {
         }
     }
 
-    /// refresh updates the seed peers data.
+    /// Updates the seed peers data.
     async fn refresh(&self) -> Result<()> {
         // Only one refresh can be running at a time.
         let Ok(_guard) = self.mutex.try_lock() else {
@@ -160,7 +160,7 @@ impl SeedPeerSelector {
         Ok(())
     }
 
-    /// list_seed_peers lists the seed peers from scheduler.
+    /// Lists the seed peers from scheduler.
     async fn list_seed_peers(&self) -> Result<Vec<Host>> {
         // Filter for seed peer types, seed peer type is 1.
         // refer to dragonfly-client-config/src/dfdaemon.rs#HostType.
@@ -171,7 +171,7 @@ impl SeedPeerSelector {
         Ok(seed_peers)
     }
 
-    /// check_health checks the health of each seed peer.
+    /// Checks the health of each seed peer.
     async fn check_health(addr: &str) -> Result<HealthCheckResponse> {
         let channel = Endpoint::from_shared(addr.to_string())?
             .connect_timeout(SEED_PEERS_HEALTH_CHECK_TIMEOUT)

@@ -33,10 +33,10 @@ use url::Url;
 
 use super::*;
 
-/// DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL is the default steady tick interval of progress bar.
+/// The default steady tick interval of progress bar.
 const DEFAULT_PROGRESS_BAR_STEADY_TICK_INTERVAL: Duration = Duration::from_millis(80);
 
-/// ImportCommand is the subcommand of import.
+/// The subcommand of import.
 #[derive(Debug, Clone, Parser)]
 pub struct ImportCommand {
     #[arg(help = "Specify the path of the file to import")]

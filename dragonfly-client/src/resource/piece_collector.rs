@@ -33,13 +33,13 @@ use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, instrument, Instrument};
 
-/// Collected parent is the parent peer collected from the parent.
+/// The parent peer collected from the parent.
 #[derive(Clone, Debug, Default)]
 pub struct CollectedParent {
-    /// ID is the id of the parent.
+    /// The id of the parent.
     pub id: String,
 
-    /// Host is the host of the parent.
+    /// The host of the parent.
     pub host: Option<Host>,
 
     // IP is used to indicate the IP address of the peer. If protocol is rdma,
@@ -53,42 +53,42 @@ pub struct CollectedParent {
     pub download_quic_port: Option<i32>,
 }
 
-/// Collected piece is the piece collected from a peer.
+/// The piece collected from a peer.
 #[derive(Clone, Debug, Default)]
 pub struct CollectedPiece {
-    /// Number is the piece number.
+    /// The piece number.
     pub number: u32,
 
-    /// Length is the piece length.
+    /// The piece length.
     pub length: u64,
 
-    /// Parents is the parents providing the piece.
+    /// The parents providing the piece.
     pub parents: Vec<CollectedParent>,
 }
 
-/// Piece collector is used to collect pieces from peers.
+/// Used to collect pieces from peers.
 #[derive(Clone, Debug, Default)]
 pub struct PieceCollector {
-    /// Config is the configuration of the dfdaemon.
+    /// The configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// Host id is the id of the host.
+    /// The id of the host.
     host_id: String,
 
-    /// Task id is the id of the task.
+    /// The id of the task.
     task_id: String,
 
-    /// Parents is the parent peers.
+    /// The parent peers.
     parents: Vec<CollectedParent>,
 
-    /// Interested pieces is the pieces interested by the collector.
+    /// The pieces interested by the collector.
     interested_pieces: Vec<metadata::Piece>,
 
-    /// Collected pieces is a map to store the collected pieces from different parents.
+    /// A map to store the collected pieces from different parents.
     collected_pieces: Arc<DashMap<u32, CollectedPiece>>,
 }
 
-/// Piece collector is used to collect pieces from peers.
+/// Used to collect pieces from peers.
 impl PieceCollector {
     /// Creates a new PieceCollector.
     pub async fn new(
@@ -361,28 +361,28 @@ impl PieceCollector {
     }
 }
 
-/// Persistent piece collector is used to collect persistent pieces from peers.
+/// Used to collect persistent pieces from peers.
 pub struct PersistentPieceCollector {
-    /// Config is the configuration of the dfdaemon.
+    /// The configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// Host id is the id of the host.
+    /// The id of the host.
     host_id: String,
 
-    /// Task id is the id of the persistent task.
+    /// The id of the persistent task.
     task_id: String,
 
-    /// Parents is the parent peers.
+    /// The parent peers.
     parents: Vec<CollectedParent>,
 
-    /// Interested pieces is the pieces interested by the collector.
+    /// The pieces interested by the collector.
     interested_pieces: Vec<metadata::Piece>,
 
-    /// Collected pieces is a map to store the collected pieces from different parents.
+    /// A map to store the collected pieces from different parents.
     collected_pieces: Arc<DashMap<u32, CollectedPiece>>,
 }
 
-/// Persistent piece collector is used to collect persistent pieces from peers.
+/// Used to collect persistent pieces from peers.
 impl PersistentPieceCollector {
     /// Creates a new PieceCollector.
     pub async fn new(
@@ -663,28 +663,28 @@ impl PersistentPieceCollector {
     }
 }
 
-/// Persistent cache piece collector is used to collect persistent cache pieces from peers.
+/// Used to collect persistent cache pieces from peers.
 pub struct PersistentCachePieceCollector {
-    /// Config is the configuration of the dfdaemon.
+    /// The configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// Host id is the id of the host.
+    /// The id of the host.
     host_id: String,
 
-    /// Task id is the id of the persistent task.
+    /// The id of the persistent task.
     task_id: String,
 
-    /// Parents is the parent peers.
+    /// The parent peers.
     parents: Vec<CollectedParent>,
 
-    /// Interested pieces is the pieces interested by the collector.
+    /// The pieces interested by the collector.
     interested_pieces: Vec<metadata::Piece>,
 
-    /// Collected pieces is a map to store the collected pieces from different parents.
+    /// A map to store the collected pieces from different parents.
     collected_pieces: Arc<DashMap<u32, CollectedPiece>>,
 }
 
-/// Persistent cache piece collector is used to collect persistent cache pieces from peers.
+/// Used to collect persistent cache pieces from peers.
 impl PersistentCachePieceCollector {
     /// Creates a new PieceCollector.
     pub async fn new(
