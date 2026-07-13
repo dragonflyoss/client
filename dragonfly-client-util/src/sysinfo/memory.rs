@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use sysinfo::{MemoryRefreshKind, Pid, ProcessRefreshKind, RefreshKind, System};
+use sysinfo::{MemoryRefreshKind, Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 use tracing::debug;
 
 /// Represents system-wide memory statistics.
@@ -106,10 +106,16 @@ impl Memory {
     /// # Returns
     /// ProcessMemoryStats containing the process's memory usage percentage.
     pub fn get_process_stats(&self, pid: u32) -> ProcessMemoryStats {
-        let sys = System::new_with_specifics(
-            RefreshKind::new()
-                .with_memory(MemoryRefreshKind::new().with_ram())
-                .with_processes(ProcessRefreshKind::new().with_memory()),
+        // Only refresh the given process to avoid reading other processes'
+        // `/proc/<pid>` entries, which is denied by the default AppArmor
+        // profile when running in a container.
+        let mut sys = System::new_with_specifics(
+            RefreshKind::new().with_memory(MemoryRefreshKind::new().with_ram()),
+        );
+        sys.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+            false,
+            ProcessRefreshKind::new().with_memory(),
         );
         let memory_usage = sys.process(Pid::from_u32(pid)).unwrap().memory();
         let total_memory = sys.total_memory();
