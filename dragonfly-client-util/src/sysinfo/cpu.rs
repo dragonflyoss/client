@@ -124,15 +124,13 @@ impl CPU {
         // Lock the mutex to ensure exclusive access to cpu stats.
         let _guard = self.mutex.lock().await;
 
-        // Only refresh the given process to avoid reading other processes'
-        // `/proc/<pid>` entries, which is denied by the default AppArmor
-        // profile when running in a container.
         let mut sys = System::new();
         sys.refresh_processes_specifics(
             ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
             false,
             ProcessRefreshKind::new().with_cpu(),
         );
+
         sleep(Self::DEFAULT_CPU_REFRESH_INTERVAL).await;
         sys.refresh_processes_specifics(
             ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),

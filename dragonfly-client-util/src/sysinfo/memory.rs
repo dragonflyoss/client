@@ -106,9 +106,6 @@ impl Memory {
     /// # Returns
     /// ProcessMemoryStats containing the process's memory usage percentage.
     pub fn get_process_stats(&self, pid: u32) -> ProcessMemoryStats {
-        // Only refresh the given process to avoid reading other processes'
-        // `/proc/<pid>` entries, which is denied by the default AppArmor
-        // profile when running in a container.
         let mut sys = System::new_with_specifics(
             RefreshKind::new().with_memory(MemoryRefreshKind::new().with_ram()),
         );
