@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use sysinfo::{MemoryRefreshKind, Pid, ProcessRefreshKind, RefreshKind, System};
+use sysinfo::{MemoryRefreshKind, Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 use tracing::debug;
 
 /// Represents system-wide memory statistics.
@@ -72,8 +72,9 @@ impl Memory {
     /// # Returns
     /// MemoryStats containing total, free, available, used memory and usage percentage.
     pub fn get_stats(&self) -> MemoryStats {
-        let sys =
-            System::new_with_specifics(RefreshKind::new().with_memory(MemoryRefreshKind::new()));
+        let sys = System::new_with_specifics(
+            RefreshKind::nothing().with_memory(MemoryRefreshKind::nothing().with_ram()),
+        );
         let total_memory = sys.total_memory();
         let free_memory = sys.free_memory();
         let available_memory = sys.available_memory();
@@ -106,10 +107,13 @@ impl Memory {
     /// # Returns
     /// ProcessMemoryStats containing the process's memory usage percentage.
     pub fn get_process_stats(&self, pid: u32) -> ProcessMemoryStats {
-        let sys = System::new_with_specifics(
-            RefreshKind::new()
-                .with_memory(MemoryRefreshKind::new().with_ram())
-                .with_processes(ProcessRefreshKind::new().with_memory()),
+        let mut sys = System::new_with_specifics(
+            RefreshKind::nothing().with_memory(MemoryRefreshKind::nothing().with_ram()),
+        );
+        sys.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+            false,
+            ProcessRefreshKind::nothing().with_memory(),
         );
         let memory_usage = sys.process(Pid::from_u32(pid)).unwrap().memory();
         let total_memory = sys.total_memory();

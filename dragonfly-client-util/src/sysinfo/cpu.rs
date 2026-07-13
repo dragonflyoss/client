@@ -96,7 +96,7 @@ impl CPU {
         let _guard = self.mutex.lock().await;
 
         let mut sys = System::new_with_specifics(
-            RefreshKind::new().with_cpu(CpuRefreshKind::new().with_cpu_usage()),
+            RefreshKind::nothing().with_cpu(CpuRefreshKind::nothing().with_cpu_usage()),
         );
         sys.refresh_cpu_usage();
         sleep(Self::DEFAULT_CPU_REFRESH_INTERVAL).await;
@@ -124,12 +124,19 @@ impl CPU {
         // Lock the mutex to ensure exclusive access to cpu stats.
         let _guard = self.mutex.lock().await;
 
-        let mut sys = System::new_with_specifics(
-            RefreshKind::new().with_processes(ProcessRefreshKind::new().with_cpu()),
+        let mut sys = System::new();
+        sys.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+            false,
+            ProcessRefreshKind::nothing().with_cpu(),
         );
-        sys.refresh_processes(ProcessesToUpdate::Some(&[Pid::from_u32(pid)]), false);
+
         sleep(Self::DEFAULT_CPU_REFRESH_INTERVAL).await;
-        sys.refresh_processes(ProcessesToUpdate::Some(&[Pid::from_u32(pid)]), false);
+        sys.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+            false,
+            ProcessRefreshKind::nothing().with_cpu(),
+        );
 
         let cpu_usage = sys.process(Pid::from_u32(pid)).unwrap().cpu_usage();
         let used_percent = cpu_usage as f64 / self.logical_core_count as f64;

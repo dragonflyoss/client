@@ -18,7 +18,7 @@ use dragonfly_client_core::Result;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::sync::Mutex;
 use tracing::debug;
 
@@ -118,8 +118,12 @@ impl Disk {
     pub async fn get_process_stats(&self, pid: u32) -> ProcessDiskStats {
         // Lock the mutex to ensure exclusive access to disk stats.
         let _guard = self.mutex.lock().await;
-        let mut sys = System::new_with_specifics(
-            RefreshKind::new().with_processes(ProcessRefreshKind::new().with_disk_usage()),
+
+        let mut sys = System::new();
+        sys.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+            false,
+            ProcessRefreshKind::nothing().with_disk_usage(),
         );
 
         // Sleep to calculate the disk traffic difference over
@@ -127,9 +131,9 @@ impl Disk {
         tokio::time::sleep(Self::DEFAULT_DISK_REFRESH_INTERVAL).await;
 
         sys.refresh_processes_specifics(
-            ProcessesToUpdate::All,
-            true,
-            ProcessRefreshKind::new().with_disk_usage(),
+            ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+            false,
+            ProcessRefreshKind::nothing().with_disk_usage(),
         );
 
         let disk_usage = sys.process(Pid::from_u32(pid)).unwrap().disk_usage();
