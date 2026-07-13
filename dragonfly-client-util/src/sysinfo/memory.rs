@@ -150,14 +150,9 @@ impl Memory {
                     if let Some(memory_controller) = cgroup.controller_of::<MemController>() {
                         let memory_stats = memory_controller.memory_stat();
                         // The `rss` key only exists in cgroup v1's memory.stat. In cgroup v2 the
-                        // equivalent counter (NR_ANON_MAPPED) is exported as `anon`. Note that
-                        // `inactive_anon + active_anon` is NOT equivalent: the anon LRU lists
-                        // include shmem/tmpfs pages and exclude mlocked (unevictable) and
-                        // MADV_FREE'd pages, so only use it as a last-resort fallback.
+                        // equivalent counter (NR_ANON_MAPPED) is exported as `anon`.
                         let memory_usage = if cgroup.v2() {
-                            memory_stats.stat.raw.get("anon").copied().unwrap_or(
-                                memory_stats.stat.inactive_anon + memory_stats.stat.active_anon,
-                            )
+                            memory_stats.stat.raw.get("anon").copied().unwrap_or(0)
                         } else {
                             memory_stats.stat.rss
                         };

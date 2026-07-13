@@ -15,7 +15,9 @@
  */
 
 use crate::grpc::scheduler::SchedulerClient;
-use dragonfly_api::common::v2::{Build, CgroupCpu, CgroupMemory, Cpu, Disk, Host, Memory, Network};
+use dragonfly_api::common::v2::{
+    Build, CgroupCpu, CgroupDisk, CgroupMemory, Cpu, Disk, Host, Memory, Network,
+};
 use dragonfly_api::scheduler::v2::{AnnounceHostRequest, DeleteHostRequest};
 use dragonfly_client_config::{
     dfdaemon::{Config, HostType},
@@ -212,13 +214,14 @@ impl SchedulerAnnouncer {
             .disk
             .get_stats(self.config.storage.dir.as_path())?;
         let process_disk_stats = self.system_monitor.disk.get_process_stats(pid).await;
-        let disk = Disk {
+        let mut disk = Disk {
             total: disk_stats.total,
             free: disk_stats.free,
             used: disk_stats.usage,
             used_percent: disk_stats.used_percent,
             write_bandwidth: process_disk_stats.write_bandwidth,
             read_bandwidth: process_disk_stats.read_bandwidth,
+            cgroup: None,
 
             // TODO: Get the disk inodes information.
             inodes_total: 0,
@@ -226,6 +229,19 @@ impl SchedulerAnnouncer {
             inodes_free: 0,
             inodes_used_percent: 0.0,
         };
+
+        // Get the cgroup disk information if running in a container environment.
+        if self.is_running_in_container {
+            disk.cgroup = self
+                .system_monitor
+                .disk
+                .get_cgroup_stats(pid)
+                .await
+                .map(|stats| CgroupDisk {
+                    read_bandwidth: stats.read_bandwidth,
+                    write_bandwidth: stats.write_bandwidth,
+                });
+        }
 
         // Get the build information.
         let build = Build {
