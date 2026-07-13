@@ -211,7 +211,7 @@ impl Disk {
                 pid, write_bandwidth, read_bandwidth
             );
 
-            return Some(CgroupDiskStats {
+            Some(CgroupDiskStats {
                 write_bandwidth,
                 read_bandwidth,
             });
