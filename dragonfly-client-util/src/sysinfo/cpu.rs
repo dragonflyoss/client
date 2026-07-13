@@ -96,7 +96,7 @@ impl CPU {
         let _guard = self.mutex.lock().await;
 
         let mut sys = System::new_with_specifics(
-            RefreshKind::new().with_cpu(CpuRefreshKind::new().with_cpu_usage()),
+            RefreshKind::nothing().with_cpu(CpuRefreshKind::nothing().with_cpu_usage()),
         );
         sys.refresh_cpu_usage();
         sleep(Self::DEFAULT_CPU_REFRESH_INTERVAL).await;
@@ -128,14 +128,14 @@ impl CPU {
         sys.refresh_processes_specifics(
             ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
             false,
-            ProcessRefreshKind::new().with_cpu(),
+            ProcessRefreshKind::nothing().with_cpu(),
         );
 
         sleep(Self::DEFAULT_CPU_REFRESH_INTERVAL).await;
         sys.refresh_processes_specifics(
             ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
             false,
-            ProcessRefreshKind::new().with_cpu(),
+            ProcessRefreshKind::nothing().with_cpu(),
         );
 
         let cpu_usage = sys.process(Pid::from_u32(pid)).unwrap().cpu_usage();

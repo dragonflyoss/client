@@ -123,7 +123,7 @@ impl Disk {
         sys.refresh_processes_specifics(
             ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
             false,
-            ProcessRefreshKind::new().with_disk_usage(),
+            ProcessRefreshKind::nothing().with_disk_usage(),
         );
 
         // Sleep to calculate the disk traffic difference over
@@ -133,7 +133,7 @@ impl Disk {
         sys.refresh_processes_specifics(
             ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
             false,
-            ProcessRefreshKind::new().with_disk_usage(),
+            ProcessRefreshKind::nothing().with_disk_usage(),
         );
 
         let disk_usage = sys.process(Pid::from_u32(pid)).unwrap().disk_usage();
