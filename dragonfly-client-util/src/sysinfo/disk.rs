@@ -214,7 +214,7 @@ impl Disk {
             Some(CgroupDiskStats {
                 write_bandwidth,
                 read_bandwidth,
-            });
+            })
         }
 
         #[cfg(not(target_os = "linux"))]
