@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use sysinfo::{MemoryRefreshKind, Pid, ProcessRefreshKind, RefreshKind, System};
+use sysinfo::{MemoryRefreshKind, Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 use tracing::debug;
 
 /// Represents system-wide memory statistics.
@@ -72,8 +72,9 @@ impl Memory {
     /// # Returns
     /// MemoryStats containing total, free, available, used memory and usage percentage.
     pub fn get_stats(&self) -> MemoryStats {
-        let sys =
-            System::new_with_specifics(RefreshKind::new().with_memory(MemoryRefreshKind::new()));
+        let sys = System::new_with_specifics(
+            RefreshKind::nothing().with_memory(MemoryRefreshKind::nothing().with_ram()),
+        );
         let total_memory = sys.total_memory();
         let free_memory = sys.free_memory();
         let available_memory = sys.available_memory();
@@ -106,10 +107,13 @@ impl Memory {
     /// # Returns
     /// ProcessMemoryStats containing the process's memory usage percentage.
     pub fn get_process_stats(&self, pid: u32) -> ProcessMemoryStats {
-        let sys = System::new_with_specifics(
-            RefreshKind::new()
-                .with_memory(MemoryRefreshKind::new().with_ram())
-                .with_processes(ProcessRefreshKind::new().with_memory()),
+        let mut sys = System::new_with_specifics(
+            RefreshKind::nothing().with_memory(MemoryRefreshKind::nothing().with_ram()),
+        );
+        sys.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+            false,
+            ProcessRefreshKind::nothing().with_memory(),
         );
         let memory_usage = sys.process(Pid::from_u32(pid)).unwrap().memory();
         let total_memory = sys.total_memory();
@@ -145,24 +149,28 @@ impl Memory {
                 Ok(cgroup) => {
                     if let Some(memory_controller) = cgroup.controller_of::<MemController>() {
                         let memory_stats = memory_controller.memory_stat();
-                        let used_percent = if memory_stats.limit_in_bytes > 0 {
-                            (memory_stats.stat.rss as f64 / memory_stats.limit_in_bytes as f64)
-                                * 100.0
+                        // The `rss` key only exists in cgroup v1's memory.stat. In cgroup v2 the
+                        // equivalent counter (NR_ANON_MAPPED) is exported as `anon`.
+                        let memory_usage = if cgroup.v2() {
+                            memory_stats.stat.raw.get("anon").copied().unwrap_or(0)
                         } else {
-                            (memory_stats.stat.rss as f64 / self.get_stats().total as f64) * 100.0
+                            memory_stats.stat.rss
+                        };
+
+                        let used_percent = if memory_stats.limit_in_bytes > 0 {
+                            (memory_usage as f64 / memory_stats.limit_in_bytes as f64) * 100.0
+                        } else {
+                            (memory_usage as f64 / self.get_stats().total as f64) * 100.0
                         };
 
                         debug!(
                             "process {} cgroup memory limit: {} bytes, memory usage: {} bytes, used percent: {}%",
-                            pid,
-                            memory_stats.limit_in_bytes,
-                            memory_stats.stat.rss,
-                            used_percent,
+                            pid, memory_stats.limit_in_bytes, memory_usage, used_percent,
                         );
 
                         return Some(CgroupMemoryStats {
                             limit: memory_stats.limit_in_bytes,
-                            usage: memory_stats.stat.rss,
+                            usage: memory_usage,
                             used_percent: used_percent.clamp(0.0, 100.0),
                         });
                     }

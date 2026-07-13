@@ -131,7 +131,7 @@ impl Network {
         tokio::time::sleep(Self::DEFAULT_NETWORK_REFRESH_INTERVAL).await;
 
         // Refresh network information to get updated statistics.
-        networks.refresh();
+        networks.refresh(true);
         let Some(network_stats) = networks.get(self.interface_name.as_str()) else {
             warn!(
                 "can not find network data for interface {}",
