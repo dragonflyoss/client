@@ -15,7 +15,6 @@
  */
 
 use crate::dynconfig::Dynconfig;
-use crate::grpc::block_list::BlockList;
 use crate::grpc::REQUEST_TIMEOUT;
 use crate::resource::{piece::MIN_PIECE_LENGTH, task::Task};
 use bytes::Bytes;
@@ -97,8 +96,8 @@ pub struct Proxy {
     /// Request rate limiter of the proxy server.
     request_rate_limiter: Arc<RateLimiter>,
 
-    /// Block list to check whether the download task is blocked.
-    block_list: Arc<BlockList>,
+    /// Dynamic configuration of the dfdaemon, used to check the block list.
+    dynconfig: Arc<Dynconfig>,
 
     /// Used to shut down the proxy server.
     shutdown: shutdown::Shutdown,
@@ -132,7 +131,7 @@ impl Proxy {
                     .fair(false)
                     .build(),
             ),
-            block_list: Arc::new(BlockList::new(config.clone(), dynconfig.clone())),
+            dynconfig,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         };
@@ -190,7 +189,7 @@ impl Proxy {
             registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
             server_ca_cert: Arc<Option<Certificate>>,
             request_rate_limiter: Arc<RateLimiter>,
-            block_list: Arc<BlockList>,
+            dynconfig: Arc<Dynconfig>,
         }
 
         let context = Context {
@@ -199,7 +198,7 @@ impl Proxy {
             registry_cert: self.registry_cert.clone(),
             server_ca_cert: self.server_ca_cert.clone(),
             request_rate_limiter: self.request_rate_limiter.clone(),
-            block_list: self.block_list.clone(),
+            dynconfig: self.dynconfig.clone(),
         };
 
         let listener = TcpListener::bind(self.addr).await?;
@@ -228,7 +227,7 @@ impl Proxy {
                                 service_fn(move |request|{
                                     let context = context.clone();
                                     async move {
-                                        handler(context.config, context.task, request, context.registry_cert, context.server_ca_cert, context.request_rate_limiter, context.block_list, remote_address.ip()).await
+                                        handler(context.config, context.task, request, context.registry_cert, context.server_ca_cert, context.request_rate_limiter, context.dynconfig, remote_address.ip()).await
                                     }
                                 } ),
                                 )
@@ -260,7 +259,7 @@ pub async fn handler(
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
     request_rate_limiter: Arc<RateLimiter>,
-    block_list: Arc<BlockList>,
+    dynconfig: Arc<Dynconfig>,
     remote_ip: std::net::IpAddr,
 ) -> ClientResult<Response> {
     // Span record the url and method.
@@ -295,7 +294,7 @@ pub async fn handler(
                 registry_cert,
                 server_ca_cert,
                 request_rate_limiter,
-                block_list,
+                dynconfig,
             )
             .await;
         }
@@ -306,7 +305,7 @@ pub async fn handler(
             request,
             remote_ip,
             registry_cert,
-            block_list,
+            dynconfig,
         )
         .await;
     }
@@ -321,12 +320,12 @@ pub async fn handler(
             registry_cert,
             server_ca_cert,
             request_rate_limiter,
-            block_list,
+            dynconfig,
         )
         .await;
     }
 
-    http_handler(config, task, request, remote_ip, registry_cert, block_list).await
+    http_handler(config, task, request, remote_ip, registry_cert, dynconfig).await
 }
 
 /// Handles the http request for the registry mirror by client.
@@ -337,10 +336,10 @@ pub async fn registry_mirror_http_handler(
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
-    block_list: Arc<BlockList>,
+    dynconfig: Arc<Dynconfig>,
 ) -> ClientResult<Response> {
     let request = make_registry_mirror_request(config.clone(), request)?;
-    return http_handler(config, task, request, remote_ip, registry_cert, block_list).await;
+    return http_handler(config, task, request, remote_ip, registry_cert, dynconfig).await;
 }
 
 /// Handles the https request for the registry mirror by client.
@@ -354,7 +353,7 @@ pub async fn registry_mirror_https_handler(
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
     request_rate_limiter: Arc<RateLimiter>,
-    block_list: Arc<BlockList>,
+    dynconfig: Arc<Dynconfig>,
 ) -> ClientResult<Response> {
     let request = make_registry_mirror_request(config.clone(), request)?;
     return https_handler(
@@ -365,7 +364,7 @@ pub async fn registry_mirror_https_handler(
         registry_cert,
         server_ca_cert,
         request_rate_limiter,
-        block_list,
+        dynconfig,
     )
     .await;
 }
@@ -378,7 +377,7 @@ pub async fn http_handler(
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
-    block_list: Arc<BlockList>,
+    dynconfig: Arc<Dynconfig>,
 ) -> ClientResult<Response> {
     // Authenticate the request with the basic auth.
     if let Some(basic_auth) = config.proxy.server.basic_auth.as_ref() {
@@ -417,7 +416,7 @@ pub async fn http_handler(
                 request
             );
 
-            return proxy_via_dfdaemon(config, task, block_list, &rule, request, remote_ip).await;
+            return proxy_via_dfdaemon(config, task, dynconfig, &rule, request, remote_ip).await;
         }
 
         debug!(
@@ -438,7 +437,7 @@ pub async fn http_handler(
             return proxy_via_dfdaemon(
                 config,
                 task,
-                block_list,
+                dynconfig,
                 &Rule::default(),
                 request,
                 remote_ip,
@@ -480,7 +479,7 @@ pub async fn https_handler(
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
     request_rate_limiter: Arc<RateLimiter>,
-    block_list: Arc<BlockList>,
+    dynconfig: Arc<Dynconfig>,
 ) -> ClientResult<Response> {
     info!("handle HTTPS request: {:?}", request);
 
@@ -501,7 +500,7 @@ pub async fn https_handler(
                         registry_cert,
                         server_ca_cert,
                         request_rate_limiter,
-                        block_list,
+                        dynconfig,
                     )
                     .await
                     {
@@ -537,7 +536,7 @@ async fn upgraded_tunnel(
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
     request_rate_limiter: Arc<RateLimiter>,
-    block_list: Arc<BlockList>,
+    dynconfig: Arc<Dynconfig>,
 ) -> ClientResult<()> {
     // Generate the self-signed certificate by the given host. If the ca_cert
     // is not set, use the self-signed certificate. Otherwise, use the CA
@@ -586,7 +585,7 @@ async fn upgraded_tunnel(
                     remote_ip,
                     registry_cert.clone(),
                     request_rate_limiter.clone(),
-                    block_list.clone(),
+                    dynconfig.clone(),
                 )
             }),
         )
@@ -611,7 +610,7 @@ pub async fn upgraded_handler(
     remote_ip: std::net::IpAddr,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     request_rate_limiter: Arc<RateLimiter>,
-    block_list: Arc<BlockList>,
+    dynconfig: Arc<Dynconfig>,
 ) -> ClientResult<Response> {
     // Span record the url and method.
     Span::current().record("url", request.uri().to_string().as_str());
@@ -684,7 +683,7 @@ pub async fn upgraded_handler(
                 request,
             );
 
-            return proxy_via_dfdaemon(config, task, block_list, &rule, request, remote_ip).await;
+            return proxy_via_dfdaemon(config, task, dynconfig, &rule, request, remote_ip).await;
         }
 
         debug!(
@@ -705,7 +704,7 @@ pub async fn upgraded_handler(
             return proxy_via_dfdaemon(
                 config,
                 task,
-                block_list,
+                dynconfig,
                 &Rule::default(),
                 request,
                 remote_ip,
@@ -741,7 +740,7 @@ pub async fn upgraded_handler(
 async fn proxy_via_dfdaemon(
     config: Arc<Config>,
     task: Arc<Task>,
-    block_list: Arc<BlockList>,
+    dynconfig: Arc<Dynconfig>,
     rule: &Rule,
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
@@ -775,7 +774,7 @@ async fn proxy_via_dfdaemon(
     let mut out_stream = match task::download(
         config.clone(),
         task.clone(),
-        block_list.clone(),
+        dynconfig.clone(),
         download_task_request,
     )
     .await
@@ -844,13 +843,13 @@ async fn proxy_via_dfdaemon(
                 info!("prefetch task started");
                 let config = config.clone();
                 let task_manager = task.clone();
-                let block_list = block_list.clone();
+                let dynconfig = dynconfig.clone();
                 tokio::spawn(
                     async move {
                         if let Err(err) = task::prefetch(
                             config,
                             task_manager.clone(),
-                            block_list,
+                            dynconfig,
                             prefetch_download_task_request,
                         )
                         .await

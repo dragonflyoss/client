@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
-use crate::dynconfig::{
-    Dynconfig, SchedulerClusterConfigBlockList, SchedulerClusterConfigDownloadBlockList,
+use super::{
+    Data, SchedulerClusterConfigBlockList, SchedulerClusterConfigDownloadBlockList,
     SchedulerClusterConfigUploadBlockList,
 };
 use dragonfly_client_config::dfdaemon::Config;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// Parameters for checking download block list.
 #[derive(Debug, Clone)]
@@ -55,16 +56,17 @@ pub struct BlockList {
     /// Configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// Dynamic configuration of the dfdaemon.
-    dynconfig: Arc<Dynconfig>,
+    /// Dynamic configuration data shared with the dynconfig.
+    data: Arc<RwLock<Data>>,
 }
 
 /// The block list struct provides methods to check if certain tasks are blocked based on the
 /// dynamic configuration.
 impl BlockList {
-    /// Creates a new `BlockList` instance with the given static configuration and dynamic configuration.
-    pub fn new(config: Arc<Config>, dynconfig: Arc<Dynconfig>) -> Self {
-        Self { config, dynconfig }
+    /// Creates a new `BlockList` instance with the given static configuration and shared dynamic
+    /// configuration data.
+    pub fn new(config: Arc<Config>, data: Arc<RwLock<Data>>) -> Self {
+        Self { config, data }
     }
 
     /// Acquires a read lock on the dynamic configuration data and applies the given transformation
@@ -75,7 +77,7 @@ impl BlockList {
     where
         F: FnOnce(&SchedulerClusterConfigBlockList) -> Option<R>,
     {
-        let data = self.dynconfig.data.read().await;
+        let data = self.data.read().await;
         let config = if self.config.seed_peer.enable {
             data.seed_client_config
                 .as_ref()

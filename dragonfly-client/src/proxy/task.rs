@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-use crate::grpc::block_list::{BlockList, DownloadBlockListCheckParams};
+use crate::dynconfig::block_list::DownloadBlockListCheckParams;
+use crate::dynconfig::Dynconfig;
 use crate::grpc::{DOWNLOAD_STREAM_BUFFER_SIZE, REQUEST_TIMEOUT};
 use crate::resource::task::Task;
 use dragonfly_api::common::v2::TaskType;
@@ -53,7 +54,7 @@ type DownloadTaskStream = mpsc::Receiver<Result<DownloadTaskResponse, Status>>;
 pub async fn download(
     config: Arc<Config>,
     task_manager: Arc<Task>,
-    block_list: Arc<BlockList>,
+    dynconfig: Arc<Dynconfig>,
     request: DownloadTaskRequest,
 ) -> ClientResult<DownloadTaskStream> {
     // Record the start time.
@@ -72,10 +73,14 @@ pub async fn download(
         tag: download.tag.clone(),
         priority: Some(download.priority),
     };
-    if block_list.is_task_download_blocked(&check_params).await {
+    if dynconfig
+        .block_list
+        .is_task_download_blocked(&check_params)
+        .await
+    {
         warn!("download rejected by blocklist policy: {:?}", check_params);
         collect_download_task_blocked_metrics(TaskType::Standard as i32);
-        return Err(ClientError::Unauthorized);
+        return Err(ClientError::PermissionDenied);
     }
 
     // If concurrent_piece_count is not set in the request, use the default value in the config.
@@ -360,7 +365,7 @@ pub async fn download(
 pub async fn prefetch(
     config: Arc<Config>,
     task_manager: Arc<Task>,
-    block_list: Arc<BlockList>,
+    dynconfig: Arc<Dynconfig>,
     mut request: DownloadTaskRequest,
 ) -> ClientResult<()> {
     // Make the prefetch request.
@@ -390,7 +395,7 @@ pub async fn prefetch(
     let priority = download.priority;
 
     // Download the task by the task manager.
-    let mut out_stream_rx = self::download(config, task_manager, block_list, request)
+    let mut out_stream_rx = self::download(config, task_manager, dynconfig, request)
         .await
         .inspect_err(|err| {
             error!("prefetch task failed: {}", err);
