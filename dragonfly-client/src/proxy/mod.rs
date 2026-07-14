@@ -1121,17 +1121,21 @@ async fn proxy_via_http(mut request: Request<hyper::body::Incoming>) -> ClientRe
         }
     });
 
-    // Override Host header with full authority (including port) to handle
-    // containerd's behavior with non-443 HTTPS ports, which otherwise
-    // causes request failures.
+    // Override Host header with the URI authority to handle containerd's
+    // behavior with non-default ports, which otherwise causes request
+    // failures. The default port (80) is stripped, since clients sign
+    // requests (e.g. presigned URLs with `host` in the signed headers)
+    // against the host without the default port.
     let authority = request
         .uri()
         .authority()
-        .ok_or_else(|| ClientError::Unknown("request uri authority is not set".to_string()))?
-        .as_str()
-        .parse()
-        .or_err(ErrorType::ParseError)?;
-    request.headers_mut().insert(hyper::header::HOST, authority);
+        .ok_or_else(|| ClientError::Unknown("request uri authority is not set".to_string()))?;
+    let host = match authority.port_u16() {
+        Some(port) if port != 80 => authority.as_str().parse(),
+        _ => authority.host().parse(),
+    }
+    .or_err(ErrorType::ParseError)?;
+    request.headers_mut().insert(hyper::header::HOST, host);
 
     let response = client.send_request(request).await?;
     Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
@@ -1167,17 +1171,21 @@ async fn proxy_via_https(
         .build();
     let client = Client::builder(TokioExecutor::new()).build(https);
 
-    // Override Host header with full authority (including port) to handle
-    // containerd's behavior with non-443 HTTPS ports, which otherwise
-    // causes request failures.
+    // Override Host header with the URI authority to handle containerd's
+    // behavior with non-443 HTTPS ports, which otherwise causes request
+    // failures. The default port (443) is stripped, since clients sign
+    // requests (e.g. presigned URLs with `host` in the signed headers)
+    // against the host without the default port.
     let authority = request
         .uri()
         .authority()
-        .ok_or_else(|| ClientError::Unknown("request uri authority is not set".to_string()))?
-        .as_str()
-        .parse()
-        .or_err(ErrorType::ParseError)?;
-    request.headers_mut().insert(hyper::header::HOST, authority);
+        .ok_or_else(|| ClientError::Unknown("request uri authority is not set".to_string()))?;
+    let host = match authority.port_u16() {
+        Some(port) if port != 443 => authority.as_str().parse(),
+        _ => authority.host().parse(),
+    }
+    .or_err(ErrorType::ParseError)?;
+    request.headers_mut().insert(hyper::header::HOST, host);
 
     let response = client.request(request).await.inspect_err(|err| {
         error!("request failed: {:?}", err);
