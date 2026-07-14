@@ -762,25 +762,17 @@ async fn proxy_via_dfdaemon(
             }
         };
 
-    // Clone the download task request for prefetching the full task, because
-    // the download task request is moved into the download task.
-    let prefetch_download_task_request = download_task_request
-        .download
-        .as_ref()
-        .is_some_and(|download| download.prefetch)
-        .then(|| download_task_request.clone());
-
     // Download the task by the local task manager.
     let mut out_stream = match task::download(
         config.clone(),
         task.clone(),
         dynconfig.clone(),
-        download_task_request,
+        download_task_request.clone(),
     )
     .await
     {
         Ok(out_stream) => out_stream,
-        Err(ClientError::Unauthorized) => {
+        Err(ClientError::PermissionDenied) => {
             error!("download task rejected by blocklist policy");
             return Ok(make_error_response(
                 header::ErrorType::Proxy,
@@ -835,8 +827,14 @@ async fn proxy_via_dfdaemon(
         ));
     };
 
+    // Get the download from the request.
+    let Some(download) = &download_task_request.download else {
+        error!("missing download");
+        return Err(ClientError::InvalidParameter);
+    };
+
     // If prefetch flag is true, prefetch the full task.
-    if let Some(prefetch_download_task_request) = prefetch_download_task_request {
+    if download.prefetch {
         let task_id = message.task_id.clone();
         match task.prefetch_task_started(task_id.as_str()).await {
             Ok(_) => {
@@ -850,7 +848,7 @@ async fn proxy_via_dfdaemon(
                             config,
                             task_manager.clone(),
                             dynconfig,
-                            prefetch_download_task_request,
+                            download_task_request,
                         )
                         .await
                         {
