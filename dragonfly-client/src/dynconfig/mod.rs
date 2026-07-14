@@ -16,6 +16,7 @@
 
 use crate::grpc::health::HealthClient;
 use crate::grpc::manager::ManagerClient;
+use block_list::BlockList;
 use dragonfly_api::manager::v2::{
     ListSchedulersRequest, ListSchedulersResponse, Scheduler, SourceType,
 };
@@ -32,6 +33,8 @@ use tokio::sync::{mpsc, Mutex, RwLock};
 use tonic_health::pb::health_check_response::ServingStatus;
 use tracing::{debug, error, info, instrument};
 use url::Url;
+
+pub mod block_list;
 
 /// Block list configuration for scheduler cluster clients.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -149,7 +152,10 @@ pub struct Data {
 /// refreshing state from the manager service.
 pub struct Dynconfig {
     /// Current dynamic configuration, protected by a read-write lock.
-    pub data: RwLock<Data>,
+    pub data: Arc<RwLock<Data>>,
+
+    /// Block list to check whether tasks are blocked, backed by the dynamic configuration data.
+    pub block_list: Arc<BlockList>,
 
     /// Static dfdaemon configuration.
     config: Arc<Config>,
@@ -177,9 +183,11 @@ impl Dynconfig {
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Result<Self> {
         // Create a new Dynconfig.
+        let data = Arc::new(RwLock::new(Data::default()));
         let dc = Dynconfig {
+            block_list: Arc::new(BlockList::new(config.clone(), data.clone())),
+            data,
             config,
-            data: RwLock::new(Data::default()),
             manager_client,
             mutex: Mutex::new(()),
             shutdown,

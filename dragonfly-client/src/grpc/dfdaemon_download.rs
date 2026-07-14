@@ -14,10 +14,8 @@
  * limitations under the License.
  */
 
+use crate::dynconfig::block_list::{DownloadBlockListCheckParams, UploadBlockListCheckParams};
 use crate::dynconfig::Dynconfig;
-use crate::grpc::block_list::{
-    BlockList, DownloadBlockListCheckParams, UploadBlockListCheckParams,
-};
 use crate::resource::{persistent_cache_task, persistent_task, task};
 use dragonfly_api::common::v2::{
     CacheTask, PersistentCacheTask, PersistentTask, Priority, Task, TaskType,
@@ -165,7 +163,7 @@ impl DfdaemonDownloadServer {
         let service = DfdaemonDownloadGRPCServer::with_interceptor(
             DfdaemonDownloadServerHandler {
                 config: self.config.clone(),
-                block_list: BlockList::new(self.config.clone(), self.dynconfig.clone()),
+                dynconfig: self.dynconfig.clone(),
                 socket_path: self.socket_path.clone(),
                 task: self.task.clone(),
                 persistent_task: self.persistent_task.clone(),
@@ -273,8 +271,8 @@ pub struct DfdaemonDownloadServerHandler {
     /// Configuration of the dfdaemon.
     config: Arc<Config>,
 
-    /// Block list for download tasks.
-    block_list: BlockList,
+    /// Dynamic configuration of the dfdaemon.
+    dynconfig: Arc<Dynconfig>,
 
     /// Path of the Unix domain socket.
     socket_path: PathBuf,
@@ -329,6 +327,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             priority: Some(download.priority),
         };
         if self
+            .dynconfig
             .block_list
             .is_task_download_blocked(&check_params)
             .await
@@ -1157,6 +1156,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             priority: None,
         };
         if self
+            .dynconfig
             .block_list
             .is_persistent_task_download_blocked(check_params)
             .await
@@ -1481,6 +1481,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             tag: None,
         };
         if self
+            .dynconfig
             .block_list
             .is_persistent_task_upload_blocked(check_params)
             .await
@@ -1761,6 +1762,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             priority: None,
         };
         if self
+            .dynconfig
             .block_list
             .is_persistent_cache_task_download_blocked(check_params)
             .await
@@ -2039,6 +2041,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             tag: request.tag.clone(),
         };
         if self
+            .dynconfig
             .block_list
             .is_persistent_cache_task_upload_blocked(check_params)
             .await

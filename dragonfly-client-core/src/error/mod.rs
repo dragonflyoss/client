@@ -158,6 +158,10 @@ pub enum DFError {
     #[error{"unimplemented"}]
     Unimplemented,
 
+    /// The error when the permission is denied.
+    #[error{"permission denied"}]
+    PermissionDenied,
+
     /// The error when the range fallback error is empty.
     #[error{"RangeUnsatisfiable: Failed to parse range fallback error, please file an issue"}]
     EmptyHTTPRangeError,

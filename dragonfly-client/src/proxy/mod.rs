@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-use crate::grpc::{dfdaemon_download::DfdaemonDownloadClient, REQUEST_TIMEOUT};
+use crate::dynconfig::Dynconfig;
+use crate::grpc::REQUEST_TIMEOUT;
 use crate::resource::{piece::MIN_PIECE_LENGTH, task::Task};
 use bytes::Bytes;
 use dragonfly_api::common::v2::{Download, TaskType};
@@ -65,6 +66,7 @@ use tracing::{debug, error, info, instrument, Instrument, Span};
 
 pub mod header;
 pub mod query;
+pub mod task;
 
 lazy_static! {
   /// Supported HTTP protocols, including HTTP/1.1 and HTTP/1.0.
@@ -94,6 +96,9 @@ pub struct Proxy {
     /// Request rate limiter of the proxy server.
     request_rate_limiter: Arc<RateLimiter>,
 
+    /// Dynamic configuration of the dfdaemon, used to check the block list.
+    dynconfig: Arc<Dynconfig>,
+
     /// Used to shut down the proxy server.
     shutdown: shutdown::Shutdown,
 
@@ -107,6 +112,7 @@ impl Proxy {
     pub fn new(
         config: Arc<Config>,
         task: Arc<Task>,
+        dynconfig: Arc<Dynconfig>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
@@ -125,6 +131,7 @@ impl Proxy {
                     .fair(false)
                     .build(),
             ),
+            dynconfig,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         };
@@ -175,27 +182,23 @@ impl Proxy {
             }
         }
 
-        let dfdaemon_download_client =
-            DfdaemonDownloadClient::new_unix(self.config.download.server.socket_path.clone())
-                .await?;
-
         #[derive(Clone)]
         struct Context {
             config: Arc<Config>,
             task: Arc<Task>,
-            dfdaemon_download_client: DfdaemonDownloadClient,
             registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
             server_ca_cert: Arc<Option<Certificate>>,
             request_rate_limiter: Arc<RateLimiter>,
+            dynconfig: Arc<Dynconfig>,
         }
 
         let context = Context {
             config: self.config.clone(),
             task: self.task.clone(),
-            dfdaemon_download_client,
             registry_cert: self.registry_cert.clone(),
             server_ca_cert: self.server_ca_cert.clone(),
             request_rate_limiter: self.request_rate_limiter.clone(),
+            dynconfig: self.dynconfig.clone(),
         };
 
         let listener = TcpListener::bind(self.addr).await?;
@@ -224,7 +227,7 @@ impl Proxy {
                                 service_fn(move |request|{
                                     let context = context.clone();
                                     async move {
-                                        handler(context.config, context.task, request, context.dfdaemon_download_client, context.registry_cert, context.server_ca_cert, context.request_rate_limiter, remote_address.ip()).await
+                                        handler(context.config, context.task, request, context.registry_cert, context.server_ca_cert, context.request_rate_limiter, context.dynconfig, remote_address.ip()).await
                                     }
                                 } ),
                                 )
@@ -253,10 +256,10 @@ pub async fn handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
-    dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
     request_rate_limiter: Arc<RateLimiter>,
+    dynconfig: Arc<Dynconfig>,
     remote_ip: std::net::IpAddr,
 ) -> ClientResult<Response> {
     // Span record the url and method.
@@ -288,10 +291,10 @@ pub async fn handler(
                 task,
                 request,
                 remote_ip,
-                dfdaemon_download_client,
                 registry_cert,
                 server_ca_cert,
                 request_rate_limiter,
+                dynconfig,
             )
             .await;
         }
@@ -301,8 +304,8 @@ pub async fn handler(
             task,
             request,
             remote_ip,
-            dfdaemon_download_client,
             registry_cert,
+            dynconfig,
         )
         .await;
     }
@@ -314,23 +317,15 @@ pub async fn handler(
             task,
             request,
             remote_ip,
-            dfdaemon_download_client,
             registry_cert,
             server_ca_cert,
             request_rate_limiter,
+            dynconfig,
         )
         .await;
     }
 
-    http_handler(
-        config,
-        task,
-        request,
-        remote_ip,
-        dfdaemon_download_client,
-        registry_cert,
-    )
-    .await
+    http_handler(config, task, request, remote_ip, registry_cert, dynconfig).await
 }
 
 /// Handles the http request for the registry mirror by client.
@@ -340,19 +335,11 @@ pub async fn registry_mirror_http_handler(
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
+    dynconfig: Arc<Dynconfig>,
 ) -> ClientResult<Response> {
     let request = make_registry_mirror_request(config.clone(), request)?;
-    return http_handler(
-        config,
-        task,
-        request,
-        remote_ip,
-        dfdaemon_download_client,
-        registry_cert,
-    )
-    .await;
+    return http_handler(config, task, request, remote_ip, registry_cert, dynconfig).await;
 }
 
 /// Handles the https request for the registry mirror by client.
@@ -363,10 +350,10 @@ pub async fn registry_mirror_https_handler(
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
     request_rate_limiter: Arc<RateLimiter>,
+    dynconfig: Arc<Dynconfig>,
 ) -> ClientResult<Response> {
     let request = make_registry_mirror_request(config.clone(), request)?;
     return https_handler(
@@ -374,10 +361,10 @@ pub async fn registry_mirror_https_handler(
         task,
         request,
         remote_ip,
-        dfdaemon_download_client,
         registry_cert,
         server_ca_cert,
         request_rate_limiter,
+        dynconfig,
     )
     .await;
 }
@@ -389,8 +376,8 @@ pub async fn http_handler(
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
+    dynconfig: Arc<Dynconfig>,
 ) -> ClientResult<Response> {
     // Authenticate the request with the basic auth.
     if let Some(basic_auth) = config.proxy.server.basic_auth.as_ref() {
@@ -429,15 +416,7 @@ pub async fn http_handler(
                 request
             );
 
-            return proxy_via_dfdaemon(
-                config,
-                task,
-                &rule,
-                request,
-                remote_ip,
-                dfdaemon_download_client,
-            )
-            .await;
+            return proxy_via_dfdaemon(config, task, dynconfig, &rule, request, remote_ip).await;
         }
 
         debug!(
@@ -458,10 +437,10 @@ pub async fn http_handler(
             return proxy_via_dfdaemon(
                 config,
                 task,
+                dynconfig,
                 &Rule::default(),
                 request,
                 remote_ip,
-                dfdaemon_download_client,
             )
             .await;
         }
@@ -497,10 +476,10 @@ pub async fn https_handler(
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
     request_rate_limiter: Arc<RateLimiter>,
+    dynconfig: Arc<Dynconfig>,
 ) -> ClientResult<Response> {
     info!("handle HTTPS request: {:?}", request);
 
@@ -518,10 +497,10 @@ pub async fn https_handler(
                         host,
                         port,
                         remote_ip,
-                        dfdaemon_download_client,
                         registry_cert,
                         server_ca_cert,
                         request_rate_limiter,
+                        dynconfig,
                     )
                     .await
                     {
@@ -554,10 +533,10 @@ async fn upgraded_tunnel(
     host: String,
     port: u16,
     remote_ip: std::net::IpAddr,
-    dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     server_ca_cert: Arc<Option<Certificate>>,
     request_rate_limiter: Arc<RateLimiter>,
+    dynconfig: Arc<Dynconfig>,
 ) -> ClientResult<()> {
     // Generate the self-signed certificate by the given host. If the ca_cert
     // is not set, use the self-signed certificate. Otherwise, use the CA
@@ -604,9 +583,9 @@ async fn upgraded_tunnel(
                     port,
                     request,
                     remote_ip,
-                    dfdaemon_download_client.clone(),
                     registry_cert.clone(),
                     request_rate_limiter.clone(),
+                    dynconfig.clone(),
                 )
             }),
         )
@@ -629,9 +608,9 @@ pub async fn upgraded_handler(
     port: u16,
     mut request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    dfdaemon_download_client: DfdaemonDownloadClient,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
     request_rate_limiter: Arc<RateLimiter>,
+    dynconfig: Arc<Dynconfig>,
 ) -> ClientResult<Response> {
     // Span record the url and method.
     Span::current().record("url", request.uri().to_string().as_str());
@@ -704,15 +683,7 @@ pub async fn upgraded_handler(
                 request,
             );
 
-            return proxy_via_dfdaemon(
-                config,
-                task,
-                &rule,
-                request,
-                remote_ip,
-                dfdaemon_download_client,
-            )
-            .await;
+            return proxy_via_dfdaemon(config, task, dynconfig, &rule, request, remote_ip).await;
         }
 
         debug!(
@@ -733,10 +704,10 @@ pub async fn upgraded_handler(
             return proxy_via_dfdaemon(
                 config,
                 task,
+                dynconfig,
                 &Rule::default(),
                 request,
                 remote_ip,
-                dfdaemon_download_client,
             )
             .await;
         }
@@ -769,10 +740,10 @@ pub async fn upgraded_handler(
 async fn proxy_via_dfdaemon(
     config: Arc<Config>,
     task: Arc<Task>,
+    dynconfig: Arc<Dynconfig>,
     rule: &Rule,
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    dfdaemon_download_client: DfdaemonDownloadClient,
 ) -> ClientResult<Response> {
     // Collect the metrics for the proxy request via dfdaemon.
     collect_proxy_request_via_dfdaemon_metrics();
@@ -791,64 +762,45 @@ async fn proxy_via_dfdaemon(
             }
         };
 
-    // Download the task by the dfdaemon download client.
-    let response = match dfdaemon_download_client
-        .download_task(download_task_request)
-        .await
+    // Download the task by the local task manager.
+    let mut out_stream = match task::download(
+        config.clone(),
+        task.clone(),
+        dynconfig.clone(),
+        download_task_request.clone(),
+    )
+    .await
     {
-        Ok(response) => response,
-        Err(err) => match err {
-            ClientError::TonicStatus(err) if err.code() == tonic::Code::ResourceExhausted => {
-                return Ok(make_error_response(
-                    header::ErrorType::Proxy,
-                    http::StatusCode::TOO_MANY_REQUESTS,
-                    None,
-                ));
-            }
-            ClientError::TonicStatus(err) if err.code() == tonic::Code::PermissionDenied => {
-                return Ok(make_error_response(
-                    header::ErrorType::Proxy,
-                    http::StatusCode::FORBIDDEN,
-                    None,
-                ));
-            }
-            ClientError::TonicStatus(err) => {
-                match serde_json::from_slice::<Backend>(err.details()) {
-                    Ok(backend) => {
-                        error!("download task failed: {:?}", backend);
-                        return Ok(make_error_response(
-                            header::ErrorType::Backend,
-                            http::StatusCode::from_u16(
-                                backend.status_code.unwrap_or_default() as u16
-                            )
-                            .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
-                            Some(hashmap_to_headermap(&backend.header)?),
-                        ));
-                    }
-                    Err(_) => {
-                        error!("download task failed: {}", err);
-                        return Ok(make_error_response(
-                            header::ErrorType::Dfdaemon,
-                            http::StatusCode::INTERNAL_SERVER_ERROR,
-                            None,
-                        ));
-                    }
-                };
-            }
-            _ => {
-                error!("download task failed: {}", err);
-                return Ok(make_error_response(
-                    header::ErrorType::Dfdaemon,
-                    http::StatusCode::INTERNAL_SERVER_ERROR,
-                    None,
-                ));
-            }
-        },
+        Ok(out_stream) => out_stream,
+        Err(ClientError::PermissionDenied) => {
+            error!("download task rejected by blocklist policy");
+            return Ok(make_error_response(
+                header::ErrorType::Proxy,
+                http::StatusCode::FORBIDDEN,
+                None,
+            ));
+        }
+        Err(ClientError::BackendError(err)) => {
+            error!("download task failed: {:?}", err);
+            return Ok(make_error_response(
+                header::ErrorType::Backend,
+                err.status_code
+                    .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
+                err.header.clone(),
+            ));
+        }
+        Err(err) => {
+            error!("download task failed: {}", err);
+            return Ok(make_error_response(
+                header::ErrorType::Dfdaemon,
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                None,
+            ));
+        }
     };
 
-    // Handle the response from the download grpc server.
-    let mut out_stream = response.into_inner();
-    let Ok(Some(message)) = out_stream.message().await else {
+    // Handle the response from the download task.
+    let Some(Ok(message)) = out_stream.recv().await else {
         error!("response message failed");
         return Ok(make_error_response(
             header::ErrorType::Dfdaemon,
@@ -864,7 +816,7 @@ async fn proxy_via_dfdaemon(
 
     // Handle the download task started response.
     let Some(download_task_response::Response::DownloadTaskStartedResponse(
-        download_task_started_response,
+        mut download_task_started_response,
     )) = message.response
     else {
         error!("response is not started");
@@ -874,6 +826,55 @@ async fn proxy_via_dfdaemon(
             None,
         ));
     };
+
+    // Get the download from the request.
+    let Some(download) = &download_task_request.download else {
+        error!("missing download");
+        return Err(ClientError::InvalidParameter);
+    };
+
+    // If prefetch flag is true, prefetch the full task.
+    if download.prefetch {
+        let task_id = message.task_id.clone();
+        match task.prefetch_task_started(task_id.as_str()).await {
+            Ok(_) => {
+                info!("prefetch task started");
+                let config = config.clone();
+                let task_manager = task.clone();
+                let dynconfig = dynconfig.clone();
+                tokio::spawn(
+                    async move {
+                        if let Err(err) = task::prefetch(
+                            config,
+                            task_manager.clone(),
+                            dynconfig,
+                            download_task_request,
+                        )
+                        .await
+                        {
+                            match task_manager.prefetch_task_failed(task_id.as_str()).await {
+                                Ok(_) => {
+                                    error!("prefetch task failed: {}", err);
+                                }
+                                Err(err) => {
+                                    error!(
+                                        "prefetch succeeded, but failed to update metadata: {}",
+                                        err
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    .in_current_span(),
+                );
+            }
+            // If the task is already prefetched, ignore the error.
+            Err(ClientError::InvalidState(_)) => info!("task is already prefetched"),
+            Err(err) => {
+                error!("prefetch task started: {}", err);
+            }
+        }
+    }
 
     // Write the status code to the writer.
     let (sender, mut receiver) = mpsc::channel(4);
@@ -895,7 +896,7 @@ async fn proxy_via_dfdaemon(
     *response.headers_mut() = make_response_headers(
         message.task_id.as_str(),
         config.host.ip.unwrap(),
-        download_task_started_response.clone(),
+        &mut download_task_started_response,
     )?;
     // Return 206 Partial Content for range requests to match the Content-Range header set by
     // make_response_headers. Returning 200 for a partial body breaks range-aware clients (e.g. the
@@ -937,8 +938,8 @@ async fn proxy_via_dfdaemon(
             // not in order, store it in the hashmap, and write it to the pipe
             // when the previous piece data is written.
             loop {
-                match out_stream.message().await {
-                    Ok(Some(message)) => {
+                match out_stream.recv().await {
+                    Some(Ok(message)) => {
                         if let Some(
                             download_task_response::Response::DownloadPieceFinishedResponse(
                                 download_task_response,
@@ -1019,7 +1020,7 @@ async fn proxy_via_dfdaemon(
                             return;
                         }
                     }
-                    Ok(None) => {
+                    None => {
                         info!("message is none");
                         if let Err(err) = writer.flush().await {
                             error!("writer flush error: {}", err);
@@ -1027,7 +1028,7 @@ async fn proxy_via_dfdaemon(
 
                         return;
                     }
-                    Err(err) => {
+                    Some(Err(err)) => {
                         if initialized {
                             error!("stream error: {}", err);
                             if let Err(err) = writer.flush().await {
@@ -1120,17 +1121,21 @@ async fn proxy_via_http(mut request: Request<hyper::body::Incoming>) -> ClientRe
         }
     });
 
-    // Override Host header with full authority (including port) to handle
-    // containerd's behavior with non-443 HTTPS ports, which otherwise
-    // causes request failures.
+    // Override Host header with the URI authority to handle containerd's
+    // behavior with non-default ports, which otherwise causes request
+    // failures. The default port (80) is stripped, since clients sign
+    // requests (e.g. presigned URLs with `host` in the signed headers)
+    // against the host without the default port.
     let authority = request
         .uri()
         .authority()
-        .ok_or_else(|| ClientError::Unknown("request uri authority is not set".to_string()))?
-        .as_str()
-        .parse()
-        .or_err(ErrorType::ParseError)?;
-    request.headers_mut().insert(hyper::header::HOST, authority);
+        .ok_or_else(|| ClientError::Unknown("request uri authority is not set".to_string()))?;
+    let host = match authority.port_u16() {
+        Some(port) if port != 80 => authority.as_str().parse(),
+        _ => authority.host().parse(),
+    }
+    .or_err(ErrorType::ParseError)?;
+    request.headers_mut().insert(hyper::header::HOST, host);
 
     let response = client.send_request(request).await?;
     Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
@@ -1166,17 +1171,21 @@ async fn proxy_via_https(
         .build();
     let client = Client::builder(TokioExecutor::new()).build(https);
 
-    // Override Host header with full authority (including port) to handle
-    // containerd's behavior with non-443 HTTPS ports, which otherwise
-    // causes request failures.
+    // Override Host header with the URI authority to handle containerd's
+    // behavior with non-443 HTTPS ports, which otherwise causes request
+    // failures. The default port (443) is stripped, since clients sign
+    // requests (e.g. presigned URLs with `host` in the signed headers)
+    // against the host without the default port.
     let authority = request
         .uri()
         .authority()
-        .ok_or_else(|| ClientError::Unknown("request uri authority is not set".to_string()))?
-        .as_str()
-        .parse()
-        .or_err(ErrorType::ParseError)?;
-    request.headers_mut().insert(hyper::header::HOST, authority);
+        .ok_or_else(|| ClientError::Unknown("request uri authority is not set".to_string()))?;
+    let host = match authority.port_u16() {
+        Some(port) if port != 443 => authority.as_str().parse(),
+        _ => authority.host().parse(),
+    }
+    .or_err(ErrorType::ParseError)?;
+    request.headers_mut().insert(hyper::header::HOST, host);
 
     let response = client.request(request).await.inspect_err(|err| {
         error!("request failed: {:?}", err);
@@ -1341,7 +1350,7 @@ fn make_download_url(
 fn make_response_headers(
     task_id: &str,
     server_ip: std::net::IpAddr,
-    mut download_task_started_response: DownloadTaskStartedResponse,
+    download_task_started_response: &mut DownloadTaskStartedResponse,
 ) -> ClientResult<hyper::header::HeaderMap> {
     // Insert the content range header to the response header.
     if let Some(range) = download_task_started_response.range.as_ref() {

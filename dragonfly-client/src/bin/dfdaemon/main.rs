@@ -368,6 +368,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let proxy = Proxy::new(
         config.clone(),
         task.clone(),
+        dynconfig.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
