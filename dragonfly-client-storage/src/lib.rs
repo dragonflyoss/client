@@ -1287,6 +1287,16 @@ impl Storage {
     /// Waits for the piece to be finished.
     #[instrument(level = "debug", skip_all)]
     async fn wait_for_piece_finished(&self, piece_id: &str) -> Result<metadata::Piece> {
+        // Fast path: the piece is usually already finished when the upload
+        // starts, so check once before setting up the timers.
+        let piece = self
+            .get_piece(piece_id)?
+            .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
+
+        if piece.is_finished() {
+            return Ok(piece);
+        }
+
         // Total timeout for downloading a piece, combining the download time and the time to write to storage.
         let wait_timeout = tokio::time::sleep(
             self.config.download.piece_timeout + self.config.storage.write_piece_timeout,
@@ -1318,6 +1328,16 @@ impl Storage {
     /// Waits for the persistent piece to be finished.
     #[instrument(level = "debug", skip_all)]
     async fn wait_for_persistent_piece_finished(&self, piece_id: &str) -> Result<metadata::Piece> {
+        // Fast path: the piece is usually already finished when the upload
+        // starts, so check once before setting up the timers.
+        let piece = self
+            .get_persistent_piece(piece_id)?
+            .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
+
+        if piece.is_finished() {
+            return Ok(piece);
+        }
+
         // Total timeout for downloading a piece, combining the download time and the time to write to storage.
         let wait_timeout = tokio::time::sleep(
             self.config.download.piece_timeout + self.config.storage.write_piece_timeout,
@@ -1352,6 +1372,16 @@ impl Storage {
         &self,
         piece_id: &str,
     ) -> Result<metadata::Piece> {
+        // Fast path: the piece is usually already finished when the upload
+        // starts, so check once before setting up the timers.
+        let piece = self
+            .get_persistent_cache_piece(piece_id)?
+            .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
+
+        if piece.is_finished() {
+            return Ok(piece);
+        }
+
         // Total timeout for downloading a piece, combining the download time and the time to write to storage.
         let wait_timeout = tokio::time::sleep(
             self.config.download.piece_timeout + self.config.storage.write_piece_timeout,
@@ -1613,6 +1643,15 @@ impl Storage {
     /// Waits for the cache piece to be finished.
     #[instrument(level = "debug", skip_all)]
     async fn wait_for_cache_piece_finished(&self, piece_id: &str) -> Result<metadata::Piece> {
+        // Fast path: the piece is usually already finished when the upload
+        // starts, so check once before setting up the timers.
+        let piece = self
+            .get_cache_piece(piece_id)?
+            .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
+        if piece.is_finished() {
+            return Ok(piece);
+        }
+
         // Total timeout for downloading a piece, combining the download time and the time to write to storage.
         let wait_timeout = tokio::time::sleep(
             self.config.download.piece_timeout + self.config.storage.write_piece_timeout,
