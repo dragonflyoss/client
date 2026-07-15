@@ -1198,7 +1198,7 @@ impl PersistentCacheTask {
                 let piece_id = piece_manager.persistent_cache_id(task_id.as_str(), number);
                 let parent = parent_selector.select(parents);
 
-                info!(
+                debug!(
                     "start to download persistent cache piece {} from parent {:?}",
                     piece_id,
                     parent.id.clone()

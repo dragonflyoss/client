@@ -29,7 +29,7 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::{
     filter::LevelFilter,
-    fmt::{time::ChronoLocal, Layer},
+    fmt::{time::SystemTime, Layer},
     prelude::*,
     EnvFilter, Registry,
 };
@@ -66,13 +66,13 @@ pub fn init_tracing(
     };
     let stdout_logging_layer = Layer::new()
         .with_writer(stdout_writer)
+        .with_ansi(false)
         .with_file(true)
         .with_line_number(true)
         .with_target(false)
         .with_thread_names(false)
         .with_thread_ids(false)
-        .with_timer(ChronoLocal::rfc_3339())
-        .pretty()
+        .with_timer(SystemTime)
         .with_filter(stdout_filter);
 
     // Setup file layer.
@@ -95,7 +95,7 @@ pub fn init_tracing(
         .with_target(false)
         .with_thread_names(false)
         .with_thread_ids(false)
-        .with_timer(ChronoLocal::rfc_3339())
+        .with_timer(SystemTime)
         .compact();
 
     // Setup env filter for log level.
@@ -242,8 +242,7 @@ pub fn init_command_tracing(log_level: Level, console: bool) -> Vec<WorkerGuard>
         .with_target(false)
         .with_thread_names(false)
         .with_thread_ids(false)
-        .with_timer(ChronoLocal::rfc_3339())
-        .pretty()
+        .with_timer(SystemTime)
         .with_filter(stdout_filter);
 
     // Setup env filter for log level.

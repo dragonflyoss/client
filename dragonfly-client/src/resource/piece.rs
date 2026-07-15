@@ -33,8 +33,8 @@ use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::io::{AsyncRead, AsyncReadExt};
-use tracing::{error, info, instrument, warn, Span};
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt};
+use tracing::{debug, error, instrument, warn, Span};
 
 /// The maximum piece count. If the piece count is upper
 /// than MAX_PIECE_COUNT, the piece length will be optimized by the file length.
@@ -183,15 +183,14 @@ impl Piece {
                 number += 1;
             }
 
-            info!(
-                "calculate interested pieces by range {:?}, content length: {:?}, piece length: {:?}, pieces: {:?}",
+            debug!(
+                "calculate interested pieces by range {:?}, content length: {:?}, piece length: {:?}, pieces: count {}, range [{}, {}]",
                 range,
                 content_length,
                 piece_length,
-                pieces
-                    .iter()
-                    .map(|piece| piece.number)
-                    .collect::<Vec<u32>>()
+                pieces.len(),
+                pieces.first().map(|piece| piece.number).unwrap_or_default(),
+                pieces.last().map(|piece| piece.number).unwrap_or_default()
             );
             return Ok(pieces);
         }
@@ -233,20 +232,19 @@ impl Piece {
             number += 1;
         }
 
-        info!(
-            "calculate interested pieces by content length: {:?}, piece length: {:?}, pieces: {:?}",
+        debug!(
+            "calculate interested pieces by content length: {:?}, piece length: {:?}, pieces: count {}, range [{}, {}]",
             content_length,
             piece_length,
-            pieces
-                .iter()
-                .map(|piece| piece.number)
-                .collect::<Vec<u32>>()
+            pieces.len(),
+            pieces.first().map(|piece| piece.number).unwrap_or_default(),
+            pieces.last().map(|piece| piece.number).unwrap_or_default()
         );
         Ok(pieces)
     }
 
     /// Removes the finished pieces from interested pieces.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn remove_finished_from_interested(
         &self,
         finished_pieces: Vec<metadata::Piece>,
@@ -264,7 +262,7 @@ impl Piece {
     }
 
     /// Merges the finished pieces and has finished pieces.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn merge_finished_pieces(
         &self,
         finished_pieces: Vec<metadata::Piece>,
@@ -310,14 +308,14 @@ impl Piece {
     }
 
     /// Downloads a single piece from local cache.
-    #[instrument(skip_all, fields(piece_id))]
+    #[instrument(level = "debug", skip_all, fields(piece_id))]
     pub async fn download_from_local_into_async_read(
         &self,
         piece_id: &str,
         task_id: &str,
         length: u64,
         range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<impl AsyncBufRead> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
@@ -328,14 +326,14 @@ impl Piece {
 
     /// Downloads a single piece from local cache. Fake the download piece
     /// from the local cache, just collect the metrics.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_from_local(&self, length: u64) {
         collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
     }
 
     /// Downloads a single piece from a parent.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all, fields(piece_id))]
+    #[instrument(level = "debug", skip_all, fields(piece_id))]
     pub async fn download_from_parent(
         &self,
         piece_id: &str,
@@ -366,7 +364,7 @@ impl Piece {
         // If the piece is downloaded by the other thread,
         // return the piece directly.
         if piece.is_finished() {
-            info!("finished piece {} from local", piece_id);
+            debug!("finished piece {} from local", piece_id);
             scopeguard::ScopeGuard::into_inner(guard);
             return Ok(piece);
         }
@@ -460,7 +458,7 @@ impl Piece {
 
     /// Downloads a single piece from the source.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all, fields(piece_id))]
+    #[instrument(level = "debug", skip_all, fields(piece_id))]
     pub async fn download_from_source(
         &self,
         piece_id: &str,
@@ -496,7 +494,7 @@ impl Piece {
         // If the piece is downloaded by the other thread,
         // return the piece directly.
         if piece.is_finished() {
-            info!("finished piece {} from local", piece_id);
+            debug!("finished piece {} from local", piece_id);
             scopeguard::ScopeGuard::into_inner(guard);
             return Ok(piece);
         }
@@ -626,13 +624,13 @@ impl Piece {
     }
 
     /// Gets a persistent piece from the local storage.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_persistent(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
         self.storage.get_persistent_piece(piece_id)
     }
 
     /// Creates a new persistent piece.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn create_persistent<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -648,7 +646,7 @@ impl Piece {
     }
 
     /// Registers a new persistent piece.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn register_persistent(
         &self,
         piece_id: &str,
@@ -661,14 +659,14 @@ impl Piece {
     }
 
     /// Downloads a persistent piece from local cache.
-    #[instrument(skip_all, fields(piece_id))]
+    #[instrument(level = "debug", skip_all, fields(piece_id))]
     pub async fn download_persistent_from_local_into_async_read(
         &self,
         piece_id: &str,
         task_id: &str,
         length: u64,
         range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<impl AsyncBufRead> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
@@ -681,14 +679,14 @@ impl Piece {
 
     /// Downloads a persistent piece from local cache. Fake the download
     /// persistent piece from the local cache, just collect the metrics.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_persistent_from_local(&self, length: u64) {
         collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
     }
 
     /// Downloads a persistent piece from a parent.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all, fields(piece_id))]
+    #[instrument(level = "debug", skip_all, fields(piece_id))]
     pub async fn download_persistent_from_parent(
         &self,
         piece_id: &str,
@@ -727,7 +725,7 @@ impl Piece {
         // If the piece is downloaded by the other thread,
         // return the piece directly.
         if piece.is_finished() {
-            info!("finished persistent piece {} from local", piece_id);
+            debug!("finished persistent piece {} from local", piece_id);
             scopeguard::ScopeGuard::into_inner(guard);
             return Ok(piece);
         }
@@ -810,7 +808,7 @@ impl Piece {
 
     /// Downloads a single persistent piece from the source.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all, fields(piece_id))]
+    #[instrument(level = "debug", skip_all, fields(piece_id))]
     pub async fn download_persistent_from_source(
         &self,
         piece_id: &str,
@@ -849,7 +847,7 @@ impl Piece {
         // If the piece is downloaded by the other thread,
         // return the piece directly.
         if piece.is_finished() {
-            info!("finished piece {} from local", piece_id);
+            debug!("finished piece {} from local", piece_id);
             scopeguard::ScopeGuard::into_inner(guard);
             return Ok(piece);
         }
@@ -971,13 +969,13 @@ impl Piece {
     }
 
     /// Gets a persistent cache piece from the local storage.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_persistent_cache(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
         self.storage.get_persistent_cache_piece(piece_id)
     }
 
     /// Creates a new persistent cache piece.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn create_persistent_cache<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -993,7 +991,7 @@ impl Piece {
     }
 
     /// Registers a new persistent cache piece.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn register_persistent_cache(
         &self,
         piece_id: &str,
@@ -1006,14 +1004,14 @@ impl Piece {
     }
 
     /// Downloads a persistent cache piece from local cache.
-    #[instrument(skip_all, fields(piece_id))]
+    #[instrument(level = "debug", skip_all, fields(piece_id))]
     pub async fn download_persistent_cache_from_local_into_async_read(
         &self,
         piece_id: &str,
         task_id: &str,
         length: u64,
         range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<impl AsyncBufRead> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
@@ -1026,14 +1024,14 @@ impl Piece {
 
     /// Downloads a persistent cache piece from local cache. Fake the download
     /// persistent cache piece from the local cache, just collect the metrics.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_persistent_cache_from_local(&self, length: u64) {
         collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
     }
 
     /// Downloads a persistent cache piece from a parent.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all, fields(piece_id))]
+    #[instrument(level = "debug", skip_all, fields(piece_id))]
     pub async fn download_persistent_cache_from_parent(
         &self,
         piece_id: &str,
@@ -1072,7 +1070,7 @@ impl Piece {
         // If the piece is downloaded by the other thread,
         // return the piece directly.
         if piece.is_finished() {
-            info!("finished persistent cache piece {} from local", piece_id);
+            debug!("finished persistent cache piece {} from local", piece_id);
             scopeguard::ScopeGuard::into_inner(guard);
             return Ok(piece);
         }

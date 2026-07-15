@@ -53,7 +53,7 @@ use dragonfly_client_metric::{
 };
 use dragonfly_client_util::{
     digest::{is_blob_url, verify_file_digest, Digest},
-    http::{get_range, hashmap_to_headermap, headermap_to_hashmap},
+    http::{hashmap_to_headermap, headermap_to_hashmap, parse_range_header},
     id_generator::{PersistentTaskIDParameter, TaskIDParameter},
     ratelimiter::bbr::BBR,
     shutdown,
@@ -401,51 +401,43 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         // If download protocol is http, use the range of the request header.
         // If download protocol is not http, use the range of the download.
         if download.range.is_none() {
-            // Convert the header.
-            let request_header = match hashmap_to_headermap(&download.request_header) {
-                Ok(header) => header,
-                Err(err) => {
-                    // Download task failed.
-                    self.task
-                        .download_failed(task_id.as_str())
-                        .await
-                        .unwrap_or_else(|err| error!("download task failed: {}", err));
+            // Look up the range header directly instead of converting the whole
+            // request header hashmap into a HeaderMap.
+            let range_header = download
+                .request_header
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(reqwest::header::RANGE.as_str()))
+                .map(|(_, value)| value.as_str());
 
-                    // Collect download task failure metrics.
-                    collect_download_task_failure_metrics(
-                        download.r#type,
-                        download.tag.clone().unwrap_or_default().as_str(),
-                        download.application.clone().unwrap_or_default().as_str(),
-                        download.priority.to_string().as_str(),
-                    );
+            download.range = match range_header {
+                Some(range_header) => {
+                    match parse_range_header(
+                        range_header,
+                        task.content_length().unwrap_or_default(),
+                    ) {
+                        Ok(range) => Some(range),
+                        Err(err) => {
+                            // Download task failed.
+                            self.task
+                                .download_failed(task_id.as_str())
+                                .await
+                                .unwrap_or_else(|err| error!("download task failed: {}", err));
 
-                    error!("convert header: {}", err);
-                    return Err(Status::invalid_argument(err.to_string()));
-                }
-            };
+                            // Collect download task failure metrics.
+                            collect_download_task_failure_metrics(
+                                download.r#type,
+                                download.tag.clone().unwrap_or_default().as_str(),
+                                download.application.clone().unwrap_or_default().as_str(),
+                                download.priority.to_string().as_str(),
+                            );
 
-            download.range =
-                match get_range(&request_header, task.content_length().unwrap_or_default()) {
-                    Ok(range) => range,
-                    Err(err) => {
-                        // Download task failed.
-                        self.task
-                            .download_failed(task_id.as_str())
-                            .await
-                            .unwrap_or_else(|err| error!("download task failed: {}", err));
-
-                        // Collect download task failure metrics.
-                        collect_download_task_failure_metrics(
-                            download.r#type,
-                            download.tag.clone().unwrap_or_default().as_str(),
-                            download.application.clone().unwrap_or_default().as_str(),
-                            download.priority.to_string().as_str(),
-                        );
-
-                        error!("get range failed: {}", err);
-                        return Err(Status::failed_precondition(err.to_string()));
+                            error!("get range failed: {}", err);
+                            return Err(Status::failed_precondition(err.to_string()));
+                        }
                     }
-                };
+                }
+                None => None,
+            };
         }
 
         // Initialize stream channel.
@@ -927,7 +919,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
     /// Sync pieces provides the piece metadata for parent. If the per-piece collection timeout is exceeded,
     /// the stream will be closed.
-    #[instrument(skip_all, fields(host_id, remote_host_id, task_id))]
+    #[instrument(level = "debug", skip_all, fields(host_id, remote_host_id, task_id))]
     async fn sync_pieces(
         &self,
         request: Request<SyncPiecesRequest>,
@@ -1666,7 +1658,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     type SyncPersistentPiecesStream = ReceiverStream<Result<SyncPersistentPiecesResponse, Status>>;
 
     /// Sync perisstent pieces provides the persistent piece metadata for parent.
-    #[instrument(skip_all, fields(host_id, remote_host_id, task_id))]
+    #[instrument(level = "debug", skip_all, fields(host_id, remote_host_id, task_id))]
     async fn sync_persistent_pieces(
         &self,
         request: Request<SyncPersistentPiecesRequest>,
@@ -2248,7 +2240,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
     /// Sync persistent cache pieces provides the persistent cache piece metadata for parent.
     /// If the per-piece collection timeout is exceeded, the stream will be closed.
-    #[instrument(skip_all, fields(host_id, remote_host_id, task_id))]
+    #[instrument(level = "debug", skip_all, fields(host_id, remote_host_id, task_id))]
     async fn sync_persistent_cache_pieces(
         &self,
         request: Request<SyncPersistentCachePiecesRequest>,
@@ -2472,7 +2464,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     type SyncCachePiecesStream = ReceiverStream<Result<SyncCachePiecesResponse, Status>>;
 
     /// Sync cache pieces provides the cache piece metadata for parent.
-    #[instrument(skip_all, fields(host_id, remote_host_id, task_id))]
+    #[instrument(level = "debug", skip_all, fields(host_id, remote_host_id, task_id))]
     async fn sync_cache_pieces(
         &self,
         _request: Request<SyncCachePiecesRequest>,
@@ -2482,6 +2474,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
     /// Downloads the cache piece content for parent.
     #[instrument(
+        level = "debug",
         skip_all,
         fields(host_id, remote_host_id, task_id, piece_id, piece_length)
     )]
@@ -2623,7 +2616,7 @@ impl DfdaemonUploadClient {
 
     /// Sync pieces provides the piece metadata for parent. If the per-piece collection timeout is exceeded,
     /// the stream will be closed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn sync_pieces(
         &self,
         request: SyncPiecesRequest,
@@ -2698,7 +2691,7 @@ impl DfdaemonUploadClient {
     }
 
     /// Sync perisstent pieces provides the persistent piece metadata for parent.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn sync_persistent_pieces(
         &self,
         request: SyncPersistentPiecesRequest,
@@ -2769,7 +2762,7 @@ impl DfdaemonUploadClient {
 
     /// Sync persistent cache pieces provides the persistent cache piece metadata for parent.
     /// If the per-piece collection timeout is exceeded, the stream will be closed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn sync_persistent_cache_pieces(
         &self,
         request: SyncPersistentCachePiecesRequest,
