@@ -2040,7 +2040,7 @@ impl PersistentTask {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 let parent = parent_selector.select(parents);
 
-                info!(
+                debug!(
                     "start to download persistent piece {} from parent {:?}",
                     piece_id,
                     parent.id.clone()
@@ -2349,7 +2349,7 @@ impl PersistentTask {
                 model_scope: Option<ModelScope>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
-                info!("start to download piece {} from source", piece_id);
+                debug!("start to download piece {} from source", piece_id);
 
                 let metadata = piece_manager
                     .download_persistent_from_source(
@@ -2794,7 +2794,7 @@ impl PersistentTask {
                 model_scope: Option<ModelScope>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
-                info!("start to download piece {} from source", piece_id);
+                debug!("start to download piece {} from source", piece_id);
 
                 let metadata = piece_manager
                     .download_persistent_from_source(

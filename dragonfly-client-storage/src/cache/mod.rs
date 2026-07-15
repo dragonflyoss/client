@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::io::{AsyncRead, BufReader};
+use tokio::io::AsyncBufRead;
 use tokio::sync::RwLock;
 use tracing::{error, info};
 
@@ -107,9 +107,6 @@ impl Task {
 /// Task is the metadata of the task.
 #[derive(Clone)]
 pub struct Cache {
-    /// The configuration of the dfdaemon.
-    config: Arc<Config>,
-
     /// The size of the cache in bytes.
     size: Arc<AtomicU64>,
 
@@ -125,7 +122,6 @@ impl Cache {
     /// Creates a new cache with the specified capacity.
     pub fn new(config: Arc<Config>) -> Self {
         Cache {
-            config: config.clone(),
             size: Arc::new(AtomicU64::new(0)),
             capacity: config.storage.cache_capacity.as_u64(),
             // LRU cache capacity is set to usize::MAX to avoid evicting tasks. LRU cache will evict tasks
@@ -142,7 +138,7 @@ impl Cache {
         piece_id: &str,
         piece: super::metadata::Piece,
         range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<impl AsyncBufRead> {
         let mut tasks = self.tasks.write().await;
         let Some(task) = tasks.get(task_id) else {
             return Err(Error::TaskNotFound(task_id.to_string()));
@@ -184,9 +180,7 @@ impl Cache {
         }
 
         let content = piece_content.slice(begin..end);
-        let reader =
-            BufReader::with_capacity(self.config.storage.read_buffer_size, Cursor::new(content));
-        Ok(reader)
+        Ok(Cursor::new(content))
     }
 
     /// Writes the piece content to the cache.

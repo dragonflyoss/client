@@ -22,9 +22,9 @@ use dragonfly_client_util::fs::fallocate;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::fs::{self, File, OpenOptions};
+use tokio::fs::{self, OpenOptions};
 use tokio::io::{
-    self, AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter, SeekFrom,
+    self, AsyncBufRead, AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufWriter, SeekFrom,
 };
 use tokio_util::io::InspectReader;
 use tracing::{debug, error, info, instrument, warn};
@@ -37,6 +37,9 @@ pub struct Content {
 
     /// The directory to store content.
     pub dir: PathBuf,
+
+    /// The cache of the opened file descriptors for reading pieces.
+    fd_cache: super::content::FDCache,
 }
 
 /// Implements the content storage.
@@ -56,7 +59,11 @@ impl Content {
         fs::create_dir_all(&dir.join(super::content::DEFAULT_PERSISTENT_TASK_DIR)).await?;
         fs::create_dir_all(&dir.join(super::content::DEFAULT_PERSISTENT_CACHE_TASK_DIR)).await?;
         info!("content initialized directory: {:?}", dir);
-        Ok(Content { config, dir })
+        Ok(Content {
+            config,
+            dir,
+            fd_cache: super::content::FDCache::new(super::content::DEFAULT_FD_CACHE_CAPACITY),
+        })
     }
 
     /// Returns the available space of the disk.
@@ -233,6 +240,8 @@ impl Content {
     pub async fn delete_task(&self, task_id: &str) -> Result<()> {
         info!("delete task content: {}", task_id);
         let task_path = self.get_task_path(task_id);
+
+        self.fd_cache.remove(&task_path);
         fs::remove_file(task_path.as_path())
             .await
             .inspect_err(|err| {
@@ -242,83 +251,36 @@ impl Content {
     }
 
     /// Reads the piece from the content.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn read_piece(
         &self,
         task_id: &str,
         offset: u64,
         length: u64,
         range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<impl AsyncBufRead> {
         let task_path = self.get_task_path(task_id);
 
         // Calculate the target offset and length based on the range.
         let (target_offset, target_length) =
             super::content::calculate_piece_range(offset, length, range);
 
-        let f = File::open(task_path.as_path()).await.inspect_err(|err| {
+        // Read the piece with positional reads on the cached file descriptor,
+        // avoiding reopening and seeking the file for every piece.
+        let fd = self.fd_cache.open(&task_path).await.inspect_err(|err| {
             error!("open {:?} failed: {}", task_path, err);
         })?;
-        let mut f_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, f);
 
-        f_reader
-            .seek(SeekFrom::Start(target_offset))
-            .await
-            .inspect_err(|err| {
-                error!("seek {:?} failed: {}", task_path, err);
-            })?;
-
-        Ok(f_reader.take(target_length))
-    }
-
-    /// Returns two readers, one is the range reader, and the other is the
-    /// full reader of the piece. It is used for cache the piece content to the proxy cache.
-    #[instrument(skip_all)]
-    pub async fn read_piece_with_dual_read(
-        &self,
-        task_id: &str,
-        offset: u64,
-        length: u64,
-        range: Option<Range>,
-    ) -> Result<(impl AsyncRead, impl AsyncRead)> {
-        let task_path = self.get_task_path(task_id);
-
-        // Calculate the target offset and length based on the range.
-        let (target_offset, target_length) =
-            super::content::calculate_piece_range(offset, length, range);
-
-        let f = File::open(task_path.as_path()).await.inspect_err(|err| {
-            error!("open {:?} failed: {}", task_path, err);
-        })?;
-        let mut f_range_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, f);
-
-        f_range_reader
-            .seek(SeekFrom::Start(target_offset))
-            .await
-            .inspect_err(|err| {
-                error!("seek {:?} failed: {}", task_path, err);
-            })?;
-        let range_reader = f_range_reader.take(target_length);
-
-        // Create full reader of the piece.
-        let f = File::open(task_path.as_path()).await.inspect_err(|err| {
-            error!("open {:?} failed: {}", task_path, err);
-        })?;
-        let mut f_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, f);
-
-        f_reader
-            .seek(SeekFrom::Start(offset))
-            .await
-            .inspect_err(|err| {
-                error!("seek {:?} failed: {}", task_path, err);
-            })?;
-        let reader = f_reader.take(length);
-
-        Ok((range_reader, reader))
+        Ok(super::content::RangeReader::new(
+            fd,
+            target_offset,
+            target_length,
+            self.config.storage.read_buffer_size,
+        ))
     }
 
     /// Writes the piece to the content and calculates the hash of the piece by crc32.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn write_piece<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
@@ -342,7 +304,6 @@ impl Content {
         })?;
 
         let reader = reader.take(expected_length);
-        let reader = BufReader::with_capacity(self.config.storage.write_buffer_size, reader);
         let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
 
         // Copy the piece to the file while updating the CRC32 value.
@@ -363,8 +324,7 @@ impl Content {
 
         if length != expected_length {
             return Err(Error::Unknown(format!(
-                "expected length {} but got {}",
-                expected_length, length
+                "expected length {expected_length} but got {length}"
             )));
         }
 
@@ -514,38 +474,37 @@ impl Content {
     }
 
     /// Reads the persistent piece from the content.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn read_persistent_piece(
         &self,
         task_id: &str,
         offset: u64,
         length: u64,
         range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<impl AsyncBufRead> {
         let task_path = self.get_persistent_task_path(task_id);
 
         // Calculate the target offset and length based on the range.
         let (target_offset, target_length) =
             super::content::calculate_piece_range(offset, length, range);
 
-        let f = File::open(task_path.as_path()).await.inspect_err(|err| {
+        // Read the piece with positional reads on the cached file descriptor,
+        // avoiding reopening and seeking the file for every piece.
+        let fd = self.fd_cache.open(&task_path).await.inspect_err(|err| {
             error!("open {:?} failed: {}", task_path, err);
         })?;
-        let mut f_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, f);
 
-        f_reader
-            .seek(SeekFrom::Start(target_offset))
-            .await
-            .inspect_err(|err| {
-                error!("seek {:?} failed: {}", task_path, err);
-            })?;
-
-        Ok(f_reader.take(target_length))
+        Ok(super::content::RangeReader::new(
+            fd,
+            target_offset,
+            target_length,
+            self.config.storage.read_buffer_size,
+        ))
     }
 
     /// Writes the persistent piece to the content and
     /// calculates the hash of the piece by crc32.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn write_persistent_piece<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
@@ -569,7 +528,6 @@ impl Content {
         })?;
 
         let reader = reader.take(expected_length);
-        let reader = BufReader::with_capacity(self.config.storage.write_buffer_size, reader);
         let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
 
         // Copy the piece to the file while updating the CRC32 value.
@@ -590,8 +548,7 @@ impl Content {
 
         if length != expected_length {
             return Err(Error::Unknown(format!(
-                "expected length {} but got {}",
-                expected_length, length
+                "expected length {expected_length} but got {length}"
             )));
         }
 
@@ -606,6 +563,8 @@ impl Content {
     pub async fn delete_persistent_task(&self, task_id: &str) -> Result<()> {
         info!("delete persistent task content: {}", task_id);
         let persistent_task_path = self.get_persistent_task_path(task_id);
+
+        self.fd_cache.remove(&persistent_task_path);
         fs::remove_file(persistent_task_path.as_path())
             .await
             .inspect_err(|err| {
@@ -760,38 +719,37 @@ impl Content {
     }
 
     /// Reads the persistent cache piece from the content.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn read_persistent_cache_piece(
         &self,
         task_id: &str,
         offset: u64,
         length: u64,
         range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<impl AsyncBufRead> {
         let task_path = self.get_persistent_cache_task_path(task_id);
 
         // Calculate the target offset and length based on the range.
         let (target_offset, target_length) =
             super::content::calculate_piece_range(offset, length, range);
 
-        let f = File::open(task_path.as_path()).await.inspect_err(|err| {
+        // Read the piece with positional reads on the cached file descriptor,
+        // avoiding reopening and seeking the file for every piece.
+        let fd = self.fd_cache.open(&task_path).await.inspect_err(|err| {
             error!("open {:?} failed: {}", task_path, err);
         })?;
-        let mut f_reader = BufReader::with_capacity(self.config.storage.read_buffer_size, f);
 
-        f_reader
-            .seek(SeekFrom::Start(target_offset))
-            .await
-            .inspect_err(|err| {
-                error!("seek {:?} failed: {}", task_path, err);
-            })?;
-
-        Ok(f_reader.take(target_length))
+        Ok(super::content::RangeReader::new(
+            fd,
+            target_offset,
+            target_length,
+            self.config.storage.read_buffer_size,
+        ))
     }
 
     /// Writes the persistent cache piece to the content and
     /// calculates the hash of the piece by crc32.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn write_persistent_cache_piece<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
@@ -815,7 +773,6 @@ impl Content {
         })?;
 
         let reader = reader.take(expected_length);
-        let reader = BufReader::with_capacity(self.config.storage.write_buffer_size, reader);
         let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
 
         // Copy the piece to the file while updating the CRC32 value.
@@ -836,8 +793,7 @@ impl Content {
 
         if length != expected_length {
             return Err(Error::Unknown(format!(
-                "expected length {} but got {}",
-                expected_length, length
+                "expected length {expected_length} but got {length}"
             )));
         }
 
@@ -852,6 +808,8 @@ impl Content {
     pub async fn delete_persistent_cache_task(&self, task_id: &str) -> Result<()> {
         info!("delete persistent cache task content: {}", task_id);
         let persistent_cache_task_path = self.get_persistent_cache_task_path(task_id);
+
+        self.fd_cache.remove(&persistent_cache_task_path);
         fs::remove_file(persistent_cache_task_path.as_path())
             .await
             .inspect_err(|err| {
@@ -1301,7 +1259,7 @@ mod tests {
             .join(content::DEFAULT_CONTENT_DIR)
             .join(content::DEFAULT_TASK_DIR)
             .join("1mib");
-        let mut file = File::create(&file_path).await.unwrap();
+        let mut file = fs::File::create(&file_path).await.unwrap();
         let buffer = vec![0u8; ByteSize::mib(1).as_u64() as usize];
         file.write_all(&buffer).await.unwrap();
         file.flush().await.unwrap();

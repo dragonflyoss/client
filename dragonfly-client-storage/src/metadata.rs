@@ -680,7 +680,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the task when task uploads started.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn upload_task_started(&self, id: &str) -> Result<Task> {
         let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
@@ -696,7 +696,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the task when task uploads finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn upload_task_finished(&self, id: &str) -> Result<Task> {
         let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
@@ -713,7 +713,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the task when the task uploads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn upload_task_failed(&self, id: &str) -> Result<Task> {
         let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
@@ -1356,7 +1356,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
 
     /// Creates a new persistent piece, which is imported by
     /// local.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn create_persistent_piece(
         &self,
         piece_id: &str,
@@ -1387,7 +1387,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
 
     /// Creates a new persistent cache piece, which is imported by
     /// local.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn create_persistent_cache_piece(
         &self,
         piece_id: &str,
@@ -1417,7 +1417,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the piece when the piece downloads started.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_piece_started(&self, piece_id: &str, number: u32) -> Result<Piece> {
         // Construct the piece metadata.
         let piece = Piece {
@@ -1433,7 +1433,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the piece when the piece downloads finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_piece_finished(
         &self,
         piece_id: &str,
@@ -1460,13 +1460,13 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the piece when the piece downloads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_piece_failed(&self, piece_id: &str) -> Result<()> {
         self.delete_piece(piece_id)
     }
 
     /// Waits for the piece to be finished or failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn wait_for_piece_finished_failed(&self, piece_id: &str) -> Result<()> {
         self.delete_piece(piece_id)
     }
@@ -1477,13 +1477,13 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Checks if the piece exists.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn is_piece_exists(&self, piece_id: &str) -> Result<bool> {
         self.db.exists::<Piece>(piece_id.as_bytes())
     }
 
     /// Gets the piece metadatas.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_pieces(&self, task_id: &str) -> Result<Vec<Piece>> {
         let pieces = self
             .db
@@ -1501,14 +1501,14 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Deletes the piece metadata.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn delete_piece(&self, piece_id: &str) -> Result<()> {
         info!("delete piece metadata {}", piece_id);
         self.db.delete::<Piece>(piece_id.as_bytes())
     }
 
     /// Deletes the piece metadatas.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn delete_pieces(&self, task_id: &str) -> Result<()> {
         let piece_ids = self
             .db

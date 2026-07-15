@@ -32,7 +32,7 @@ use leaky_bucket::RateLimiter;
 use quinn::{congestion::BbrConfig, AckFrequencyConfig, Endpoint, ServerConfig, TransportConfig};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{copy, AsyncRead};
+use tokio::io::{copy_buf, AsyncBufRead};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, instrument, Span};
 use vortex_protocol::{
@@ -150,7 +150,7 @@ pub struct QUICServerHandler {
 /// Implements the request handler.
 impl QUICServerHandler {
     /// Handles a single QUIC connection.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn handle(
         &self,
         connection: quinn::Connection,
@@ -191,7 +191,11 @@ impl QUICServerHandler {
     /// It reads the protocol header to determine the request type and dispatches
     /// to the appropriate handler. Supports both regular piece downloads and
     /// persistent cache piece downloads with proper request/response framing.
-    #[instrument(skip_all, fields(host_id, remote_address, task_id, piece_id))]
+    #[instrument(
+        level = "debug",
+        skip_all,
+        fields(host_id, remote_address, task_id, piece_id)
+    )]
     async fn handle_stream(
         &self,
         mut reader: quinn::RecvStream,
@@ -491,12 +495,12 @@ impl QUICServerHandler {
     /// upload rate limiting, and prepares both the piece metadata and
     /// content stream for transmission. It's the core handler for regular
     /// piece download requests in the P2P network.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_piece(
         &self,
         piece_id: &str,
         task_id: &str,
-    ) -> Result<(PieceContent, impl AsyncRead), Error> {
+    ) -> Result<(PieceContent, impl AsyncBufRead), Error> {
         // Get the piece metadata from the local storage.
         let piece = match self.storage.get_piece(piece_id) {
             Ok(Some(piece)) => piece,
@@ -555,12 +559,12 @@ impl QUICServerHandler {
     /// which have different storage semantics and metadata structure. This
     /// enables efficient serving of frequently accessed content from the
     /// persistent layer.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_persistent_piece(
         &self,
         piece_id: &str,
         task_id: &str,
-    ) -> Result<(PersistentPieceContent, impl AsyncRead), Error> {
+    ) -> Result<(PersistentPieceContent, impl AsyncBufRead), Error> {
         // Get the piece metadata from the local storage.
         let piece = match self.storage.get_persistent_piece(piece_id) {
             Ok(Some(piece)) => piece,
@@ -619,12 +623,12 @@ impl QUICServerHandler {
     /// which have different storage semantics and metadata structure. This
     /// enables efficient serving of frequently accessed content from the
     /// persistent cache layer.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_persistent_cache_piece(
         &self,
         piece_id: &str,
         task_id: &str,
-    ) -> Result<(PersistentCachePieceContent, impl AsyncRead), Error> {
+    ) -> Result<(PersistentCachePieceContent, impl AsyncBufRead), Error> {
         // Get the piece metadata from the local storage.
         let piece = match self.storage.get_persistent_cache_piece(piece_id) {
             Ok(Some(piece)) => piece,
@@ -724,7 +728,7 @@ impl QUICServerHandler {
     /// This function sends the provided bytes as a response and ensures
     /// all data is flushed to the underlying transport. This is typically
     /// used for sending headers and small payloads in a single operation.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn write_response(
         &self,
         request: Bytes,
@@ -742,16 +746,17 @@ impl QUICServerHandler {
     /// Streams data from a reader directly to the QUIC writer.
     ///
     /// This function efficiently copies all data from the provided stream
-    /// to the QUIC connection using tokio's copy utility. It's designed for
-    /// streaming large piece content without loading everything into memory.
-    /// The operation is flushed to ensure data delivery.
-    #[instrument(skip_all)]
-    async fn write_stream<R: AsyncRead + Unpin + ?Sized>(
+    /// to the QUIC connection using tokio's copy_buf utility, which writes the
+    /// reader's internal buffer directly without an intermediate copy buffer.
+    /// It's designed for streaming large piece content without loading
+    /// everything into memory. The operation is flushed to ensure data delivery.
+    #[instrument(level = "debug", skip_all)]
+    async fn write_stream<R: AsyncBufRead + Unpin + ?Sized>(
         &self,
         stream: &mut R,
         writer: &mut quinn::SendStream,
     ) -> ClientResult<()> {
-        copy(stream, writer)
+        copy_buf(stream, writer)
             .await
             .inspect_err(|err| error!("copy failed: {}", err))?;
 

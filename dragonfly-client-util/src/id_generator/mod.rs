@@ -125,12 +125,17 @@ impl IDGenerator {
             } => {
                 // Filter the query parameters.
                 let url = Url::parse(url.as_str()).or_err(ErrorType::ParseError)?;
-                let query = url
+                let mut query = url
                     .query_pairs()
-                    .filter(|(k, _)| !filtered_query_params.contains(&k.to_string()));
+                    .filter(|(k, _)| {
+                        !filtered_query_params
+                            .iter()
+                            .any(|param| param.as_str() == k.as_ref())
+                    })
+                    .peekable();
 
                 let mut artifact_url = url.clone();
-                if query.clone().count() == 0 {
+                if query.peek().is_none() {
                     artifact_url.set_query(None);
                 } else {
                     artifact_url.query_pairs_mut().clear().extend_pairs(query);
