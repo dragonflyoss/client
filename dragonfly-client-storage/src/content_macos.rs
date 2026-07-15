@@ -242,7 +242,7 @@ impl Content {
     }
 
     /// Reads the piece from the content.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn read_piece(
         &self,
         task_id: &str,
@@ -272,7 +272,7 @@ impl Content {
     }
 
     /// Writes the piece to the content and calculates the hash of the piece by crc32.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn write_piece<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
@@ -467,7 +467,7 @@ impl Content {
     }
 
     /// Reads the persistent piece from the content.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn read_persistent_piece(
         &self,
         task_id: &str,
@@ -498,7 +498,7 @@ impl Content {
 
     /// Writes the persistent piece to the content and
     /// calculates the hash of the piece by crc32.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn write_persistent_piece<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,
@@ -712,7 +712,7 @@ impl Content {
     }
 
     /// Reads the persistent cache piece from the content.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn read_persistent_cache_piece(
         &self,
         task_id: &str,
@@ -743,7 +743,7 @@ impl Content {
 
     /// Writes the persistent cache piece to the content and
     /// calculates the hash of the piece by crc32.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn write_persistent_cache_piece<R: AsyncRead + Unpin + ?Sized>(
         &self,
         task_id: &str,

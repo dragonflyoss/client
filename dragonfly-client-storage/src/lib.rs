@@ -639,7 +639,7 @@ impl Storage {
     }
 
     /// Creates a new persistent piece.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn create_persistent_piece<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -668,7 +668,7 @@ impl Storage {
     /// Used when creating a hardlink from persistent to storage. Since the piece
     /// content is accessed via hardlink, digest calculation is deferred until another
     /// peer downloads the piece.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn register_persistent_piece(
         &self,
         piece_id: &str,
@@ -686,7 +686,7 @@ impl Storage {
     }
 
     /// Creates a new persistent cache piece.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn create_persistent_cache_piece<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -715,7 +715,7 @@ impl Storage {
     /// Used when creating a hardlink from persistent cache to storage. Since the piece
     /// content is accessed via hardlink, digest calculation is deferred until another
     /// peer downloads the piece.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn register_persistent_cache_piece(
         &self,
         piece_id: &str,
@@ -734,7 +734,7 @@ impl Storage {
 
     /// Updates the metadata of the piece and writes
     /// the data of piece to file when the piece downloads started.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_piece_started(
         &self,
         piece_id: &str,
@@ -750,7 +750,7 @@ impl Storage {
 
     /// Used for downloading piece from source.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_piece_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -797,7 +797,7 @@ impl Storage {
 
     /// Used for downloading piece from parent.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_piece_from_parent_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -821,7 +821,7 @@ impl Storage {
 
     // handle_downloaded_piece_from_parent_finished handles the downloaded piece from parent.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_downloaded_piece_from_parent_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -863,14 +863,14 @@ impl Storage {
     }
 
     /// Updates the metadata of the piece when the piece downloads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_piece_failed(&self, piece_id: &str) -> Result<()> {
         self.metadata.download_piece_failed(piece_id)
     }
 
     /// Updates the metadata of the piece and
     /// returns the data of the piece.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn upload_piece(
         &self,
         piece_id: &str,
@@ -940,13 +940,13 @@ impl Storage {
     }
 
     /// Returns whether the piece exists.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn is_piece_exists(&self, piece_id: &str) -> Result<bool> {
         self.metadata.is_piece_exists(piece_id)
     }
 
     /// Returns the piece metadatas.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_pieces(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
         self.metadata.get_pieces(task_id)
     }
@@ -959,7 +959,7 @@ impl Storage {
 
     /// Updates the metadata of the persistent piece and writes
     /// the data of piece to file when the persistent piece downloads started.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_persistent_piece_started(
         &self,
         piece_id: &str,
@@ -975,7 +975,7 @@ impl Storage {
 
     /// Used for downloading persistent piece from parent.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_persistent_piece_from_parent_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -1018,7 +1018,7 @@ impl Storage {
 
     /// Used for downloading piece from source.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_persistent_piece_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -1064,14 +1064,14 @@ impl Storage {
     }
 
     /// Updates the metadata of the persistent piece when the persistent piece downloads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_persistent_piece_failed(&self, piece_id: &str) -> Result<()> {
         self.metadata.download_piece_failed(piece_id)
     }
 
     /// Updates the metadata of the piece and_then
     /// returns the data of the piece.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn upload_persistent_piece(
         &self,
         piece_id: &str,
@@ -1118,13 +1118,13 @@ impl Storage {
     }
 
     /// Returns the persistent piece metadata.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_persistent_piece(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
         self.metadata.get_piece(piece_id)
     }
 
     /// Returns whether the persistent piece exists.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn is_persistent_piece_exists(&self, piece_id: &str) -> Result<bool> {
         self.metadata.is_piece_exists(piece_id)
     }
@@ -1142,7 +1142,7 @@ impl Storage {
 
     /// Updates the metadata of the persistent cache piece and writes
     /// the data of piece to file when the persistent cache piece downloads started.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_persistent_cache_piece_started(
         &self,
         piece_id: &str,
@@ -1161,7 +1161,7 @@ impl Storage {
 
     /// Used for downloading persistent cache piece from parent.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_persistent_cache_piece_from_parent_finished<
         R: AsyncRead + Unpin + ?Sized,
     >(
@@ -1205,14 +1205,14 @@ impl Storage {
     }
 
     /// Updates the metadata of the persistent cache piece when the persistent cache piece downloads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_persistent_cache_piece_failed(&self, piece_id: &str) -> Result<()> {
         self.metadata.download_piece_failed(piece_id)
     }
 
     /// Updates the metadata of the piece and_then
     /// returns the data of the piece.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn upload_persistent_cache_piece(
         &self,
         piece_id: &str,
@@ -1262,13 +1262,13 @@ impl Storage {
     }
 
     /// Returns the persistent cache piece metadata.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_persistent_cache_piece(&self, piece_id: &str) -> Result<Option<metadata::Piece>> {
         self.metadata.get_piece(piece_id)
     }
 
     /// Returns whether the persistent cache piece exists.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn is_persistent_cache_piece_exists(&self, piece_id: &str) -> Result<bool> {
         self.metadata.is_piece_exists(piece_id)
     }
@@ -1285,7 +1285,7 @@ impl Storage {
     }
 
     /// Waits for the piece to be finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn wait_for_piece_finished(&self, piece_id: &str) -> Result<metadata::Piece> {
         // Total timeout for downloading a piece, combining the download time and the time to write to storage.
         let wait_timeout = tokio::time::sleep(
@@ -1316,7 +1316,7 @@ impl Storage {
     }
 
     /// Waits for the persistent piece to be finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn wait_for_persistent_piece_finished(&self, piece_id: &str) -> Result<metadata::Piece> {
         // Total timeout for downloading a piece, combining the download time and the time to write to storage.
         let wait_timeout = tokio::time::sleep(
@@ -1347,7 +1347,7 @@ impl Storage {
     }
 
     /// Waits for the persistent cache piece to be finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn wait_for_persistent_cache_piece_finished(
         &self,
         piece_id: &str,
@@ -1382,7 +1382,7 @@ impl Storage {
 
     /// Updates the metadata of the cache piece and writes
     /// the data of cache piece to file when the cache piece downloads started.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_cache_piece_started(
         &self,
         piece_id: &str,
@@ -1398,7 +1398,7 @@ impl Storage {
 
     /// Used for downloading cache piece from source.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_cache_piece_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -1419,7 +1419,7 @@ impl Storage {
     }
 
     // handle_downloaded_cache_piece_from_source_finished handles the downloaded cache piece from source.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_downloaded_cache_piece_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -1454,7 +1454,7 @@ impl Storage {
 
     /// Used for downloading cache piece from parent.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_cache_piece_from_parent_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -1478,7 +1478,7 @@ impl Storage {
 
     // handle_downloaded_cache_piece_from_parent_finished handles the downloaded cache piece from parent.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_downloaded_cache_piece_from_parent_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -1527,14 +1527,14 @@ impl Storage {
         )
     }
     /// Updates the metadata of the cache piece when the cache piece downloads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_cache_piece_failed(&self, piece_id: &str) -> Result<()> {
         self.metadata.download_piece_failed(piece_id)
     }
 
     /// Updates the metadata of the piece and
     /// returns the data of the piece.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn upload_cache_piece(
         &self,
         piece_id: &str,
@@ -1593,13 +1593,13 @@ impl Storage {
     }
 
     /// Returns whether the cache piece exists.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn is_cache_piece_exists(&self, piece_id: &str) -> Result<bool> {
         self.metadata.is_piece_exists(piece_id)
     }
 
     /// Returns the cache piece metadatas.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_cache_pieces(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
         self.metadata.get_pieces(task_id)
     }
@@ -1611,7 +1611,7 @@ impl Storage {
     }
 
     /// Waits for the cache piece to be finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn wait_for_cache_piece_finished(&self, piece_id: &str) -> Result<metadata::Piece> {
         // Total timeout for downloading a piece, combining the download time and the time to write to storage.
         let wait_timeout = tokio::time::sleep(

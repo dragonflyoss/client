@@ -927,7 +927,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
     /// Sync pieces provides the piece metadata for parent. If the per-piece collection timeout is exceeded,
     /// the stream will be closed.
-    #[instrument(skip_all, fields(host_id, remote_host_id, task_id))]
+    #[instrument(level = "debug", skip_all, fields(host_id, remote_host_id, task_id))]
     async fn sync_pieces(
         &self,
         request: Request<SyncPiecesRequest>,
@@ -1666,7 +1666,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     type SyncPersistentPiecesStream = ReceiverStream<Result<SyncPersistentPiecesResponse, Status>>;
 
     /// Sync perisstent pieces provides the persistent piece metadata for parent.
-    #[instrument(skip_all, fields(host_id, remote_host_id, task_id))]
+    #[instrument(level = "debug", skip_all, fields(host_id, remote_host_id, task_id))]
     async fn sync_persistent_pieces(
         &self,
         request: Request<SyncPersistentPiecesRequest>,
@@ -2248,7 +2248,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
     /// Sync persistent cache pieces provides the persistent cache piece metadata for parent.
     /// If the per-piece collection timeout is exceeded, the stream will be closed.
-    #[instrument(skip_all, fields(host_id, remote_host_id, task_id))]
+    #[instrument(level = "debug", skip_all, fields(host_id, remote_host_id, task_id))]
     async fn sync_persistent_cache_pieces(
         &self,
         request: Request<SyncPersistentCachePiecesRequest>,
@@ -2472,7 +2472,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
     type SyncCachePiecesStream = ReceiverStream<Result<SyncCachePiecesResponse, Status>>;
 
     /// Sync cache pieces provides the cache piece metadata for parent.
-    #[instrument(skip_all, fields(host_id, remote_host_id, task_id))]
+    #[instrument(level = "debug", skip_all, fields(host_id, remote_host_id, task_id))]
     async fn sync_cache_pieces(
         &self,
         _request: Request<SyncCachePiecesRequest>,
@@ -2482,6 +2482,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 
     /// Downloads the cache piece content for parent.
     #[instrument(
+        level = "debug",
         skip_all,
         fields(host_id, remote_host_id, task_id, piece_id, piece_length)
     )]
@@ -2623,7 +2624,7 @@ impl DfdaemonUploadClient {
 
     /// Sync pieces provides the piece metadata for parent. If the per-piece collection timeout is exceeded,
     /// the stream will be closed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn sync_pieces(
         &self,
         request: SyncPiecesRequest,
@@ -2698,7 +2699,7 @@ impl DfdaemonUploadClient {
     }
 
     /// Sync perisstent pieces provides the persistent piece metadata for parent.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn sync_persistent_pieces(
         &self,
         request: SyncPersistentPiecesRequest,
@@ -2769,7 +2770,7 @@ impl DfdaemonUploadClient {
 
     /// Sync persistent cache pieces provides the persistent cache piece metadata for parent.
     /// If the per-piece collection timeout is exceeded, the stream will be closed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn sync_persistent_cache_pieces(
         &self,
         request: SyncPersistentCachePiecesRequest,
