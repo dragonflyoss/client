@@ -29,7 +29,6 @@ use tokio::{
     io::{AsyncBufRead, AsyncRead, AsyncReadExt},
     time::sleep,
 };
-use tokio_util::either::Either;
 use tokio_util::io::InspectReader;
 use tracing::{debug, error, info, instrument, warn};
 
@@ -877,54 +876,22 @@ impl Storage {
         task_id: &str,
         range: Option<Range>,
     ) -> Result<impl AsyncBufRead> {
-        // Wait for the piece to be finished.
-        self.wait_for_piece_finished(piece_id).await?;
+        // Wait for the piece to be finished and get the piece metadata.
+        let piece = self.wait_for_piece_finished(piece_id).await?;
 
         // Start uploading the task.
         self.metadata.upload_task_started(task_id)?;
 
-        // Get the piece metadata and return the content of the piece.
-        match self.metadata.get_piece(piece_id) {
-            Ok(Some(piece)) => {
-                if self.cache.contains_piece(task_id, piece_id).await {
-                    match self
-                        .cache
-                        .read_piece(task_id, piece_id, piece.clone(), range)
-                        .await
-                    {
-                        Ok(reader) => {
-                            // Finish uploading the task.
-                            self.metadata.upload_task_finished(task_id)?;
-                            debug!("get piece from cache: {}", piece_id);
-                            return Ok(Either::Left(reader));
-                        }
-                        Err(err) => {
-                            return Err(err);
-                        }
-                    }
-                }
-
-                match self
-                    .content
-                    .read_piece(task_id, piece.offset, piece.length, range)
-                    .await
-                {
-                    Ok(reader) => {
-                        // Finish uploading the task.
-                        self.metadata.upload_task_finished(task_id)?;
-                        Ok(Either::Right(reader))
-                    }
-                    Err(err) => {
-                        // Failed uploading the task.
-                        self.metadata.upload_task_failed(task_id)?;
-                        Err(err)
-                    }
-                }
-            }
-            Ok(None) => {
-                // Failed uploading the task.
-                self.metadata.upload_task_failed(task_id)?;
-                Err(Error::PieceNotFound(piece_id.to_string()))
+        // Return the content of the piece.
+        match self
+            .content
+            .read_piece(task_id, piece.offset, piece.length, range)
+            .await
+        {
+            Ok(reader) => {
+                // Finish uploading the task.
+                self.metadata.upload_task_finished(task_id)?;
+                Ok(reader)
             }
             Err(err) => {
                 // Failed uploading the task.
@@ -1078,36 +1045,22 @@ impl Storage {
         task_id: &str,
         range: Option<Range>,
     ) -> Result<impl AsyncBufRead> {
-        // Wait for the persistent piece to be finished.
-        self.wait_for_persistent_piece_finished(piece_id).await?;
+        // Wait for the persistent piece to be finished and get the piece metadata.
+        let piece = self.wait_for_persistent_piece_finished(piece_id).await?;
 
         // Start uploading the persistent task.
         self.metadata.upload_persistent_task_started(task_id)?;
 
-        // Get the persistent piece metadata and return the content of the persistent piece.
-        match self.metadata.get_piece(piece_id) {
-            Ok(Some(piece)) => {
-                match self
-                    .content
-                    .read_persistent_piece(task_id, piece.offset, piece.length, range)
-                    .await
-                {
-                    Ok(reader) => {
-                        // Finish uploading the persistent task.
-                        self.metadata.upload_persistent_task_finished(task_id)?;
-                        Ok(reader)
-                    }
-                    Err(err) => {
-                        // Failed uploading the persistent task.
-                        self.metadata.upload_persistent_task_failed(task_id)?;
-                        Err(err)
-                    }
-                }
-            }
-            Ok(None) => {
-                // Failed uploading the persistent task.
-                self.metadata.upload_persistent_task_failed(task_id)?;
-                Err(Error::PieceNotFound(piece_id.to_string()))
+        // Return the content of the persistent piece.
+        match self
+            .content
+            .read_persistent_piece(task_id, piece.offset, piece.length, range)
+            .await
+        {
+            Ok(reader) => {
+                // Finish uploading the persistent task.
+                self.metadata.upload_persistent_task_finished(task_id)?;
+                Ok(reader)
             }
             Err(err) => {
                 // Failed uploading the persistent task.
@@ -1219,39 +1172,26 @@ impl Storage {
         task_id: &str,
         range: Option<Range>,
     ) -> Result<impl AsyncBufRead> {
-        // Wait for the persistent cache piece to be finished.
-        self.wait_for_persistent_cache_piece_finished(piece_id)
+        // Wait for the persistent cache piece to be finished and get the piece.
+        let piece = self
+            .wait_for_persistent_cache_piece_finished(piece_id)
             .await?;
 
         // Start uploading the persistent cache task.
         self.metadata
             .upload_persistent_cache_task_started(task_id)?;
 
-        // Get the persistent cache piece metadata and return the content of the persistent cache piece.
-        match self.metadata.get_piece(piece_id) {
-            Ok(Some(piece)) => {
-                match self
-                    .content
-                    .read_persistent_cache_piece(task_id, piece.offset, piece.length, range)
-                    .await
-                {
-                    Ok(reader) => {
-                        // Finish uploading the persistent cache task.
-                        self.metadata
-                            .upload_persistent_cache_task_finished(task_id)?;
-                        Ok(reader)
-                    }
-                    Err(err) => {
-                        // Failed uploading the persistent cache task.
-                        self.metadata.upload_persistent_cache_task_failed(task_id)?;
-                        Err(err)
-                    }
-                }
-            }
-            Ok(None) => {
-                // Failed uploading the persistent cache task.
-                self.metadata.upload_persistent_cache_task_failed(task_id)?;
-                Err(Error::PieceNotFound(piece_id.to_string()))
+        // Return the content of the persistent cache piece.
+        match self
+            .content
+            .read_persistent_cache_piece(task_id, piece.offset, piece.length, range)
+            .await
+        {
+            Ok(reader) => {
+                // Finish uploading the persistent cache task.
+                self.metadata
+                    .upload_persistent_cache_task_finished(task_id)?;
+                Ok(reader)
             }
             Err(err) => {
                 // Failed uploading the persistent cache task.
@@ -1571,49 +1511,31 @@ impl Storage {
         task_id: &str,
         range: Option<Range>,
     ) -> Result<impl AsyncBufRead> {
-        // Wait for the cache piece to be finished.
-        self.wait_for_cache_piece_finished(piece_id).await?;
+        // Wait for the cache piece to be finished and get the piece metadata.
+        let piece = self.wait_for_cache_piece_finished(piece_id).await?;
 
         // Start uploading the task.
         self.metadata.upload_cache_task_started(task_id)?;
 
-        // Get the piece metadata and return the content of the piece.
-        match self.metadata.get_piece(piece_id) {
-            Ok(Some(piece)) => {
-                if self.cache.contains_piece(task_id, piece_id).await {
-                    match self
-                        .cache
-                        .read_piece(task_id, piece_id, piece.clone(), range)
-                        .await
-                    {
-                        Ok(reader) => {
-                            // Finish uploading the task.
-                            self.metadata.upload_cache_task_finished(task_id)?;
-                            debug!("get piece from cache: {}", piece_id);
-                            Ok(reader)
-                        }
-                        Err(err) => {
-                            // Failed uploading the cache task.
-                            self.metadata.upload_cache_task_failed(task_id)?;
-                            Err(err)
-                        }
-                    }
-                } else {
+        // Return the content of the cache piece.
+        if self.cache.contains_piece(task_id, piece_id).await {
+            match self.cache.read_piece(task_id, piece_id, piece, range).await {
+                Ok(reader) => {
+                    // Finish uploading the task.
+                    self.metadata.upload_cache_task_finished(task_id)?;
+                    debug!("get piece from cache: {}", piece_id);
+                    Ok(reader)
+                }
+                Err(err) => {
                     // Failed uploading the cache task.
                     self.metadata.upload_cache_task_failed(task_id)?;
-                    Err(Error::PieceNotFound(piece_id.to_string()))
+                    Err(err)
                 }
             }
-            Ok(None) => {
-                // Failed uploading the cache task.
-                self.metadata.upload_cache_task_failed(task_id)?;
-                Err(Error::PieceNotFound(piece_id.to_string()))
-            }
-            Err(err) => {
-                // Failed uploading the cache task.
-                self.metadata.upload_cache_task_failed(task_id)?;
-                Err(err)
-            }
+        } else {
+            // Failed uploading the cache task.
+            self.metadata.upload_cache_task_failed(task_id)?;
+            Err(Error::PieceNotFound(piece_id.to_string()))
         }
     }
 
