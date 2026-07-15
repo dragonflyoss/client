@@ -23,6 +23,8 @@ oci-spec.workspace = true
 reqwest.workspace = true
 reqwest-tracing.workspace = true
 reqwest-middleware.workspace = true
+serde_json.workspace = true
+prost-wkt-types.workspace = true
 rustix = { version = "1.1.3", features = ["fs"] }
 rustls-pki-types.workspace = true
 tokio.workspace = true
