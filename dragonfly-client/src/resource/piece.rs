@@ -33,7 +33,7 @@ use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt};
 use tracing::{debug, error, instrument, warn, Span};
 
 /// The maximum piece count. If the piece count is upper
@@ -315,7 +315,7 @@ impl Piece {
         task_id: &str,
         length: u64,
         range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<impl AsyncBufRead> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
@@ -666,7 +666,7 @@ impl Piece {
         task_id: &str,
         length: u64,
         range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<impl AsyncBufRead> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
@@ -1011,7 +1011,7 @@ impl Piece {
         task_id: &str,
         length: u64,
         range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<impl AsyncBufRead> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);

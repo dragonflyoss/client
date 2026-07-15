@@ -32,7 +32,7 @@ use leaky_bucket::RateLimiter;
 use quinn::{congestion::BbrConfig, AckFrequencyConfig, Endpoint, ServerConfig, TransportConfig};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{copy, AsyncRead};
+use tokio::io::{copy_buf, AsyncBufRead};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, instrument, Span};
 use vortex_protocol::{
@@ -500,7 +500,7 @@ impl QUICServerHandler {
         &self,
         piece_id: &str,
         task_id: &str,
-    ) -> Result<(PieceContent, impl AsyncRead), Error> {
+    ) -> Result<(PieceContent, impl AsyncBufRead), Error> {
         // Get the piece metadata from the local storage.
         let piece = match self.storage.get_piece(piece_id) {
             Ok(Some(piece)) => piece,
@@ -564,7 +564,7 @@ impl QUICServerHandler {
         &self,
         piece_id: &str,
         task_id: &str,
-    ) -> Result<(PersistentPieceContent, impl AsyncRead), Error> {
+    ) -> Result<(PersistentPieceContent, impl AsyncBufRead), Error> {
         // Get the piece metadata from the local storage.
         let piece = match self.storage.get_persistent_piece(piece_id) {
             Ok(Some(piece)) => piece,
@@ -628,7 +628,7 @@ impl QUICServerHandler {
         &self,
         piece_id: &str,
         task_id: &str,
-    ) -> Result<(PersistentCachePieceContent, impl AsyncRead), Error> {
+    ) -> Result<(PersistentCachePieceContent, impl AsyncBufRead), Error> {
         // Get the piece metadata from the local storage.
         let piece = match self.storage.get_persistent_cache_piece(piece_id) {
             Ok(Some(piece)) => piece,
@@ -746,16 +746,17 @@ impl QUICServerHandler {
     /// Streams data from a reader directly to the QUIC writer.
     ///
     /// This function efficiently copies all data from the provided stream
-    /// to the QUIC connection using tokio's copy utility. It's designed for
-    /// streaming large piece content without loading everything into memory.
-    /// The operation is flushed to ensure data delivery.
+    /// to the QUIC connection using tokio's copy_buf utility, which writes the
+    /// reader's internal buffer directly without an intermediate copy buffer.
+    /// It's designed for streaming large piece content without loading
+    /// everything into memory. The operation is flushed to ensure data delivery.
     #[instrument(level = "debug", skip_all)]
-    async fn write_stream<R: AsyncRead + Unpin + ?Sized>(
+    async fn write_stream<R: AsyncBufRead + Unpin + ?Sized>(
         &self,
         stream: &mut R,
         writer: &mut quinn::SendStream,
     ) -> ClientResult<()> {
-        copy(stream, writer)
+        copy_buf(stream, writer)
             .await
             .inspect_err(|err| error!("copy failed: {}", err))?;
 

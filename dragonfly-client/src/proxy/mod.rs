@@ -997,8 +997,11 @@ async fn proxy_via_dfdaemon(
                                 };
 
                                 debug!("copy piece {} to stream", need_piece_number);
+                                // copy_buf writes the piece reader's internal buffer to the
+                                // pipe directly, skipping tokio::io::copy's intermediate 8KiB
+                                // copy buffer.
                                 if let Err(err) =
-                                    tokio::io::copy(&mut piece_range_reader, &mut writer).await
+                                    tokio::io::copy_buf(&mut piece_range_reader, &mut writer).await
                                 {
                                     error!("download piece reader error: {}", err);
                                     if let Err(err) = writer.shutdown().await {

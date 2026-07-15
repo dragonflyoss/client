@@ -28,7 +28,7 @@ use leaky_bucket::RateLimiter;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{copy, AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{copy_buf, AsyncBufRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{
     tcp::{OwnedReadHalf, OwnedWriteHalf},
     TcpListener, TcpStream,
@@ -456,7 +456,7 @@ impl TCPServerHandler {
         &self,
         piece_id: &str,
         task_id: &str,
-    ) -> Result<(PieceContent, impl AsyncRead), Error> {
+    ) -> Result<(PieceContent, impl AsyncBufRead), Error> {
         // Get the piece metadata from the local storage.
         let piece = match self.storage.get_piece(piece_id) {
             Ok(Some(piece)) => piece,
@@ -520,7 +520,7 @@ impl TCPServerHandler {
         &self,
         piece_id: &str,
         task_id: &str,
-    ) -> Result<(PersistentPieceContent, impl AsyncRead), Error> {
+    ) -> Result<(PersistentPieceContent, impl AsyncBufRead), Error> {
         // Get the piece metadata from the local storage.
         let piece = match self.storage.get_persistent_piece(piece_id) {
             Ok(Some(piece)) => piece,
@@ -584,7 +584,7 @@ impl TCPServerHandler {
         &self,
         piece_id: &str,
         task_id: &str,
-    ) -> Result<(PersistentCachePieceContent, impl AsyncRead), Error> {
+    ) -> Result<(PersistentCachePieceContent, impl AsyncBufRead), Error> {
         // Get the piece metadata from the local storage.
         let piece = match self.storage.get_persistent_cache_piece(piece_id) {
             Ok(Some(piece)) => piece,
@@ -706,17 +706,18 @@ impl TCPServerHandler {
     /// Streams data from a reader directly to the TCP writer.
     ///
     /// This function efficiently copies all data from the provided stream
-    /// to the TCP connection using tokio's copy utility. It's designed for
-    /// streaming large piece content without loading everything into memory.
-    /// The operation is flushed to ensure data delivery.
+    /// to the TCP connection using tokio's copy_buf utility, which writes the
+    /// reader's internal buffer directly without an intermediate copy buffer.
+    /// It's designed for streaming large piece content without loading
+    /// everything into memory. The operation is flushed to ensure data delivery.
     #[instrument(level = "debug", skip_all)]
-    async fn write_stream<R: AsyncRead + Unpin + ?Sized>(
+    async fn write_stream<R: AsyncBufRead + Unpin + ?Sized>(
         &self,
         stream: &mut R,
         writer: &mut OwnedWriteHalf,
     ) -> ClientResult<()> {
         debug!("start to write stream to tcp writer");
-        copy(stream, writer).await.inspect_err(|err| {
+        copy_buf(stream, writer).await.inspect_err(|err| {
             error!("copy failed: {}", err);
         })?;
 

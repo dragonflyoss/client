@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::{
     fs,
-    io::{AsyncRead, AsyncReadExt},
+    io::{AsyncBufRead, AsyncRead, AsyncReadExt},
     time::sleep,
 };
 use tokio_util::either::Either;
@@ -876,7 +876,7 @@ impl Storage {
         piece_id: &str,
         task_id: &str,
         range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<impl AsyncBufRead> {
         // Wait for the piece to be finished.
         self.wait_for_piece_finished(piece_id).await?;
 
@@ -1077,7 +1077,7 @@ impl Storage {
         piece_id: &str,
         task_id: &str,
         range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<impl AsyncBufRead> {
         // Wait for the persistent piece to be finished.
         self.wait_for_persistent_piece_finished(piece_id).await?;
 
@@ -1218,7 +1218,7 @@ impl Storage {
         piece_id: &str,
         task_id: &str,
         range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<impl AsyncBufRead> {
         // Wait for the persistent cache piece to be finished.
         self.wait_for_persistent_cache_piece_finished(piece_id)
             .await?;
@@ -1570,7 +1570,7 @@ impl Storage {
         piece_id: &str,
         task_id: &str,
         range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<impl AsyncBufRead> {
         // Wait for the cache piece to be finished.
         self.wait_for_cache_piece_finished(piece_id).await?;
 

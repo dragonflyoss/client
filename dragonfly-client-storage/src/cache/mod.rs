@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::io::AsyncRead;
+use tokio::io::AsyncBufRead;
 use tokio::sync::RwLock;
 use tracing::{error, info};
 
@@ -138,7 +138,7 @@ impl Cache {
         piece_id: &str,
         piece: super::metadata::Piece,
         range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<impl AsyncBufRead> {
         let mut tasks = self.tasks.write().await;
         let Some(task) = tasks.get(task_id) else {
             return Err(Error::TaskNotFound(task_id.to_string()));

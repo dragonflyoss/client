@@ -24,7 +24,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{
-    self, AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter, SeekFrom,
+    self, AsyncBufRead, AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader, BufWriter,
+    SeekFrom,
 };
 use tokio_util::io::InspectReader;
 use tracing::{debug, error, info, instrument, warn};
@@ -249,7 +250,7 @@ impl Content {
         offset: u64,
         length: u64,
         range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<impl AsyncBufRead> {
         let task_path = self.get_task_path(task_id);
 
         // Calculate the target offset and length based on the range.
@@ -474,7 +475,7 @@ impl Content {
         offset: u64,
         length: u64,
         range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<impl AsyncBufRead> {
         let task_path = self.get_persistent_task_path(task_id);
 
         // Calculate the target offset and length based on the range.
@@ -719,7 +720,7 @@ impl Content {
         offset: u64,
         length: u64,
         range: Option<Range>,
-    ) -> Result<impl AsyncRead> {
+    ) -> Result<impl AsyncBufRead> {
         let task_path = self.get_persistent_cache_task_path(task_id);
 
         // Calculate the target offset and length based on the range.
