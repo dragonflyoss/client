@@ -72,7 +72,6 @@ pub fn init_tracing(
         .with_thread_names(false)
         .with_thread_ids(false)
         .with_timer(ChronoLocal::rfc_3339())
-        .pretty()
         .with_filter(stdout_filter);
 
     // Setup file layer.
@@ -243,7 +242,6 @@ pub fn init_command_tracing(log_level: Level, console: bool) -> Vec<WorkerGuard>
         .with_thread_names(false)
         .with_thread_ids(false)
         .with_timer(ChronoLocal::rfc_3339())
-        .pretty()
         .with_filter(stdout_filter);
 
     // Setup env filter for log level.
