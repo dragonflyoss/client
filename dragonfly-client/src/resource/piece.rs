@@ -34,7 +34,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tracing::{error, info, instrument, warn, Span};
+use tracing::{debug, error, instrument, warn, Span};
 
 /// The maximum piece count. If the piece count is upper
 /// than MAX_PIECE_COUNT, the piece length will be optimized by the file length.
@@ -183,7 +183,7 @@ impl Piece {
                 number += 1;
             }
 
-            info!(
+            debug!(
                 "calculate interested pieces by range {:?}, content length: {:?}, piece length: {:?}, pieces: count {}, range [{}, {}]",
                 range,
                 content_length,
@@ -232,7 +232,7 @@ impl Piece {
             number += 1;
         }
 
-        info!(
+        debug!(
             "calculate interested pieces by content length: {:?}, piece length: {:?}, pieces: count {}, range [{}, {}]",
             content_length,
             piece_length,
@@ -364,7 +364,7 @@ impl Piece {
         // If the piece is downloaded by the other thread,
         // return the piece directly.
         if piece.is_finished() {
-            info!("finished piece {} from local", piece_id);
+            debug!("finished piece {} from local", piece_id);
             scopeguard::ScopeGuard::into_inner(guard);
             return Ok(piece);
         }
@@ -494,7 +494,7 @@ impl Piece {
         // If the piece is downloaded by the other thread,
         // return the piece directly.
         if piece.is_finished() {
-            info!("finished piece {} from local", piece_id);
+            debug!("finished piece {} from local", piece_id);
             scopeguard::ScopeGuard::into_inner(guard);
             return Ok(piece);
         }
@@ -725,7 +725,7 @@ impl Piece {
         // If the piece is downloaded by the other thread,
         // return the piece directly.
         if piece.is_finished() {
-            info!("finished persistent piece {} from local", piece_id);
+            debug!("finished persistent piece {} from local", piece_id);
             scopeguard::ScopeGuard::into_inner(guard);
             return Ok(piece);
         }
@@ -847,7 +847,7 @@ impl Piece {
         // If the piece is downloaded by the other thread,
         // return the piece directly.
         if piece.is_finished() {
-            info!("finished piece {} from local", piece_id);
+            debug!("finished piece {} from local", piece_id);
             scopeguard::ScopeGuard::into_inner(guard);
             return Ok(piece);
         }
@@ -1070,7 +1070,7 @@ impl Piece {
         // If the piece is downloaded by the other thread,
         // return the piece directly.
         if piece.is_finished() {
-            info!("finished persistent cache piece {} from local", piece_id);
+            debug!("finished persistent cache piece {} from local", piece_id);
             scopeguard::ScopeGuard::into_inner(guard);
             return Ok(piece);
         }

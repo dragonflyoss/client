@@ -481,7 +481,7 @@ pub async fn https_handler(
     request_rate_limiter: Arc<RateLimiter>,
     dynconfig: Arc<Dynconfig>,
 ) -> ClientResult<Response> {
-    info!("handle HTTPS request: {:?}", request);
+    debug!("handle HTTPS request: {:?}", request);
 
     // Proxy the request directly  to the remote server.
     if let Some(host) = request.uri().host() {
@@ -869,7 +869,7 @@ async fn proxy_via_dfdaemon(
                 );
             }
             // If the task is already prefetched, ignore the error.
-            Err(ClientError::InvalidState(_)) => info!("task is already prefetched"),
+            Err(ClientError::InvalidState(_)) => debug!("task is already prefetched"),
             Err(err) => {
                 error!("prefetch task started: {}", err);
             }
@@ -1020,7 +1020,7 @@ async fn proxy_via_dfdaemon(
                         }
                     }
                     None => {
-                        info!("message is none");
+                        debug!("message is none");
                         if let Err(err) = writer.flush().await {
                             error!("writer flush error: {}", err);
                         }

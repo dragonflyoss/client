@@ -1214,7 +1214,7 @@ impl Task {
                         interrupt.store(true, Ordering::SeqCst);
                     });
 
-                info!(
+                debug!(
                     "finished piece {} from parent {:?} using protocol {}",
                     piece_id, metadata.parent_id, protocol,
                 );
@@ -1507,7 +1507,7 @@ impl Task {
                             error!("send DownloadPieceBackToSourceFinishedRequest for piece {} failed: {:?}", piece_id, err);
                         });
 
-                info!("finished piece {} from source", piece_id);
+                debug!("finished piece {} from source", piece_id);
                 Ok(metadata)
             }
 
@@ -1695,7 +1695,7 @@ impl Task {
 
             // Fake the download from the local.
             self.piece.download_from_local(piece.length);
-            info!("finished piece {} from local", piece_id,);
+            debug!("finished piece {} from local", piece_id,);
 
             // Construct the piece.
             let piece = Piece {
@@ -1946,7 +1946,7 @@ impl Task {
                         });
                 }
 
-                info!("finished piece {} from source", piece_id);
+                debug!("finished piece {} from source", piece_id);
                 Ok(metadata)
             }
 
