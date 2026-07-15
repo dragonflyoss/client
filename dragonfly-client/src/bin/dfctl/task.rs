@@ -823,7 +823,8 @@ pub struct PreheatCommand {
         default_value_t = false,
         env = "DFCTL_TASK_PREHEAT_REQUEST_SDK",
         help = "Specify whether to use request SDK mode for preheat. If not set, uses gRPC mode to call the scheduler directly. \
-         If set, uses the request SDK proxy for preheat, refer to https://github.com/dragonflyoss/client/blob/main/dragonfly-client-util/src/request/mod.rs"
+         If set, uses request SDK task ID and seed-peer selection while triggering dfdaemon DownloadTask control stream only. \
+         This mode does not stream file or image layer content back to dfctl."
     )]
     request_sdk: bool,
 
@@ -1394,7 +1395,7 @@ impl PreheatCommand {
         Ok(())
     }
 
-    /// Preheats an OCI image via the Dragonfly SDK proxy.
+    /// Preheats an OCI image with request SDK task ID and seed-peer selection.
     async fn preheat_image_by_request_sdk(&self) -> Result<()> {
         let proxy = Proxy::builder()
             .scheduler_endpoint(self.scheduler_endpoint.clone())
@@ -1448,7 +1449,7 @@ impl PreheatCommand {
         Ok(())
     }
 
-    /// Preheats a file via the Dragonfly SDK proxy.
+    /// Preheats a file with request SDK task ID and seed-peer selection.
     async fn preheat_file_by_request_sdk(&self) -> Result<()> {
         let proxy = Proxy::builder()
             .scheduler_endpoint(self.scheduler_endpoint.clone())
@@ -1479,14 +1480,10 @@ impl PreheatCommand {
             client_cert: None,
         };
 
-        let response = proxy
-            .get(&request)
+        proxy
+            .preheat_file_via_control_plane(&request)
             .await
             .map_err(|err| Error::Unknown(format!("preheat failed: {err}")))?;
-
-        if let Some(mut reader) = response.reader {
-            tokio::io::copy(&mut reader, &mut tokio::io::sink()).await?;
-        }
 
         println!(
             "{}{}Preheat Succeeded!{}",
