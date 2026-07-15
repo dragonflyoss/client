@@ -1433,7 +1433,9 @@ impl Storage {
         let mut tee = InspectReader::new(reader, |bytes| {
             hasher.update(bytes);
         });
-        tee.read_buf(&mut content).await?;
+
+        // Keep reading until EOF to avoid truncating the piece content.
+        while tee.read_buf(&mut content).await? > 0 {}
 
         self.cache
             .write_piece(task_id, piece_id, content.freeze())
@@ -1492,7 +1494,9 @@ impl Storage {
         let mut tee = InspectReader::new(reader, |bytes| {
             hasher.update(bytes);
         });
-        tee.read_buf(&mut content).await?;
+
+        // Keep reading until EOF to avoid truncating the piece content.
+        while tee.read_buf(&mut content).await? > 0 {}
 
         self.cache
             .write_piece(task_id, piece_id, content.freeze())

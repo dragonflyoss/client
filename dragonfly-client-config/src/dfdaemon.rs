@@ -265,16 +265,16 @@ fn default_storage_write_piece_timeout() -> Duration {
     Duration::from_secs(360)
 }
 
-/// Returns the default buffer size for writing piece to disk, default is 4MB.
+/// Returns the default buffer size for writing piece to disk, default is 1MiB.
 #[inline]
 fn default_storage_write_buffer_size() -> usize {
-    4 * 1024 * 1024
+    1024 * 1024
 }
 
-/// Returns the default buffer size for reading piece from disk, default is 4MB.
+/// Returns the default buffer size for reading piece from disk, default is 1MiB.
 #[inline]
 fn default_storage_read_buffer_size() -> usize {
-    4 * 1024 * 1024
+    1024 * 1024
 }
 
 /// Returns the default cache capacity for the storage server, default is
@@ -338,10 +338,10 @@ pub fn default_proxy_request_rate_limit() -> u64 {
     4000
 }
 
-/// Returns the default buffer size for reading piece, default is 4MB.
+/// Returns the default buffer size for reading piece, default is 1MiB.
 #[inline]
 pub fn default_proxy_read_buffer_size() -> usize {
-    4 * 1024 * 1024
+    1024 * 1024
 }
 
 /// Returns the default rate limit of the prefetch speed in GB/MB/KB per second, default is 10GB/s. The prefetch request
@@ -980,7 +980,7 @@ pub struct Storage {
     /// Larger buffers improve read throughput by reducing I/O system calls and better
     /// utilizing disk sequential read performance, but increase memory consumption.
     /// Smaller buffers reduce memory footprint but may cause more frequent I/O operations.
-    /// Default is 4MiB. Tune based on your access patterns and memory constraints.
+    /// Default is 1MiB. Tune based on your access patterns and memory constraints.
     #[serde(default = "default_storage_read_buffer_size")]
     pub read_buffer_size: usize,
 
@@ -1361,7 +1361,7 @@ pub struct Proxy {
     /// Specifies the buffer size for reading piece data from disk.
     /// Larger buffers can improve throughput for sequential reads but consume more memory.
     /// Smaller buffers reduce memory usage but may increase I/O overhead.
-    /// Default value is 1KB. Adjust based on your disk I/O characteristics and memory constraints.
+    /// Default value is 1MiB. Adjust based on your disk I/O characteristics and memory constraints.
     #[serde(default = "default_proxy_read_buffer_size")]
     pub read_buffer_size: usize,
 }

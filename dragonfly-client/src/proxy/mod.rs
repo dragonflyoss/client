@@ -56,7 +56,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncWriteExt, BufReader, BufWriter};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Barrier};
@@ -882,9 +882,9 @@ async fn proxy_via_dfdaemon(
     // Get the read buffer size from the config.
     let read_buffer_size = config.proxy.read_buffer_size;
 
-    // Write the task data to the reader.
-    let (reader, writer) = tokio::io::duplex(read_buffer_size);
-    let mut writer = BufWriter::with_capacity(read_buffer_size, writer);
+    // Write the task data to the reader. The duplex pipe buffers the data
+    // itself, so no extra BufWriter is needed.
+    let (reader, mut writer) = tokio::io::duplex(read_buffer_size);
     let reader_stream = ReaderStream::with_capacity(reader, read_buffer_size);
 
     // Construct the response body.
@@ -914,8 +914,11 @@ async fn proxy_via_dfdaemon(
     // shutdown the writer.
     tokio::spawn(
         async move {
-            // Initialize the hashmap of the finished piece readers and pieces.
-            let mut finished_piece_readers = HashMap::new();
+            // Initialize the hashmap of the finished piece lengths, keyed by
+            // piece number. Readers are opened lazily when a piece is written
+            // in order, so out-of-order pieces do not hold buffers or file
+            // descriptors while waiting.
+            let mut finished_pieces = HashMap::new();
 
             // Get the first piece number from the started response.
             let Some(first_piece) = download_task_started_response.pieces.first() else {
@@ -965,38 +968,34 @@ async fn proxy_via_dfdaemon(
                                 return;
                             };
 
-                            let piece_range_reader = match task
-                                .piece
-                                .download_from_local_into_async_read(
-                                    task.piece
-                                        .id(message.task_id.as_str(), piece.number)
-                                        .as_str(),
-                                    message.task_id.as_str(),
-                                    piece.length,
-                                    download_task_started_response.range,
-                                )
-                                .await
-                            {
-                                Ok(piece_range_reader) => piece_range_reader,
-                                Err(err) => {
-                                    error!("download piece reader error: {}", err);
-                                    if let Err(err) = writer.shutdown().await {
-                                        error!("writer shutdown error: {}", err);
-                                    }
-
-                                    return;
-                                }
-                            };
-
-                            // Use a buffer to read the piece.
-                            let piece_range_reader =
-                                BufReader::with_capacity(read_buffer_size, piece_range_reader);
-
                             // Write the piece data to the pipe in order.
-                            finished_piece_readers.insert(piece.number, piece_range_reader);
-                            while let Some(mut piece_range_reader) =
-                                finished_piece_readers.remove(&need_piece_number)
+                            finished_pieces.insert(piece.number, piece.length);
+                            while let Some(piece_length) =
+                                finished_pieces.remove(&need_piece_number)
                             {
+                                let mut piece_range_reader = match task
+                                    .piece
+                                    .download_from_local_into_async_read(
+                                        task.piece
+                                            .id(message.task_id.as_str(), need_piece_number)
+                                            .as_str(),
+                                        message.task_id.as_str(),
+                                        piece_length,
+                                        download_task_started_response.range,
+                                    )
+                                    .await
+                                {
+                                    Ok(piece_range_reader) => piece_range_reader,
+                                    Err(err) => {
+                                        error!("download piece reader error: {}", err);
+                                        if let Err(err) = writer.shutdown().await {
+                                            error!("writer shutdown error: {}", err);
+                                        }
+
+                                        return;
+                                    }
+                                };
+
                                 debug!("copy piece {} to stream", need_piece_number);
                                 if let Err(err) =
                                     tokio::io::copy(&mut piece_range_reader, &mut writer).await
