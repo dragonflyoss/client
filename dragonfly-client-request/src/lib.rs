@@ -27,18 +27,12 @@ use dragonfly_client_util::net::preferred_local_ip;
 use dragonfly_client_util::pool::{Builder as PoolBuilder, Entry, Factory, Pool};
 use errors::{BackendError, DfdaemonError, Error, ProxyError};
 use futures::TryStreamExt;
-use oci_client::client::ClientConfig;
-use oci_client::manifest::ImageIndexEntry;
-use oci_client::secrets::RegistryAuth;
-use oci_client::{Client as OciClient, Reference, RegistryOperation};
-use oci_spec::image::{Arch, Os};
 use reqwest::{
-    header::{HeaderMap, HeaderValue, AUTHORIZATION},
+    header::{HeaderMap, HeaderValue},
     Client,
 };
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_tracing::TracingMiddleware;
-use rustix::path::Arg;
 use rustls_pki_types::CertificateDer;
 use selector::{SeedPeerSelector, Selector};
 use std::io::Error as IOError;
@@ -49,7 +43,17 @@ use std::time::Duration;
 use tokio::io::AsyncRead;
 use tokio_util::io::StreamReader;
 use tonic::transport::Endpoint;
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
+
+#[cfg(feature = "preheat")]
+use oci_client::{
+    client::ClientConfig, manifest::ImageIndexEntry, secrets::RegistryAuth, Client as OciClient,
+    Reference, RegistryOperation,
+};
+#[cfg(feature = "preheat")]
+use oci_spec::image::{Arch, Os};
+#[cfg(feature = "preheat")]
+use reqwest::header::AUTHORIZATION;
 
 pub mod errors;
 mod selector;
@@ -110,6 +114,7 @@ pub trait Request {
     /// cluster. It parses the image reference, authenticates with the OCI registry, resolves
     /// the image manifest (including multi-platform image indexes), and downloads each blob
     /// (config and layers) through the seed client.
+    #[cfg(feature = "preheat")]
     async fn preheat(&self, request: &PreheatRequest) -> Result<()>;
 }
 
@@ -201,6 +206,7 @@ where
 /// Dragonfly seed client. The preheat downloads all blobs (config and layers)
 /// of the specified image via the Dragonfly proxy, effectively caching them
 /// in the P2P network for faster downloading.
+#[cfg(feature = "preheat")]
 pub struct PreheatRequest {
     /// The OCI image reference (e.g., "docker.io/library/nginx:latest").
     pub image: String,
@@ -255,6 +261,7 @@ pub struct PreheatRequest {
 }
 
 /// Default implementation for PreheatRequest.
+#[cfg(feature = "preheat")]
 impl Default for PreheatRequest {
     /// Returns a default PreheatRequest with empty image and default values for other
     /// fields.
@@ -548,6 +555,7 @@ impl Request for Proxy {
     /// cluster. It parses the image reference, authenticates with the OCI registry, resolves
     /// the image manifest (including multi-platform image indexes), and downloads each blob
     /// (config and layers) through the seed client.
+    #[cfg(feature = "preheat")]
     async fn preheat(&self, request: &PreheatRequest) -> Result<()> {
         let oci_client = Self::oci_client(request.platform.clone())?;
 
@@ -625,7 +633,7 @@ impl Request for Proxy {
                         })?;
                 }
                 None => {
-                    warn!(
+                    error!(
                         "no response body for blob {}, download may not have completed",
                         digest
                     );
@@ -865,11 +873,13 @@ impl Proxy {
 
     /// Helper function to check if a URL is an OCI blob URL (e.g., /v2/<name>/blobs/sha256:
     /// <digest>).
+    #[cfg(feature = "preheat")]
     fn build_blob_url(registry: &str, repository: &str, digest: &str) -> String {
         format!("https://{registry}/v2/{repository}/blobs/{digest}")
     }
 
     /// Builds an OCI client with a platform resolver that matches the requested os/arch.
+    #[cfg(feature = "preheat")]
     fn oci_client(platform: Option<String>) -> Result<OciClient> {
         let mut oci_config = ClientConfig::default();
         if let Some(platform) = platform {
