@@ -251,7 +251,7 @@ impl Proxy {
 
 /// handler handles the request from the client.
 #[allow(clippy::too_many_arguments)]
-#[instrument(skip_all, fields(url, method, remote_ip))]
+#[instrument(level = "debug", skip_all, fields(url, method, remote_ip))]
 pub async fn handler(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -329,7 +329,7 @@ pub async fn handler(
 }
 
 /// Handles the http request for the registry mirror by client.
-#[instrument(skip_all)]
+#[instrument(level = "debug", skip_all)]
 pub async fn registry_mirror_http_handler(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -344,7 +344,7 @@ pub async fn registry_mirror_http_handler(
 
 /// Handles the https request for the registry mirror by client.
 #[allow(clippy::too_many_arguments)]
-#[instrument(skip_all)]
+#[instrument(level = "debug", skip_all)]
 pub async fn registry_mirror_https_handler(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -525,7 +525,7 @@ pub async fn https_handler(
 /// self-signed certificate. Otherwise, use the CA certificate to sign the
 /// self-signed certificate.
 #[allow(clippy::too_many_arguments)]
-#[instrument(skip_all)]
+#[instrument(level = "debug", skip_all)]
 async fn upgraded_tunnel(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -600,7 +600,7 @@ async fn upgraded_tunnel(
 
 /// Handles the upgraded https request from the client.
 #[allow(clippy::too_many_arguments)]
-#[instrument(skip_all, fields(url, method))]
+#[instrument(level = "debug", skip_all, fields(url, method))]
 pub async fn upgraded_handler(
     config: Arc<Config>,
     task: Arc<Task>,

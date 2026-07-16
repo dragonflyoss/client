@@ -99,7 +99,7 @@ impl SchedulerClient {
     }
 
     /// Announces the peer to the scheduler.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn announce_peer(
         &self,
         task_id: &str,
@@ -115,7 +115,7 @@ impl SchedulerClient {
     }
 
     /// Gets the status of the peer.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn stat_peer(&self, request: StatPeerRequest) -> Result<Peer> {
         let task_id = request.task_id.clone();
         let request = Self::make_request(request);
@@ -128,7 +128,7 @@ impl SchedulerClient {
     }
 
     /// Tells the scheduler that the peer is deleting.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn delete_peer(&self, request: DeletePeerRequest) -> Result<()> {
         let task_id = request.task_id.clone();
         let request = Self::make_request(request);
@@ -140,7 +140,7 @@ impl SchedulerClient {
     }
 
     /// Gets the status of the task.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn stat_task(&self, request: StatTaskRequest) -> Result<Task> {
         let task_id = request.task_id.clone();
         let request = Self::make_request(request);
@@ -153,7 +153,7 @@ impl SchedulerClient {
     }
 
     /// Tells the scheduler that the task is deleting.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn delete_task(&self, request: DeleteTaskRequest) -> Result<()> {
         let task_id = request.task_id.clone();
         let request = Self::make_request(request);
@@ -165,7 +165,7 @@ impl SchedulerClient {
     }
 
     /// Announces the host to the scheduler.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn announce_host(&self, request: AnnounceHostRequest) -> Result<()> {
         // Update scheduler addresses of the client.
         self.update_available_scheduler_addrs().await?;
@@ -223,7 +223,7 @@ impl SchedulerClient {
     }
 
     /// Announces the host to the scheduler.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn init_announce_host(&self, request: AnnounceHostRequest) -> Result<()> {
         let mut join_set = JoinSet::new();
         let available_scheduler_addrs = self.available_scheduler_addrs.read().await;
@@ -278,7 +278,7 @@ impl SchedulerClient {
     }
 
     /// Tells the scheduler that the host is deleting.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn delete_host(&self, request: DeleteHostRequest) -> Result<()> {
         // Update scheduler addresses of the client.
         self.update_available_scheduler_addrs().await?;
@@ -336,7 +336,7 @@ impl SchedulerClient {
     }
 
     /// Announces the persistent peer to the scheduler.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn announce_persistent_peer(
         &self,
         task_id: &str,
@@ -352,7 +352,7 @@ impl SchedulerClient {
     }
 
     /// Gets the status of the persistent peer.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn stat_persistent_peer(
         &self,
         request: StatPersistentPeerRequest,
@@ -368,7 +368,7 @@ impl SchedulerClient {
     }
 
     /// Tells the scheduler that the persistent peer is deleting.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn delete_persistent_peer(&self, request: DeletePersistentPeerRequest) -> Result<()> {
         let task_id = request.task_id.clone();
         let request = Self::make_request(request);
@@ -380,7 +380,7 @@ impl SchedulerClient {
     }
 
     /// Uploads the metadata of the persistent task started.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn upload_persistent_task_started(
         &self,
         request: UploadPersistentTaskStartedRequest,
@@ -395,7 +395,7 @@ impl SchedulerClient {
     }
 
     /// Uploads the metadata of the persistent task finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn upload_persistent_task_finished(
         &self,
         request: UploadPersistentTaskFinishedRequest,
@@ -411,7 +411,7 @@ impl SchedulerClient {
     }
 
     /// Uploads the metadata of the persistent task failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn upload_persistent_task_failed(
         &self,
         request: UploadPersistentTaskFailedRequest,
@@ -426,7 +426,7 @@ impl SchedulerClient {
     }
 
     /// Gets the status of the persistent task.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn stat_persistent_task(
         &self,
         request: StatPersistentTaskRequest,
@@ -442,7 +442,7 @@ impl SchedulerClient {
     }
 
     /// Tells the scheduler that the persistent task is deleting.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn delete_persistent_task(&self, request: DeletePersistentTaskRequest) -> Result<()> {
         let task_id = request.task_id.clone();
         let request = Self::make_request(request);
@@ -454,7 +454,7 @@ impl SchedulerClient {
     }
 
     /// Announces the persistent cache peer to the scheduler.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn announce_persistent_cache_peer(
         &self,
         task_id: &str,
@@ -470,7 +470,7 @@ impl SchedulerClient {
     }
 
     /// Gets the status of the persistent cache peer.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn stat_persistent_cache_peer(
         &self,
         request: StatPersistentCachePeerRequest,
@@ -486,7 +486,7 @@ impl SchedulerClient {
     }
 
     /// Tells the scheduler that the persistent cache peer is deleting.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn delete_persistent_cache_peer(
         &self,
         request: DeletePersistentCachePeerRequest,
@@ -501,7 +501,7 @@ impl SchedulerClient {
     }
 
     /// Uploads the metadata of the persistent cache task started.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn upload_persistent_cache_task_started(
         &self,
         request: UploadPersistentCacheTaskStartedRequest,
@@ -516,7 +516,7 @@ impl SchedulerClient {
     }
 
     /// Uploads the metadata of the persistent cache task finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn upload_persistent_cache_task_finished(
         &self,
         request: UploadPersistentCacheTaskFinishedRequest,
@@ -532,7 +532,7 @@ impl SchedulerClient {
     }
 
     /// Uploads the metadata of the persistent cache task failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn upload_persistent_cache_task_failed(
         &self,
         request: UploadPersistentCacheTaskFailedRequest,
@@ -547,7 +547,7 @@ impl SchedulerClient {
     }
 
     /// Gets the status of the persistent cache task.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn stat_persistent_cache_task(
         &self,
         request: StatPersistentCacheTaskRequest,
@@ -563,7 +563,7 @@ impl SchedulerClient {
     }
 
     /// Tells the scheduler that the persistent cache task is deleting.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn delete_persistent_cache_task(
         &self,
         request: DeletePersistentCacheTaskRequest,
@@ -578,7 +578,7 @@ impl SchedulerClient {
     }
 
     /// Gets the grpc client of the scheduler.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     async fn client(
         &self,
         task_id: &str,
@@ -649,7 +649,7 @@ impl SchedulerClient {
     }
 
     /// Updates the addresses of available schedulers.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     async fn update_available_scheduler_addrs(&self) -> Result<()> {
         // Get the endpoints of available schedulers.
         let data_available_schedulers_clone = {
@@ -735,7 +735,7 @@ impl SchedulerClient {
     }
 
     /// Refreshes addresses of available schedulers.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     async fn refresh_available_scheduler_addrs(&self) -> Result<()> {
         // Refresh the dynamic configuration.
         self.dynconfig.refresh().await?;

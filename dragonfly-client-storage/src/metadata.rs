@@ -532,7 +532,7 @@ where
 
 impl<E: StorageEngineOwned> Metadata<E> {
     /// Prepares the metadata of the download task.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn prepare_download_task(&self, id: &str) -> Result<(Task, bool)> {
         let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
@@ -568,7 +568,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the task when the task downloads started.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_task_started(
         &self,
         id: &str,
@@ -608,7 +608,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the task when the task downloads finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_task_finished(&self, id: &str) -> Result<Task> {
         let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
@@ -625,7 +625,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the task when the task downloads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_task_failed(&self, id: &str) -> Result<Task> {
         let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
@@ -641,7 +641,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the task when the task prefetch started.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn prefetch_task_started(&self, id: &str) -> Result<Task> {
         let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
@@ -663,7 +663,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the task when the task prefetch failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn prefetch_task_failed(&self, id: &str) -> Result<Task> {
         let task = match self.db.get::<Task>(id.as_bytes())? {
             Some(mut task) => {
@@ -729,19 +729,19 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Gets the task metadata.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_task(&self, id: &str) -> Result<Option<Task>> {
         self.db.get(id.as_bytes())
     }
 
     /// Checks if the task exists.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn is_task_exists(&self, id: &str) -> Result<bool> {
         self.db.exists::<Task>(id.as_bytes())
     }
 
     /// Gets the task metadatas.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_tasks(&self) -> Result<Vec<Task>> {
         let tasks = self
             .db
@@ -759,14 +759,14 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Deletes the task metadata.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn delete_task(&self, id: &str) -> Result<()> {
         info!("delete task metadata {}", id);
         self.db.delete::<Task>(id.as_bytes())
     }
 
     /// Creates a new persistent task.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn create_persistent_task_started(
         &self,
         id: &str,
@@ -791,7 +791,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
 
     /// Updates the metadata of the persistent task
     /// when the persistent task finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn create_persistent_task_finished(&self, id: &str) -> Result<PersistentTask> {
         let task = match self.db.get::<PersistentTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -815,7 +815,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     /// Updates the metadata of the persistent task when
     /// the persistent task downloads started. If the persistent task downloaded by scheduler
     /// to create persistent task, the persistent should be set to true.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_persistent_task_started(
         &self,
         id: &str,
@@ -852,7 +852,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the persistent task when the persistent task downloads finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_persistent_task_finished(&self, id: &str) -> Result<PersistentTask> {
         let task = match self.db.get::<PersistentTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -874,7 +874,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the persistent task when the persistent task downloads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_persistent_task_failed(&self, id: &str) -> Result<PersistentTask> {
         let task = match self.db.get::<PersistentTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -890,7 +890,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the persistent task when persistent task uploads started.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn upload_persistent_task_started(&self, id: &str) -> Result<PersistentTask> {
         let task = match self.db.get::<PersistentTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -906,7 +906,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the persistent task when persistent task uploads finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn upload_persistent_task_finished(&self, id: &str) -> Result<PersistentTask> {
         let task = match self.db.get::<PersistentTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -923,7 +923,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the persistent task when the persistent task uploads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn upload_persistent_task_failed(&self, id: &str) -> Result<PersistentTask> {
         let task = match self.db.get::<PersistentTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -939,7 +939,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Persists the persistent task metadata.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn persist_persistent_task(&self, id: &str) -> Result<PersistentTask> {
         let task = match self.db.get::<PersistentTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -955,33 +955,33 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Gets the persistent task metadata.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_persistent_task(&self, id: &str) -> Result<Option<PersistentTask>> {
         self.db.get(id.as_bytes())
     }
 
     /// Checks if the persistent task exists.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn is_persistent_task_exists(&self, id: &str) -> Result<bool> {
         self.db.exists::<PersistentTask>(id.as_bytes())
     }
 
     /// Gets the persistent task metadatas.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_persistent_tasks(&self) -> Result<Vec<PersistentTask>> {
         let iter = self.db.iter::<PersistentTask>()?;
         iter.map(|ele| ele.map(|(_, task)| task)).collect()
     }
 
     /// Deletes the persistent task metadata.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn delete_persistent_task(&self, id: &str) -> Result<()> {
         info!("delete persistent task metadata {}", id);
         self.db.delete::<PersistentTask>(id.as_bytes())
     }
 
     /// Creates a new persistent cache task.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn create_persistent_cache_task_started(
         &self,
         id: &str,
@@ -1006,7 +1006,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
 
     /// Updates the metadata of the persistent cache task
     /// when the persistent cache task finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn create_persistent_cache_task_finished(&self, id: &str) -> Result<PersistentCacheTask> {
         let task = match self.db.get::<PersistentCacheTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -1030,7 +1030,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     /// Updates the metadata of the persistent cache task when
     /// the persistent cache task downloads started. If the persistent cache task downloaded by scheduler
     /// to create persistent cache task, the persistent should be set to true.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_persistent_cache_task_started(
         &self,
         id: &str,
@@ -1067,7 +1067,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the persistent cache task when the persistent cache task downloads finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_persistent_cache_task_finished(&self, id: &str) -> Result<PersistentCacheTask> {
         let task = match self.db.get::<PersistentCacheTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -1089,7 +1089,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the persistent cache task when the persistent cache task downloads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_persistent_cache_task_failed(&self, id: &str) -> Result<PersistentCacheTask> {
         let task = match self.db.get::<PersistentCacheTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -1105,7 +1105,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the persistent cache task when persistent cache task uploads started.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn upload_persistent_cache_task_started(&self, id: &str) -> Result<PersistentCacheTask> {
         let task = match self.db.get::<PersistentCacheTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -1121,7 +1121,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the persistent cache task when persistent cache task uploads finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn upload_persistent_cache_task_finished(&self, id: &str) -> Result<PersistentCacheTask> {
         let task = match self.db.get::<PersistentCacheTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -1138,7 +1138,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the persistent cache task when the persistent cache task uploads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn upload_persistent_cache_task_failed(&self, id: &str) -> Result<PersistentCacheTask> {
         let task = match self.db.get::<PersistentCacheTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -1154,7 +1154,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Persists the persistent cache task metadata.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn persist_persistent_cache_task(&self, id: &str) -> Result<PersistentCacheTask> {
         let task = match self.db.get::<PersistentCacheTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -1170,33 +1170,33 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Gets the persistent cache task metadata.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_persistent_cache_task(&self, id: &str) -> Result<Option<PersistentCacheTask>> {
         self.db.get(id.as_bytes())
     }
 
     /// Checks if the persistent cache task exists.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn is_persistent_cache_task_exists(&self, id: &str) -> Result<bool> {
         self.db.exists::<PersistentCacheTask>(id.as_bytes())
     }
 
     /// Gets the persistent cache task metadatas.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_persistent_cache_tasks(&self) -> Result<Vec<PersistentCacheTask>> {
         let iter = self.db.iter::<PersistentCacheTask>()?;
         iter.map(|ele| ele.map(|(_, task)| task)).collect()
     }
 
     /// Deletes the persistent cache task metadata.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn delete_persistent_cache_task(&self, id: &str) -> Result<()> {
         info!("delete persistent cache task metadata {}", id);
         self.db.delete::<PersistentCacheTask>(id.as_bytes())
     }
 
     /// Updates the metadata of the cache task when the cache task downloads started.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_cache_task_started(
         &self,
         id: &str,
@@ -1236,7 +1236,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the cache task when the cache task downloads finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_cache_task_finished(&self, id: &str) -> Result<CacheTask> {
         let task = match self.db.get::<CacheTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -1253,7 +1253,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the cache task when the cache task downloads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_cache_task_failed(&self, id: &str) -> Result<CacheTask> {
         let task = match self.db.get::<CacheTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -1269,7 +1269,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the cache task when the cache task uploads started.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn upload_cache_task_started(&self, id: &str) -> Result<CacheTask> {
         let task = match self.db.get::<CacheTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -1285,7 +1285,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the cache task when the cache task uploads finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn upload_cache_task_finished(&self, id: &str) -> Result<CacheTask> {
         let task = match self.db.get::<CacheTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -1302,7 +1302,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Updates the metadata of the cache task when the cache task uploads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn upload_cache_task_failed(&self, id: &str) -> Result<CacheTask> {
         let task = match self.db.get::<CacheTask>(id.as_bytes())? {
             Some(mut task) => {
@@ -1318,19 +1318,19 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Gets the cache task metadata.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_cache_task(&self, id: &str) -> Result<Option<CacheTask>> {
         self.db.get(id.as_bytes())
     }
 
     /// Checks if the cache task exists.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn is_cache_task_exists(&self, id: &str) -> Result<bool> {
         self.db.exists::<CacheTask>(id.as_bytes())
     }
 
     /// Gets the cache task metadatas.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_cache_tasks(&self) -> Result<Vec<CacheTask>> {
         let tasks = self
             .db
@@ -1348,7 +1348,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
     }
 
     /// Deletes the cache task metadata.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn delete_cache_task(&self, id: &str) -> Result<()> {
         info!("delete cache task metadata {}", id);
         self.db.delete::<CacheTask>(id.as_bytes())
@@ -1546,7 +1546,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
 /// Implements the metadata of the storage engine.
 impl Metadata<RocksdbStorageEngine> {
     /// Creates a new metadata instance.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn new(
         config: Arc<Config>,
         dir: &Path,

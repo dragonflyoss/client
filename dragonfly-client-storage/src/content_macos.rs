@@ -142,7 +142,7 @@ impl Content {
     /// Behavior of `create_task`:
     /// 1. If the task already exists, return the task path.
     /// 2. If the task does not exist, create the task directory and file.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn create_task(&self, task_id: &str, length: u64) -> Result<PathBuf> {
         let task_path = self.get_task_path(task_id);
         if task_path.exists() {
@@ -179,7 +179,7 @@ impl Content {
     /// 2. If the destination does not exist:
     ///    2.1. If the hard link succeeds, return immediately.
     ///    2.2. If the hard link fails, copy the task content to the destination once the task is finished, then return immediately.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn hard_link_task(&self, task_id: &str, to: &Path) -> Result<()> {
         let task_path = self.get_task_path(task_id);
         if let Err(err) = fs::hard_link(task_path.clone(), to).await {
@@ -207,7 +207,7 @@ impl Content {
     /// 2. If the task path does not exist:
     ///    2.1. Create hard link from source to task path.
     ///    2.2. If hard link fails, return an error.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn hard_link_to_task(&self, from: &Path, task_id: &str) -> Result<()> {
         let task_path = self.get_task_path(task_id);
         if let Err(err) = fs::hard_link(from, &task_path).await {
@@ -227,7 +227,7 @@ impl Content {
     }
 
     /// Copies the task content to the destination.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn copy_task(&self, task_id: &str, to: &Path) -> Result<()> {
         fs::copy(self.get_task_path(task_id), to).await?;
         info!("copy to {:?} success", to);
@@ -380,7 +380,7 @@ impl Content {
     /// Behavior of `create_persistent_task`:
     /// 1. If the persistent task already exists, return the persistent task path.
     /// 2. If the persistent task does not exist, create the persistent task directory and file.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn create_persistent_task(&self, task_id: &str, length: u64) -> Result<PathBuf> {
         let task_path = self.get_persistent_task_path(task_id);
         if task_path.exists() {
@@ -409,7 +409,7 @@ impl Content {
     }
 
     /// Creates only the directory for the persistent task.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn create_persistent_task_dir(&self, task_id: &str) -> Result<PathBuf> {
         let task_path = self.get_persistent_task_path(task_id);
         if task_path.exists() {
@@ -436,7 +436,7 @@ impl Content {
     /// 2. If the destination does not exist:
     ///    2.1. If the hard link succeeds, return immediately.
     ///    2.2. If the hard link fails, copy the persistent task content to the destination once the task is finished, then return immediately.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn hard_link_persistent_task(&self, task_id: &str, to: &Path) -> Result<()> {
         let task_path = self.get_persistent_task_path(task_id);
         if let Err(err) = fs::hard_link(task_path.clone(), to).await {
@@ -464,7 +464,7 @@ impl Content {
     /// 2. If the task path does not exist:
     ///    2.1. Create hard link from source to task path.
     ///    2.2. If hard link fails, return an error.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn hard_link_to_persistent_task(&self, from: &Path, task_id: &str) -> Result<()> {
         let task_path = self.get_persistent_task_path(task_id);
         if let Err(err) = fs::hard_link(from, &task_path).await {
@@ -484,7 +484,7 @@ impl Content {
     }
 
     /// Copies the persistent task content to the destination.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn copy_persistent_task(&self, task_id: &str, to: &Path) -> Result<()> {
         fs::copy(self.get_persistent_task_path(task_id), to).await?;
         info!("copy to {:?} success", to);
@@ -637,7 +637,7 @@ impl Content {
     /// Behavior of `create_persistent_cache_task`:
     /// 1. If the persistent cache task already exists, return the persistent cache task path.
     /// 2. If the persistent cache task does not exist, create the persistent cache task directory and file.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn create_persistent_cache_task(
         &self,
         task_id: &str,
@@ -670,7 +670,7 @@ impl Content {
     }
 
     /// Creates only the directory for the persistent cache task.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn create_persistent_cache_task_dir(&self, task_id: &str) -> Result<PathBuf> {
         let task_path = self.get_persistent_cache_task_path(task_id);
         if task_path.exists() {
@@ -697,7 +697,7 @@ impl Content {
     /// 2. If the destination does not exist:
     ///    2.1. If the hard link succeeds, return immediately.
     ///    2.2. If the hard link fails, copy the persistent cache task content to the destination once the task is finished, then return immediately.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn hard_link_persistent_cache_task(&self, task_id: &str, to: &Path) -> Result<()> {
         let task_path = self.get_persistent_cache_task_path(task_id);
         if let Err(err) = fs::hard_link(task_path.clone(), to).await {
@@ -725,7 +725,7 @@ impl Content {
     /// 2. If the task path does not exist:
     ///    2.1. Create hard link from source to task path.
     ///    2.2. If hard link fails, return an error.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn hard_link_to_persistent_cache_task(
         &self,
         from: &Path,
@@ -749,7 +749,7 @@ impl Content {
     }
 
     /// Copies the persistent cache task content to the destination.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn copy_persistent_cache_task(&self, task_id: &str, to: &Path) -> Result<()> {
         fs::copy(self.get_persistent_cache_task_path(task_id), to).await?;
         info!("copy to {:?} success", to);

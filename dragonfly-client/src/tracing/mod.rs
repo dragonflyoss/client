@@ -68,7 +68,7 @@ pub fn init_tracing(
     let logging_layer: Box<dyn tracing_subscriber::Layer<Registry> + Send + Sync> = if console {
         let (writer, guard) = tracing_appender::non_blocking(std::io::stdout());
         guards.push(guard);
-        base_layer(writer).with_filter(LevelFilter::DEBUG).boxed()
+        base_layer(writer).boxed()
     } else {
         fs::create_dir_all(&log_dir).expect("failed to create log directory");
         let appender = BasicRollingFileAppender::new(
@@ -215,7 +215,7 @@ pub fn init_command_tracing(log_level: Level, console: bool) -> Vec<WorkerGuard>
 
     // Initialize stdout layer.
     let stdout_filter = if console {
-        LevelFilter::DEBUG
+        LevelFilter::from_level(log_level)
     } else {
         LevelFilter::OFF
     };

@@ -136,13 +136,13 @@ impl Task {
     }
 
     /// Gets the metadata of the task.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get(&self, id: &str) -> ClientResult<Option<metadata::Task>> {
         self.storage.get_task(id)
     }
 
     /// Updates the metadata of the task when the task downloads started.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_started(
         &self,
         id: &str,
@@ -294,25 +294,25 @@ impl Task {
     }
 
     /// Updates the metadata of the task when the task downloads finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_finished(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.download_task_finished(id)
     }
 
     /// Updates the metadata of the task when the task downloads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_failed(&self, id: &str) -> ClientResult<()> {
         self.storage.download_task_failed(id).await.map(|_| ())
     }
 
     /// Updates the metadata of the task when the task prefetch started.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn prefetch_task_started(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.prefetch_task_started(id).await
     }
 
     /// Updates the metadata of the task when the task prefetch failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn prefetch_task_failed(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.prefetch_task_failed(id).await
     }
@@ -323,14 +323,14 @@ impl Task {
     }
 
     //// copy_task copies the task content to the destination.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn copy_task(&self, id: &str, to: &Path) -> ClientResult<()> {
         self.storage.copy_task(id, to).await
     }
 
     /// Downloads a task.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download(
         &self,
         task: &metadata::Task,
@@ -549,7 +549,7 @@ impl Task {
 
     /// Downloads a partial task with scheduler.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn download_partial_with_scheduler(
         &self,
         task: &metadata::Task,
@@ -974,7 +974,7 @@ impl Task {
 
     /// Downloads a partial task with scheduler from a parent.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn download_partial_with_scheduler_from_parent(
         &self,
         task: &metadata::Task,
@@ -1331,7 +1331,7 @@ impl Task {
 
     /// Downloads a partial task with scheduler from the source.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn download_partial_with_scheduler_from_source(
         &self,
         task: &metadata::Task,
@@ -1655,7 +1655,7 @@ impl Task {
 
     /// Downloads a partial task from a local.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn download_partial_from_local(
         &self,
         task: &metadata::Task,
@@ -1793,7 +1793,7 @@ impl Task {
 
     /// Downloads a partial task from the source.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn download_partial_from_source(
         &self,
         task: &metadata::Task,
@@ -2023,7 +2023,7 @@ impl Task {
     }
 
     /// Returns the task metadata from scheduler.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn stat(&self, task_id: &str, host_id: &str) -> ClientResult<CommonTask> {
         self.scheduler_client
             .stat_task(StatTaskRequest {
@@ -2037,7 +2037,7 @@ impl Task {
     }
 
     /// Returns the task metadata from local storage.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn stat_local(&self, task_id: &str) -> ClientResult<StatLocalTaskResponse> {
         let Some(task) = self.get(task_id).inspect_err(|err| {
             error!("get task {} from local storage error: {:?}", task_id, err);
@@ -2062,7 +2062,7 @@ impl Task {
     }
 
     /// Returns the tasks from local storage.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn list_local(&self) -> ClientResult<ListLocalTasksResponse> {
         let tasks = self.storage.get_tasks().inspect_err(|err| {
             error!("list tasks from local storage error: {:?}", err);
@@ -2089,7 +2089,7 @@ impl Task {
     }
 
     /// Delete a task and reclaim local storage.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn delete(&self, task_id: &str, host_id: &str) -> ClientResult<()> {
         let task = self.get(task_id).inspect_err(|err| {
             error!("get task {} from local storage error: {:?}", task_id, err);
@@ -2120,7 +2120,7 @@ impl Task {
     }
 
     /// Delete a local task and reclaim local storage.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn delete_local(&self, task_id: &str) -> ClientResult<()> {
         let task = self.get(task_id).inspect_err(|err| {
             error!("get task {} from local storage error: {:?}", task_id, err);
