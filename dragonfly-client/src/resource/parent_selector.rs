@@ -22,7 +22,7 @@ use dragonfly_api::dfdaemon::v2::SyncHostRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
 use dragonfly_client_util::id_generator::IDGenerator;
-use dragonfly_client_util::net::format_url;
+use dragonfly_client_util::net::{format_url, scheme_for_tls};
 use dragonfly_client_util::shutdown::{self, Shutdown};
 use rand::distr::weighted::WeightedIndex;
 use rand::distr::Distribution;
@@ -219,10 +219,15 @@ impl ParentSelector {
                 continue;
             }
 
+            let scheme = scheme_for_tls(
+                &self.config.upload.client.ca_cert,
+                &self.config.upload.client.cert,
+                &self.config.upload.client.key,
+            );
             let dfdaemon_upload_client = match DfdaemonUploadClient::new(
                 self.config.clone(),
                 format_url(
-                    "http",
+                    scheme,
                     IpAddr::from_str(&parent_host.ip)?,
                     parent_host.port as u16,
                 ),
@@ -541,10 +546,15 @@ impl PersistentParentSelector {
                 continue;
             }
 
+            let scheme = scheme_for_tls(
+                &self.config.upload.client.ca_cert,
+                &self.config.upload.client.cert,
+                &self.config.upload.client.key,
+            );
             let dfdaemon_upload_client = match DfdaemonUploadClient::new(
                 self.config.clone(),
                 format_url(
-                    "http",
+                    scheme,
                     IpAddr::from_str(&parent_host.ip)?,
                     parent_host.port as u16,
                 ),
@@ -866,10 +876,15 @@ impl PersistentCacheParentSelector {
                 continue;
             }
 
+            let scheme = scheme_for_tls(
+                &self.config.upload.client.ca_cert,
+                &self.config.upload.client.cert,
+                &self.config.upload.client.key,
+            );
             let dfdaemon_upload_client = match DfdaemonUploadClient::new(
                 self.config.clone(),
                 format_url(
-                    "http",
+                    scheme,
                     IpAddr::from_str(&parent_host.ip)?,
                     parent_host.port as u16,
                 ),

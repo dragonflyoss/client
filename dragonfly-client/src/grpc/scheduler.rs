@@ -35,6 +35,7 @@ use dragonfly_api::scheduler::v2::{
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
+use dragonfly_client_util::net::scheme_for_tls;
 use hashring::HashRing;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
@@ -44,7 +45,6 @@ use tokio::task::JoinSet;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
 use tracing::{debug, error, info, instrument, Instrument};
-use url::Url;
 
 use super::interceptor::InjectTracingInterceptor;
 
@@ -178,25 +178,14 @@ impl SchedulerClient {
 
         for available_scheduler_addr in available_scheduler_addrs_clone.iter() {
             let request = Self::make_request(request.clone());
+            let config = self.config.clone();
             async fn announce_host(
+                config: Arc<Config>,
                 addr: SocketAddr,
                 request: tonic::Request<AnnounceHostRequest>,
             ) -> Result<()> {
                 debug!("announce host to {}", addr);
-
-                // Connect to the scheduler.
-                let channel = Channel::from_shared(format!("http://{addr}"))
-                    .map_err(|_| Error::InvalidURI(addr.to_string()))?
-                    .buffer_size(super::BUFFER_SIZE)
-                    .connect_timeout(super::CONNECT_TIMEOUT)
-                    .timeout(super::REQUEST_TIMEOUT)
-                    .connect()
-                    .await
-                    .inspect_err(|err| {
-                        error!("connect to {} failed: {}", addr.to_string(), err);
-                    })
-                    .or_err(ErrorType::ConnectError)?;
-
+                let channel = connect_to_scheduler(config, addr).await?;
                 let mut client =
                     SchedulerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
                         .max_decoding_message_size(usize::MAX)
@@ -205,7 +194,8 @@ impl SchedulerClient {
                 Ok(())
             }
 
-            join_set.spawn(announce_host(*available_scheduler_addr, request).in_current_span());
+            join_set
+                .spawn(announce_host(config, *available_scheduler_addr, request).in_current_span());
         }
 
         while let Some(message) = join_set
@@ -232,25 +222,14 @@ impl SchedulerClient {
 
         for available_scheduler_addr in available_scheduler_addrs_clone.iter() {
             let request = Self::make_request(request.clone());
+            let config = self.config.clone();
             async fn announce_host(
+                config: Arc<Config>,
                 addr: SocketAddr,
                 request: tonic::Request<AnnounceHostRequest>,
             ) -> Result<()> {
                 info!("announce host to {:?}", addr);
-
-                // Connect to the scheduler.
-                let channel = Channel::from_shared(format!("http://{addr}"))
-                    .map_err(|_| Error::InvalidURI(addr.to_string()))?
-                    .buffer_size(super::BUFFER_SIZE)
-                    .connect_timeout(super::CONNECT_TIMEOUT)
-                    .timeout(super::REQUEST_TIMEOUT)
-                    .connect()
-                    .await
-                    .inspect_err(|err| {
-                        error!("connect to {} failed: {}", addr.to_string(), err);
-                    })
-                    .or_err(ErrorType::ConnectError)?;
-
+                let channel = connect_to_scheduler(config, addr).await?;
                 let mut client =
                     SchedulerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
                         .max_decoding_message_size(usize::MAX)
@@ -259,7 +238,8 @@ impl SchedulerClient {
                 Ok(())
             }
 
-            join_set.spawn(announce_host(*available_scheduler_addr, request).in_current_span());
+            join_set
+                .spawn(announce_host(config, *available_scheduler_addr, request).in_current_span());
         }
 
         while let Some(message) = join_set
@@ -291,25 +271,14 @@ impl SchedulerClient {
 
         for available_scheduler_addr in available_scheduler_addrs_clone.iter() {
             let request = Self::make_request(request.clone());
+            let config = self.config.clone();
             async fn delete_host(
+                config: Arc<Config>,
                 addr: SocketAddr,
                 request: tonic::Request<DeleteHostRequest>,
             ) -> Result<()> {
                 info!("delete host from {}", addr);
-
-                // Connect to the scheduler.
-                let channel = Channel::from_shared(format!("http://{addr}"))
-                    .map_err(|_| Error::InvalidURI(addr.to_string()))?
-                    .buffer_size(super::BUFFER_SIZE)
-                    .connect_timeout(super::CONNECT_TIMEOUT)
-                    .timeout(super::REQUEST_TIMEOUT)
-                    .connect()
-                    .await
-                    .inspect_err(|err| {
-                        error!("connect to {} failed: {}", addr.to_string(), err);
-                    })
-                    .or_err(ErrorType::ConnectError)?;
-
+                let channel = connect_to_scheduler(config, addr).await?;
                 let mut client =
                     SchedulerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
                         .max_decoding_message_size(usize::MAX)
@@ -318,7 +287,8 @@ impl SchedulerClient {
                 Ok(())
             }
 
-            join_set.spawn(delete_host(*available_scheduler_addr, request).in_current_span());
+            join_set
+                .spawn(delete_host(config, *available_scheduler_addr, request).in_current_span());
         }
 
         while let Some(message) = join_set
@@ -595,52 +565,7 @@ impl SchedulerClient {
         drop(addrs);
         info!("picked {:?}", addr);
 
-        let addr = format!("http://{addr}");
-        let domain_name = Url::parse(addr.as_str())?
-            .host_str()
-            .ok_or(Error::InvalidParameter)
-            .inspect_err(|_err| {
-                error!("invalid address: {}", addr);
-            })?
-            .to_string();
-
-        let channel = match self
-            .config
-            .scheduler
-            .load_client_tls_config(domain_name.as_str())
-            .await?
-        {
-            Some(client_tls_config) => Channel::from_shared(addr.clone())
-                .map_err(|_| Error::InvalidURI(addr.clone()))?
-                .tls_config(client_tls_config)?
-                .buffer_size(super::BUFFER_SIZE)
-                .connect_timeout(super::CONNECT_TIMEOUT)
-                .timeout(super::REQUEST_TIMEOUT)
-                .tcp_keepalive(Some(super::TCP_KEEPALIVE))
-                .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
-                .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
-                .connect()
-                .await
-                .inspect_err(|err| {
-                    error!("connect to {} failed: {}", addr.to_string(), err);
-                })
-                .or_err(ErrorType::ConnectError)?,
-            None => Channel::from_shared(addr.clone())
-                .map_err(|_| Error::InvalidURI(addr.clone()))?
-                .buffer_size(super::BUFFER_SIZE)
-                .connect_timeout(super::CONNECT_TIMEOUT)
-                .timeout(super::REQUEST_TIMEOUT)
-                .tcp_keepalive(Some(super::TCP_KEEPALIVE))
-                .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
-                .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
-                .connect()
-                .await
-                .inspect_err(|err| {
-                    error!("connect to {} failed: {}", addr.to_string(), err);
-                })
-                .or_err(ErrorType::ConnectError)?,
-        };
-
+        let channel = connect_to_scheduler(self.config.clone(), addr.addr).await?;
         Ok(
             SchedulerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
                 .max_decoding_message_size(usize::MAX)
@@ -750,4 +675,44 @@ impl SchedulerClient {
         request.set_timeout(super::REQUEST_TIMEOUT);
         request
     }
+}
+
+/// connect_to_scheduler opens a gRPC channel to a scheduler address, using
+/// mTLS when scheduler TLS credentials are configured. The URL scheme reflects
+/// the TLS config because tonic's `Channel` derives transport behavior from
+/// the scheme; an `http://` URL with `tls_config(...)` still dials cleartext.
+async fn connect_to_scheduler(config: Arc<Config>, addr: SocketAddr) -> Result<Channel> {
+    let scheme = scheme_for_tls(
+        &config.scheduler.ca_cert,
+        &config.scheduler.cert,
+        &config.scheduler.key,
+    );
+    let domain_name = addr.ip().to_string();
+    let addr = format!("{scheme}://{addr}");
+
+    let mut endpoint = Channel::from_shared(addr.clone())
+        .map_err(|_| Error::InvalidURI(addr.clone()))?
+        .buffer_size(super::BUFFER_SIZE)
+        .connect_timeout(super::CONNECT_TIMEOUT)
+        .timeout(super::REQUEST_TIMEOUT)
+        .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+        .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+        .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT);
+
+    if let Some(client_tls_config) = config
+        .scheduler
+        .load_client_tls_config(domain_name.as_str())
+        .await?
+    {
+        endpoint = endpoint.tls_config(client_tls_config)?;
+    }
+
+    endpoint
+        .connect()
+        .await
+        .inspect_err(|err| {
+            error!("connect to {} failed: {}", addr, err);
+        })
+        .or_err(ErrorType::ConnectError)
+        .map_err(Into::into)
 }
