@@ -823,8 +823,8 @@ pub struct PreheatCommand {
         default_value_t = false,
         env = "DFCTL_TASK_PREHEAT_REQUEST_SDK",
         help = "Specify whether to use request SDK mode for preheat. If not set, uses gRPC mode to call the scheduler directly. \
-         If set, uses request SDK task ID and seed-peer selection while triggering dfdaemon DownloadTask control stream only. \
-         This mode does not stream file or image layer content back to dfctl."
+         If set, uses the request SDK to trigger the seed peers to download the task without streaming the content back to dfctl, \
+         refer to https://github.com/dragonflyoss/client/tree/main/dragonfly-client-request"
     )]
     request_sdk: bool,
 
@@ -1395,7 +1395,7 @@ impl PreheatCommand {
         Ok(())
     }
 
-    /// Preheats an OCI image with request SDK task ID and seed-peer selection.
+    /// Preheats an OCI image via the Dragonfly request SDK.
     async fn preheat_image_by_request_sdk(&self) -> Result<()> {
         let proxy = Proxy::builder()
             .scheduler_endpoint(self.scheduler_endpoint.clone())
@@ -1408,7 +1408,7 @@ impl PreheatCommand {
             .clone()
             .unwrap_or_else(default_proxy_rule_filtered_query_params);
 
-        let request = PreheatRequest {
+        let request = dragonfly_client_request::PreheatImageRequest {
             image: self
                 .url
                 .strip_prefix(&format!("{}://", oci::SCHEME))
@@ -1435,7 +1435,7 @@ impl PreheatCommand {
         };
 
         proxy
-            .preheat(&request)
+            .preheat_image(&request)
             .await
             .map_err(|err| Error::Unknown(format!("preheat failed: {err}")))?;
 
@@ -1449,7 +1449,7 @@ impl PreheatCommand {
         Ok(())
     }
 
-    /// Preheats a file with request SDK task ID and seed-peer selection.
+    /// Preheats a file via the Dragonfly request SDK.
     async fn preheat_file_by_request_sdk(&self) -> Result<()> {
         let proxy = Proxy::builder()
             .scheduler_endpoint(self.scheduler_endpoint.clone())
@@ -1462,7 +1462,7 @@ impl PreheatCommand {
             .clone()
             .unwrap_or_else(default_proxy_rule_filtered_query_params);
 
-        let request = GetRequest {
+        let request = PreheatRequest {
             url: self.url.clone(),
             piece_length: self.piece_length.map(|piece_length| piece_length.as_u64()),
             tag: self.tag.clone(),
@@ -1481,7 +1481,7 @@ impl PreheatCommand {
         };
 
         proxy
-            .preheat_file_via_control_plane(&request)
+            .preheat(&request)
             .await
             .map_err(|err| Error::Unknown(format!("preheat failed: {err}")))?;
 

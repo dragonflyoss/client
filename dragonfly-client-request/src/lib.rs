@@ -16,11 +16,10 @@
 
 use async_trait::async_trait;
 use bytes::BytesMut;
-use dragonfly_api::common::v2::{Download, Host, TaskType};
+use dragonfly_api::common::v2::{Download, Priority, TaskType};
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_upload_client::DfdaemonUploadClient as DfdaemonUploadGRPCClient, DownloadTaskRequest,
 };
-use dragonfly_api::errordetails::v2::Backend as BackendErrorDetails;
 use dragonfly_api::scheduler::v2::scheduler_client::SchedulerClient;
 use dragonfly_client_util::digest::is_blob_url;
 use dragonfly_client_util::http::{
@@ -113,8 +112,17 @@ pub trait Request {
     /// This method is designed for scenarios where OCI image content needs to be pre-cached in
     /// the seed client before actual consumption, ensuring faster subsequent access across the
     /// cluster. It parses the image reference, authenticates with the OCI registry, resolves
-    /// the image manifest (including multi-platform image indexes), and downloads each blob
-    /// (config and layers) through the seed client.
+    /// the image manifest (including multi-platform image indexes), and triggers the seed
+    /// client to download each blob (config and layers), without streaming the blob content
+    /// back to the client.
+    async fn preheat_image(&self, request: &PreheatImageRequest) -> Result<()>;
+
+    /// Preheats a file by downloading it to the seed peers via the Dragonfly.
+    ///
+    /// This method is designed for scenarios where file content needs to be pre-cached in
+    /// the seed client before actual consumption, ensuring faster subsequent access across
+    /// the cluster. It triggers the selected seed peers to download the file by the dfdaemon
+    /// download task API, without streaming the file content back to the client.
     async fn preheat(&self, request: &PreheatRequest) -> Result<()>;
 }
 
@@ -206,7 +214,7 @@ where
 /// Dragonfly seed client. The preheat downloads all blobs (config and layers)
 /// of the specified image via the Dragonfly proxy, effectively caching them
 /// in the P2P network for faster downloading.
-pub struct PreheatRequest {
+pub struct PreheatImageRequest {
     /// The OCI image reference (e.g., "docker.io/library/nginx:latest").
     pub image: String,
 
@@ -259,9 +267,9 @@ pub struct PreheatRequest {
     pub client_cert: Option<Vec<CertificateDer<'static>>>,
 }
 
-/// Default implementation for PreheatRequest.
-impl Default for PreheatRequest {
-    /// Returns a default PreheatRequest with empty image and default values for other
+/// Default implementation for PreheatImageRequest.
+impl Default for PreheatImageRequest {
+    /// Returns a default PreheatImageRequest with empty image and default values for other
     /// fields.
     fn default() -> Self {
         Self {
@@ -269,6 +277,74 @@ impl Default for PreheatRequest {
             username: None,
             password: None,
             platform: None,
+            piece_length: None,
+            tag: None,
+            application: None,
+            filtered_query_params: default_proxy_rule_filtered_query_params(),
+            content_for_calculating_task_id: None,
+            enable_task_id_based_blob_digest: true,
+            priority: None,
+            timeout: Duration::from_secs(300),
+            client_cert: None,
+        }
+    }
+}
+
+/// Represents a request to preheat a file through the Dragonfly seed client. The preheat
+/// downloads the specified file via the Dragonfly proxy, effectively caching it in the P2P
+/// network for faster downloading.
+pub struct PreheatRequest {
+    /// The url of the request.
+    pub url: String,
+
+    /// The headers of the request.
+    pub header: HeaderMap,
+
+    /// Task piece length.
+    pub piece_length: Option<u64>,
+
+    /// URL tag identifies different task for same url.
+    pub tag: Option<String>,
+
+    /// Application of task identifies different task for same url.
+    pub application: Option<String>,
+
+    /// Filtered query params to generate the task id.
+    /// When filter is ["Signature", "Expires", "ns"], for example:
+    /// http://example.com/xyz?Expires=e1&Signature=s1&ns=docker.io and http://example.com/xyz?Expires=e2&Signature=s2&ns=docker.io
+    /// will generate the same task id.
+    /// Default value includes the filtered query params of s3, gcs, oss, obs, cos.
+    pub filtered_query_params: Vec<String>,
+
+    /// Content for calculating task id. This is used when the task ID cannot be calculated based
+    /// on URL and other parameters, such as when the URL contains dynamic query parameters that
+    /// cannot be filtered out.
+    pub content_for_calculating_task_id: Option<String>,
+
+    /// Enable task id based blob digest. It indicates whether to use the blob digest for task ID calculation
+    /// when downloading from OCI registries. When enabled for OCI blob URLs (e.g., /v2/<name>/blobs/sha256:<digest>),
+    /// the task ID is derived from the blob digest rather than the full URL. This enables deduplication across
+    /// registries - the same blob from different registries shares one task ID, eliminating redundant downloads
+    /// and storage, default is true.
+    pub enable_task_id_based_blob_digest: bool,
+
+    /// Refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L67
+    pub priority: Option<i32>,
+
+    /// The timeout of the request, default is 300s.
+    pub timeout: Duration,
+
+    /// The client certificates for the request.
+    pub client_cert: Option<Vec<CertificateDer<'static>>>,
+}
+
+/// Default implementation for PreheatRequest.
+impl Default for PreheatRequest {
+    /// Returns a default PreheatRequest with empty image and default values for other fields.
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            header: HeaderMap::new(),
             piece_length: None,
             tag: None,
             application: None,
@@ -546,13 +622,15 @@ impl Request for Proxy {
             .map_err(|err| Error::RequestTimeout(err.to_string()))?
     }
 
-    /// Preheats an OCI image by triggering dfdaemon upload gRPC DownloadTask control streams for
-    /// each image blob.
+    /// Preheats an OCI image by downloading all its blobs via the Dragonfly.
     ///
-    /// This uses the same image manifest resolution, registry authentication, blob URL generation,
-    /// task ID calculation, and seed-peer hash selection as request-SDK proxy preheat, but it does
-    /// not stream blob content back to the caller.
-    async fn preheat(&self, request: &PreheatRequest) -> Result<()> {
+    /// This method is designed for scenarios where OCI image content needs to be pre-cached in
+    /// the seed client before actual consumption, ensuring faster subsequent access across the
+    /// cluster. It parses the image reference, authenticates with the OCI registry, resolves
+    /// the image manifest (including multi-platform image indexes), and triggers the seed
+    /// client to download each blob (config and layers), without streaming the blob content
+    /// back to the client.
+    async fn preheat_image(&self, request: &PreheatImageRequest) -> Result<()> {
         let oci_client = Self::oci_client(request.platform.clone())?;
 
         // Parse image reference.
@@ -605,7 +683,7 @@ impl Request for Proxy {
             .chain(manifest.layers.iter().map(|layer| &layer.digest))
         {
             let url = Self::build_blob_url(registry, repository, digest);
-            let get_request = GetRequest {
+            let request = PreheatRequest {
                 url: url.clone(),
                 header: header.clone(),
                 piece_length: request.piece_length,
@@ -619,12 +697,139 @@ impl Request for Proxy {
                 client_cert: request.client_cert.clone(),
             };
 
-            self.preheat_file_via_control_plane(&get_request).await?;
-            debug!("preheated blob via control plane: {}", url);
+            self.preheat(&request).await?;
+            debug!("preheated blob: {}", url);
         }
 
         debug!("preheat completed for image: {}", request.image);
         Ok(())
+    }
+
+    /// Preheats a file by downloading it to the seed peers via the Dragonfly.
+    ///
+    /// This method is designed for scenarios where file content needs to be pre-cached in
+    /// the seed client before actual consumption, ensuring faster subsequent access across
+    /// the cluster. It triggers the selected seed peers to download the file by the dfdaemon
+    /// download task API, without streaming the file content back to the client.
+    async fn preheat(&self, request: &PreheatRequest) -> Result<()> {
+        // Generate task id for selecting seed peer.
+        let task_id = self
+            .id_generator
+            .task_id(
+                if let Some(content) = request.content_for_calculating_task_id.clone() {
+                    TaskIDParameter::Content(content)
+                } else if request.enable_task_id_based_blob_digest && is_blob_url(&request.url) {
+                    TaskIDParameter::BlobDigestBased(request.url.clone())
+                } else {
+                    TaskIDParameter::URLBased {
+                        url: request.url.clone(),
+                        piece_length: request.piece_length,
+                        tag: request.tag.clone(),
+                        application: request.application.clone(),
+                        filtered_query_params: request.filtered_query_params.clone(),
+                        revision: None,
+                    }
+                },
+            )
+            .map_err(|err| Error::Internal(format!("failed to generate task id: {err}")))?;
+
+        // Select seed peers for downloading.
+        let seed_peers = self
+            .seed_peer_selector
+            .select(task_id.clone(), self.max_retries as u32)
+            .await
+            .map_err(|err| {
+                Error::Internal(format!("failed to select seed peers from scheduler: {err}"))
+            })?;
+
+        debug!("task {} selected seed peers: {:?}", task_id, seed_peers);
+
+        // Construct the download task request for preheating.
+        let download_task_request = DownloadTaskRequest {
+            download: Some(Download {
+                url: request.url.clone(),
+                r#type: TaskType::Standard as i32,
+                tag: request.tag.clone(),
+                application: request.application.clone(),
+                priority: request.priority.unwrap_or(Priority::Level6 as i32),
+                filtered_query_params: request.filtered_query_params.clone(),
+                request_header: headermap_to_hashmap(&request.header),
+                piece_length: request.piece_length,
+                timeout: Some(
+                    prost_wkt_types::Duration::try_from(request.timeout).map_err(|err| {
+                        Error::InvalidArgument(format!("invalid request timeout: {err}"))
+                    })?,
+                ),
+                content_for_calculating_task_id: request.content_for_calculating_task_id.clone(),
+                remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
+                enable_task_id_based_blob_digest: request.enable_task_id_based_blob_digest,
+                ..Default::default()
+            }),
+        };
+
+        for (index, peer) in seed_peers.iter().enumerate() {
+            let addr = format_url(
+                "http",
+                IpAddr::from_str(&peer.ip).map_err(|err| Error::Internal(err.to_string()))?,
+                peer.port as u16,
+            );
+
+            // Trigger the seed peer to download the task and wait for the download task
+            // to finish, without streaming the file content back to the client.
+            let download_task = async {
+                let channel = Channel::from_shared(addr.clone())
+                    .map_err(|err| Error::InvalidArgument(err.to_string()))?
+                    .connect_timeout(request.timeout)
+                    .timeout(request.timeout)
+                    .connect()
+                    .await
+                    .map_err(|err| {
+                        Error::Internal(format!("failed to connect to seed peer {addr}: {err}"))
+                    })?;
+
+                let mut client = DfdaemonUploadGRPCClient::new(channel)
+                    .max_decoding_message_size(usize::MAX)
+                    .max_encoding_message_size(usize::MAX);
+
+                let mut response = client
+                    .download_task(download_task_request.clone())
+                    .await
+                    .map_err(|err| {
+                        Error::Internal(format!("failed to download task {task_id}: {err}"))
+                    })?
+                    .into_inner();
+
+                while response
+                    .message()
+                    .await
+                    .map_err(|err| {
+                        Error::Internal(format!("failed to download task {task_id}: {err}"))
+                    })?
+                    .is_some()
+                {}
+
+                Ok(())
+            };
+
+            match download_task.await {
+                Ok(()) => return Ok(()),
+                Err(err) => {
+                    error!(
+                        "failed to download task {} from seed peer {}: {}",
+                        task_id, addr, err
+                    );
+
+                    // If this is the last seed peer, return the error.
+                    if index == seed_peers.len() - 1 {
+                        return Err(err);
+                    }
+                }
+            }
+        }
+
+        Err(Error::Internal(
+            "failed to download task from any seed peer".to_string(),
+        ))
     }
 }
 
@@ -635,7 +840,37 @@ impl Proxy {
         &self,
         request: &GetRequest,
     ) -> Result<Vec<Entry<ClientWithMiddleware>>> {
-        let (_task_id, seed_peers) = self.select_seed_peers(request).await?;
+        // Generate task id for selecting seed peer.
+        let task_id = self
+            .id_generator
+            .task_id(
+                if let Some(content) = request.content_for_calculating_task_id.clone() {
+                    TaskIDParameter::Content(content)
+                } else if request.enable_task_id_based_blob_digest && is_blob_url(&request.url) {
+                    TaskIDParameter::BlobDigestBased(request.url.clone())
+                } else {
+                    TaskIDParameter::URLBased {
+                        url: request.url.clone(),
+                        piece_length: request.piece_length,
+                        tag: request.tag.clone(),
+                        application: request.application.clone(),
+                        filtered_query_params: request.filtered_query_params.clone(),
+                        revision: None,
+                    }
+                },
+            )
+            .map_err(|err| Error::Internal(format!("failed to generate task id: {err}")))?;
+
+        // Select seed peers for downloading.
+        let seed_peers = self
+            .seed_peer_selector
+            .select(task_id.clone(), self.max_retries as u32)
+            .await
+            .map_err(|err| {
+                Error::Internal(format!("failed to select seed peers from scheduler: {err}"))
+            })?;
+
+        debug!("task {} selected seed peers: {:?}", task_id, seed_peers);
 
         let mut client_entries = Vec::with_capacity(seed_peers.len());
         for peer in seed_peers.iter() {
@@ -650,182 +885,6 @@ impl Proxy {
         }
 
         Ok(client_entries)
-    }
-
-    /// Preheats a file by triggering dfdaemon upload gRPC DownloadTask control streams.
-    ///
-    /// This keeps the request-SDK task ID and seed-peer hash selection semantics, but it does
-    /// not issue an HTTP GET through the peer proxy and therefore does not stream file content
-    /// back to the caller.
-    pub async fn preheat_file_via_control_plane(&self, request: &GetRequest) -> Result<()> {
-        let (task_id, seed_peers) = self.select_seed_peers(request).await?;
-        let download_task_request = self.make_download_task_request(request)?;
-
-        for (index, peer) in seed_peers.iter().enumerate() {
-            match self
-                .download_task_from_seed_peer(peer, download_task_request.clone())
-                .await
-            {
-                Ok(()) => return Ok(()),
-                Err(err) => {
-                    error!(
-                        "failed to preheat task {} from seed peer {}:{}: {}",
-                        task_id, peer.ip, peer.port, err
-                    );
-                    if index == seed_peers.len() - 1 {
-                        return Err(Error::Internal(format!(
-                            "failed to preheat task {task_id} from any selected seed peer: last error: {err}"
-                        )));
-                    }
-                }
-            }
-        }
-
-        Err(Error::Internal(
-            "failed to preheat task because no seed peer was selected".to_string(),
-        ))
-    }
-
-    /// Generates task id and selects seed peers for request-SDK compatible operations.
-    async fn select_seed_peers(&self, request: &GetRequest) -> Result<(String, Vec<Host>)> {
-        let task_id = self.task_id(request)?;
-        let seed_peers = self
-            .seed_peer_selector
-            .select(task_id.clone(), self.max_retries as u32)
-            .await
-            .map_err(|err| {
-                Error::Internal(format!("failed to select seed peers from scheduler: {err}"))
-            })?;
-
-        debug!("task {} selected seed peers: {:?}", task_id, seed_peers);
-        Ok((task_id, seed_peers))
-    }
-
-    /// Generates the same task id as request-SDK proxy GET mode.
-    fn task_id(&self, request: &GetRequest) -> Result<String> {
-        self.id_generator
-            .task_id(Self::task_id_parameter(request))
-            .map_err(|err| Error::Internal(format!("failed to generate task id: {err}")))
-    }
-
-    fn task_id_parameter(request: &GetRequest) -> TaskIDParameter {
-        if let Some(content) = request.content_for_calculating_task_id.clone() {
-            TaskIDParameter::Content(content)
-        } else if request.enable_task_id_based_blob_digest && is_blob_url(&request.url) {
-            TaskIDParameter::BlobDigestBased(request.url.clone())
-        } else {
-            TaskIDParameter::URLBased {
-                url: request.url.clone(),
-                piece_length: request.piece_length,
-                tag: request.tag.clone(),
-                application: request.application.clone(),
-                filtered_query_params: request.filtered_query_params.clone(),
-                revision: None,
-            }
-        }
-    }
-
-    fn make_download_task_request(&self, request: &GetRequest) -> Result<DownloadTaskRequest> {
-        Ok(DownloadTaskRequest {
-            download: Some(Download {
-                url: request.url.clone(),
-                digest: None,
-                range: None,
-                r#type: TaskType::Standard as i32,
-                tag: request.tag.clone(),
-                application: request.application.clone(),
-                priority: request.priority.unwrap_or(6),
-                filtered_query_params: request.filtered_query_params.clone(),
-                request_header: headermap_to_hashmap(&request.header),
-                piece_length: request.piece_length,
-                output_path: None,
-                timeout: Some(
-                    prost_wkt_types::Duration::try_from(request.timeout).map_err(|err| {
-                        Error::InvalidArgument(format!("invalid request timeout: {err}"))
-                    })?,
-                ),
-                need_back_to_source: false,
-                disable_back_to_source: false,
-                certificate_chain: Vec::new(),
-                prefetch: false,
-                object_storage: None,
-                hdfs: None,
-                is_prefetch: false,
-                need_piece_content: false,
-                force_hard_link: false,
-                content_for_calculating_task_id: request.content_for_calculating_task_id.clone(),
-                remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
-                concurrent_piece_count: None,
-                overwrite: false,
-                actual_piece_length: None,
-                actual_content_length: None,
-                actual_piece_count: None,
-                enable_task_id_based_blob_digest: request.enable_task_id_based_blob_digest,
-                hugging_face: None,
-                model_scope: None,
-            }),
-        })
-    }
-
-    async fn download_task_from_seed_peer(
-        &self,
-        peer: &Host,
-        request: DownloadTaskRequest,
-    ) -> Result<()> {
-        let request_timeout = request
-            .download
-            .as_ref()
-            .and_then(|download| download.timeout)
-            .and_then(|timeout| Duration::try_from(timeout).ok());
-        let addr = format_url(
-            "http",
-            IpAddr::from_str(&peer.ip).map_err(|err| Error::Internal(err.to_string()))?,
-            peer.port as u16,
-        );
-        let channel = Channel::from_shared(addr.clone())
-            .map_err(|err| {
-                Error::InvalidArgument(format!("invalid seed peer address {addr}: {err}"))
-            })?
-            .connect_timeout(request_timeout.unwrap_or(DEFAULT_SCHEDULER_REQUEST_TIMEOUT))
-            .connect()
-            .await
-            .map_err(|err| Error::Internal(format!("failed to connect seed peer {addr}: {err}")))?;
-        let mut client = DfdaemonUploadGRPCClient::new(channel)
-            .max_decoding_message_size(usize::MAX)
-            .max_encoding_message_size(usize::MAX);
-        let mut grpc_request = tonic::Request::new(request);
-        if let Some(request_timeout) = request_timeout {
-            grpc_request.set_timeout(request_timeout);
-        }
-        let mut response = client
-            .download_task(grpc_request)
-            .await
-            .map_err(|err| Self::download_task_status_error("download task rpc failed", err))?
-            .into_inner();
-
-        while let Some(_message) = response
-            .message()
-            .await
-            .map_err(|err| Self::download_task_status_error("download task stream failed", err))?
-        {
-        }
-
-        Ok(())
-    }
-
-    fn download_task_status_error(context: &str, status: tonic::Status) -> Error {
-        if let Ok(details) = serde_json::from_slice::<BackendErrorDetails>(status.details()) {
-            return Error::BackendError(BackendError {
-                message: (!details.message.is_empty()).then_some(details.message),
-                header: details.header,
-                status_code: details
-                    .status_code
-                    .and_then(|code| u16::try_from(code).ok())
-                    .and_then(|code| reqwest::StatusCode::from_u16(code).ok()),
-            });
-        }
-
-        Error::Internal(format!("{context}: {status}"))
     }
 
     /// Private helper to process requests and handle response headers with retries.
@@ -1033,9 +1092,9 @@ impl Proxy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Request;
     use dragonfly_api::scheduler::v2::ListHostsResponse;
     use mocktail::prelude::*;
-    use std::collections::HashMap;
     use std::time::Duration;
 
     // Mock scheduler service for testing.
@@ -1109,7 +1168,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_preheat_file_via_control_plane_uses_seed_peer_selection() {
+    async fn test_preheat_file_no_available_seed_peers() {
         let mock_server = setup_mock_scheduler().await.unwrap();
         let scheduler_endpoint = format!("http://0.0.0.0:{}", mock_server.port().unwrap());
         let proxy = Proxy::builder()
@@ -1118,64 +1177,17 @@ mod tests {
             .await
             .unwrap();
 
-        let request = GetRequest {
+        let request = PreheatRequest {
             url: "http://example.com/payload.txt".to_string(),
-            tag: Some("control-plane".to_string()),
+            tag: Some("preheat".to_string()),
             application: Some("dfctl".to_string()),
             ..Default::default()
         };
 
-        let result = proxy.preheat_file_via_control_plane(&request).await;
-
+        let result = proxy.preheat(&request).await;
         assert!(
             matches!(result, Err(Error::Internal(message)) if message.contains("failed to select seed peers"))
         );
-    }
-
-    #[test]
-    fn test_download_task_status_error_decodes_backend_details() {
-        let details = dragonfly_api::errordetails::v2::Backend {
-            message: "404 Not Found".to_string(),
-            header: HashMap::from([("x-origin".to_string(), "source".to_string())]),
-            status_code: Some(404),
-        };
-        let status = tonic::Status::with_details(
-            tonic::Code::Internal,
-            "backend error: 404 Not Found",
-            serde_json::to_vec(&details).unwrap().into(),
-        );
-
-        let error = Proxy::download_task_status_error("download task rpc failed", status);
-
-        match error {
-            Error::BackendError(error) => {
-                assert_eq!(error.message.as_deref(), Some("404 Not Found"));
-                assert_eq!(
-                    error.header.get("x-origin").map(String::as_str),
-                    Some("source")
-                );
-                assert_eq!(error.status_code, Some(reqwest::StatusCode::NOT_FOUND));
-            }
-            error => panic!("expected BackendError, got {error:?}"),
-        }
-    }
-
-    #[test]
-    fn test_download_task_status_error_falls_back_for_invalid_details() {
-        let status = tonic::Status::with_details(
-            tonic::Code::Internal,
-            "backend error: malformed",
-            bytes::Bytes::from_static(b"not-json"),
-        );
-
-        let error = Proxy::download_task_status_error("download task stream failed", status);
-
-        assert!(matches!(
-            error,
-            Error::Internal(message)
-                if message.contains("download task stream failed")
-                    && message.contains("backend error: malformed")
-        ));
     }
 
     #[test]
