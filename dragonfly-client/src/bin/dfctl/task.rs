@@ -29,7 +29,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
-use dragonfly_client_request::{GetRequest, PreheatRequest, Proxy, Request};
+use dragonfly_client_request::{PreheatRequest, Proxy, Request};
 use dragonfly_client_util::{
     http::{
         header_vec_to_hashmap, header_vec_to_headermap,
@@ -823,7 +823,8 @@ pub struct PreheatCommand {
         default_value_t = false,
         env = "DFCTL_TASK_PREHEAT_REQUEST_SDK",
         help = "Specify whether to use request SDK mode for preheat. If not set, uses gRPC mode to call the scheduler directly. \
-         If set, uses the request SDK proxy for preheat, refer to https://github.com/dragonflyoss/client/blob/main/dragonfly-client-util/src/request/mod.rs"
+         If set, uses the request SDK to trigger the seed peers to download the task without streaming the content back to dfctl, \
+         refer to https://github.com/dragonflyoss/client/tree/main/dragonfly-client-request"
     )]
     request_sdk: bool,
 
@@ -1394,7 +1395,7 @@ impl PreheatCommand {
         Ok(())
     }
 
-    /// Preheats an OCI image via the Dragonfly SDK proxy.
+    /// Preheats an OCI image via the Dragonfly request SDK.
     async fn preheat_image_by_request_sdk(&self) -> Result<()> {
         let proxy = Proxy::builder()
             .scheduler_endpoint(self.scheduler_endpoint.clone())
@@ -1407,7 +1408,7 @@ impl PreheatCommand {
             .clone()
             .unwrap_or_else(default_proxy_rule_filtered_query_params);
 
-        let request = PreheatRequest {
+        let request = dragonfly_client_request::PreheatImageRequest {
             image: self
                 .url
                 .strip_prefix(&format!("{}://", oci::SCHEME))
@@ -1434,7 +1435,7 @@ impl PreheatCommand {
         };
 
         proxy
-            .preheat(&request)
+            .preheat_image(&request)
             .await
             .map_err(|err| Error::Unknown(format!("preheat failed: {err}")))?;
 
@@ -1448,7 +1449,7 @@ impl PreheatCommand {
         Ok(())
     }
 
-    /// Preheats a file via the Dragonfly SDK proxy.
+    /// Preheats a file via the Dragonfly request SDK.
     async fn preheat_file_by_request_sdk(&self) -> Result<()> {
         let proxy = Proxy::builder()
             .scheduler_endpoint(self.scheduler_endpoint.clone())
@@ -1461,7 +1462,7 @@ impl PreheatCommand {
             .clone()
             .unwrap_or_else(default_proxy_rule_filtered_query_params);
 
-        let request = GetRequest {
+        let request = PreheatRequest {
             url: self.url.clone(),
             piece_length: self.piece_length.map(|piece_length| piece_length.as_u64()),
             tag: self.tag.clone(),
@@ -1479,14 +1480,10 @@ impl PreheatCommand {
             client_cert: None,
         };
 
-        let response = proxy
-            .get(&request)
+        proxy
+            .preheat(&request)
             .await
             .map_err(|err| Error::Unknown(format!("preheat failed: {err}")))?;
-
-        if let Some(mut reader) = response.reader {
-            tokio::io::copy(&mut reader, &mut tokio::io::sink()).await?;
-        }
 
         println!(
             "{}{}Preheat Succeeded!{}",

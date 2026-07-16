@@ -12,7 +12,7 @@ keywords.workspace = true
 
 [features]
 default = []
-# Enables the image preheat API (`Request::preheat` and `PreheatRequest`),
+# Enables the image preheat API (`Request::preheat_image` and `PreheatImageRequest`),
 # which pulls in the OCI registry dependencies.
 preheat = ["dep:oci-client", "dep:oci-spec"]
 
@@ -29,6 +29,7 @@ oci-spec = { workspace = true, optional = true }
 reqwest.workspace = true
 reqwest-tracing.workspace = true
 reqwest-middleware.workspace = true
+prost-wkt-types.workspace = true
 rustls-pki-types.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

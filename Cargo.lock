@@ -1521,6 +1521,7 @@ dependencies = [
  "mocktail",
  "oci-client",
  "oci-spec",
+ "prost-wkt-types",
  "reqwest 0.12.28",
  "reqwest-middleware",
  "reqwest-tracing",

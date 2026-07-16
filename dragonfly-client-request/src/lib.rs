@@ -16,6 +16,10 @@
 
 use async_trait::async_trait;
 use bytes::BytesMut;
+use dragonfly_api::common::v2::{Download, Priority, TaskType};
+use dragonfly_api::dfdaemon::v2::{
+    dfdaemon_upload_client::DfdaemonUploadClient as DfdaemonUploadGRPCClient, DownloadTaskRequest,
+};
 use dragonfly_api::scheduler::v2::scheduler_client::SchedulerClient;
 use dragonfly_client_util::digest::is_blob_url;
 use dragonfly_client_util::http::{
@@ -42,7 +46,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncRead;
 use tokio_util::io::StreamReader;
-use tonic::transport::Endpoint;
+use tonic::transport::{Channel, Endpoint};
 use tracing::{debug, error};
 
 #[cfg(feature = "preheat")]
@@ -112,9 +116,18 @@ pub trait Request {
     /// This method is designed for scenarios where OCI image content needs to be pre-cached in
     /// the seed client before actual consumption, ensuring faster subsequent access across the
     /// cluster. It parses the image reference, authenticates with the OCI registry, resolves
-    /// the image manifest (including multi-platform image indexes), and downloads each blob
-    /// (config and layers) through the seed client.
+    /// the image manifest (including multi-platform image indexes), and triggers the seed
+    /// client to download each blob (config and layers), without streaming the blob content
+    /// back to the client.
     #[cfg(feature = "preheat")]
+    async fn preheat_image(&self, request: &PreheatImageRequest) -> Result<()>;
+
+    /// Preheats a file by downloading it to the seed peers via the Dragonfly.
+    ///
+    /// This method is designed for scenarios where file content needs to be pre-cached in
+    /// the seed client before actual consumption, ensuring faster subsequent access across
+    /// the cluster. It triggers the selected seed peers to download the file by the dfdaemon
+    /// download task API, without streaming the file content back to the client.
     async fn preheat(&self, request: &PreheatRequest) -> Result<()>;
 }
 
@@ -207,7 +220,7 @@ where
 /// of the specified image via the Dragonfly proxy, effectively caching them
 /// in the P2P network for faster downloading.
 #[cfg(feature = "preheat")]
-pub struct PreheatRequest {
+pub struct PreheatImageRequest {
     /// The OCI image reference (e.g., "docker.io/library/nginx:latest").
     pub image: String,
 
@@ -260,10 +273,10 @@ pub struct PreheatRequest {
     pub client_cert: Option<Vec<CertificateDer<'static>>>,
 }
 
-/// Default implementation for PreheatRequest.
+/// Default implementation for PreheatImageRequest.
 #[cfg(feature = "preheat")]
-impl Default for PreheatRequest {
-    /// Returns a default PreheatRequest with empty image and default values for other
+impl Default for PreheatImageRequest {
+    /// Returns a default PreheatImageRequest with empty image and default values for other
     /// fields.
     fn default() -> Self {
         Self {
@@ -271,6 +284,74 @@ impl Default for PreheatRequest {
             username: None,
             password: None,
             platform: None,
+            piece_length: None,
+            tag: None,
+            application: None,
+            filtered_query_params: default_proxy_rule_filtered_query_params(),
+            content_for_calculating_task_id: None,
+            enable_task_id_based_blob_digest: true,
+            priority: None,
+            timeout: Duration::from_secs(300),
+            client_cert: None,
+        }
+    }
+}
+
+/// Represents a request to preheat a file through the Dragonfly seed client. The preheat
+/// downloads the specified file via the Dragonfly proxy, effectively caching it in the P2P
+/// network for faster downloading.
+pub struct PreheatRequest {
+    /// The url of the request.
+    pub url: String,
+
+    /// The headers of the request.
+    pub header: HeaderMap,
+
+    /// Task piece length.
+    pub piece_length: Option<u64>,
+
+    /// URL tag identifies different task for same url.
+    pub tag: Option<String>,
+
+    /// Application of task identifies different task for same url.
+    pub application: Option<String>,
+
+    /// Filtered query params to generate the task id.
+    /// When filter is ["Signature", "Expires", "ns"], for example:
+    /// http://example.com/xyz?Expires=e1&Signature=s1&ns=docker.io and http://example.com/xyz?Expires=e2&Signature=s2&ns=docker.io
+    /// will generate the same task id.
+    /// Default value includes the filtered query params of s3, gcs, oss, obs, cos.
+    pub filtered_query_params: Vec<String>,
+
+    /// Content for calculating task id. This is used when the task ID cannot be calculated based
+    /// on URL and other parameters, such as when the URL contains dynamic query parameters that
+    /// cannot be filtered out.
+    pub content_for_calculating_task_id: Option<String>,
+
+    /// Enable task id based blob digest. It indicates whether to use the blob digest for task ID calculation
+    /// when downloading from OCI registries. When enabled for OCI blob URLs (e.g., /v2/<name>/blobs/sha256:<digest>),
+    /// the task ID is derived from the blob digest rather than the full URL. This enables deduplication across
+    /// registries - the same blob from different registries shares one task ID, eliminating redundant downloads
+    /// and storage, default is true.
+    pub enable_task_id_based_blob_digest: bool,
+
+    /// Refer to https://github.com/dragonflyoss/api/blob/main/proto/common.proto#L67
+    pub priority: Option<i32>,
+
+    /// The timeout of the request, default is 300s.
+    pub timeout: Duration,
+
+    /// The client certificates for the request.
+    pub client_cert: Option<Vec<CertificateDer<'static>>>,
+}
+
+/// Default implementation for PreheatRequest.
+impl Default for PreheatRequest {
+    /// Returns a default PreheatRequest with empty image and default values for other fields.
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            header: HeaderMap::new(),
             piece_length: None,
             tag: None,
             application: None,
@@ -553,10 +634,11 @@ impl Request for Proxy {
     /// This method is designed for scenarios where OCI image content needs to be pre-cached in
     /// the seed client before actual consumption, ensuring faster subsequent access across the
     /// cluster. It parses the image reference, authenticates with the OCI registry, resolves
-    /// the image manifest (including multi-platform image indexes), and downloads each blob
-    /// (config and layers) through the seed client.
+    /// the image manifest (including multi-platform image indexes), and triggers the seed
+    /// client to download each blob (config and layers), without streaming the blob content
+    /// back to the client.
     #[cfg(feature = "preheat")]
-    async fn preheat(&self, request: &PreheatRequest) -> Result<()> {
+    async fn preheat_image(&self, request: &PreheatImageRequest) -> Result<()> {
         let oci_client = Self::oci_client(request.platform.clone())?;
 
         // Parse image reference.
@@ -609,7 +691,7 @@ impl Request for Proxy {
             .chain(manifest.layers.iter().map(|layer| &layer.digest))
         {
             let url = Self::build_blob_url(registry, repository, digest);
-            let get_request = GetRequest {
+            let request = PreheatRequest {
                 url: url.clone(),
                 header: header.clone(),
                 piece_length: request.piece_length,
@@ -623,28 +705,139 @@ impl Request for Proxy {
                 client_cert: request.client_cert.clone(),
             };
 
-            let response = self.get(&get_request).await?;
-            match response.reader {
-                Some(mut reader) => {
-                    tokio::io::copy(&mut reader, &mut tokio::io::sink())
-                        .await
-                        .map_err(|err| {
-                            Error::Internal(format!("failed to read blob {digest}: {err}"))
-                        })?;
-                }
-                None => {
-                    error!(
-                        "no response body for blob {}, download may not have completed",
-                        digest
-                    );
-                }
-            }
-
+            self.preheat(&request).await?;
             debug!("preheated blob: {}", url);
         }
 
         debug!("preheat completed for image: {}", request.image);
         Ok(())
+    }
+
+    /// Preheats a file by downloading it to the seed peers via the Dragonfly.
+    ///
+    /// This method is designed for scenarios where file content needs to be pre-cached in
+    /// the seed client before actual consumption, ensuring faster subsequent access across
+    /// the cluster. It triggers the selected seed peers to download the file by the dfdaemon
+    /// download task API, without streaming the file content back to the client.
+    async fn preheat(&self, request: &PreheatRequest) -> Result<()> {
+        // Generate task id for selecting seed peer.
+        let task_id = self
+            .id_generator
+            .task_id(
+                if let Some(content) = request.content_for_calculating_task_id.clone() {
+                    TaskIDParameter::Content(content)
+                } else if request.enable_task_id_based_blob_digest && is_blob_url(&request.url) {
+                    TaskIDParameter::BlobDigestBased(request.url.clone())
+                } else {
+                    TaskIDParameter::URLBased {
+                        url: request.url.clone(),
+                        piece_length: request.piece_length,
+                        tag: request.tag.clone(),
+                        application: request.application.clone(),
+                        filtered_query_params: request.filtered_query_params.clone(),
+                        revision: None,
+                    }
+                },
+            )
+            .map_err(|err| Error::Internal(format!("failed to generate task id: {err}")))?;
+
+        // Select seed peers for downloading.
+        let seed_peers = self
+            .seed_peer_selector
+            .select(task_id.clone(), self.max_retries as u32)
+            .await
+            .map_err(|err| {
+                Error::Internal(format!("failed to select seed peers from scheduler: {err}"))
+            })?;
+
+        debug!("task {} selected seed peers: {:?}", task_id, seed_peers);
+
+        // Construct the download task request for preheating.
+        let download_task_request = DownloadTaskRequest {
+            download: Some(Download {
+                url: request.url.clone(),
+                r#type: TaskType::Standard as i32,
+                tag: request.tag.clone(),
+                application: request.application.clone(),
+                priority: request.priority.unwrap_or(Priority::Level6 as i32),
+                filtered_query_params: request.filtered_query_params.clone(),
+                request_header: headermap_to_hashmap(&request.header),
+                piece_length: request.piece_length,
+                timeout: Some(
+                    prost_wkt_types::Duration::try_from(request.timeout).map_err(|err| {
+                        Error::InvalidArgument(format!("invalid request timeout: {err}"))
+                    })?,
+                ),
+                content_for_calculating_task_id: request.content_for_calculating_task_id.clone(),
+                remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
+                enable_task_id_based_blob_digest: request.enable_task_id_based_blob_digest,
+                ..Default::default()
+            }),
+        };
+
+        for (index, peer) in seed_peers.iter().enumerate() {
+            let addr = format_url(
+                "http",
+                IpAddr::from_str(&peer.ip).map_err(|err| Error::Internal(err.to_string()))?,
+                peer.port as u16,
+            );
+
+            // Trigger the seed peer to download the task and wait for the download task
+            // to finish, without streaming the file content back to the client.
+            let download_task = async {
+                let channel = Channel::from_shared(addr.clone())
+                    .map_err(|err| Error::InvalidArgument(err.to_string()))?
+                    .connect_timeout(request.timeout)
+                    .timeout(request.timeout)
+                    .connect()
+                    .await
+                    .map_err(|err| {
+                        Error::Internal(format!("failed to connect to seed peer {addr}: {err}"))
+                    })?;
+
+                let mut client = DfdaemonUploadGRPCClient::new(channel)
+                    .max_decoding_message_size(usize::MAX)
+                    .max_encoding_message_size(usize::MAX);
+
+                let mut response = client
+                    .download_task(download_task_request.clone())
+                    .await
+                    .map_err(|err| {
+                        Error::Internal(format!("failed to download task {task_id}: {err}"))
+                    })?
+                    .into_inner();
+
+                while response
+                    .message()
+                    .await
+                    .map_err(|err| {
+                        Error::Internal(format!("failed to download task {task_id}: {err}"))
+                    })?
+                    .is_some()
+                {}
+
+                Ok(())
+            };
+
+            match download_task.await {
+                Ok(()) => return Ok(()),
+                Err(err) => {
+                    error!(
+                        "failed to download task {} from seed peer {}: {}",
+                        task_id, addr, err
+                    );
+
+                    // If this is the last seed peer, return the error.
+                    if index == seed_peers.len() - 1 {
+                        return Err(err);
+                    }
+                }
+            }
+        }
+
+        Err(Error::Internal(
+            "failed to download task from any seed peer".to_string(),
+        ))
     }
 }
 
@@ -909,16 +1102,21 @@ impl Proxy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Request;
+    use dragonfly_api::common::v2::Host;
+    use dragonfly_api::dfdaemon::v2::DownloadTaskResponse;
     use dragonfly_api::scheduler::v2::ListHostsResponse;
     use mocktail::prelude::*;
     use std::time::Duration;
+    use tonic_health::pb::health_check_response::ServingStatus;
+    use tonic_health::pb::HealthCheckResponse;
 
-    // Mock scheduler service for testing.
-    async fn setup_mock_scheduler() -> Result<mocktail::server::MockServer> {
+    // Mock scheduler service for testing, which returns the given hosts as seed peers.
+    async fn setup_mock_scheduler(hosts: Vec<Host>) -> Result<mocktail::server::MockServer> {
         let mut mocks = MockSet::new();
         mocks.mock(|when, then| {
             when.path("/scheduler.v2.Scheduler/ListHosts");
-            then.pb(ListHostsResponse { hosts: vec![] });
+            then.pb(ListHostsResponse { hosts });
         });
 
         let server = MockServer::new_grpc("scheduler.v2.Scheduler").with_mocks(mocks);
@@ -929,9 +1127,40 @@ mod tests {
         Ok(server)
     }
 
+    // Mock seed peer service for testing, which responds to health checks from the
+    // seed peer selector and serves download task requests with the given mocks.
+    async fn setup_mock_seed_peer(mut mocks: MockSet) -> Result<mocktail::server::MockServer> {
+        mocks.mock(|when, then| {
+            when.path("/grpc.health.v1.Health/Check");
+            then.pb(HealthCheckResponse {
+                status: ServingStatus::Serving as i32,
+            });
+        });
+
+        let server = MockServer::new_grpc("dfdaemon.v2.DfdaemonUpload").with_mocks(mocks);
+        server.start().await.map_err(|err| {
+            Error::Internal(format!("failed to start mock seed peer server: {err}"))
+        })?;
+
+        Ok(server)
+    }
+
+    // Creates a seed peer host pointing at the mock seed peer server.
+    fn create_seed_peer_host(port: u16) -> Host {
+        Host {
+            id: "seed-peer-1".to_string(),
+            r#type: 1,
+            hostname: "seed-peer-1".to_string(),
+            ip: "127.0.0.1".to_string(),
+            port: port as i32,
+            name: "seed-peer-1".to_string(),
+            ..Default::default()
+        }
+    }
+
     #[tokio::test]
     async fn test_proxy_new_success() {
-        let mock_server = setup_mock_scheduler().await.unwrap();
+        let mock_server = setup_mock_scheduler(vec![]).await.unwrap();
         let scheduler_endpoint = format!("http://0.0.0.0:{}", mock_server.port().unwrap());
         let result = Proxy::builder()
             .scheduler_endpoint(scheduler_endpoint)
@@ -955,7 +1184,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_proxy_new_invalid_retry_times() {
-        let mock_server = setup_mock_scheduler().await.unwrap();
+        let mock_server = setup_mock_scheduler(vec![]).await.unwrap();
 
         let scheduler_endpoint = format!("http://0.0.0.0:{}", mock_server.port().unwrap());
         let result = Proxy::builder()
@@ -970,7 +1199,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_proxy_new_invalid_health_check_interval() {
-        let mock_server = setup_mock_scheduler().await.unwrap();
+        let mock_server = setup_mock_scheduler(vec![]).await.unwrap();
 
         let scheduler_endpoint = format!("http://0.0.0.0:{}", mock_server.port().unwrap());
         let result = Proxy::builder()
@@ -981,6 +1210,190 @@ mod tests {
 
         assert!(result.is_err());
         assert!(matches!(result, Err(Error::InvalidArgument(_))));
+    }
+
+    #[tokio::test]
+    async fn test_preheat_file_no_available_seed_peers() {
+        let mock_server = setup_mock_scheduler(vec![]).await.unwrap();
+        let scheduler_endpoint = format!("http://0.0.0.0:{}", mock_server.port().unwrap());
+        let proxy = Proxy::builder()
+            .scheduler_endpoint(scheduler_endpoint)
+            .build()
+            .await
+            .unwrap();
+
+        let request = PreheatRequest {
+            url: "http://example.com/payload.txt".to_string(),
+            tag: Some("preheat".to_string()),
+            application: Some("dfctl".to_string()),
+            ..Default::default()
+        };
+
+        let result = proxy.preheat(&request).await;
+        assert!(
+            matches!(result, Err(Error::Internal(message)) if message.contains("failed to select seed peers"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_preheat_succeeds_with_seed_peer() {
+        // The seed peer serves the download task request with a streaming response.
+        let mut mocks = MockSet::new();
+        mocks.mock(|when, then| {
+            when.path("/dfdaemon.v2.DfdaemonUpload/DownloadTask");
+            then.pb_stream(vec![
+                DownloadTaskResponse {
+                    host_id: "seed-peer-1".to_string(),
+                    task_id: "task-1".to_string(),
+                    peer_id: "peer-1".to_string(),
+                    ..Default::default()
+                },
+                DownloadTaskResponse {
+                    host_id: "seed-peer-1".to_string(),
+                    task_id: "task-1".to_string(),
+                    peer_id: "peer-1".to_string(),
+                    ..Default::default()
+                },
+            ]);
+        });
+
+        let mock_seed_peer = setup_mock_seed_peer(mocks).await.unwrap();
+        let mock_scheduler =
+            setup_mock_scheduler(vec![create_seed_peer_host(mock_seed_peer.port().unwrap())])
+                .await
+                .unwrap();
+
+        let scheduler_endpoint = format!("http://0.0.0.0:{}", mock_scheduler.port().unwrap());
+        let proxy = Proxy::builder()
+            .scheduler_endpoint(scheduler_endpoint)
+            .build()
+            .await
+            .unwrap();
+
+        let request = PreheatRequest {
+            url: "http://example.com/payload.txt".to_string(),
+            tag: Some("preheat".to_string()),
+            application: Some("dfctl".to_string()),
+            ..Default::default()
+        };
+
+        let result = proxy.preheat(&request).await;
+        assert!(result.is_ok(), "preheat should succeed: {:?}", result.err());
+    }
+
+    #[tokio::test]
+    async fn test_preheat_fails_when_seed_peer_download_fails() {
+        // The seed peer is healthy but fails to serve the download task request.
+        let mut mocks = MockSet::new();
+        mocks.mock(|when, then| {
+            when.path("/dfdaemon.v2.DfdaemonUpload/DownloadTask");
+            then.error(StatusCode::INTERNAL_SERVER_ERROR, "storage is full");
+        });
+
+        let mock_seed_peer = setup_mock_seed_peer(mocks).await.unwrap();
+        let mock_scheduler =
+            setup_mock_scheduler(vec![create_seed_peer_host(mock_seed_peer.port().unwrap())])
+                .await
+                .unwrap();
+
+        let scheduler_endpoint = format!("http://0.0.0.0:{}", mock_scheduler.port().unwrap());
+        let proxy = Proxy::builder()
+            .scheduler_endpoint(scheduler_endpoint)
+            .build()
+            .await
+            .unwrap();
+
+        let request = PreheatRequest {
+            url: "http://example.com/payload.txt".to_string(),
+            tag: Some("preheat".to_string()),
+            application: Some("dfctl".to_string()),
+            ..Default::default()
+        };
+
+        let result = proxy.preheat(&request).await;
+        assert!(
+            matches!(result, Err(Error::Internal(message)) if message.contains("failed to download task"))
+        );
+    }
+
+    #[cfg(feature = "preheat")]
+    #[tokio::test]
+    async fn test_preheat_image_invalid_reference() {
+        let mock_server = setup_mock_scheduler(vec![]).await.unwrap();
+        let scheduler_endpoint = format!("http://0.0.0.0:{}", mock_server.port().unwrap());
+        let proxy = Proxy::builder()
+            .scheduler_endpoint(scheduler_endpoint)
+            .build()
+            .await
+            .unwrap();
+
+        let request = PreheatImageRequest {
+            image: "invalid image reference!!".to_string(),
+            ..Default::default()
+        };
+
+        let result = proxy.preheat_image(&request).await;
+        assert!(
+            matches!(result, Err(Error::InvalidArgument(message)) if message.contains("invalid image reference"))
+        );
+    }
+
+    #[cfg(feature = "preheat")]
+    #[tokio::test]
+    async fn test_preheat_image_invalid_platform() {
+        let mock_server = setup_mock_scheduler(vec![]).await.unwrap();
+        let scheduler_endpoint = format!("http://0.0.0.0:{}", mock_server.port().unwrap());
+        let proxy = Proxy::builder()
+            .scheduler_endpoint(scheduler_endpoint)
+            .build()
+            .await
+            .unwrap();
+
+        // The platform must be in the format "os/arch" (e.g., "linux/amd64").
+        let request = PreheatImageRequest {
+            image: "docker.io/library/nginx:latest".to_string(),
+            platform: Some("linux-amd64".to_string()),
+            ..Default::default()
+        };
+
+        let result = proxy.preheat_image(&request).await;
+        assert!(
+            matches!(result, Err(Error::InvalidArgument(message)) if message.contains("invalid platform format"))
+        );
+    }
+
+    #[cfg(feature = "preheat")]
+    #[tokio::test]
+    async fn test_preheat_image_unreachable_registry() {
+        let mock_server = setup_mock_scheduler(vec![]).await.unwrap();
+        let scheduler_endpoint = format!("http://0.0.0.0:{}", mock_server.port().unwrap());
+        let proxy = Proxy::builder()
+            .scheduler_endpoint(scheduler_endpoint)
+            .build()
+            .await
+            .unwrap();
+
+        // Port 1 is reserved and refuses connections, so pulling the manifest fails.
+        let request = PreheatImageRequest {
+            image: "127.0.0.1:1/library/nginx:latest".to_string(),
+            ..Default::default()
+        };
+
+        let result = proxy.preheat_image(&request).await;
+        assert!(
+            matches!(result, Err(Error::Internal(message)) if message.contains("failed to pull image manifest"))
+        );
+    }
+
+    #[cfg(feature = "preheat")]
+    #[test]
+    fn test_build_blob_url_uses_https_by_default() {
+        let url = Proxy::build_blob_url("registry.example.com", "library/nginx", "sha256:abcdef");
+
+        assert_eq!(
+            url,
+            "https://registry.example.com/v2/library/nginx/blobs/sha256:abcdef"
+        );
     }
 
     #[tokio::test]
