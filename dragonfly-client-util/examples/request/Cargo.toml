@@ -19,6 +19,6 @@ name = "preheat"
 path = "src/bin/preheat.rs"
 
 [dependencies]
-dragonfly-client-request.workspace = true
+dragonfly-client-request = { workspace = true, features = ["preheat"] }
 tokio.workspace = true
 anyhow.workspace = true
