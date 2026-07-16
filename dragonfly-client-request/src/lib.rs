@@ -31,18 +31,12 @@ use dragonfly_client_util::net::preferred_local_ip;
 use dragonfly_client_util::pool::{Builder as PoolBuilder, Entry, Factory, Pool};
 use errors::{BackendError, DfdaemonError, Error, ProxyError};
 use futures::TryStreamExt;
-use oci_client::client::ClientConfig;
-use oci_client::manifest::ImageIndexEntry;
-use oci_client::secrets::RegistryAuth;
-use oci_client::{Client as OciClient, Reference, RegistryOperation};
-use oci_spec::image::{Arch, Os};
 use reqwest::{
-    header::{HeaderMap, HeaderValue, AUTHORIZATION},
+    header::{HeaderMap, HeaderValue},
     Client,
 };
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_tracing::TracingMiddleware;
-use rustix::path::Arg;
 use rustls_pki_types::CertificateDer;
 use selector::{SeedPeerSelector, Selector};
 use std::io::Error as IOError;
@@ -54,6 +48,16 @@ use tokio::io::AsyncRead;
 use tokio_util::io::StreamReader;
 use tonic::transport::{Channel, Endpoint};
 use tracing::{debug, error};
+
+#[cfg(feature = "preheat")]
+use oci_client::{
+    client::ClientConfig, manifest::ImageIndexEntry, secrets::RegistryAuth, Client as OciClient,
+    Reference, RegistryOperation,
+};
+#[cfg(feature = "preheat")]
+use oci_spec::image::{Arch, Os};
+#[cfg(feature = "preheat")]
+use reqwest::header::AUTHORIZATION;
 
 pub mod errors;
 mod selector;
@@ -115,6 +119,7 @@ pub trait Request {
     /// the image manifest (including multi-platform image indexes), and triggers the seed
     /// client to download each blob (config and layers), without streaming the blob content
     /// back to the client.
+    #[cfg(feature = "preheat")]
     async fn preheat_image(&self, request: &PreheatImageRequest) -> Result<()>;
 
     /// Preheats a file by downloading it to the seed peers via the Dragonfly.
@@ -214,6 +219,7 @@ where
 /// Dragonfly seed client. The preheat downloads all blobs (config and layers)
 /// of the specified image via the Dragonfly proxy, effectively caching them
 /// in the P2P network for faster downloading.
+#[cfg(feature = "preheat")]
 pub struct PreheatImageRequest {
     /// The OCI image reference (e.g., "docker.io/library/nginx:latest").
     pub image: String,
@@ -268,6 +274,7 @@ pub struct PreheatImageRequest {
 }
 
 /// Default implementation for PreheatImageRequest.
+#[cfg(feature = "preheat")]
 impl Default for PreheatImageRequest {
     /// Returns a default PreheatImageRequest with empty image and default values for other
     /// fields.
@@ -630,6 +637,7 @@ impl Request for Proxy {
     /// the image manifest (including multi-platform image indexes), and triggers the seed
     /// client to download each blob (config and layers), without streaming the blob content
     /// back to the client.
+    #[cfg(feature = "preheat")]
     async fn preheat_image(&self, request: &PreheatImageRequest) -> Result<()> {
         let oci_client = Self::oci_client(request.platform.clone())?;
 
@@ -1058,11 +1066,13 @@ impl Proxy {
 
     /// Helper function to check if a URL is an OCI blob URL (e.g., /v2/<name>/blobs/sha256:
     /// <digest>).
+    #[cfg(feature = "preheat")]
     fn build_blob_url(registry: &str, repository: &str, digest: &str) -> String {
         format!("https://{registry}/v2/{repository}/blobs/{digest}")
     }
 
     /// Builds an OCI client with a platform resolver that matches the requested os/arch.
+    #[cfg(feature = "preheat")]
     fn oci_client(platform: Option<String>) -> Result<OciClient> {
         let mut oci_config = ClientConfig::default();
         if let Some(platform) = platform {
@@ -1306,6 +1316,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "preheat")]
     #[tokio::test]
     async fn test_preheat_image_invalid_reference() {
         let mock_server = setup_mock_scheduler(vec![]).await.unwrap();
@@ -1327,6 +1338,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "preheat")]
     #[tokio::test]
     async fn test_preheat_image_invalid_platform() {
         let mock_server = setup_mock_scheduler(vec![]).await.unwrap();
@@ -1350,6 +1362,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "preheat")]
     #[tokio::test]
     async fn test_preheat_image_unreachable_registry() {
         let mock_server = setup_mock_scheduler(vec![]).await.unwrap();
@@ -1372,6 +1385,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "preheat")]
     #[test]
     fn test_build_blob_url_uses_https_by_default() {
         let url = Proxy::build_blob_url("registry.example.com", "library/nginx", "sha256:abcdef");
