@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use bytes::BytesMut;
 use bytesize::ByteSize;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
@@ -23,10 +24,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs::{self, OpenOptions};
-use tokio::io::{
-    self, AsyncBufRead, AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufWriter, SeekFrom,
-};
-use tokio_util::io::InspectReader;
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tracing::{debug, error, info, instrument, warn};
 use walkdir::WalkDir;
 
@@ -275,21 +273,41 @@ impl Content {
             error!("seek {:?} failed: {}", task_path, err);
         })?;
 
-        let reader = reader.take(expected_length);
-        let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
+        let mut reader = reader.take(expected_length);
 
-        // Copy the piece to the file while updating the CRC32 value.
+        // Copy the piece to the file and update the CRC32 value, so the hash
+        // update and the file write operate on large chunks.
+        let mut buffer = BytesMut::with_capacity(self.config.storage.write_buffer_size);
         let mut hasher = crc32fast::Hasher::new();
-        let mut tee = InspectReader::new(reader, |bytes| {
-            hasher.update(bytes);
-        });
+        let mut length: u64 = 0;
 
         debug!("start to write piece to {:?}", task_path);
-        let length = io::copy(&mut tee, &mut writer).await.inspect_err(|err| {
-            error!("copy {:?} failed: {}", task_path, err);
-        })?;
+        loop {
+            // Fill the buffer until it is full or the reader reaches EOF.
+            while buffer.len() < self.config.storage.write_buffer_size {
+                let n = reader.read_buf(&mut buffer).await.inspect_err(|err| {
+                    error!("read {:?} failed: {}", task_path, err);
+                })?;
 
-        writer.flush().await.inspect_err(|err| {
+                if n == 0 {
+                    break;
+                }
+            }
+
+            if buffer.is_empty() {
+                break;
+            }
+
+            hasher.update(&buffer);
+            f.write_all(&buffer).await.inspect_err(|err| {
+                error!("write {:?} failed: {}", task_path, err);
+            })?;
+
+            length += buffer.len() as u64;
+            buffer.clear();
+        }
+
+        f.flush().await.inspect_err(|err| {
             error!("flush {:?} failed: {}", task_path, err);
         })?;
         debug!("finish to write piece to {:?}", task_path);
@@ -499,21 +517,41 @@ impl Content {
             error!("seek {:?} failed: {}", task_path, err);
         })?;
 
-        let reader = reader.take(expected_length);
-        let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
+        let mut reader = reader.take(expected_length);
 
-        // Copy the piece to the file while updating the CRC32 value.
+        // Copy the piece to the file and update the CRC32 value, so the hash
+        // update and the file write operate on large chunks.
+        let mut buffer = BytesMut::with_capacity(self.config.storage.write_buffer_size);
         let mut hasher = crc32fast::Hasher::new();
-        let mut tee = InspectReader::new(reader, |bytes| {
-            hasher.update(bytes);
-        });
+        let mut length: u64 = 0;
 
         debug!("start to write piece to {:?}", task_path);
-        let length = io::copy(&mut tee, &mut writer).await.inspect_err(|err| {
-            error!("copy {:?} failed: {}", task_path, err);
-        })?;
+        loop {
+            // Fill the buffer until it is full or the reader reaches EOF.
+            while buffer.len() < self.config.storage.write_buffer_size {
+                let n = reader.read_buf(&mut buffer).await.inspect_err(|err| {
+                    error!("read {:?} failed: {}", task_path, err);
+                })?;
 
-        writer.flush().await.inspect_err(|err| {
+                if n == 0 {
+                    break;
+                }
+            }
+
+            if buffer.is_empty() {
+                break;
+            }
+
+            hasher.update(&buffer);
+            f.write_all(&buffer).await.inspect_err(|err| {
+                error!("write {:?} failed: {}", task_path, err);
+            })?;
+
+            length += buffer.len() as u64;
+            buffer.clear();
+        }
+
+        f.flush().await.inspect_err(|err| {
             error!("flush {:?} failed: {}", task_path, err);
         })?;
         debug!("finish to write piece to {:?}", task_path);
@@ -744,21 +782,41 @@ impl Content {
             error!("seek {:?} failed: {}", task_path, err);
         })?;
 
-        let reader = reader.take(expected_length);
-        let mut writer = BufWriter::with_capacity(self.config.storage.write_buffer_size, f);
+        let mut reader = reader.take(expected_length);
 
-        // Copy the piece to the file while updating the CRC32 value.
+        // Copy the piece to the file and update the CRC32 value, so the hash
+        // update and the file write operate on large chunks.
+        let mut buffer = BytesMut::with_capacity(self.config.storage.write_buffer_size);
         let mut hasher = crc32fast::Hasher::new();
-        let mut tee = InspectReader::new(reader, |bytes| {
-            hasher.update(bytes);
-        });
+        let mut length: u64 = 0;
 
         debug!("start to write piece to {:?}", task_path);
-        let length = io::copy(&mut tee, &mut writer).await.inspect_err(|err| {
-            error!("copy {:?} failed: {}", task_path, err);
-        })?;
+        loop {
+            // Fill the buffer until it is full or the reader reaches EOF.
+            while buffer.len() < self.config.storage.write_buffer_size {
+                let n = reader.read_buf(&mut buffer).await.inspect_err(|err| {
+                    error!("read {:?} failed: {}", task_path, err);
+                })?;
 
-        writer.flush().await.inspect_err(|err| {
+                if n == 0 {
+                    break;
+                }
+            }
+
+            if buffer.is_empty() {
+                break;
+            }
+
+            hasher.update(&buffer);
+            f.write_all(&buffer).await.inspect_err(|err| {
+                error!("write {:?} failed: {}", task_path, err);
+            })?;
+
+            length += buffer.len() as u64;
+            buffer.clear();
+        }
+
+        f.flush().await.inspect_err(|err| {
             error!("flush {:?} failed: {}", task_path, err);
         })?;
         debug!("finish to write piece to {:?}", task_path);

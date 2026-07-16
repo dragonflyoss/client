@@ -106,7 +106,7 @@ struct Args {
         long,
         default_value_t = true,
         env = "DFDAEMON_CONSOLE",
-        help = "Specify whether to print log"
+        help = "Specify whether to print logs to the console. If enabled, logs will not be written to the local log files"
     )]
     console: bool,
 
