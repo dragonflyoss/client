@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-use dragonfly_client_request::{PreheatRequest, Proxy, Request};
+use dragonfly_client_request::{PreheatImageRequest, Proxy, Request};
 use std::time::Duration;
 
-/// This example demonstrates how to use the preheat method of the Dragonfly request module
+/// This example demonstrates how to use the preheat_image method of the Dragonfly request module
 /// to pre-cache an OCI image via the Dragonfly P2P network.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -33,14 +33,14 @@ async fn main() -> anyhow::Result<()> {
         .await
         .map_err(|err| anyhow::anyhow!("failed to build proxy: {err}"))?;
 
-    let request = PreheatRequest {
+    let request = PreheatImageRequest {
         image: "docker.io/dragonflyoss/scheduler:v2.4.3".to_string(),
         platform: Some("linux/amd64".to_string()),
         ..Default::default()
     };
 
     proxy
-        .preheat(&request)
+        .preheat_image(&request)
         .await
         .map_err(|err| anyhow::anyhow!("preheat failed: {err}"))?;
 

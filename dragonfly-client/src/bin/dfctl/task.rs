@@ -29,7 +29,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
-use dragonfly_client_request::{GetRequest, PreheatRequest, Proxy, Request};
+use dragonfly_client_request::{PreheatRequest, Proxy, Request};
 use dragonfly_client_util::{
     http::{
         header_vec_to_hashmap, header_vec_to_headermap,

@@ -1093,16 +1093,20 @@ impl Proxy {
 mod tests {
     use super::*;
     use crate::Request;
+    use dragonfly_api::common::v2::Host;
+    use dragonfly_api::dfdaemon::v2::DownloadTaskResponse;
     use dragonfly_api::scheduler::v2::ListHostsResponse;
     use mocktail::prelude::*;
     use std::time::Duration;
+    use tonic_health::pb::health_check_response::ServingStatus;
+    use tonic_health::pb::HealthCheckResponse;
 
-    // Mock scheduler service for testing.
-    async fn setup_mock_scheduler() -> Result<mocktail::server::MockServer> {
+    // Mock scheduler service for testing, which returns the given hosts as seed peers.
+    async fn setup_mock_scheduler(hosts: Vec<Host>) -> Result<mocktail::server::MockServer> {
         let mut mocks = MockSet::new();
         mocks.mock(|when, then| {
             when.path("/scheduler.v2.Scheduler/ListHosts");
-            then.pb(ListHostsResponse { hosts: vec![] });
+            then.pb(ListHostsResponse { hosts });
         });
 
         let server = MockServer::new_grpc("scheduler.v2.Scheduler").with_mocks(mocks);
@@ -1113,9 +1117,40 @@ mod tests {
         Ok(server)
     }
 
+    // Mock seed peer service for testing, which responds to health checks from the
+    // seed peer selector and serves download task requests with the given mocks.
+    async fn setup_mock_seed_peer(mut mocks: MockSet) -> Result<mocktail::server::MockServer> {
+        mocks.mock(|when, then| {
+            when.path("/grpc.health.v1.Health/Check");
+            then.pb(HealthCheckResponse {
+                status: ServingStatus::Serving as i32,
+            });
+        });
+
+        let server = MockServer::new_grpc("dfdaemon.v2.DfdaemonUpload").with_mocks(mocks);
+        server.start().await.map_err(|err| {
+            Error::Internal(format!("failed to start mock seed peer server: {err}"))
+        })?;
+
+        Ok(server)
+    }
+
+    // Creates a seed peer host pointing at the mock seed peer server.
+    fn create_seed_peer_host(port: u16) -> Host {
+        Host {
+            id: "seed-peer-1".to_string(),
+            r#type: 1,
+            hostname: "seed-peer-1".to_string(),
+            ip: "127.0.0.1".to_string(),
+            port: port as i32,
+            name: "seed-peer-1".to_string(),
+            ..Default::default()
+        }
+    }
+
     #[tokio::test]
     async fn test_proxy_new_success() {
-        let mock_server = setup_mock_scheduler().await.unwrap();
+        let mock_server = setup_mock_scheduler(vec![]).await.unwrap();
         let scheduler_endpoint = format!("http://0.0.0.0:{}", mock_server.port().unwrap());
         let result = Proxy::builder()
             .scheduler_endpoint(scheduler_endpoint)
@@ -1139,7 +1174,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_proxy_new_invalid_retry_times() {
-        let mock_server = setup_mock_scheduler().await.unwrap();
+        let mock_server = setup_mock_scheduler(vec![]).await.unwrap();
 
         let scheduler_endpoint = format!("http://0.0.0.0:{}", mock_server.port().unwrap());
         let result = Proxy::builder()
@@ -1154,7 +1189,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_proxy_new_invalid_health_check_interval() {
-        let mock_server = setup_mock_scheduler().await.unwrap();
+        let mock_server = setup_mock_scheduler(vec![]).await.unwrap();
 
         let scheduler_endpoint = format!("http://0.0.0.0:{}", mock_server.port().unwrap());
         let result = Proxy::builder()
@@ -1169,7 +1204,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_preheat_file_no_available_seed_peers() {
-        let mock_server = setup_mock_scheduler().await.unwrap();
+        let mock_server = setup_mock_scheduler(vec![]).await.unwrap();
         let scheduler_endpoint = format!("http://0.0.0.0:{}", mock_server.port().unwrap());
         let proxy = Proxy::builder()
             .scheduler_endpoint(scheduler_endpoint)
@@ -1187,6 +1222,153 @@ mod tests {
         let result = proxy.preheat(&request).await;
         assert!(
             matches!(result, Err(Error::Internal(message)) if message.contains("failed to select seed peers"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_preheat_succeeds_with_seed_peer() {
+        // The seed peer serves the download task request with a streaming response.
+        let mut mocks = MockSet::new();
+        mocks.mock(|when, then| {
+            when.path("/dfdaemon.v2.DfdaemonUpload/DownloadTask");
+            then.pb_stream(vec![
+                DownloadTaskResponse {
+                    host_id: "seed-peer-1".to_string(),
+                    task_id: "task-1".to_string(),
+                    peer_id: "peer-1".to_string(),
+                    ..Default::default()
+                },
+                DownloadTaskResponse {
+                    host_id: "seed-peer-1".to_string(),
+                    task_id: "task-1".to_string(),
+                    peer_id: "peer-1".to_string(),
+                    ..Default::default()
+                },
+            ]);
+        });
+
+        let mock_seed_peer = setup_mock_seed_peer(mocks).await.unwrap();
+        let mock_scheduler =
+            setup_mock_scheduler(vec![create_seed_peer_host(mock_seed_peer.port().unwrap())])
+                .await
+                .unwrap();
+
+        let scheduler_endpoint = format!("http://0.0.0.0:{}", mock_scheduler.port().unwrap());
+        let proxy = Proxy::builder()
+            .scheduler_endpoint(scheduler_endpoint)
+            .build()
+            .await
+            .unwrap();
+
+        let request = PreheatRequest {
+            url: "http://example.com/payload.txt".to_string(),
+            tag: Some("preheat".to_string()),
+            application: Some("dfctl".to_string()),
+            ..Default::default()
+        };
+
+        let result = proxy.preheat(&request).await;
+        assert!(result.is_ok(), "preheat should succeed: {:?}", result.err());
+    }
+
+    #[tokio::test]
+    async fn test_preheat_fails_when_seed_peer_download_fails() {
+        // The seed peer is healthy but fails to serve the download task request.
+        let mut mocks = MockSet::new();
+        mocks.mock(|when, then| {
+            when.path("/dfdaemon.v2.DfdaemonUpload/DownloadTask");
+            then.error(StatusCode::INTERNAL_SERVER_ERROR, "storage is full");
+        });
+
+        let mock_seed_peer = setup_mock_seed_peer(mocks).await.unwrap();
+        let mock_scheduler =
+            setup_mock_scheduler(vec![create_seed_peer_host(mock_seed_peer.port().unwrap())])
+                .await
+                .unwrap();
+
+        let scheduler_endpoint = format!("http://0.0.0.0:{}", mock_scheduler.port().unwrap());
+        let proxy = Proxy::builder()
+            .scheduler_endpoint(scheduler_endpoint)
+            .build()
+            .await
+            .unwrap();
+
+        let request = PreheatRequest {
+            url: "http://example.com/payload.txt".to_string(),
+            tag: Some("preheat".to_string()),
+            application: Some("dfctl".to_string()),
+            ..Default::default()
+        };
+
+        let result = proxy.preheat(&request).await;
+        assert!(
+            matches!(result, Err(Error::Internal(message)) if message.contains("failed to download task"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_preheat_image_invalid_reference() {
+        let mock_server = setup_mock_scheduler(vec![]).await.unwrap();
+        let scheduler_endpoint = format!("http://0.0.0.0:{}", mock_server.port().unwrap());
+        let proxy = Proxy::builder()
+            .scheduler_endpoint(scheduler_endpoint)
+            .build()
+            .await
+            .unwrap();
+
+        let request = PreheatImageRequest {
+            image: "invalid image reference!!".to_string(),
+            ..Default::default()
+        };
+
+        let result = proxy.preheat_image(&request).await;
+        assert!(
+            matches!(result, Err(Error::InvalidArgument(message)) if message.contains("invalid image reference"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_preheat_image_invalid_platform() {
+        let mock_server = setup_mock_scheduler(vec![]).await.unwrap();
+        let scheduler_endpoint = format!("http://0.0.0.0:{}", mock_server.port().unwrap());
+        let proxy = Proxy::builder()
+            .scheduler_endpoint(scheduler_endpoint)
+            .build()
+            .await
+            .unwrap();
+
+        // The platform must be in the format "os/arch" (e.g., "linux/amd64").
+        let request = PreheatImageRequest {
+            image: "docker.io/library/nginx:latest".to_string(),
+            platform: Some("linux-amd64".to_string()),
+            ..Default::default()
+        };
+
+        let result = proxy.preheat_image(&request).await;
+        assert!(
+            matches!(result, Err(Error::InvalidArgument(message)) if message.contains("invalid platform format"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_preheat_image_unreachable_registry() {
+        let mock_server = setup_mock_scheduler(vec![]).await.unwrap();
+        let scheduler_endpoint = format!("http://0.0.0.0:{}", mock_server.port().unwrap());
+        let proxy = Proxy::builder()
+            .scheduler_endpoint(scheduler_endpoint)
+            .build()
+            .await
+            .unwrap();
+
+        // Port 1 is reserved and refuses connections, so pulling the manifest fails.
+        let request = PreheatImageRequest {
+            image: "127.0.0.1:1/library/nginx:latest".to_string(),
+            ..Default::default()
+        };
+
+        let result = proxy.preheat_image(&request).await;
+        assert!(
+            matches!(result, Err(Error::Internal(message)) if message.contains("failed to pull image manifest"))
         );
     }
 
