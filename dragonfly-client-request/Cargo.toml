@@ -12,8 +12,6 @@ keywords.workspace = true
 
 [features]
 default = []
-# Enables the image preheat API (`Request::preheat_image` and `PreheatImageRequest`),
-# which pulls in the OCI registry dependencies.
 preheat = ["dep:oci-client", "dep:oci-spec"]
 
 [dependencies]
