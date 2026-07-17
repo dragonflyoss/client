@@ -19,7 +19,7 @@ use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
 use std::cmp::{max, min};
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::future::Future;
 use std::io;
 use std::os::unix::fs::FileExt;
@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{ready, Context, Poll};
-use tokio::io::{AsyncBufRead, AsyncRead, ReadBuf};
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
 use tokio::task::JoinHandle;
 
 #[cfg(target_os = "linux")]
@@ -97,10 +97,10 @@ pub fn calculate_piece_range(offset: u64, length: u64, range: Option<Range>) -> 
 }
 
 /// FDCache caches opened file descriptors by path with LRU eviction, so repeated
-/// piece reads of the same task reuse one descriptor instead of reopening the
-/// file every time. The cached descriptors are only used for positional reads,
-/// which never move the file cursor, so one descriptor is safely shared by
-/// concurrent readers.
+/// piece reads and writes of the same task reuse one descriptor instead of
+/// reopening the file every time. The cached descriptors are only used for
+/// positional reads and writes, which never move the file cursor, so one
+/// descriptor is safely shared by concurrent readers and writers.
 pub struct FDCache {
     /// The opened file descriptors by path.
     fds: Mutex<LruCache<PathBuf, Arc<File>>>,
@@ -127,7 +127,16 @@ impl FDCache {
         let fd = Arc::new(
             tokio::task::spawn_blocking({
                 let path = path.clone();
-                move || File::open(path)
+                // Open read-write so the descriptor serves both positional reads
+                // and writes. Fall back to read-only for files that are not
+                // writable, e.g. read-only files imported by hard link.
+                move || {
+                    OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .open(&path)
+                        .or_else(|_| File::open(&path))
+                }
             })
             .await
             .map_err(io::Error::other)??,
@@ -264,12 +273,127 @@ impl AsyncRead for RangeReader {
     }
 }
 
+/// The state of the in-flight write of the RangeWriter.
+enum RangeWriterState {
+    /// No write is in flight, the buffer may hold buffered data.
+    Idle,
+
+    /// A positional write is running on the blocking thread pool, owning the
+    /// buffer until it completes.
+    Writing(JoinHandle<io::Result<Vec<u8>>>),
+}
+
+/// RangeWriter writes sequential data starting at a fixed offset of a file
+/// with positional writes on a shared file descriptor. It never seeks the
+/// descriptor and buffers the data into a single reusable buffer, instead of
+/// reopening and seeking the file for every piece.
+pub struct RangeWriter {
+    /// The shared file descriptor to write to.
+    fd: Arc<File>,
+
+    /// The offset of the next positional write.
+    offset: u64,
+
+    /// The reusable write buffer, moved into the blocking task while writing.
+    buf: Vec<u8>,
+
+    /// The capacity of the write buffer.
+    capacity: usize,
+
+    /// The state of the in-flight write.
+    state: RangeWriterState,
+}
+
+/// Implements the range writer.
+impl RangeWriter {
+    /// Creates a new RangeWriter writing at `offset` with a reusable buffer of
+    /// `buffer_size` bytes.
+    pub fn new(fd: Arc<File>, offset: u64, buffer_size: usize) -> Self {
+        let capacity = max(buffer_size, 1);
+        Self {
+            fd,
+            offset,
+            buf: Vec::with_capacity(capacity),
+            capacity,
+            state: RangeWriterState::Idle,
+        }
+    }
+
+    /// Moves the buffered data into a positional write on the blocking thread
+    /// pool and advances the offset.
+    fn dispatch(&mut self) {
+        let buf = std::mem::take(&mut self.buf);
+        let fd = self.fd.clone();
+        let offset = self.offset;
+        self.offset += buf.len() as u64;
+        self.state = RangeWriterState::Writing(tokio::task::spawn_blocking(move || {
+            fd.write_all_at(&buf, offset)?;
+            Ok(buf)
+        }));
+    }
+
+    /// Polls the in-flight write to complete, restoring the buffer for reuse.
+    fn poll_idle(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match &mut self.state {
+            RangeWriterState::Idle => Poll::Ready(Ok(())),
+            RangeWriterState::Writing(handle) => {
+                let buf = ready!(Pin::new(handle).poll(cx)).map_err(io::Error::other)??;
+                self.buf = buf;
+                self.buf.clear();
+                self.state = RangeWriterState::Idle;
+                Poll::Ready(Ok(()))
+            }
+        }
+    }
+}
+
+/// Implements the buffered write for the RangeWriter.
+impl AsyncWrite for RangeWriter {
+    /// Polls the write to buffer the data, dispatching a positional write on the
+    /// blocking thread pool when the buffer is full. The buffer is reused for
+    /// subsequent writes.
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        data: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        ready!(this.poll_idle(cx))?;
+
+        let n = min(this.capacity - this.buf.len(), data.len());
+        this.buf.extend_from_slice(&data[..n]);
+        if this.buf.len() == this.capacity {
+            this.dispatch();
+        }
+
+        Poll::Ready(Ok(n))
+    }
+
+    /// Polls the flush to dispatch the buffered data and wait for the writes
+    /// to complete.
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        ready!(this.poll_idle(cx))?;
+        if !this.buf.is_empty() {
+            this.dispatch();
+            ready!(this.poll_idle(cx))?;
+        }
+
+        Poll::Ready(Ok(()))
+    }
+
+    /// Polls the shutdown to flush the buffered data.
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        self.poll_flush(cx)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;
     use tempfile::tempdir;
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
     fn pattern(length: usize) -> Vec<u8> {
         (0..length).map(|i| (i % 251) as u8).collect()
@@ -293,6 +417,46 @@ mod tests {
         cache.remove(&path);
         tokio::fs::remove_file(&path).await.unwrap();
         assert!(cache.open(&path).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_fd_cache_read_only_fallback() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, b"hello, world!").await.unwrap();
+
+        let mut permissions = tokio::fs::metadata(&path).await.unwrap().permissions();
+        permissions.set_readonly(true);
+        tokio::fs::set_permissions(&path, permissions)
+            .await
+            .unwrap();
+
+        let cache = FDCache::new(DEFAULT_FD_CACHE_CAPACITY);
+        let fd = cache.open(&path).await.unwrap();
+
+        let mut buffer = vec![0u8; 13];
+        fd.read_at(&mut buffer, 0).unwrap();
+        assert_eq!(buffer, b"hello, world!");
+    }
+
+    #[tokio::test]
+    async fn test_range_writer_then_range_reader_shared_fd() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, b"").await.unwrap();
+
+        let cache = FDCache::new(DEFAULT_FD_CACHE_CAPACITY);
+        let fd = cache.open(&path).await.unwrap();
+
+        let data = pattern(16 * 1024);
+        let mut writer = RangeWriter::new(fd.clone(), 0, 4 * 1024);
+        writer.write_all(&data).await.unwrap();
+        writer.flush().await.unwrap();
+
+        let mut reader = RangeReader::new(fd, 0, data.len() as u64, 4 * 1024);
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await.unwrap();
+        assert_eq!(buffer, data);
     }
 
     #[tokio::test]
@@ -460,6 +624,147 @@ mod tests {
         }
 
         assert_eq!(buffer, b"hello, world!");
+    }
+
+    #[tokio::test]
+    async fn test_range_writer() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, b"").await.unwrap();
+        let fd = Arc::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap(),
+        );
+
+        let mut writer = RangeWriter::new(fd, 0, 512);
+        writer.write_all(b"hello, world!").await.unwrap();
+        writer.flush().await.unwrap();
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"hello, world!");
+    }
+
+    #[tokio::test]
+    async fn test_range_writer_multiple_fills() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, b"").await.unwrap();
+        let fd = Arc::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap(),
+        );
+
+        let data = pattern(256 * 1024);
+        let mut writer = RangeWriter::new(fd, 0, 4 * 1024);
+        writer.write_all(&data).await.unwrap();
+        writer.flush().await.unwrap();
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), data);
+    }
+
+    #[tokio::test]
+    async fn test_range_writer_offset() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, vec![0u8; 64]).await.unwrap();
+        let fd = Arc::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap(),
+        );
+
+        let mut writer = RangeWriter::new(fd, 7, 2);
+        writer.write_all(b"world").await.unwrap();
+        writer.flush().await.unwrap();
+
+        let content = tokio::fs::read(&path).await.unwrap();
+        assert_eq!(&content[7..12], b"world");
+        assert_eq!(content.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn test_range_writer_small_chunk_writes() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, b"").await.unwrap();
+        let fd = Arc::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap(),
+        );
+
+        let data = pattern(1024);
+        let mut writer = RangeWriter::new(fd, 0, 16);
+        for chunk in data.chunks(3) {
+            writer.write_all(chunk).await.unwrap();
+        }
+        writer.flush().await.unwrap();
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), data);
+    }
+
+    #[tokio::test]
+    async fn test_range_writer_buffer_sizes() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+
+        for buffer_size in [13, 512, 1, 0] {
+            tokio::fs::write(&path, b"").await.unwrap();
+            let fd = Arc::new(
+                OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&path)
+                    .unwrap(),
+            );
+
+            let mut writer = RangeWriter::new(fd, 0, buffer_size);
+            writer.write_all(b"hello, world!").await.unwrap();
+            writer.flush().await.unwrap();
+            assert_eq!(tokio::fs::read(&path).await.unwrap(), b"hello, world!");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_range_writer_concurrent_writers() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        let data = pattern(64 * 1024);
+        tokio::fs::write(&path, vec![0u8; data.len()])
+            .await
+            .unwrap();
+        let fd = Arc::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap(),
+        );
+
+        let range_length: usize = 8 * 1024;
+        let handles: Vec<_> = (0..8usize)
+            .map(|i| {
+                let fd = fd.clone();
+                let piece = data[i * range_length..(i + 1) * range_length].to_vec();
+                tokio::spawn(async move {
+                    let mut writer = RangeWriter::new(fd, (i * range_length) as u64, 1024);
+                    writer.write_all(&piece).await.unwrap();
+                    writer.flush().await.unwrap();
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), data);
     }
 
     #[tokio::test]
