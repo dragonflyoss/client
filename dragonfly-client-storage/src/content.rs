@@ -98,12 +98,17 @@ pub fn calculate_piece_range(offset: u64, length: u64, range: Option<Range>) -> 
 
 /// FDCache caches opened file descriptors by path with LRU eviction, so repeated
 /// piece reads and writes of the same task reuse one descriptor instead of
-/// reopening the file every time. The cached descriptors are only used for
-/// positional reads and writes, which never move the file cursor, so one
-/// descriptor is safely shared by concurrent readers and writers.
+/// reopening the file every time. The read-only and write-only descriptors are
+/// cached separately, so a write open failure surfaces at open time instead of
+/// falling back to a cached read-only descriptor. The cached descriptors are
+/// only used for positional reads and writes, which never move the file cursor,
+/// so one descriptor is safely shared by concurrent readers and writers.
 pub struct FDCache {
-    /// The opened file descriptors by path.
-    fds: Mutex<LruCache<PathBuf, Arc<File>>>,
+    /// The opened file descriptors for reading by path.
+    read_fds: Mutex<LruCache<PathBuf, Arc<File>>>,
+
+    /// The opened file descriptors for writing by path.
+    write_fds: Mutex<LruCache<PathBuf, Arc<File>>>,
 }
 
 /// Implements the file descriptor cache.
@@ -111,15 +116,17 @@ impl FDCache {
     /// Creates a new FDCache with the given capacity.
     pub fn new(capacity: usize) -> Self {
         Self {
-            fds: Mutex::new(LruCache::new(capacity)),
+            read_fds: Mutex::new(LruCache::new(capacity)),
+            write_fds: Mutex::new(LruCache::new(capacity)),
         }
     }
 
-    /// Returns the cached file descriptor of the path, opening and caching it if
-    /// it is absent. Concurrent misses may open the file more than once, the last
-    /// inserted descriptor wins and the others are closed when their readers finish.
+    /// Returns the cached read-only file descriptor of the path, opening and
+    /// caching it if it is absent. Concurrent misses may open the file more than
+    /// once, the last inserted descriptor wins and the others are closed when
+    /// their readers finish.
     pub async fn open(&self, path: &Path) -> io::Result<Arc<File>> {
-        if let Some(fd) = self.fds.lock().unwrap().get(path) {
+        if let Some(fd) = self.read_fds.lock().unwrap().get(path) {
             return Ok(fd.clone());
         }
 
@@ -127,29 +134,49 @@ impl FDCache {
         let fd = Arc::new(
             tokio::task::spawn_blocking({
                 let path = path.clone();
-                // Open read-write so the descriptor serves both positional reads
-                // and writes. Fall back to read-only for files that are not
-                // writable, e.g. read-only files imported by hard link.
+                move || File::open(path)
+            })
+            .await
+            .map_err(io::Error::other)??,
+        );
+
+        self.read_fds.lock().unwrap().put(path, fd.clone());
+        Ok(fd)
+    }
+
+    /// Returns the cached write-only file descriptor of the path, opening and
+    /// caching it if it is absent. The open error surfaces to the caller and
+    /// nothing is cached on failure, so a file that becomes writable later is
+    /// opened again on the next write.
+    pub async fn open_write(&self, path: &Path) -> io::Result<Arc<File>> {
+        if let Some(fd) = self.write_fds.lock().unwrap().get(path) {
+            return Ok(fd.clone());
+        }
+
+        let path = path.to_path_buf();
+        let fd = Arc::new(
+            tokio::task::spawn_blocking({
+                let path = path.clone();
                 move || {
                     OpenOptions::new()
-                        .read(true)
+                        .truncate(false)
                         .write(true)
-                        .open(&path)
-                        .or_else(|_| File::open(&path))
+                        .open(path.as_path())
                 }
             })
             .await
             .map_err(io::Error::other)??,
         );
 
-        self.fds.lock().unwrap().put(path, fd.clone());
+        self.write_fds.lock().unwrap().put(path, fd.clone());
         Ok(fd)
     }
 
-    /// Removes the cached file descriptor of the path. It needs to be called when
+    /// Removes the cached file descriptors of the path. It needs to be called when
     /// the content is deleted, so a recreated task will not read the stale file.
     pub fn remove(&self, path: &Path) {
-        self.fds.lock().unwrap().pop(path);
+        self.read_fds.lock().unwrap().pop(path);
+        self.write_fds.lock().unwrap().pop(path);
     }
 }
 
@@ -410,17 +437,27 @@ mod tests {
         let second = cache.open(&path).await.unwrap();
         assert!(Arc::ptr_eq(&first, &second));
 
+        let first_write = cache.open_write(&path).await.unwrap();
+        let second_write = cache.open_write(&path).await.unwrap();
+        assert!(Arc::ptr_eq(&first_write, &second_write));
+        assert!(!Arc::ptr_eq(&first, &first_write));
+
         cache.remove(&path);
         let third = cache.open(&path).await.unwrap();
         assert!(!Arc::ptr_eq(&first, &third));
+        let third_write = cache.open_write(&path).await.unwrap();
+        assert!(!Arc::ptr_eq(&first_write, &third_write));
 
         cache.remove(&path);
         tokio::fs::remove_file(&path).await.unwrap();
         assert!(cache.open(&path).await.is_err());
+        assert!(cache.open_write(&path).await.is_err());
     }
 
     #[tokio::test]
-    async fn test_fd_cache_read_only_fallback() {
+    async fn test_fd_cache_open_write_read_only_file() {
+        use std::os::unix::fs::PermissionsExt;
+
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("task");
         tokio::fs::write(&path, b"hello, world!").await.unwrap();
@@ -433,27 +470,39 @@ mod tests {
 
         let cache = FDCache::new(DEFAULT_FD_CACHE_CAPACITY);
         let fd = cache.open(&path).await.unwrap();
-
         let mut buffer = vec![0u8; 13];
         fd.read_at(&mut buffer, 0).unwrap();
         assert_eq!(buffer, b"hello, world!");
+        assert!(cache.open_write(&path).await.is_err());
+
+        tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .await
+            .unwrap();
+
+        let fd = cache.open_write(&path).await.unwrap();
+        fd.write_all_at(b"HELLO", 0).unwrap();
+        assert_eq!(&tokio::fs::read(&path).await.unwrap()[..5], b"HELLO");
     }
 
     #[tokio::test]
-    async fn test_range_writer_then_range_reader_shared_fd() {
+    async fn test_range_writer_then_range_reader_shared_cache() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("task");
         tokio::fs::write(&path, b"").await.unwrap();
 
         let cache = FDCache::new(DEFAULT_FD_CACHE_CAPACITY);
-        let fd = cache.open(&path).await.unwrap();
 
         let data = pattern(16 * 1024);
-        let mut writer = RangeWriter::new(fd.clone(), 0, 4 * 1024);
+        let mut writer = RangeWriter::new(cache.open_write(&path).await.unwrap(), 0, 4 * 1024);
         writer.write_all(&data).await.unwrap();
         writer.flush().await.unwrap();
 
-        let mut reader = RangeReader::new(fd, 0, data.len() as u64, 4 * 1024);
+        let mut reader = RangeReader::new(
+            cache.open(&path).await.unwrap(),
+            0,
+            data.len() as u64,
+            4 * 1024,
+        );
         let mut buffer = Vec::new();
         reader.read_to_end(&mut buffer).await.unwrap();
         assert_eq!(buffer, data);

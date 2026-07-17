@@ -261,9 +261,13 @@ impl Content {
         // Write the piece with positional writes on the cached file descriptor,
         // avoiding reopening and seeking the file for every piece.
         let task_path = self.get_task_path(task_id);
-        let fd = self.fd_cache.open(&task_path).await.inspect_err(|err| {
-            error!("open {:?} failed: {}", task_path, err);
-        })?;
+        let fd = self
+            .fd_cache
+            .open_write(&task_path)
+            .await
+            .inspect_err(|err| {
+                error!("open {:?} failed: {}", task_path, err);
+            })?;
 
         let mut writer =
             super::content::RangeWriter::new(fd, offset, self.config.storage.write_buffer_size);
@@ -496,9 +500,13 @@ impl Content {
         // Write the piece with positional writes on the cached file descriptor,
         // avoiding reopening and seeking the file for every piece.
         let task_path = self.get_persistent_task_path(task_id);
-        let fd = self.fd_cache.open(&task_path).await.inspect_err(|err| {
-            error!("open {:?} failed: {}", task_path, err);
-        })?;
+        let fd = self
+            .fd_cache
+            .open_write(&task_path)
+            .await
+            .inspect_err(|err| {
+                error!("open {:?} failed: {}", task_path, err);
+            })?;
 
         let mut writer =
             super::content::RangeWriter::new(fd, offset, self.config.storage.write_buffer_size);
@@ -752,9 +760,13 @@ impl Content {
         // Write the piece with positional writes on the cached file descriptor,
         // avoiding reopening and seeking the file for every piece.
         let task_path = self.get_persistent_cache_task_path(task_id);
-        let fd = self.fd_cache.open(&task_path).await.inspect_err(|err| {
-            error!("open {:?} failed: {}", task_path, err);
-        })?;
+        let fd = self
+            .fd_cache
+            .open_write(&task_path)
+            .await
+            .inspect_err(|err| {
+                error!("open {:?} failed: {}", task_path, err);
+            })?;
 
         let mut writer =
             super::content::RangeWriter::new(fd, offset, self.config.storage.write_buffer_size);
