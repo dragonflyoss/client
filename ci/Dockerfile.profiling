@@ -1,0 +1,96 @@
+FROM rust:1.88.0 AS builder
+
+WORKDIR /app/client
+
+RUN apt-get update && apt-get install -y \
+    openssl libclang-dev pkg-config protobuf-compiler git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY .git ./.git
+COPY Cargo.toml Cargo.lock ./
+COPY .cargo ./.cargo
+
+COPY dragonfly-client/Cargo.toml ./dragonfly-client/Cargo.toml
+COPY dragonfly-client/src ./dragonfly-client/src
+
+COPY dragonfly-client-core/Cargo.toml ./dragonfly-client-core/Cargo.toml
+COPY dragonfly-client-core/src ./dragonfly-client-core/src
+
+COPY dragonfly-client-config/Cargo.toml ./dragonfly-client-config/Cargo.toml
+COPY dragonfly-client-config/src ./dragonfly-client-config/src
+COPY dragonfly-client-config/build.rs ./dragonfly-client-config/build.rs
+
+COPY dragonfly-client-storage/Cargo.toml ./dragonfly-client-storage/Cargo.toml
+COPY dragonfly-client-storage/src ./dragonfly-client-storage/src
+COPY dragonfly-client-storage/benches ./dragonfly-client-storage/benches
+
+COPY dragonfly-client-backend/Cargo.toml ./dragonfly-client-backend/Cargo.toml
+COPY dragonfly-client-backend/src ./dragonfly-client-backend/src
+
+COPY dragonfly-client-backend/examples/plugin/Cargo.toml ./dragonfly-client-backend/examples/plugin/Cargo.toml
+COPY dragonfly-client-backend/examples/plugin/src ./dragonfly-client-backend/examples/plugin/src
+
+COPY dragonfly-client-metric/Cargo.toml ./dragonfly-client-metric/Cargo.toml
+COPY dragonfly-client-metric/src ./dragonfly-client-metric/src
+
+COPY dragonfly-client-request/Cargo.toml ./dragonfly-client-request/Cargo.toml
+COPY dragonfly-client-request/src ./dragonfly-client-request/src
+
+COPY dragonfly-client-util/Cargo.toml ./dragonfly-client-util/Cargo.toml
+COPY dragonfly-client-util/src ./dragonfly-client-util/src
+
+COPY dragonfly-client-util/examples/request/Cargo.toml ./dragonfly-client-util/examples/request/Cargo.toml
+COPY dragonfly-client-util/examples/request/src ./dragonfly-client-util/examples/request/src
+
+COPY dragonfly-client-init/Cargo.toml ./dragonfly-client-init/Cargo.toml
+COPY dragonfly-client-init/src ./dragonfly-client-init/src
+
+ARG TARGETPLATFORM
+RUN case "${TARGETPLATFORM}" in \
+  "linux/arm64") export JEMALLOC_SYS_WITH_LG_PAGE=16;; \
+  esac && \
+  cargo build --verbose --profile profiling --bin dfget --bin dfdaemon --bin dfcache --bin dfstore --bin dfctl
+
+RUN cargo install flamegraph --version 0.6.8 --root /usr/local
+RUN cargo install bottom --version 0.11.0 --locked --root /usr/local
+RUN cargo install tokio-console --version 0.1.13 --locked --root /usr/local
+
+FROM alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11 AS health
+
+ENV GRPC_HEALTH_PROBE_VERSION=v0.4.24
+
+RUN if [ "$(uname -m)" = "ppc64le" ]; then \
+    wget -qO/bin/grpc_health_probe https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/${GRPC_HEALTH_PROBE_VERSION}/grpc_health_probe-linux-ppc64le; \
+    elif [ "$(uname -m)" = "aarch64" ]; then \
+    wget -qO/bin/grpc_health_probe https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/${GRPC_HEALTH_PROBE_VERSION}/grpc_health_probe-linux-arm64; \
+    else \
+    wget -qO/bin/grpc_health_probe https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/${GRPC_HEALTH_PROBE_VERSION}/grpc_health_probe-linux-amd64; \
+    fi && \
+    chmod +x /bin/grpc_health_probe
+
+FROM golang:1.25.5-alpine3.23@sha256:ac09a5f469f307e5da71e766b0bd59c9c49ea460a528cc3e6686513d64a6f1fb AS pprof
+
+RUN go install github.com/google/pprof@v0.0.0-20251114195745-4902fdda35c8
+RUN go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends iperf3 iperf fio curl infiniband-diags ibverbs-utils \
+    iotop sysstat bash-completion procps apache2-utils ca-certificates binutils bpfcc-tools linux-libc-dev libc6-dev \
+    nvme-cli smartmontools dnsutils iputils-ping vim linux-perf llvm lsof socat strace dstat net-tools bpftrace \
+    libbpf-tools graphviz \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/client/target/profiling/dfget /usr/local/bin/dfget
+COPY --from=builder /app/client/target/profiling/dfdaemon /usr/local/bin/dfdaemon
+COPY --from=builder /app/client/target/profiling/dfcache /usr/local/bin/dfcache
+COPY --from=builder /app/client/target/profiling/dfstore /usr/local/bin/dfstore
+COPY --from=builder /app/client/target/profiling/dfctl /usr/local/bin/dfctl
+COPY --from=builder /usr/local/bin/flamegraph /usr/local/bin/
+COPY --from=builder /usr/local/bin/btm /usr/local/bin/
+COPY --from=builder /usr/local/bin/tokio-console /usr/local/bin/
+COPY --from=pprof /go/bin/pprof /bin/pprof
+COPY --from=pprof /go/bin/grpcurl /bin/grpcurl
+COPY --from=health /bin/grpc_health_probe /bin/grpc_health_probe
+
+ENTRYPOINT ["/usr/local/bin/dfdaemon"]
