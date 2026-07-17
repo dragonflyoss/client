@@ -45,6 +45,7 @@ COPY dragonfly-client-util/examples/request/src ./dragonfly-client-util/examples
 COPY dragonfly-client-init/Cargo.toml ./dragonfly-client-init/Cargo.toml
 COPY dragonfly-client-init/src ./dragonfly-client-init/src
 
+ENV RUSTFLAGS="--cfg tokio_unstable -C force-frame-pointers=yes -C force-unwind-tables=yes"
 ARG TARGETPLATFORM
 RUN case "${TARGETPLATFORM}" in \
   "linux/arm64") export JEMALLOC_SYS_WITH_LG_PAGE=16;; \
