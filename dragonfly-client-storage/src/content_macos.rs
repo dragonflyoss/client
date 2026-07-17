@@ -239,7 +239,10 @@ impl Content {
         info!("delete task content: {}", task_id);
         let task_path = self.get_task_path(task_id);
 
-        self.fd_cache.remove(&task_path);
+        self.fd_cache.remove(&task_path).unwrap_or_else(|err| {
+            error!("remove {:?} from fd_cache failed: {}", task_path, err);
+        });
+
         fs::remove_file(task_path.as_path())
             .await
             .inspect_err(|err| {
@@ -592,7 +595,15 @@ impl Content {
         info!("delete persistent task content: {}", task_id);
         let persistent_task_path = self.get_persistent_task_path(task_id);
 
-        self.fd_cache.remove(&persistent_task_path);
+        self.fd_cache
+            .remove(&persistent_task_path)
+            .unwrap_or_else(|err| {
+                error!(
+                    "remove {:?} from fd_cache failed: {}",
+                    persistent_task_path, err
+                );
+            });
+
         fs::remove_file(persistent_task_path.as_path())
             .await
             .inspect_err(|err| {
@@ -852,7 +863,15 @@ impl Content {
         info!("delete persistent cache task content: {}", task_id);
         let persistent_cache_task_path = self.get_persistent_cache_task_path(task_id);
 
-        self.fd_cache.remove(&persistent_cache_task_path);
+        self.fd_cache
+            .remove(&persistent_cache_task_path)
+            .unwrap_or_else(|err| {
+                error!(
+                    "remove {:?} from fd_cache failed: {}",
+                    persistent_cache_task_path, err
+                );
+            });
+
         fs::remove_file(persistent_cache_task_path.as_path())
             .await
             .inspect_err(|err| {

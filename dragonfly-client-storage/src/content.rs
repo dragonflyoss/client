@@ -125,8 +125,8 @@ impl FDCache {
     /// caching it if it is absent. Concurrent misses may open the file more than
     /// once, the last inserted descriptor wins and the others are closed when
     /// their readers finish.
-    pub async fn open(&self, path: &Path) -> io::Result<Arc<File>> {
-        if let Some(fd) = self.read_fds.lock().unwrap().get(path) {
+    pub async fn open(&self, path: &Path) -> Result<Arc<File>> {
+        if let Some(fd) = self.read_fds.lock()?.get(path) {
             return Ok(fd.clone());
         }
 
@@ -140,7 +140,7 @@ impl FDCache {
             .map_err(io::Error::other)??,
         );
 
-        self.read_fds.lock().unwrap().put(path, fd.clone());
+        self.read_fds.lock()?.put(path, fd.clone());
         Ok(fd)
     }
 
@@ -148,8 +148,8 @@ impl FDCache {
     /// caching it if it is absent. The open error surfaces to the caller and
     /// nothing is cached on failure, so a file that becomes writable later is
     /// opened again on the next write.
-    pub async fn open_write(&self, path: &Path) -> io::Result<Arc<File>> {
-        if let Some(fd) = self.write_fds.lock().unwrap().get(path) {
+    pub async fn open_write(&self, path: &Path) -> Result<Arc<File>> {
+        if let Some(fd) = self.write_fds.lock()?.get(path) {
             return Ok(fd.clone());
         }
 
@@ -168,15 +168,16 @@ impl FDCache {
             .map_err(io::Error::other)??,
         );
 
-        self.write_fds.lock().unwrap().put(path, fd.clone());
+        self.write_fds.lock()?.put(path, fd.clone());
         Ok(fd)
     }
 
     /// Removes the cached file descriptors of the path. It needs to be called when
     /// the content is deleted, so a recreated task will not read the stale file.
-    pub fn remove(&self, path: &Path) {
-        self.read_fds.lock().unwrap().pop(path);
-        self.write_fds.lock().unwrap().pop(path);
+    pub fn remove(&self, path: &Path) -> Result<()> {
+        self.read_fds.lock()?.pop(path);
+        self.write_fds.lock()?.pop(path);
+        Ok(())
     }
 }
 
@@ -259,8 +260,9 @@ impl AsyncBufRead for RangeReader {
                         }));
                 }
                 RangeReaderState::Reading(handle) => {
-                    let (buf, n) =
-                        ready!(Pin::new(handle).poll(cx)).map_err(io::Error::other)??;
+                    let result = ready!(Pin::new(handle).poll(cx));
+                    this.state = RangeReaderState::Idle;
+                    let (buf, n) = result.map_err(io::Error::other)??;
                     this.buf = buf;
                     this.pos = 0;
                     this.filled = n;
@@ -268,7 +270,6 @@ impl AsyncBufRead for RangeReader {
 
                     // Stop at the end of the file even if the range is longer.
                     this.remaining = if n == 0 { 0 } else { this.remaining - n as u64 };
-                    this.state = RangeReaderState::Idle;
                 }
             }
         }
@@ -364,10 +365,10 @@ impl RangeWriter {
         match &mut self.state {
             RangeWriterState::Idle => Poll::Ready(Ok(())),
             RangeWriterState::Writing(handle) => {
-                let buf = ready!(Pin::new(handle).poll(cx)).map_err(io::Error::other)??;
-                self.buf = buf;
-                self.buf.clear();
+                let result = ready!(Pin::new(handle).poll(cx));
                 self.state = RangeWriterState::Idle;
+                self.buf = result.map_err(io::Error::other)??;
+                self.buf.clear();
                 Poll::Ready(Ok(()))
             }
         }
@@ -442,13 +443,13 @@ mod tests {
         assert!(Arc::ptr_eq(&first_write, &second_write));
         assert!(!Arc::ptr_eq(&first, &first_write));
 
-        cache.remove(&path);
+        let _ = cache.remove(&path);
         let third = cache.open(&path).await.unwrap();
         assert!(!Arc::ptr_eq(&first, &third));
         let third_write = cache.open_write(&path).await.unwrap();
         assert!(!Arc::ptr_eq(&first_write, &third_write));
 
-        cache.remove(&path);
+        let _ = cache.remove(&path);
         tokio::fs::remove_file(&path).await.unwrap();
         assert!(cache.open(&path).await.is_err());
         assert!(cache.open_write(&path).await.is_err());
@@ -482,6 +483,43 @@ mod tests {
         let fd = cache.open_write(&path).await.unwrap();
         fd.write_all_at(b"HELLO", 0).unwrap();
         assert_eq!(&tokio::fs::read(&path).await.unwrap()[..5], b"HELLO");
+    }
+
+    #[tokio::test]
+    async fn test_range_reader_poll_after_read_error() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, b"hello, world!").await.unwrap();
+        let fd = Arc::new(
+            OpenOptions::new()
+                .truncate(false)
+                .write(true)
+                .open(&path)
+                .unwrap(),
+        );
+
+        let mut reader = RangeReader::new(fd, 0, 13, 4);
+        let mut buffer = Vec::new();
+        assert!(reader.read_to_end(&mut buffer).await.is_err());
+
+        // Polling again after the error must not panic.
+        let mut buffer = Vec::new();
+        let _ = reader.read_to_end(&mut buffer).await;
+    }
+
+    #[tokio::test]
+    async fn test_range_writer_poll_after_write_error() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, b"hello, world!").await.unwrap();
+        let fd = Arc::new(File::open(&path).unwrap());
+
+        let mut writer = RangeWriter::new(fd, 0, 4);
+        assert!(writer.write_all(b"data!").await.is_err());
+
+        // Polling again after the error must not panic.
+        let _ = writer.write_all(b"more").await;
+        let _ = writer.flush().await;
     }
 
     #[tokio::test]
