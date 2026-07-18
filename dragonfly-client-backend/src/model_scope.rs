@@ -369,7 +369,7 @@ impl ModelScope {
                 Error::BackendError(Box::new(BackendError {
                     status_code: Some(status_code),
                     header: Some(response_header.clone()),
-                    message: format!("invalid Content-Range header: {}", err),
+                    message: format!("invalid Content-Range header: {err}"),
                 }))
             })?;
 
@@ -377,7 +377,7 @@ impl ModelScope {
             return Err(Error::BackendError(Box::new(BackendError {
                 status_code: Some(status_code),
                 header: Some(response_header.clone()),
-                message: format!("invalid Content-Range header format: {}", content_range),
+                message: format!("invalid Content-Range header format: {content_range}"),
             })));
         };
 
@@ -385,7 +385,7 @@ impl ModelScope {
             return Err(Error::BackendError(Box::new(BackendError {
                 status_code: Some(status_code),
                 header: Some(response_header.clone()),
-                message: format!("invalid Content-Range header format: {}", content_range),
+                message: format!("invalid Content-Range header format: {content_range}"),
             })));
         };
 
@@ -393,7 +393,7 @@ impl ModelScope {
             return Err(Error::BackendError(Box::new(BackendError {
                 status_code: Some(status_code),
                 header: Some(response_header.clone()),
-                message: format!("invalid Content-Range header format: {}", content_range),
+                message: format!("invalid Content-Range header format: {content_range}"),
             })));
         };
 
@@ -401,14 +401,14 @@ impl ModelScope {
             Error::BackendError(Box::new(BackendError {
                 status_code: Some(status_code),
                 header: Some(response_header.clone()),
-                message: format!("invalid Content-Range start: {}", err),
+                message: format!("invalid Content-Range start: {err}"),
             }))
         })?;
         let actual_end = end.parse::<u64>().map_err(|err| {
             Error::BackendError(Box::new(BackendError {
                 status_code: Some(status_code),
                 header: Some(response_header.clone()),
-                message: format!("invalid Content-Range end: {}", err),
+                message: format!("invalid Content-Range end: {err}"),
             }))
         })?;
 
