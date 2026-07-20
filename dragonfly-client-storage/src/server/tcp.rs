@@ -29,7 +29,7 @@ use leaky_bucket::RateLimiter;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{copy_buf, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{
     tcp::{OwnedReadHalf, OwnedWriteHalf},
     TcpListener, TcpStream,
@@ -49,6 +49,9 @@ use vortex_protocol::{
     },
     Header, Vortex, HEADER_SIZE,
 };
+
+#[cfg(not(target_os = "linux"))]
+use tokio::io::copy_buf;
 
 /// A TCP-based server for dfdaemon upload service.
 pub struct TCPServer {
