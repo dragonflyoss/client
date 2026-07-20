@@ -14,109 +14,88 @@
  * limitations under the License.
  */
 
+use lazy_static::lazy_static;
 use std::collections::HashSet;
 
 /// The default filtered query params with s3 protocol to generate the task id.
-#[inline]
-fn s3_filtered_query_params() -> Vec<String> {
-    vec![
-        "X-Amz-Algorithm".to_string(),
-        "X-Amz-Credential".to_string(),
-        "X-Amz-Date".to_string(),
-        "X-Amz-Expires".to_string(),
-        "X-Amz-SignedHeaders".to_string(),
-        "X-Amz-Signature".to_string(),
-        "X-Amz-Security-Token".to_string(),
-        "X-Amz-User-Agent".to_string(),
-    ]
-}
+const S3_FILTERED_QUERY_PARAMS: &[&str] = &[
+    "X-Amz-Algorithm",
+    "X-Amz-Credential",
+    "X-Amz-Date",
+    "X-Amz-Expires",
+    "X-Amz-SignedHeaders",
+    "X-Amz-Signature",
+    "X-Amz-Security-Token",
+    "X-Amz-User-Agent",
+];
 
 /// The filtered query params with gcs protocol to generate the task id.
-#[inline]
-fn gcs_filtered_query_params() -> Vec<String> {
-    vec![
-        "X-Goog-Algorithm".to_string(),
-        "X-Goog-Credential".to_string(),
-        "X-Goog-Date".to_string(),
-        "X-Goog-Expires".to_string(),
-        "X-Goog-SignedHeaders".to_string(),
-        "X-Goog-Signature".to_string(),
-    ]
-}
+const GCS_FILTERED_QUERY_PARAMS: &[&str] = &[
+    "X-Goog-Algorithm",
+    "X-Goog-Credential",
+    "X-Goog-Date",
+    "X-Goog-Expires",
+    "X-Goog-SignedHeaders",
+    "X-Goog-Signature",
+];
 
 /// The filtered query params with oss protocol to generate the task id.
-#[inline]
-fn oss_filtered_query_params() -> Vec<String> {
-    vec![
-        "OSSAccessKeyId".to_string(),
-        "Expires".to_string(),
-        "Signature".to_string(),
-        "SecurityToken".to_string(),
-    ]
-}
+const OSS_FILTERED_QUERY_PARAMS: &[&str] =
+    &["OSSAccessKeyId", "Expires", "Signature", "SecurityToken"];
 
 /// The filtered query params with obs protocol to generate the task id.
-#[inline]
-fn obs_filtered_query_params() -> Vec<String> {
-    vec![
-        "AccessKeyId".to_string(),
-        "Signature".to_string(),
-        "Expires".to_string(),
-        "X-Obs-Date".to_string(),
-        "X-Obs-Security-Token".to_string(),
-    ]
-}
+const OBS_FILTERED_QUERY_PARAMS: &[&str] = &[
+    "AccessKeyId",
+    "Signature",
+    "Expires",
+    "X-Obs-Date",
+    "X-Obs-Security-Token",
+];
 
 /// The filtered query params with cos protocol to generate the task id.
-#[inline]
-fn cos_filtered_query_params() -> Vec<String> {
-    vec![
-        "q-sign-algorithm".to_string(),
-        "q-ak".to_string(),
-        "q-sign-time".to_string(),
-        "q-key-time".to_string(),
-        "q-header-list".to_string(),
-        "q-url-param-list".to_string(),
-        "q-signature".to_string(),
-        "x-cos-security-token".to_string(),
-    ]
-}
+const COS_FILTERED_QUERY_PARAMS: &[&str] = &[
+    "q-sign-algorithm",
+    "q-ak",
+    "q-sign-time",
+    "q-key-time",
+    "q-header-list",
+    "q-url-param-list",
+    "q-signature",
+    "x-cos-security-token",
+];
 
 /// The filtered query params with containerd to generate the task id.
-#[inline]
-fn containerd_filtered_query_params() -> Vec<String> {
-    vec!["ns".to_string()]
+const CONTAINERD_FILTERED_QUERY_PARAMS: &[&str] = &["ns"];
+
+lazy_static! {
+    /// The default filtered query params to generate the task id, deduplicated
+    /// across all protocols and built once.
+    static ref DEFAULT_PROXY_RULE_FILTERED_QUERY_PARAMS: Vec<String> = {
+        let mut visited = HashSet::new();
+        let mut params = Vec::new();
+        for query_param in [
+            S3_FILTERED_QUERY_PARAMS,
+            GCS_FILTERED_QUERY_PARAMS,
+            OSS_FILTERED_QUERY_PARAMS,
+            OBS_FILTERED_QUERY_PARAMS,
+            COS_FILTERED_QUERY_PARAMS,
+            CONTAINERD_FILTERED_QUERY_PARAMS,
+        ]
+        .concat()
+        {
+            if visited.insert(query_param) {
+                params.push(query_param.to_string());
+            }
+        }
+
+        params
+    };
 }
 
 /// The default filtered query params to generate the task id.
 #[inline]
 pub fn default_proxy_rule_filtered_query_params() -> Vec<String> {
-    let mut visited = HashSet::new();
-    for query_param in s3_filtered_query_params() {
-        visited.insert(query_param);
-    }
-
-    for query_param in gcs_filtered_query_params() {
-        visited.insert(query_param);
-    }
-
-    for query_param in oss_filtered_query_params() {
-        visited.insert(query_param);
-    }
-
-    for query_param in obs_filtered_query_params() {
-        visited.insert(query_param);
-    }
-
-    for query_param in cos_filtered_query_params() {
-        visited.insert(query_param);
-    }
-
-    for query_param in containerd_filtered_query_params() {
-        visited.insert(query_param);
-    }
-
-    visited.into_iter().collect()
+    DEFAULT_PROXY_RULE_FILTERED_QUERY_PARAMS.clone()
 }
 
 #[cfg(test)]
@@ -127,12 +106,16 @@ mod tests {
     #[test]
     fn default_proxy_rule_filtered_query_params_contains_all_params() {
         let mut expected = HashSet::new();
-        expected.extend(s3_filtered_query_params());
-        expected.extend(gcs_filtered_query_params());
-        expected.extend(oss_filtered_query_params());
-        expected.extend(obs_filtered_query_params());
-        expected.extend(cos_filtered_query_params());
-        expected.extend(containerd_filtered_query_params());
+        expected.extend(S3_FILTERED_QUERY_PARAMS.iter().map(|s| s.to_string()));
+        expected.extend(GCS_FILTERED_QUERY_PARAMS.iter().map(|s| s.to_string()));
+        expected.extend(OSS_FILTERED_QUERY_PARAMS.iter().map(|s| s.to_string()));
+        expected.extend(OBS_FILTERED_QUERY_PARAMS.iter().map(|s| s.to_string()));
+        expected.extend(COS_FILTERED_QUERY_PARAMS.iter().map(|s| s.to_string()));
+        expected.extend(
+            CONTAINERD_FILTERED_QUERY_PARAMS
+                .iter()
+                .map(|s| s.to_string()),
+        );
 
         let actual = default_proxy_rule_filtered_query_params();
         let actual_set: HashSet<_> = actual.into_iter().collect();
