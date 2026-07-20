@@ -114,7 +114,7 @@ impl Backend for Hdfs {
     }
 
     /// Stat the metadata from the backend.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn stat(&self, request: StatRequest) -> ClientResult<StatResponse> {
         debug!(
             "stat request {} {}: {:?}",
@@ -197,7 +197,7 @@ impl Backend for Hdfs {
     }
 
     /// Get the content from the backend.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn get(&self, request: GetRequest) -> ClientResult<GetResponse<Body>> {
         debug!(
             "get request {} {}: {:?}",
@@ -269,13 +269,13 @@ impl Backend for Hdfs {
     }
 
     /// Put the content to the backend.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn put(&self, _request: PutRequest) -> ClientResult<PutResponse> {
         unimplemented!()
     }
 
     /// Exists checks whether the file exists in the backend.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn exists(&self, request: ExistsRequest) -> ClientResult<bool> {
         debug!(
             "exist request {} {}: {:?}",

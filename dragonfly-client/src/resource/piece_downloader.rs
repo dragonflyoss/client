@@ -167,7 +167,7 @@ impl QUICDownloader {
 #[async_trait]
 impl Downloader for QUICDownloader {
     /// Downloads a piece from the other peer by the QUIC protocol.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn download_piece(
         &self,
         addr: &str,
@@ -193,7 +193,7 @@ impl Downloader for QUICDownloader {
 
     /// Downloads a persistent piece from the other peer by
     /// the QUIC protocol.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn download_persistent_piece(
         &self,
         addr: &str,
@@ -223,7 +223,7 @@ impl Downloader for QUICDownloader {
 
     /// Downloads a persistent cache piece from the other peer by
     /// the QUIC protocol.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn download_persistent_cache_piece(
         &self,
         addr: &str,
@@ -319,7 +319,7 @@ impl TCPDownloader {
 #[async_trait]
 impl Downloader for TCPDownloader {
     /// Downloads a piece from the other peer by the TCP protocol.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn download_piece(
         &self,
         addr: &str,
@@ -345,7 +345,7 @@ impl Downloader for TCPDownloader {
 
     /// Downloads a persistent piece from the other peer by
     /// the TCP protocol.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn download_persistent_piece(
         &self,
         addr: &str,
@@ -375,7 +375,7 @@ impl Downloader for TCPDownloader {
 
     /// Downloads a persistent cache piece from the other peer by
     /// the TCP protocol.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn download_persistent_cache_piece(
         &self,
         addr: &str,

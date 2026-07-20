@@ -173,7 +173,7 @@ impl Operations for RocksdbStorageEngine {
     fn delete<O: DatabaseObject>(&self, key: &[u8]) -> Result<()> {
         let cf = cf_handle::<O>(self)?;
         let mut options = WriteOptions::default();
-        options.set_sync(true);
+        options.set_sync(false);
 
         self.delete_cf_opt(cf, key, &options)
             .or_err(ErrorType::StorageError)?;
@@ -237,7 +237,7 @@ impl Operations for RocksdbStorageEngine {
         }
 
         let mut options = WriteOptions::default();
-        options.set_sync(true);
+        options.set_sync(false);
         Ok(self
             .write_opt(batch, &options)
             .or_err(ErrorType::StorageError)?)

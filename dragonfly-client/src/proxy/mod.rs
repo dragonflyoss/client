@@ -56,12 +56,11 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Barrier};
 use tokio_rustls::TlsAcceptor;
-use tokio_util::io::ReaderStream;
+use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, error, info, instrument, Instrument, Span};
 
 pub mod header;
@@ -251,7 +250,7 @@ impl Proxy {
 
 /// handler handles the request from the client.
 #[allow(clippy::too_many_arguments)]
-#[instrument(skip_all, fields(url, method, remote_ip))]
+#[instrument(level = "debug", skip_all, fields(url, method, remote_ip))]
 pub async fn handler(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -329,7 +328,7 @@ pub async fn handler(
 }
 
 /// Handles the http request for the registry mirror by client.
-#[instrument(skip_all)]
+#[instrument(level = "debug", skip_all)]
 pub async fn registry_mirror_http_handler(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -344,7 +343,7 @@ pub async fn registry_mirror_http_handler(
 
 /// Handles the https request for the registry mirror by client.
 #[allow(clippy::too_many_arguments)]
-#[instrument(skip_all)]
+#[instrument(level = "debug", skip_all)]
 pub async fn registry_mirror_https_handler(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -370,7 +369,7 @@ pub async fn registry_mirror_https_handler(
 }
 
 /// Handles the http request by client.
-#[instrument(skip_all)]
+#[instrument(level = "debug", skip_all)]
 pub async fn http_handler(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -525,7 +524,7 @@ pub async fn https_handler(
 /// self-signed certificate. Otherwise, use the CA certificate to sign the
 /// self-signed certificate.
 #[allow(clippy::too_many_arguments)]
-#[instrument(skip_all)]
+#[instrument(level = "debug", skip_all)]
 async fn upgraded_tunnel(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -600,7 +599,7 @@ async fn upgraded_tunnel(
 
 /// Handles the upgraded https request from the client.
 #[allow(clippy::too_many_arguments)]
-#[instrument(skip_all, fields(url, method))]
+#[instrument(level = "debug", skip_all, fields(url, method))]
 pub async fn upgraded_handler(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -736,7 +735,7 @@ pub async fn upgraded_handler(
 }
 
 /// Proxies the request via the dfdaemon.
-#[instrument(skip_all, fields(host_id, task_id, peer_id))]
+#[instrument(level = "debug", skip_all, fields(host_id, task_id, peer_id))]
 async fn proxy_via_dfdaemon(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -879,16 +878,11 @@ async fn proxy_via_dfdaemon(
     // Write the status code to the writer.
     let (sender, mut receiver) = mpsc::channel(4);
 
-    // Get the read buffer size from the config.
-    let read_buffer_size = config.proxy.read_buffer_size;
-
-    // Write the task data to the reader. The duplex pipe buffers the data
-    // itself, so no extra BufWriter is needed.
-    let (reader, mut writer) = tokio::io::duplex(read_buffer_size);
-    let reader_stream = ReaderStream::with_capacity(reader, read_buffer_size);
+    // Initialize the channel for sending the response body to the client.
+    let (body_tx, body_rx) = mpsc::channel::<ClientResult<Bytes>>(4);
 
     // Construct the response body.
-    let stream_body = StreamBody::new(reader_stream.map_ok(Frame::data).map_err(ClientError::from));
+    let stream_body = StreamBody::new(ReceiverStream::new(body_rx).map_ok(Frame::data));
     let boxed_body = stream_body.boxed();
 
     // Construct the response.
@@ -910,12 +904,12 @@ async fn proxy_via_dfdaemon(
     // Return the response if the client return the first piece.
     let mut initialized = false;
 
-    // Write task data to pipe. If grpc received error message,
-    // shutdown the writer.
+    // Send the task data to the response body. If the stream received an error
+    // message, stop the body stream to close the connection.
     tokio::spawn(
         async move {
             // Initialize the hashmap of the finished piece lengths, keyed by
-            // piece number. Readers are opened lazily when a piece is written
+            // piece number. Readers are opened lazily when a piece is sent
             // in order, so out-of-order pieces do not hold buffers or file
             // descriptors while waiting.
             let mut finished_pieces = HashMap::new();
@@ -923,9 +917,6 @@ async fn proxy_via_dfdaemon(
             // Get the first piece number from the started response.
             let Some(first_piece) = download_task_started_response.pieces.first() else {
                 error!("response pieces is empty");
-                if let Err(err) = writer.shutdown().await {
-                    error!("writer shutdown error: {}", err);
-                }
 
                 // Send the none response to the client in case if it is empty file.
                 sender
@@ -937,9 +928,9 @@ async fn proxy_via_dfdaemon(
             };
             let mut need_piece_number = first_piece.number;
 
-            // Read piece data from stream and write to pipe. If the piece data is
-            // not in order, store it in the hashmap, and write it to the pipe
-            // when the previous piece data is written.
+            // Send the piece contents to the response body in order. If the
+            // piece contents are not in order, store them in the hashmap, and
+            // send them when the previous piece contents are sent.
             loop {
                 match out_stream.recv().await {
                     Some(Ok(message)) => {
@@ -961,21 +952,17 @@ async fn proxy_via_dfdaemon(
 
                             let Some(piece) = download_task_response.piece else {
                                 error!("response piece is empty");
-                                writer.shutdown().await.unwrap_or_else(|err| {
-                                    error!("writer shutdown error: {}", err);
-                                });
-
                                 return;
                             };
 
-                            // Write the piece data to the pipe in order.
+                            // Send the piece data to the response body in order.
                             finished_pieces.insert(piece.number, piece.length);
                             while let Some(piece_length) =
                                 finished_pieces.remove(&need_piece_number)
                             {
                                 let mut piece_range_reader = match task
                                     .piece
-                                    .download_from_local_into_async_read(
+                                    .download_from_local_into_range_reader(
                                         task.piece
                                             .id(message.task_id.as_str(), need_piece_number)
                                             .as_str(),
@@ -988,55 +975,41 @@ async fn proxy_via_dfdaemon(
                                     Ok(piece_range_reader) => piece_range_reader,
                                     Err(err) => {
                                         error!("download piece reader error: {}", err);
-                                        if let Err(err) = writer.shutdown().await {
-                                            error!("writer shutdown error: {}", err);
-                                        }
-
                                         return;
                                     }
                                 };
 
-                                debug!("copy piece {} to stream", need_piece_number);
-                                // copy_buf writes the piece reader's internal buffer to the
-                                // pipe directly, skipping tokio::io::copy's intermediate 8KiB
-                                // copy buffer.
-                                if let Err(err) =
-                                    tokio::io::copy_buf(&mut piece_range_reader, &mut writer).await
-                                {
-                                    error!("download piece reader error: {}", err);
-                                    if let Err(err) = writer.shutdown().await {
-                                        error!("writer shutdown error: {}", err);
+                                debug!("send piece {} to stream", need_piece_number);
+                                loop {
+                                    match piece_range_reader.read_chunk().await {
+                                        Ok(bytes) if bytes.is_empty() => break,
+                                        Ok(bytes) => {
+                                            if body_tx.send(Ok(bytes)).await.is_err() {
+                                                debug!("body stream is closed");
+                                                return;
+                                            }
+                                        }
+                                        Err(err) => {
+                                            error!("download piece reader error: {}", err);
+                                            return;
+                                        }
                                     }
-
-                                    return;
                                 }
 
                                 need_piece_number += 1;
                             }
                         } else {
                             error!("response unknown message");
-                            writer.shutdown().await.unwrap_or_else(|err| {
-                                error!("writer shutdown error: {}", err);
-                            });
-
                             return;
                         }
                     }
                     None => {
                         debug!("message is none");
-                        if let Err(err) = writer.flush().await {
-                            error!("writer flush error: {}", err);
-                        }
-
                         return;
                     }
                     Some(Err(err)) => {
                         if initialized {
                             error!("stream error: {}", err);
-                            if let Err(err) = writer.flush().await {
-                                error!("writer flush error: {}", err);
-                            }
-
                             return;
                         }
 
@@ -1097,7 +1070,7 @@ async fn proxy_via_dfdaemon(
 }
 
 /// Proxies the HTTP request directly to the remote server.
-#[instrument(skip_all)]
+#[instrument(level = "debug", skip_all)]
 async fn proxy_via_http(mut request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
     let Some(host) = request.uri().host() else {
         error!("CONNECT host is not socket addr: {:?}", request.uri());
@@ -1144,7 +1117,7 @@ async fn proxy_via_http(mut request: Request<hyper::body::Incoming>) -> ClientRe
 }
 
 /// Proxies the HTTPS request directly to the remote server.
-#[instrument(skip_all)]
+#[instrument(level = "debug", skip_all)]
 async fn proxy_via_https(
     mut request: Request<hyper::body::Incoming>,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,

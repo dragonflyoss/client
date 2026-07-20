@@ -121,7 +121,7 @@ impl PieceCollector {
     }
 
     /// Runs the piece collector.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn run(&self) -> Receiver<CollectedPiece> {
         let config = self.config.clone();
         let host_id = self.host_id.clone();
@@ -177,7 +177,7 @@ impl PieceCollector {
     /// `collected_piece_tx`, it carries a complete list of available parents, enabling
     /// load-balanced concurrent downloads across different peers.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn collect_from_parents(
         config: Arc<Config>,
         host_id: &str,
@@ -415,7 +415,7 @@ impl PersistentPieceCollector {
     }
 
     /// Runs the piece collector.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn run(&self) -> Receiver<CollectedPiece> {
         let config = self.config.clone();
         let host_id = self.host_id.clone();
@@ -471,7 +471,7 @@ impl PersistentPieceCollector {
     /// `collected_piece_tx`, it carries a complete list of available parents, enabling
     /// load-balanced concurrent downloads across different peers.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn collect_from_parents(
         config: Arc<Config>,
         host_id: &str,
@@ -717,7 +717,7 @@ impl PersistentCachePieceCollector {
     }
 
     /// Runs the piece collector.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn run(&self) -> Receiver<CollectedPiece> {
         let config = self.config.clone();
         let host_id = self.host_id.clone();
@@ -773,7 +773,7 @@ impl PersistentCachePieceCollector {
     /// `collected_piece_tx`, it carries a complete list of available parents, enabling
     /// load-balanced concurrent downloads across different peers.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn collect_from_parents(
         config: Arc<Config>,
         host_id: &str,
