@@ -1328,7 +1328,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                         );
 
                         // Download persistent task succeeded.
-                        info!("download persistent task succeeded");
+                        debug!("download persistent task succeeded");
                         if let Err(err) =
                             task_manager_clone.download_finished(task_clone.id.as_str())
                         {
@@ -1888,7 +1888,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                         );
 
                         // Download persistent cache task succeeded.
-                        info!("download persistent cache task succeeded");
+                        debug!("download persistent cache task succeeded");
                         if let Err(err) =
                             task_manager_clone.download_finished(task_clone.id.as_str())
                         {
