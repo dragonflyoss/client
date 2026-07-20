@@ -500,7 +500,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         );
 
                         // Download task succeeded.
-                        info!("download task succeeded");
+                        debug!("download task succeeded");
                         if let Err(err) =
                             task_manager_clone.download_finished(task_clone.id.as_str())
                         {
@@ -945,7 +945,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("host_id", host_id.clone());
         Span::current().record("remote_host_id", remote_host_id.as_str());
         Span::current().record("task_id", task_id.clone());
-        info!("sync pieces in upload server");
+        debug!("sync pieces in upload server");
 
         // Get the interested piece numbers from the request.
         let mut interested_piece_numbers = request.interested_piece_numbers.clone();
@@ -1684,7 +1684,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("host_id", host_id.clone());
         Span::current().record("remote_host_id", remote_host_id.as_str());
         Span::current().record("task_id", task_id.clone());
-        info!("sync persistent pieces in upload server");
+        debug!("sync persistent pieces in upload server");
 
         // Get the interested piece numbers from the request.
         let mut interested_piece_numbers = request.interested_piece_numbers.clone();
@@ -2266,7 +2266,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         Span::current().record("host_id", host_id.clone());
         Span::current().record("remote_host_id", remote_host_id.as_str());
         Span::current().record("task_id", task_id.clone());
-        info!("sync persistent cache pieces in upload server");
+        debug!("sync persistent cache pieces in upload server");
 
         // Get the interested piece numbers from the request.
         let mut interested_piece_numbers = request.interested_piece_numbers.clone();

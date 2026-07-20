@@ -735,7 +735,7 @@ pub async fn upgraded_handler(
 }
 
 /// Proxies the request via the dfdaemon.
-#[instrument(skip_all, fields(host_id, task_id, peer_id))]
+#[instrument(level = "debug", skip_all, fields(host_id, task_id, peer_id))]
 async fn proxy_via_dfdaemon(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -1070,7 +1070,7 @@ async fn proxy_via_dfdaemon(
 }
 
 /// Proxies the HTTP request directly to the remote server.
-#[instrument(skip_all)]
+#[instrument(level = "debug", skip_all)]
 async fn proxy_via_http(mut request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
     let Some(host) = request.uri().host() else {
         error!("CONNECT host is not socket addr: {:?}", request.uri());
@@ -1117,7 +1117,7 @@ async fn proxy_via_http(mut request: Request<hyper::body::Incoming>) -> ClientRe
 }
 
 /// Proxies the HTTPS request directly to the remote server.
-#[instrument(skip_all)]
+#[instrument(level = "debug", skip_all)]
 async fn proxy_via_https(
     mut request: Request<hyper::body::Incoming>,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
