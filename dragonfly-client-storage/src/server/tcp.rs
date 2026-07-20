@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::content::RangeReader;
 use crate::Storage;
 use bytes::{Bytes, BytesMut};
 use dragonfly_api::common::v2::TrafficType;
@@ -28,7 +29,7 @@ use leaky_bucket::RateLimiter;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{copy_buf, AsyncBufRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{
     tcp::{OwnedReadHalf, OwnedWriteHalf},
     TcpListener, TcpStream,
@@ -48,6 +49,9 @@ use vortex_protocol::{
     },
     Header, Vortex, HEADER_SIZE,
 };
+
+#[cfg(not(target_os = "linux"))]
+use tokio::io::copy_buf;
 
 /// A TCP-based server for dfdaemon upload service.
 pub struct TCPServer {
@@ -220,7 +224,7 @@ impl TCPServerHandler {
                 info!("start upload piece content");
 
                 match self.handle_piece(piece_id.as_str(), task_id).await {
-                    Ok((piece_content, mut content_reader)) => {
+                    Ok((piece_content, content_reader)) => {
                         let piece_length = piece_content.metadata().length;
                         let piece_content_bytes: Bytes = piece_content.into();
 
@@ -241,7 +245,7 @@ impl TCPServerHandler {
                                 collect_upload_piece_failure_metrics();
                             })?;
 
-                        self.write_stream(&mut content_reader, &mut writer)
+                        self.write_stream(content_reader, &mut writer)
                             .await
                             .inspect_err(|err| {
                                 error!("failed to send piece content stream: {}", err);
@@ -298,7 +302,7 @@ impl TCPServerHandler {
                     .handle_persistent_piece(piece_id.as_str(), task_id)
                     .await
                 {
-                    Ok((persistent_piece_content, mut content_reader)) => {
+                    Ok((persistent_piece_content, content_reader)) => {
                         let persistent_piece_length = persistent_piece_content.metadata().length;
                         let persistent_piece_content_bytes: Bytes = persistent_piece_content.into();
 
@@ -322,7 +326,7 @@ impl TCPServerHandler {
                                 collect_upload_piece_failure_metrics();
                             })?;
 
-                        self.write_stream(&mut content_reader, &mut writer)
+                        self.write_stream(content_reader, &mut writer)
                             .await
                             .inspect_err(|err| {
                                 error!("failed to send persistent piece content stream: {}", err);
@@ -379,7 +383,7 @@ impl TCPServerHandler {
                     .handle_persistent_cache_piece(piece_id.as_str(), task_id)
                     .await
                 {
-                    Ok((persistent_cache_piece_content, mut content_reader)) => {
+                    Ok((persistent_cache_piece_content, content_reader)) => {
                         let persistent_cache_piece_length =
                             persistent_cache_piece_content.metadata().length;
                         let persistent_cache_piece_content_bytes: Bytes =
@@ -408,7 +412,7 @@ impl TCPServerHandler {
                                 collect_upload_piece_failure_metrics();
                             })?;
 
-                        self.write_stream(&mut content_reader, &mut writer)
+                        self.write_stream(content_reader, &mut writer)
                             .await
                             .inspect_err(|err| {
                                 error!(
@@ -456,7 +460,7 @@ impl TCPServerHandler {
         &self,
         piece_id: &str,
         task_id: &str,
-    ) -> Result<(PieceContent, impl AsyncBufRead), Error> {
+    ) -> Result<(PieceContent, RangeReader), Error> {
         // Get the piece metadata from the local storage.
         let piece = match self.storage.get_piece(piece_id) {
             Ok(Some(piece)) => piece,
@@ -520,7 +524,7 @@ impl TCPServerHandler {
         &self,
         piece_id: &str,
         task_id: &str,
-    ) -> Result<(PersistentPieceContent, impl AsyncBufRead), Error> {
+    ) -> Result<(PersistentPieceContent, RangeReader), Error> {
         // Get the piece metadata from the local storage.
         let piece = match self.storage.get_persistent_piece(piece_id) {
             Ok(Some(piece)) => piece,
@@ -584,7 +588,7 @@ impl TCPServerHandler {
         &self,
         piece_id: &str,
         task_id: &str,
-    ) -> Result<(PersistentCachePieceContent, impl AsyncBufRead), Error> {
+    ) -> Result<(PersistentCachePieceContent, RangeReader), Error> {
         // Get the piece metadata from the local storage.
         let piece = match self.storage.get_persistent_cache_piece(piece_id) {
             Ok(Some(piece)) => piece,
@@ -703,6 +707,32 @@ impl TCPServerHandler {
         Ok(())
     }
 
+    /// Streams the remaining range of the piece file directly to the TCP
+    /// socket with sendfile, so the piece bytes move from the page cache to
+    /// the socket inside the kernel without passing through user space.
+    #[cfg(target_os = "linux")]
+    #[instrument(level = "debug", skip_all)]
+    async fn write_stream(
+        &self,
+        reader: RangeReader,
+        writer: &mut OwnedWriteHalf,
+    ) -> ClientResult<()> {
+        debug!("start to write stream to tcp writer");
+        let (fd, offset, remaining) = reader.into_parts();
+        sendfile_range(writer.as_ref(), &fd, offset, remaining)
+            .await
+            .inspect_err(|err| {
+                error!("sendfile failed: {}", err);
+            })?;
+
+        writer.flush().await.inspect_err(|err| {
+            error!("flush failed: {}", err);
+        })?;
+        debug!("finished writing stream to tcp writer");
+
+        Ok(())
+    }
+
     /// Streams data from a reader directly to the TCP writer.
     ///
     /// This function efficiently copies all data from the provided stream
@@ -710,14 +740,15 @@ impl TCPServerHandler {
     /// reader's internal buffer directly without an intermediate copy buffer.
     /// It's designed for streaming large piece content without loading
     /// everything into memory. The operation is flushed to ensure data delivery.
+    #[cfg(not(target_os = "linux"))]
     #[instrument(level = "debug", skip_all)]
-    async fn write_stream<R: AsyncBufRead + Unpin + ?Sized>(
+    async fn write_stream(
         &self,
-        stream: &mut R,
+        mut reader: RangeReader,
         writer: &mut OwnedWriteHalf,
     ) -> ClientResult<()> {
         debug!("start to write stream to tcp writer");
-        copy_buf(stream, writer).await.inspect_err(|err| {
+        copy_buf(&mut reader, writer).await.inspect_err(|err| {
             error!("copy failed: {}", err);
         })?;
 
@@ -727,5 +758,153 @@ impl TCPServerHandler {
         debug!("finished writing stream to tcp writer");
 
         Ok(())
+    }
+}
+
+/// Sends `remaining` bytes of the file starting at `offset` to the TCP stream
+/// with sendfile. The socket is nonblocking, so each sendfile call is driven
+/// by the write readiness of the stream and retried when the socket buffer is
+/// full. The file offset is passed explicitly to every call, so the file
+/// cursor of the shared descriptor never moves. Stops at the end of the file
+/// even if the range is longer, matching the RangeReader semantics.
+#[cfg(target_os = "linux")]
+async fn sendfile_range(
+    stream: &TcpStream,
+    fd: &std::fs::File,
+    mut offset: u64,
+    mut remaining: u64,
+) -> std::io::Result<()> {
+    use std::os::unix::io::AsRawFd;
+
+    // The maximum number of bytes of a single sendfile call, limited by the
+    // kernel to 0x7ffff000 on Linux.
+    const MAX_SENDFILE_COUNT: u64 = 0x7fff_f000;
+
+    while remaining > 0 {
+        stream.writable().await?;
+        match stream.try_io(tokio::io::Interest::WRITABLE, || {
+            let mut off = offset as libc::off_t;
+            let count = remaining.min(MAX_SENDFILE_COUNT) as usize;
+            let n = unsafe { libc::sendfile(stream.as_raw_fd(), fd.as_raw_fd(), &mut off, count) };
+            if n < 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(n as u64)
+            }
+        }) {
+            Ok(0) => break,
+            Ok(n) => {
+                offset += n;
+                remaining -= n;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => continue,
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err),
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    fn pattern(length: usize) -> Vec<u8> {
+        (0..length).map(|i| (i % 251) as u8).collect()
+    }
+
+    async fn tcp_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let sender = TcpStream::connect(addr).await.unwrap();
+        let (receiver, _) = listener.accept().await.unwrap();
+        (sender, receiver)
+    }
+
+    #[tokio::test]
+    async fn test_sendfile_range() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        let data = pattern(8 * 1024 * 1024);
+        tokio::fs::write(&path, &data).await.unwrap();
+        let fd = std::fs::File::open(&path).unwrap();
+
+        let (sender, mut receiver) = tcp_pair().await;
+        socket2::SockRef::from(&sender)
+            .set_send_buffer_size(16 * 1024)
+            .unwrap();
+
+        let length = data.len() as u64;
+        let sender_handle = tokio::spawn(async move {
+            sendfile_range(&sender, &fd, 0, length).await.unwrap();
+            fd
+        });
+
+        let mut received = Vec::new();
+        receiver.read_to_end(&mut received).await.unwrap();
+        assert_eq!(received, data);
+
+        use std::io::Seek as _;
+        let fd = sender_handle.await.unwrap();
+        assert_eq!((&fd).stream_position().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_sendfile_range_sub_range() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        let data = pattern(64 * 1024);
+        tokio::fs::write(&path, &data).await.unwrap();
+        let fd = std::fs::File::open(&path).unwrap();
+
+        let (sender, mut receiver) = tcp_pair().await;
+        tokio::spawn(async move {
+            sendfile_range(&sender, &fd, 1_000, 50_000).await.unwrap();
+        });
+
+        let mut received = Vec::new();
+        receiver.read_to_end(&mut received).await.unwrap();
+        assert_eq!(received, &data[1_000..51_000]);
+    }
+
+    #[tokio::test]
+    async fn test_sendfile_range_stops_at_eof() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        let data = pattern(64 * 1024);
+        tokio::fs::write(&path, &data).await.unwrap();
+        let fd = std::fs::File::open(&path).unwrap();
+
+        let (sender, mut receiver) = tcp_pair().await;
+        let length = data.len() as u64;
+        tokio::spawn(async move {
+            sendfile_range(&sender, &fd, 0, length + 4096)
+                .await
+                .unwrap();
+        });
+
+        let mut received = Vec::new();
+        receiver.read_to_end(&mut received).await.unwrap();
+        assert_eq!(received, data);
+    }
+
+    #[tokio::test]
+    async fn test_sendfile_range_peer_closed() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        let data = pattern(8 * 1024 * 1024);
+        tokio::fs::write(&path, &data).await.unwrap();
+        let fd = std::fs::File::open(&path).unwrap();
+
+        let (sender, receiver) = tcp_pair().await;
+        socket2::SockRef::from(&sender)
+            .set_send_buffer_size(16 * 1024)
+            .unwrap();
+        drop(receiver);
+
+        assert!(sendfile_range(&sender, &fd, 0, data.len() as u64)
+            .await
+            .is_err());
     }
 }

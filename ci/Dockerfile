@@ -73,9 +73,9 @@ RUN go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
 
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends iperf3 iperf linux-libc-dev libc6-dev iotop sysstat \
-    bash-completion procps apache2-utils ca-certificates binutils fio curl nvme-cli smartmontools dnsutils \
-    iputils-ping llvm graphviz lsof strace dstat net-tools bpftrace libbpf-tools \
+RUN apt-get update && apt-get install -y --no-install-recommends iperf iotop sysstat \
+    bash-completion procps apache2-utils ca-certificates fio curl nvme-cli smartmontools dnsutils \
+    iputils-ping lsof strace dstat net-tools libbpf-tools \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/client/target/release/dfget /usr/local/bin/dfget
@@ -89,4 +89,3 @@ COPY --from=pprof /go/bin/grpcurl /bin/grpcurl
 COPY --from=health /bin/grpc_health_probe /bin/grpc_health_probe
 
 ENTRYPOINT ["/usr/local/bin/dfdaemon"]
-

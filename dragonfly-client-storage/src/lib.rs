@@ -107,13 +107,13 @@ impl Storage {
     }
 
     /// Hard links the task content to the destination.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn hard_link_task(&self, task_id: &str, to: &Path) -> Result<()> {
         self.content.hard_link_task(task_id, to).await
     }
 
     /// Copies the task content to the destination.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn copy_task(&self, id: &str, to: &Path) -> Result<()> {
         self.content.copy_task(id, to).await
     }
@@ -132,7 +132,7 @@ impl Storage {
 
     /// Updates the metadata of the task and create task content
     /// when the task downloads started.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_task_started(
         &self,
         id: &str,
@@ -147,55 +147,49 @@ impl Storage {
     }
 
     /// Updates the metadata of the task when the task downloads finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_task_finished(&self, id: &str) -> Result<metadata::Task> {
         self.metadata.download_task_finished(id)
     }
 
     /// Updates the metadata of the task when the task downloads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_task_failed(&self, id: &str) -> Result<metadata::Task> {
         self.metadata.download_task_failed(id)
     }
 
     /// Updates the metadata of the task when the task prefetches started.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn prefetch_task_started(&self, id: &str) -> Result<metadata::Task> {
         self.metadata.prefetch_task_started(id)
     }
 
     /// Updates the metadata of the task when the task prefetches failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn prefetch_task_failed(&self, id: &str) -> Result<metadata::Task> {
         self.metadata.prefetch_task_failed(id)
     }
 
-    /// Updates the metadata of the task when task uploads finished.
-    #[instrument(skip_all)]
-    pub fn upload_task_finished(&self, id: &str) -> Result<metadata::Task> {
-        self.metadata.upload_task_finished(id)
-    }
-
     /// Returns the task metadata.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_task(&self, id: &str) -> Result<Option<metadata::Task>> {
         self.metadata.get_task(id)
     }
 
     /// Returns whether the task exists.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn is_task_exists(&self, id: &str) -> Result<bool> {
         self.metadata.is_task_exists(id)
     }
 
     /// Returns the task metadatas.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_tasks(&self) -> Result<Vec<metadata::Task>> {
         self.metadata.get_tasks()
     }
 
     /// Deletes the task metadatas, task content and piece metadatas.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn delete_task(&self, id: &str) {
         self.metadata
             .delete_task(id)
@@ -216,13 +210,13 @@ impl Storage {
     }
 
     /// Hard links the persistent task content to the destination.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn hard_link_persistent_task(&self, task_id: &str, to: &Path) -> Result<()> {
         self.content.hard_link_persistent_task(task_id, to).await
     }
 
     /// Hard links the source file to the persistent task content.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn hard_link_to_persistent_task(&self, from: &Path, task_id: &str) -> Result<()> {
         self.content
             .hard_link_to_persistent_task(from, task_id)
@@ -230,7 +224,7 @@ impl Storage {
     }
 
     /// Copies the persistent task content to the destination.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn copy_persistent_task(&self, id: &str, to: &Path) -> Result<()> {
         self.content.copy_persistent_task(id, to).await
     }
@@ -245,7 +239,7 @@ impl Storage {
 
     /// Prepares the metadata of the persistent task
     /// and create directory for the persistent task.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn create_persistent_task_started(
         &self,
         id: &str,
@@ -262,7 +256,7 @@ impl Storage {
     }
 
     /// Creates and fallocates the persistent task content.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn create_persistent_task(&self, id: &str, content_length: u64) -> Result<()> {
         self.content
             .create_persistent_task(id, content_length)
@@ -272,7 +266,7 @@ impl Storage {
 
     /// Updates the metadata of the persistent task
     /// when the persistent task creates finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn create_persistent_task_finished(
         &self,
         id: &str,
@@ -282,14 +276,14 @@ impl Storage {
 
     /// Deletes the persistent task when
     /// the persistent task creates failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn create_persistent_task_failed(&self, id: &str) {
         self.delete_persistent_task(id).await;
     }
 
     /// Updates the metadata of the persistent task
     /// and creates the persistent task content when the persistent task downloads started.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_persistent_task_started(
         &self,
         id: &str,
@@ -315,13 +309,13 @@ impl Storage {
     }
 
     /// Updates the metadata of the persistent task when the persistent task downloads finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_persistent_task_finished(&self, id: &str) -> Result<metadata::PersistentTask> {
         self.metadata.download_persistent_task_finished(id)
     }
 
     /// Updates the metadata of the persistent task when the persistent task downloads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_persistent_task_failed(
         &self,
         id: &str,
@@ -329,38 +323,32 @@ impl Storage {
         self.metadata.download_persistent_task_failed(id)
     }
 
-    /// Updates the metadata of the cahce task when persistent task uploads finished.
-    #[instrument(skip_all)]
-    pub fn upload_persistent_task_finished(&self, id: &str) -> Result<metadata::PersistentTask> {
-        self.metadata.upload_persistent_task_finished(id)
-    }
-
     /// Returns the persistent task metadata.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_persistent_task(&self, id: &str) -> Result<Option<metadata::PersistentTask>> {
         self.metadata.get_persistent_task(id)
     }
 
     /// Persists the persistent task metadata.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn persist_persistent_task(&self, id: &str) -> Result<metadata::PersistentTask> {
         self.metadata.persist_persistent_task(id)
     }
 
     /// Returns whether the persistent task exists.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn is_persistent_task_exists(&self, id: &str) -> Result<bool> {
         self.metadata.is_persistent_task_exists(id)
     }
 
     /// Returns the task metadatas.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_persistent_tasks(&self) -> Result<Vec<metadata::PersistentTask>> {
         self.metadata.get_persistent_tasks()
     }
 
     /// Deletes the persistent task metadatas, persistent task content and piece metadatas.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn delete_persistent_task(&self, id: &str) {
         self.metadata
             .delete_persistent_task(id)
@@ -381,7 +369,7 @@ impl Storage {
     }
 
     /// Hard links the persistent cache task content to the destination.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn hard_link_persistent_cache_task(&self, task_id: &str, to: &Path) -> Result<()> {
         self.content
             .hard_link_persistent_cache_task(task_id, to)
@@ -389,7 +377,7 @@ impl Storage {
     }
 
     /// Hard links the source file to the persistent cache task content.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn hard_link_to_persistent_cache_task(
         &self,
         from: &Path,
@@ -401,7 +389,7 @@ impl Storage {
     }
 
     /// Copies the persistent cache task content to the destination.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn copy_persistent_cache_task(&self, id: &str, to: &Path) -> Result<()> {
         self.content.copy_persistent_cache_task(id, to).await
     }
@@ -420,7 +408,7 @@ impl Storage {
 
     /// Prepares the metadata of the persistent cache task
     /// and create directory for the persistent cache task.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn create_persistent_cache_task_started(
         &self,
         id: &str,
@@ -440,7 +428,7 @@ impl Storage {
     }
 
     /// Creates and fallocates the persistent cache task content.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn create_persistent_cache_task(&self, id: &str, content_length: u64) -> Result<()> {
         self.content
             .create_persistent_cache_task(id, content_length)
@@ -450,7 +438,7 @@ impl Storage {
 
     /// Updates the metadata of the persistent cache task
     /// when the persistent cache task creates finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn create_persistent_cache_task_finished(
         &self,
         id: &str,
@@ -460,14 +448,14 @@ impl Storage {
 
     /// Deletes the persistent cache task when
     /// the persistent cache task creates failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn create_persistent_cache_task_failed(&self, id: &str) {
         self.delete_persistent_cache_task(id).await;
     }
 
     /// Updates the metadata of the persistent cache task
     /// and creates the persistent cache task content when the persistent cache task downloads started.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_persistent_cache_task_started(
         &self,
         id: &str,
@@ -493,7 +481,7 @@ impl Storage {
     }
 
     /// Updates the metadata of the persistent cache task when the persistent cache task downloads finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_persistent_cache_task_finished(
         &self,
         id: &str,
@@ -502,7 +490,7 @@ impl Storage {
     }
 
     /// Updates the metadata of the persistent cache task when the persistent cache task downloads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_persistent_cache_task_failed(
         &self,
         id: &str,
@@ -510,17 +498,8 @@ impl Storage {
         self.metadata.download_persistent_cache_task_failed(id)
     }
 
-    /// Updates the metadata of the cahce task when persistent cache task uploads finished.
-    #[instrument(skip_all)]
-    pub fn upload_persistent_cache_task_finished(
-        &self,
-        id: &str,
-    ) -> Result<metadata::PersistentCacheTask> {
-        self.metadata.upload_persistent_cache_task_finished(id)
-    }
-
     /// Returns the persistent cache task metadata.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_persistent_cache_task(
         &self,
         id: &str,
@@ -529,25 +508,25 @@ impl Storage {
     }
 
     /// Persists the persistent cache task metadata.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn persist_persistent_cache_task(&self, id: &str) -> Result<metadata::PersistentCacheTask> {
         self.metadata.persist_persistent_cache_task(id)
     }
 
     /// Returns whether the persistent cache task exists.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn is_persistent_cache_task_exists(&self, id: &str) -> Result<bool> {
         self.metadata.is_persistent_cache_task_exists(id)
     }
 
     /// Returns the task metadatas.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_persistent_cache_tasks(&self) -> Result<Vec<metadata::PersistentCacheTask>> {
         self.metadata.get_persistent_cache_tasks()
     }
 
     /// Deletes the persistent cache task metadatas, persistent cache task content and piece metadatas.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn delete_persistent_cache_task(&self, id: &str) {
         self.metadata
             .delete_persistent_cache_task(id)
@@ -569,7 +548,7 @@ impl Storage {
 
     /// Updates the metadata of the cache task and create cache task content
     /// when the cache task downloads started.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_cache_task_started(
         &self,
         id: &str,
@@ -585,43 +564,43 @@ impl Storage {
     }
 
     /// Updates the metadata of the cache task when the cache task downloads finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_cache_task_finished(&self, id: &str) -> Result<metadata::CacheTask> {
         self.metadata.download_cache_task_finished(id)
     }
 
     /// Updates the metadata of the cache task when the cache task downloads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_cache_task_failed(&self, id: &str) -> Result<metadata::CacheTask> {
         self.metadata.download_cache_task_failed(id)
     }
 
     /// Updates the metadata of the cache task when the cache task uploads finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn upload_cache_task_finished(&self, id: &str) -> Result<metadata::CacheTask> {
         self.metadata.upload_cache_task_finished(id)
     }
 
     /// Returns the cache task metadata.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_cache_task(&self, id: &str) -> Result<Option<metadata::CacheTask>> {
         self.metadata.get_cache_task(id)
     }
 
     /// Returns whether the cache task exists.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn is_cache_task_exists(&self, id: &str) -> Result<bool> {
         self.metadata.is_cache_task_exists(id)
     }
 
     /// Returns the cache task metadatas.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_cache_tasks(&self) -> Result<Vec<metadata::CacheTask>> {
         self.metadata.get_cache_tasks()
     }
 
     /// Deletes the cache task metadatas, cache task content and piece metadatas.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn delete_cache_task(&self, id: &str) {
         self.metadata
             .delete_cache_task(id)
@@ -770,7 +749,7 @@ impl Storage {
     }
 
     // handle_downloaded_from_source_finished handles the downloaded piece from source.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_downloaded_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -875,12 +854,12 @@ impl Storage {
         piece_id: &str,
         task_id: &str,
         range: Option<Range>,
-    ) -> Result<impl AsyncBufRead> {
+    ) -> Result<content::RangeReader> {
         // Wait for the piece to be finished and get the piece metadata.
         let piece = self.wait_for_piece_finished(piece_id).await?;
 
         // Start uploading the task.
-        self.metadata.upload_task_started(task_id)?;
+        self.metadata.upload_task_started(task_id);
 
         // Return the content of the piece.
         match self
@@ -890,12 +869,12 @@ impl Storage {
         {
             Ok(reader) => {
                 // Finish uploading the task.
-                self.metadata.upload_task_finished(task_id)?;
+                self.metadata.upload_task_finished(task_id);
                 Ok(reader)
             }
             Err(err) => {
                 // Failed uploading the task.
-                self.metadata.upload_task_failed(task_id)?;
+                self.metadata.upload_task_failed(task_id);
                 Err(err)
             }
         }
@@ -1006,7 +985,7 @@ impl Storage {
     }
 
     // handle_persistent_downloaded_from_source_finished handles the downloaded persistent piece from source.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn handle_persistent_downloaded_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -1044,12 +1023,12 @@ impl Storage {
         piece_id: &str,
         task_id: &str,
         range: Option<Range>,
-    ) -> Result<impl AsyncBufRead> {
+    ) -> Result<content::RangeReader> {
         // Wait for the persistent piece to be finished and get the piece metadata.
         let piece = self.wait_for_persistent_piece_finished(piece_id).await?;
 
         // Start uploading the persistent task.
-        self.metadata.upload_persistent_task_started(task_id)?;
+        self.metadata.upload_persistent_task_started(task_id);
 
         // Return the content of the persistent piece.
         match self
@@ -1059,12 +1038,12 @@ impl Storage {
         {
             Ok(reader) => {
                 // Finish uploading the persistent task.
-                self.metadata.upload_persistent_task_finished(task_id)?;
+                self.metadata.upload_persistent_task_finished(task_id);
                 Ok(reader)
             }
             Err(err) => {
                 // Failed uploading the persistent task.
-                self.metadata.upload_persistent_task_failed(task_id)?;
+                self.metadata.upload_persistent_task_failed(task_id);
                 Err(err)
             }
         }
@@ -1171,15 +1150,14 @@ impl Storage {
         piece_id: &str,
         task_id: &str,
         range: Option<Range>,
-    ) -> Result<impl AsyncBufRead> {
+    ) -> Result<content::RangeReader> {
         // Wait for the persistent cache piece to be finished and get the piece.
         let piece = self
             .wait_for_persistent_cache_piece_finished(piece_id)
             .await?;
 
         // Start uploading the persistent cache task.
-        self.metadata
-            .upload_persistent_cache_task_started(task_id)?;
+        self.metadata.upload_persistent_cache_task_started(task_id);
 
         // Return the content of the persistent cache piece.
         match self
@@ -1189,13 +1167,12 @@ impl Storage {
         {
             Ok(reader) => {
                 // Finish uploading the persistent cache task.
-                self.metadata
-                    .upload_persistent_cache_task_finished(task_id)?;
+                self.metadata.upload_persistent_cache_task_finished(task_id);
                 Ok(reader)
             }
             Err(err) => {
                 // Failed uploading the persistent cache task.
-                self.metadata.upload_persistent_cache_task_failed(task_id)?;
+                self.metadata.upload_persistent_cache_task_failed(task_id);
                 Err(err)
             }
         }

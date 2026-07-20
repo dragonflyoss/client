@@ -126,13 +126,13 @@ impl PersistentCacheTask {
     }
 
     /// Gets a persistent cache task from local.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get(&self, task_id: &str) -> ClientResult<Option<metadata::PersistentCacheTask>> {
         self.storage.get_persistent_cache_task(task_id)
     }
 
     /// Creates a persistent cache task from local.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn upload(
         &self,
         task_id: &str,
@@ -528,7 +528,7 @@ impl PersistentCacheTask {
     }
 
     /// Updates the metadata of the persistent cache task when the persistent cache task downloads started.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_started(
         &self,
         task_id: &str,
@@ -616,13 +616,13 @@ impl PersistentCacheTask {
     }
 
     /// Updates the metadata of the persistent cache task when the task downloads finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_finished(&self, id: &str) -> ClientResult<metadata::PersistentCacheTask> {
         self.storage.download_persistent_cache_task_finished(id)
     }
 
     /// Updates the metadata of the persistent cache task when the task downloads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_failed(&self, id: &str) -> ClientResult<()> {
         let _ = self
             .storage
@@ -639,14 +639,14 @@ impl PersistentCacheTask {
     }
 
     //// copy_task copies the persistent cache task content to the destination.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn copy_task(&self, id: &str, to: &Path) -> ClientResult<()> {
         self.storage.copy_persistent_cache_task(id, to).await
     }
 
     /// Downloads a persistent cache task.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download(
         &self,
         task: &metadata::PersistentCacheTask,
@@ -805,7 +805,7 @@ impl PersistentCacheTask {
 
     /// Downloads a partial persistent cache task with scheduler.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn download_partial_with_scheduler(
         &self,
         task: &metadata::PersistentCacheTask,
@@ -1110,7 +1110,7 @@ impl PersistentCacheTask {
 
     /// Downloads a partial persistent cache task with scheduler from a parent.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn download_partial_with_scheduler_from_parent(
         &self,
         task: &metadata::PersistentCacheTask,
@@ -1455,7 +1455,7 @@ impl PersistentCacheTask {
 
     /// Downloads a partial persistent cache task from a local.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     async fn download_partial_from_local(
         &self,
         task: &metadata::PersistentCacheTask,
@@ -1605,7 +1605,7 @@ impl PersistentCacheTask {
     }
 
     /// Stats the persistent cache task from the scheduler.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn stat(
         &self,
         task_id: &str,
@@ -1620,7 +1620,7 @@ impl PersistentCacheTask {
     }
 
     /// Stats the local persistent cache task from the scheduler.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn stat_local(
         &self,
         task_id: &str,
@@ -1651,7 +1651,7 @@ impl PersistentCacheTask {
     }
 
     /// Returns the persistent cache tasks from local storage.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn list_local(&self) -> ClientResult<ListLocalPersistentCacheTasksResponse> {
         let tasks = self
             .storage
@@ -1689,7 +1689,7 @@ impl PersistentCacheTask {
     }
 
     /// Deletes a persistent cache task.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn delete(&self, task_id: &str) {
         self.storage.delete_persistent_cache_task(task_id).await
     }

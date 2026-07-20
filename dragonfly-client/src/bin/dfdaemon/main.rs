@@ -52,9 +52,15 @@ use tracing::{error, info, Level};
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+#[cfg(debug_assertions)]
 #[allow(non_upper_case_globals)]
 #[export_name = "malloc_conf"]
 pub static malloc_conf: &[u8] = b"prof:true,prof_active:true,lg_prof_sample:19\0";
+
+#[cfg(not(debug_assertions))]
+#[allow(non_upper_case_globals)]
+#[export_name = "malloc_conf"]
+pub static malloc_conf: &[u8] = b"prof:false\0";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -104,9 +110,9 @@ struct Args {
 
     #[arg(
         long,
-        default_value_t = true,
+        default_value_t = false,
         env = "DFDAEMON_CONSOLE",
-        help = "Specify whether to print log"
+        help = "Specify whether to print logs to the console. If enabled, logs will not be written to the local log files"
     )]
     console: bool,
 

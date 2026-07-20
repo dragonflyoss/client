@@ -36,6 +36,7 @@ use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
 use hashring::HashRing;
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -47,6 +48,12 @@ use tracing::{debug, error, info, instrument, Instrument};
 use url::Url;
 
 use super::interceptor::InjectTracingInterceptor;
+
+/// The number of connections per scheduler address. Requests are balanced over
+/// a pool of connections to avoid the head-of-line blocking and congestion
+/// window limit of a single TCP connection, and the concurrent stream limit
+/// that a server or an intermediate proxy may advertise.
+const CONNECTION_POOL_SIZE: usize = 10;
 
 /// Virtual node of the hashring.
 #[derive(Debug, Copy, Clone, Hash, PartialEq)]
@@ -80,6 +87,9 @@ pub struct SchedulerClient {
 
     /// Hashring of the scheduler.
     hashring: Arc<RwLock<HashRing<VNode>>>,
+
+    /// Channels of the available schedulers, keyed by the scheduler address.
+    channels: Arc<RwLock<HashMap<SocketAddr, Channel>>>,
 }
 
 /// Implements the grpc client of the scheduler.
@@ -92,6 +102,7 @@ impl SchedulerClient {
             available_schedulers: Arc::new(RwLock::new(Vec::new())),
             available_scheduler_addrs: Arc::new(RwLock::new(Vec::new())),
             hashring: Arc::new(RwLock::new(HashRing::new())),
+            channels: Arc::new(RwLock::new(HashMap::new())),
         };
 
         client.refresh_available_scheduler_addrs().await?;
@@ -99,7 +110,7 @@ impl SchedulerClient {
     }
 
     /// Announces the peer to the scheduler.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn announce_peer(
         &self,
         task_id: &str,
@@ -115,7 +126,7 @@ impl SchedulerClient {
     }
 
     /// Gets the status of the peer.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn stat_peer(&self, request: StatPeerRequest) -> Result<Peer> {
         let task_id = request.task_id.clone();
         let request = Self::make_request(request);
@@ -128,7 +139,7 @@ impl SchedulerClient {
     }
 
     /// Tells the scheduler that the peer is deleting.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn delete_peer(&self, request: DeletePeerRequest) -> Result<()> {
         let task_id = request.task_id.clone();
         let request = Self::make_request(request);
@@ -140,7 +151,7 @@ impl SchedulerClient {
     }
 
     /// Gets the status of the task.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn stat_task(&self, request: StatTaskRequest) -> Result<Task> {
         let task_id = request.task_id.clone();
         let request = Self::make_request(request);
@@ -153,7 +164,7 @@ impl SchedulerClient {
     }
 
     /// Tells the scheduler that the task is deleting.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn delete_task(&self, request: DeleteTaskRequest) -> Result<()> {
         let task_id = request.task_id.clone();
         let request = Self::make_request(request);
@@ -165,7 +176,7 @@ impl SchedulerClient {
     }
 
     /// Announces the host to the scheduler.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn announce_host(&self, request: AnnounceHostRequest) -> Result<()> {
         // Update scheduler addresses of the client.
         self.update_available_scheduler_addrs().await?;
@@ -179,24 +190,14 @@ impl SchedulerClient {
         for available_scheduler_addr in available_scheduler_addrs_clone.iter() {
             let request = Self::make_request(request.clone());
             async fn announce_host(
+                scheduler_client: SchedulerClient,
                 addr: SocketAddr,
                 request: tonic::Request<AnnounceHostRequest>,
             ) -> Result<()> {
                 debug!("announce host to {}", addr);
 
-                // Connect to the scheduler.
-                let channel = Channel::from_shared(format!("http://{addr}"))
-                    .map_err(|_| Error::InvalidURI(addr.to_string()))?
-                    .buffer_size(super::BUFFER_SIZE)
-                    .connect_timeout(super::CONNECT_TIMEOUT)
-                    .timeout(super::REQUEST_TIMEOUT)
-                    .connect()
-                    .await
-                    .inspect_err(|err| {
-                        error!("connect to {} failed: {}", addr.to_string(), err);
-                    })
-                    .or_err(ErrorType::ConnectError)?;
-
+                // Reuse the cached channel of the scheduler.
+                let channel = scheduler_client.channel(addr).await?;
                 let mut client =
                     SchedulerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
                         .max_decoding_message_size(usize::MAX)
@@ -205,7 +206,9 @@ impl SchedulerClient {
                 Ok(())
             }
 
-            join_set.spawn(announce_host(*available_scheduler_addr, request).in_current_span());
+            join_set.spawn(
+                announce_host(self.clone(), *available_scheduler_addr, request).in_current_span(),
+            );
         }
 
         while let Some(message) = join_set
@@ -223,7 +226,7 @@ impl SchedulerClient {
     }
 
     /// Announces the host to the scheduler.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn init_announce_host(&self, request: AnnounceHostRequest) -> Result<()> {
         let mut join_set = JoinSet::new();
         let available_scheduler_addrs = self.available_scheduler_addrs.read().await;
@@ -233,24 +236,14 @@ impl SchedulerClient {
         for available_scheduler_addr in available_scheduler_addrs_clone.iter() {
             let request = Self::make_request(request.clone());
             async fn announce_host(
+                scheduler_client: SchedulerClient,
                 addr: SocketAddr,
                 request: tonic::Request<AnnounceHostRequest>,
             ) -> Result<()> {
                 info!("announce host to {:?}", addr);
 
-                // Connect to the scheduler.
-                let channel = Channel::from_shared(format!("http://{addr}"))
-                    .map_err(|_| Error::InvalidURI(addr.to_string()))?
-                    .buffer_size(super::BUFFER_SIZE)
-                    .connect_timeout(super::CONNECT_TIMEOUT)
-                    .timeout(super::REQUEST_TIMEOUT)
-                    .connect()
-                    .await
-                    .inspect_err(|err| {
-                        error!("connect to {} failed: {}", addr.to_string(), err);
-                    })
-                    .or_err(ErrorType::ConnectError)?;
-
+                // Reuse the cached channel of the scheduler.
+                let channel = scheduler_client.channel(addr).await?;
                 let mut client =
                     SchedulerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
                         .max_decoding_message_size(usize::MAX)
@@ -259,7 +252,9 @@ impl SchedulerClient {
                 Ok(())
             }
 
-            join_set.spawn(announce_host(*available_scheduler_addr, request).in_current_span());
+            join_set.spawn(
+                announce_host(self.clone(), *available_scheduler_addr, request).in_current_span(),
+            );
         }
 
         while let Some(message) = join_set
@@ -278,7 +273,7 @@ impl SchedulerClient {
     }
 
     /// Tells the scheduler that the host is deleting.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn delete_host(&self, request: DeleteHostRequest) -> Result<()> {
         // Update scheduler addresses of the client.
         self.update_available_scheduler_addrs().await?;
@@ -292,24 +287,14 @@ impl SchedulerClient {
         for available_scheduler_addr in available_scheduler_addrs_clone.iter() {
             let request = Self::make_request(request.clone());
             async fn delete_host(
+                scheduler_client: SchedulerClient,
                 addr: SocketAddr,
                 request: tonic::Request<DeleteHostRequest>,
             ) -> Result<()> {
                 info!("delete host from {}", addr);
 
-                // Connect to the scheduler.
-                let channel = Channel::from_shared(format!("http://{addr}"))
-                    .map_err(|_| Error::InvalidURI(addr.to_string()))?
-                    .buffer_size(super::BUFFER_SIZE)
-                    .connect_timeout(super::CONNECT_TIMEOUT)
-                    .timeout(super::REQUEST_TIMEOUT)
-                    .connect()
-                    .await
-                    .inspect_err(|err| {
-                        error!("connect to {} failed: {}", addr.to_string(), err);
-                    })
-                    .or_err(ErrorType::ConnectError)?;
-
+                // Reuse the cached channel of the scheduler.
+                let channel = scheduler_client.channel(addr).await?;
                 let mut client =
                     SchedulerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
                         .max_decoding_message_size(usize::MAX)
@@ -318,7 +303,9 @@ impl SchedulerClient {
                 Ok(())
             }
 
-            join_set.spawn(delete_host(*available_scheduler_addr, request).in_current_span());
+            join_set.spawn(
+                delete_host(self.clone(), *available_scheduler_addr, request).in_current_span(),
+            );
         }
 
         while let Some(message) = join_set
@@ -336,7 +323,7 @@ impl SchedulerClient {
     }
 
     /// Announces the persistent peer to the scheduler.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn announce_persistent_peer(
         &self,
         task_id: &str,
@@ -352,7 +339,7 @@ impl SchedulerClient {
     }
 
     /// Gets the status of the persistent peer.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn stat_persistent_peer(
         &self,
         request: StatPersistentPeerRequest,
@@ -368,7 +355,7 @@ impl SchedulerClient {
     }
 
     /// Tells the scheduler that the persistent peer is deleting.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn delete_persistent_peer(&self, request: DeletePersistentPeerRequest) -> Result<()> {
         let task_id = request.task_id.clone();
         let request = Self::make_request(request);
@@ -380,7 +367,7 @@ impl SchedulerClient {
     }
 
     /// Uploads the metadata of the persistent task started.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn upload_persistent_task_started(
         &self,
         request: UploadPersistentTaskStartedRequest,
@@ -395,7 +382,7 @@ impl SchedulerClient {
     }
 
     /// Uploads the metadata of the persistent task finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn upload_persistent_task_finished(
         &self,
         request: UploadPersistentTaskFinishedRequest,
@@ -411,7 +398,7 @@ impl SchedulerClient {
     }
 
     /// Uploads the metadata of the persistent task failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn upload_persistent_task_failed(
         &self,
         request: UploadPersistentTaskFailedRequest,
@@ -426,7 +413,7 @@ impl SchedulerClient {
     }
 
     /// Gets the status of the persistent task.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn stat_persistent_task(
         &self,
         request: StatPersistentTaskRequest,
@@ -442,7 +429,7 @@ impl SchedulerClient {
     }
 
     /// Tells the scheduler that the persistent task is deleting.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn delete_persistent_task(&self, request: DeletePersistentTaskRequest) -> Result<()> {
         let task_id = request.task_id.clone();
         let request = Self::make_request(request);
@@ -454,7 +441,7 @@ impl SchedulerClient {
     }
 
     /// Announces the persistent cache peer to the scheduler.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn announce_persistent_cache_peer(
         &self,
         task_id: &str,
@@ -470,7 +457,7 @@ impl SchedulerClient {
     }
 
     /// Gets the status of the persistent cache peer.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn stat_persistent_cache_peer(
         &self,
         request: StatPersistentCachePeerRequest,
@@ -486,7 +473,7 @@ impl SchedulerClient {
     }
 
     /// Tells the scheduler that the persistent cache peer is deleting.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn delete_persistent_cache_peer(
         &self,
         request: DeletePersistentCachePeerRequest,
@@ -501,7 +488,7 @@ impl SchedulerClient {
     }
 
     /// Uploads the metadata of the persistent cache task started.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn upload_persistent_cache_task_started(
         &self,
         request: UploadPersistentCacheTaskStartedRequest,
@@ -516,7 +503,7 @@ impl SchedulerClient {
     }
 
     /// Uploads the metadata of the persistent cache task finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn upload_persistent_cache_task_finished(
         &self,
         request: UploadPersistentCacheTaskFinishedRequest,
@@ -532,7 +519,7 @@ impl SchedulerClient {
     }
 
     /// Uploads the metadata of the persistent cache task failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn upload_persistent_cache_task_failed(
         &self,
         request: UploadPersistentCacheTaskFailedRequest,
@@ -547,7 +534,7 @@ impl SchedulerClient {
     }
 
     /// Gets the status of the persistent cache task.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn stat_persistent_cache_task(
         &self,
         request: StatPersistentCacheTaskRequest,
@@ -563,7 +550,7 @@ impl SchedulerClient {
     }
 
     /// Tells the scheduler that the persistent cache task is deleting.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     pub async fn delete_persistent_cache_task(
         &self,
         request: DeletePersistentCacheTaskRequest,
@@ -578,7 +565,7 @@ impl SchedulerClient {
     }
 
     /// Gets the grpc client of the scheduler.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     async fn client(
         &self,
         task_id: &str,
@@ -595,7 +582,26 @@ impl SchedulerClient {
         drop(addrs);
         info!("picked {:?}", addr);
 
-        let addr = format!("http://{addr}");
+        let channel = self.channel(addr.addr).await?;
+        Ok(
+            SchedulerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
+                .max_decoding_message_size(usize::MAX)
+                .max_encoding_message_size(usize::MAX),
+        )
+    }
+
+    /// Returns the cached grpc channel of the scheduler address, connecting and
+    /// caching it if it is absent. The channel balances requests over a pool of
+    /// connections and reconnects on demand, so reusing it avoids a connection
+    /// handshake for every task. Concurrent misses may build the channel more
+    /// than once, the last inserted channel wins and the others are closed when
+    /// their requests finish.
+    async fn channel(&self, socket_addr: SocketAddr) -> Result<Channel> {
+        if let Some(channel) = self.channels.read().await.get(&socket_addr) {
+            return Ok(channel.clone());
+        }
+
+        let addr = format!("http://{socket_addr}");
         let domain_name = Url::parse(addr.as_str())?
             .host_str()
             .ok_or(Error::InvalidParameter)
@@ -604,7 +610,7 @@ impl SchedulerClient {
             })?
             .to_string();
 
-        let channel = match self
+        let endpoint = match self
             .config
             .scheduler
             .load_client_tls_config(domain_name.as_str())
@@ -618,13 +624,7 @@ impl SchedulerClient {
                 .timeout(super::REQUEST_TIMEOUT)
                 .tcp_keepalive(Some(super::TCP_KEEPALIVE))
                 .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
-                .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
-                .connect()
-                .await
-                .inspect_err(|err| {
-                    error!("connect to {} failed: {}", addr.to_string(), err);
-                })
-                .or_err(ErrorType::ConnectError)?,
+                .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT),
             None => Channel::from_shared(addr.clone())
                 .map_err(|_| Error::InvalidURI(addr.clone()))?
                 .buffer_size(super::BUFFER_SIZE)
@@ -632,24 +632,23 @@ impl SchedulerClient {
                 .timeout(super::REQUEST_TIMEOUT)
                 .tcp_keepalive(Some(super::TCP_KEEPALIVE))
                 .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
-                .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
-                .connect()
-                .await
-                .inspect_err(|err| {
-                    error!("connect to {} failed: {}", addr.to_string(), err);
-                })
-                .or_err(ErrorType::ConnectError)?,
+                .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT),
         };
 
-        Ok(
-            SchedulerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
-                .max_decoding_message_size(usize::MAX)
-                .max_encoding_message_size(usize::MAX),
-        )
+        // Balance the requests over a pool of connections, since the scheduler
+        // limits the concurrent streams of a single connection. The connections
+        // are established on demand.
+        let channel = Channel::balance_list((0..CONNECTION_POOL_SIZE).map(|_| endpoint.clone()));
+
+        self.channels
+            .write()
+            .await
+            .insert(socket_addr, channel.clone());
+        Ok(channel)
     }
 
     /// Updates the addresses of available schedulers.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     async fn update_available_scheduler_addrs(&self) -> Result<()> {
         // Get the endpoints of available schedulers.
         let data_available_schedulers_clone = {
@@ -708,6 +707,11 @@ impl SchedulerClient {
             new_hashring.add(VNode { addr: socket_addr });
         }
 
+        // Remove the channels of the schedulers that are no longer available.
+        let mut channels = self.channels.write().await;
+        channels.retain(|addr, _| new_available_scheduler_addrs.contains(addr));
+        drop(channels);
+
         // Update the available schedulers.
         let mut available_schedulers = self.available_schedulers.write().await;
         *available_schedulers = new_available_schedulers;
@@ -735,7 +739,7 @@ impl SchedulerClient {
     }
 
     /// Refreshes addresses of available schedulers.
-    #[instrument(skip(self))]
+    #[instrument(level = "debug", skip(self))]
     async fn refresh_available_scheduler_addrs(&self) -> Result<()> {
         // Refresh the dynamic configuration.
         self.dynconfig.refresh().await?;

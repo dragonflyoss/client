@@ -267,7 +267,7 @@ pub async fn download(
                     );
 
                     // Download task succeeded.
-                    info!("download task succeeded");
+                    debug!("download task succeeded");
                     if let Err(err) = task_manager_clone.download_finished(task_clone.id.as_str()) {
                         error!("download task finished: {}", err);
                         handle_error(&out_stream_tx, err).await;
@@ -350,7 +350,7 @@ pub async fn download(
 ///  Prefetch the full task by the task manager directly. It is similar to the
 /// prefetch_task of the dfdaemon gRPC module, but downloads the task by the task manager
 /// instead of the dfdaemon download gRPC client.
-#[instrument(skip_all)]
+#[instrument(level = "debug", skip_all)]
 pub async fn prefetch(
     config: Arc<Config>,
     task_manager: Arc<Task>,

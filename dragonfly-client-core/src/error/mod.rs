@@ -150,6 +150,10 @@ pub enum DFError {
     #[error(transparent)]
     Utf8(#[from] std::str::Utf8Error),
 
+    /// The error when the mutex is poisoned.
+    #[error("mutex poisoned: {0}")]
+    MutexPoisoned(String),
+
     /// The error when the error is unknown.
     #[error("unknown {0}")]
     Unknown(String),
@@ -278,6 +282,13 @@ pub enum DFError {
 impl<T> From<tokio::sync::mpsc::error::SendError<T>> for DFError {
     fn from(e: tokio::sync::mpsc::error::SendError<T>) -> Self {
         Self::MpscSend(e.to_string())
+    }
+}
+
+/// The error for mutex poisoned.
+impl<T> From<std::sync::PoisonError<T>> for DFError {
+    fn from(e: std::sync::PoisonError<T>) -> Self {
+        Self::MutexPoisoned(e.to_string())
     }
 }
 
