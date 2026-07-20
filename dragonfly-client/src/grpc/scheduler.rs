@@ -580,7 +580,7 @@ impl SchedulerClient {
             .get(&task_id[0..5].to_string())
             .ok_or_else(|| Error::HashRing(task_id.to_string()))?;
         drop(addrs);
-        debug!("picked {:?}", addr);
+        info!("picked {:?}", addr);
 
         let channel = self.channel(addr.addr).await?;
         Ok(
