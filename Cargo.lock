@@ -1301,7 +1301,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1385,7 +1385,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-backend"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "async-trait",
  "dashmap",
@@ -1424,7 +1424,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-config"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "bytesize",
  "bytesize-serde",
@@ -1455,7 +1455,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-core"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "cgroups-rs",
  "headers 0.4.1",
@@ -1476,7 +1476,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-init"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1494,7 +1494,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-metric"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "dragonfly-api",
  "dragonfly-client-config",
@@ -1509,7 +1509,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-request"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1537,7 +1537,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-storage"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "bincode",
  "bytes",
@@ -1573,7 +1573,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-util"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2230,7 +2230,7 @@ dependencies = [
 
 [[package]]
 name = "hdfs"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "async-trait",
  "dragonfly-client-backend",
@@ -4955,7 +4955,7 @@ dependencies = [
 
 [[package]]
 name = "request"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "anyhow",
  "dragonfly-client-request",
