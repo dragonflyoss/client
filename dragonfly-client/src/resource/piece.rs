@@ -24,7 +24,7 @@ use dragonfly_client_metric::{
     collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
     collect_backend_request_started_metrics, collect_download_piece_traffic_metrics,
 };
-use dragonfly_client_storage::{metadata, Storage};
+use dragonfly_client_storage::{content::RangeReader, metadata, Storage};
 use dragonfly_client_util::net::format_socket_addr;
 use leaky_bucket::RateLimiter;
 use reqwest::header::HeaderMap;
@@ -309,13 +309,13 @@ impl Piece {
 
     /// Downloads a single piece from local cache.
     #[instrument(skip_all, fields(piece_id))]
-    pub async fn download_from_local_into_async_read(
+    pub async fn download_from_local_into_range_reader(
         &self,
         piece_id: &str,
         task_id: &str,
         length: u64,
         range: Option<Range>,
-    ) -> Result<impl AsyncBufRead> {
+    ) -> Result<RangeReader> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);

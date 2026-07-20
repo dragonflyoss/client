@@ -17,7 +17,7 @@
 use crate::dynconfig::Dynconfig;
 use crate::grpc::REQUEST_TIMEOUT;
 use crate::resource::{piece::MIN_PIECE_LENGTH, task::Task};
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use dragonfly_api::common::v2::{Download, TaskType};
 use dragonfly_api::dfdaemon::v2::{
     download_task_response, DownloadTaskRequest, DownloadTaskStartedResponse,
@@ -56,7 +56,6 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Barrier};
@@ -879,9 +878,6 @@ async fn proxy_via_dfdaemon(
     // Write the status code to the writer.
     let (sender, mut receiver) = mpsc::channel(4);
 
-    // Get the read buffer size from the config.
-    let read_buffer_size = config.proxy.read_buffer_size;
-
     // Initialize the channel for sending the response body to the client.
     let (body_tx, body_rx) = mpsc::channel::<ClientResult<Bytes>>(4);
 
@@ -966,7 +962,7 @@ async fn proxy_via_dfdaemon(
                             {
                                 let mut piece_range_reader = match task
                                     .piece
-                                    .download_from_local_into_async_read(
+                                    .download_from_local_into_range_reader(
                                         task.piece
                                             .id(message.task_id.as_str(), need_piece_number)
                                             .as_str(),
@@ -984,14 +980,11 @@ async fn proxy_via_dfdaemon(
                                 };
 
                                 debug!("send piece {} to stream", need_piece_number);
-                                // Read the piece from the storage in chunks and send
-                                // the reference-counted bytes to the response body.
                                 loop {
-                                    let mut buffer = BytesMut::with_capacity(read_buffer_size);
-                                    match piece_range_reader.read_buf(&mut buffer).await {
-                                        Ok(0) => break,
-                                        Ok(_) => {
-                                            if body_tx.send(Ok(buffer.freeze())).await.is_err() {
+                                    match piece_range_reader.read_chunk().await {
+                                        Ok(bytes) if bytes.is_empty() => break,
+                                        Ok(bytes) => {
+                                            if body_tx.send(Ok(bytes)).await.is_err() {
                                                 debug!("body stream is closed");
                                                 return;
                                             }

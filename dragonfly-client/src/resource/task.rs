@@ -1112,7 +1112,7 @@ impl Task {
                 // If need_piece_content is true, read the piece content from the local.
                 if need_piece_content {
                     let mut reader = piece_manager
-                        .download_from_local_into_async_read(
+                        .download_from_local_into_range_reader(
                             piece_id.as_str(),
                             task_id.as_str(),
                             metadata.length,
@@ -1414,7 +1414,7 @@ impl Task {
                 // If need_piece_content is true, read the piece content from the local.
                 if need_piece_content {
                     let mut reader = piece_manager
-                        .download_from_local_into_async_read(
+                        .download_from_local_into_range_reader(
                             piece_id.as_str(),
                             task_id.as_str(),
                             metadata.length,
@@ -1714,7 +1714,7 @@ impl Task {
             if need_piece_content {
                 let mut reader = self
                     .piece
-                    .download_from_local_into_async_read(
+                    .download_from_local_into_range_reader(
                         piece_id.as_str(),
                         task_id,
                         piece.length,
@@ -1874,7 +1874,7 @@ impl Task {
                 // If need_piece_content is true, read the piece content from the local.
                 if need_piece_content {
                     let mut reader = piece_manager
-                        .download_from_local_into_async_read(
+                        .download_from_local_into_range_reader(
                             piece_id.as_str(),
                             task_id.as_str(),
                             piece.length,

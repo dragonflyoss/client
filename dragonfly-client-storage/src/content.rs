@@ -15,7 +15,7 @@
  */
 
 use crate::cache::lru_cache::LruCache;
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
@@ -206,7 +206,11 @@ pub struct RangeReader {
     /// The remaining length of the range.
     remaining: u64,
 
-    /// The reusable read buffer, moved into the blocking task while reading.
+    /// The capacity of the read buffer.
+    capacity: usize,
+
+    /// The reusable read buffer, allocated on the first buffered read and
+    /// moved into the blocking task while reading.
     buf: Vec<u8>,
 
     /// The consumed position of the buffer.
@@ -228,7 +232,8 @@ impl RangeReader {
             fd,
             offset,
             remaining: length,
-            buf: vec![0u8; capacity],
+            capacity,
+            buf: Vec::new(),
             pos: 0,
             filled: 0,
             state: RangeReaderState::Idle,
@@ -242,6 +247,41 @@ impl RangeReader {
     pub fn into_parts(self) -> (Arc<File>, u64, u64) {
         let buffered = (self.filled - self.pos) as u64;
         (self.fd, self.offset - buffered, self.remaining + buffered)
+    }
+
+    /// Reads the next chunk of the range with a positional read on the
+    /// blocking thread pool, directly into the owned buffer it returns, so
+    /// callers that send the chunk downstream get the bytes without copying
+    /// them out of a reusable buffer. Returns an empty Bytes at the end of
+    /// the range.
+    pub async fn read_chunk(&mut self) -> Result<Bytes> {
+        // Drain the data buffered by the buffered read interface first.
+        if self.pos < self.filled {
+            let chunk = Bytes::copy_from_slice(&self.buf[self.pos..self.filled]);
+            self.pos = self.filled;
+            return Ok(chunk);
+        }
+
+        if self.remaining == 0 {
+            return Ok(Bytes::new());
+        }
+
+        let len = min(self.capacity as u64, self.remaining) as usize;
+        let mut buf = BytesMut::zeroed(len);
+        let fd = self.fd.clone();
+        let offset = self.offset;
+        let (mut buf, n) = tokio::task::spawn_blocking(move || {
+            let n = fd.read_at(&mut buf, offset)?;
+            Ok::<_, io::Error>((buf, n))
+        })
+        .await
+        .map_err(io::Error::other)??;
+
+        self.offset += n as u64;
+        self.remaining = if n == 0 { 0 } else { self.remaining - n as u64 };
+
+        buf.truncate(n);
+        Ok(buf.freeze())
     }
 }
 
@@ -259,13 +299,14 @@ impl AsyncBufRead for RangeReader {
                         break;
                     }
 
-                    let len = min(this.buf.len() as u64, this.remaining) as usize;
+                    let len = min(this.capacity as u64, this.remaining) as usize;
                     let mut buf = std::mem::take(&mut this.buf);
+                    buf.resize(len, 0);
                     let fd = this.fd.clone();
                     let offset = this.offset;
                     this.state =
                         RangeReaderState::Reading(tokio::task::spawn_blocking(move || {
-                            let n = fd.read_at(&mut buf[..len], offset)?;
+                            let n = fd.read_at(&mut buf, offset)?;
                             Ok((buf, n))
                         }));
                 }
@@ -599,6 +640,78 @@ mod tests {
         let (_, offset, remaining) = reader.into_parts();
         assert_eq!(offset, 4);
         assert_eq!(remaining, 9);
+    }
+
+    #[tokio::test]
+    async fn test_range_reader_read_chunk() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        let data = pattern(64 * 1024);
+        tokio::fs::write(&path, &data).await.unwrap();
+        let fd = Arc::new(File::open(&path).unwrap());
+
+        // Read the full range in owned chunks.
+        let mut reader = RangeReader::new(fd.clone(), 0, data.len() as u64, 4 * 1024);
+        let mut buffer = Vec::new();
+        loop {
+            let chunk = reader.read_chunk().await.unwrap();
+            if chunk.is_empty() {
+                break;
+            }
+            buffer.extend_from_slice(&chunk);
+        }
+        assert_eq!(buffer, data);
+
+        // Stop at the end of the file even if the range is longer.
+        let mut reader = RangeReader::new(fd.clone(), 60 * 1024, 100 * 1024, 4 * 1024);
+        let mut buffer = Vec::new();
+        loop {
+            let chunk = reader.read_chunk().await.unwrap();
+            if chunk.is_empty() {
+                break;
+            }
+            buffer.extend_from_slice(&chunk);
+        }
+        assert_eq!(buffer, &data[60 * 1024..]);
+
+        // A zero-length range returns an empty chunk.
+        let mut reader = RangeReader::new(fd, 0, 0, 4 * 1024);
+        assert!(reader.read_chunk().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_range_reader_read_chunk_after_fill_buf() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, b"hello, world!").await.unwrap();
+        let fd = Arc::new(File::open(&path).unwrap());
+
+        // The data buffered by the buffered read interface is drained first.
+        let mut reader = RangeReader::new(fd, 0, 13, 5);
+        assert_eq!(reader.fill_buf().await.unwrap(), b"hello");
+        reader.consume(2);
+        assert_eq!(&reader.read_chunk().await.unwrap()[..], b"llo");
+        assert_eq!(&reader.read_chunk().await.unwrap()[..], b", wor");
+        assert_eq!(&reader.read_chunk().await.unwrap()[..], b"ld!");
+        assert!(reader.read_chunk().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_range_reader_read_chunk_error() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, b"hello, world!").await.unwrap();
+
+        // Reading from a write-only file descriptor must surface the error.
+        let fd = Arc::new(
+            OpenOptions::new()
+                .truncate(false)
+                .write(true)
+                .open(&path)
+                .unwrap(),
+        );
+        let mut reader = RangeReader::new(fd, 0, 13, 4);
+        assert!(reader.read_chunk().await.is_err());
     }
 
     #[tokio::test]
