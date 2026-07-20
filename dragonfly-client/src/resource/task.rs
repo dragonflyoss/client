@@ -1011,8 +1011,7 @@ impl Task {
     /// Announces a task that hits the local cache completely with the scheduler. It only
     /// reports the metadata of the peer to the scheduler by the register request with the
     /// hit_local_cache flag and the download peer started/finished requests, no pieces need
-    /// to be downloaded. The scheduler registers the peer and can schedule it as a candidate
-    /// parent for other peers.
+    /// to be downloaded.
     #[instrument(level = "debug", skip_all)]
     async fn download_partial_with_scheduler_from_local(
         &self,
