@@ -65,7 +65,6 @@ use lru::LruCache;
 use reqwest::header::HeaderMap;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
-use reqwest_tracing::TracingMiddleware;
 use rustls_pki_types::CertificateDer;
 use std::collections::HashMap;
 use std::error::Error as _;
@@ -190,7 +189,6 @@ impl HTTP {
 
             let retry_policy = ExponentialBackoff::builder().build_with_max_retries(max_retries);
             let client = ClientBuilder::new(client)
-                .with(TracingMiddleware::default())
                 .with(RetryTransientMiddleware::new_with_policy(retry_policy))
                 .build();
 
@@ -272,7 +270,6 @@ impl HTTP {
                 let retry_policy =
                     ExponentialBackoff::builder().build_with_max_retries(self.max_retries);
                 let client = ClientBuilder::new(client)
-                    .with(TracingMiddleware::default())
                     .with(RetryTransientMiddleware::new_with_policy(retry_policy))
                     .build();
 
