@@ -24,7 +24,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
-use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tracing::{error, info, instrument, warn};
 use walkdir::WalkDir;
 
@@ -259,7 +259,7 @@ impl Content {
         offset: u64,
         length: u64,
         range: Option<Range>,
-    ) -> Result<impl AsyncBufRead> {
+    ) -> Result<super::content::RangeReader> {
         let task_path = self.get_task_path(task_id);
 
         // Calculate the target offset and length based on the range.
@@ -497,7 +497,7 @@ impl Content {
         offset: u64,
         length: u64,
         range: Option<Range>,
-    ) -> Result<impl AsyncBufRead> {
+    ) -> Result<super::content::RangeReader> {
         let task_path = self.get_persistent_task_path(task_id);
 
         // Calculate the target offset and length based on the range.
@@ -765,7 +765,7 @@ impl Content {
         offset: u64,
         length: u64,
         range: Option<Range>,
-    ) -> Result<impl AsyncBufRead> {
+    ) -> Result<super::content::RangeReader> {
         let task_path = self.get_persistent_cache_task_path(task_id);
 
         // Calculate the target offset and length based on the range.

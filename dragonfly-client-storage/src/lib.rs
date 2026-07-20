@@ -170,12 +170,6 @@ impl Storage {
         self.metadata.prefetch_task_failed(id)
     }
 
-    /// Updates the metadata of the task when task uploads finished.
-    #[instrument(level = "debug", skip_all)]
-    pub fn upload_task_finished(&self, id: &str) -> Result<metadata::Task> {
-        self.metadata.upload_task_finished(id)
-    }
-
     /// Returns the task metadata.
     #[instrument(level = "debug", skip_all)]
     pub fn get_task(&self, id: &str) -> Result<Option<metadata::Task>> {
@@ -327,12 +321,6 @@ impl Storage {
         id: &str,
     ) -> Result<metadata::PersistentTask> {
         self.metadata.download_persistent_task_failed(id)
-    }
-
-    /// Updates the metadata of the cahce task when persistent task uploads finished.
-    #[instrument(level = "debug", skip_all)]
-    pub fn upload_persistent_task_finished(&self, id: &str) -> Result<metadata::PersistentTask> {
-        self.metadata.upload_persistent_task_finished(id)
     }
 
     /// Returns the persistent task metadata.
@@ -508,15 +496,6 @@ impl Storage {
         id: &str,
     ) -> Result<metadata::PersistentCacheTask> {
         self.metadata.download_persistent_cache_task_failed(id)
-    }
-
-    /// Updates the metadata of the cahce task when persistent cache task uploads finished.
-    #[instrument(level = "debug", skip_all)]
-    pub fn upload_persistent_cache_task_finished(
-        &self,
-        id: &str,
-    ) -> Result<metadata::PersistentCacheTask> {
-        self.metadata.upload_persistent_cache_task_finished(id)
     }
 
     /// Returns the persistent cache task metadata.
@@ -875,12 +854,12 @@ impl Storage {
         piece_id: &str,
         task_id: &str,
         range: Option<Range>,
-    ) -> Result<impl AsyncBufRead> {
+    ) -> Result<content::RangeReader> {
         // Wait for the piece to be finished and get the piece metadata.
         let piece = self.wait_for_piece_finished(piece_id).await?;
 
         // Start uploading the task.
-        self.metadata.upload_task_started(task_id)?;
+        self.metadata.upload_task_started(task_id);
 
         // Return the content of the piece.
         match self
@@ -890,12 +869,12 @@ impl Storage {
         {
             Ok(reader) => {
                 // Finish uploading the task.
-                self.metadata.upload_task_finished(task_id)?;
+                self.metadata.upload_task_finished(task_id);
                 Ok(reader)
             }
             Err(err) => {
                 // Failed uploading the task.
-                self.metadata.upload_task_failed(task_id)?;
+                self.metadata.upload_task_failed(task_id);
                 Err(err)
             }
         }
@@ -1044,12 +1023,12 @@ impl Storage {
         piece_id: &str,
         task_id: &str,
         range: Option<Range>,
-    ) -> Result<impl AsyncBufRead> {
+    ) -> Result<content::RangeReader> {
         // Wait for the persistent piece to be finished and get the piece metadata.
         let piece = self.wait_for_persistent_piece_finished(piece_id).await?;
 
         // Start uploading the persistent task.
-        self.metadata.upload_persistent_task_started(task_id)?;
+        self.metadata.upload_persistent_task_started(task_id);
 
         // Return the content of the persistent piece.
         match self
@@ -1059,12 +1038,12 @@ impl Storage {
         {
             Ok(reader) => {
                 // Finish uploading the persistent task.
-                self.metadata.upload_persistent_task_finished(task_id)?;
+                self.metadata.upload_persistent_task_finished(task_id);
                 Ok(reader)
             }
             Err(err) => {
                 // Failed uploading the persistent task.
-                self.metadata.upload_persistent_task_failed(task_id)?;
+                self.metadata.upload_persistent_task_failed(task_id);
                 Err(err)
             }
         }
@@ -1171,15 +1150,14 @@ impl Storage {
         piece_id: &str,
         task_id: &str,
         range: Option<Range>,
-    ) -> Result<impl AsyncBufRead> {
+    ) -> Result<content::RangeReader> {
         // Wait for the persistent cache piece to be finished and get the piece.
         let piece = self
             .wait_for_persistent_cache_piece_finished(piece_id)
             .await?;
 
         // Start uploading the persistent cache task.
-        self.metadata
-            .upload_persistent_cache_task_started(task_id)?;
+        self.metadata.upload_persistent_cache_task_started(task_id);
 
         // Return the content of the persistent cache piece.
         match self
@@ -1189,13 +1167,12 @@ impl Storage {
         {
             Ok(reader) => {
                 // Finish uploading the persistent cache task.
-                self.metadata
-                    .upload_persistent_cache_task_finished(task_id)?;
+                self.metadata.upload_persistent_cache_task_finished(task_id);
                 Ok(reader)
             }
             Err(err) => {
                 // Failed uploading the persistent cache task.
-                self.metadata.upload_persistent_cache_task_failed(task_id)?;
+                self.metadata.upload_persistent_cache_task_failed(task_id);
                 Err(err)
             }
         }

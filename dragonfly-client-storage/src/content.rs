@@ -233,6 +233,15 @@ impl RangeReader {
             state: RangeReaderState::Idle,
         }
     }
+
+    /// Consumes the reader and returns the shared file descriptor, the offset
+    /// of the next unconsumed byte, and the number of bytes left in the range,
+    /// so zero-copy senders like sendfile can transmit the rest of the range
+    /// directly from the file descriptor.
+    pub fn into_parts(self) -> (Arc<File>, u64, u64) {
+        let buffered = (self.filled - self.pos) as u64;
+        (self.fd, self.offset - buffered, self.remaining + buffered)
+    }
 }
 
 /// Implements the buffered read for the RangeReader.
@@ -591,6 +600,29 @@ mod tests {
         let mut buffer = Vec::new();
         reader.read_to_end(&mut buffer).await.unwrap();
         assert_eq!(buffer, &data[12_345..42_345]);
+    }
+
+    #[tokio::test]
+    async fn test_range_reader_into_parts() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, b"hello, world!").await.unwrap();
+        let fd = Arc::new(File::open(&path).unwrap());
+
+        // A fresh reader returns the range unchanged.
+        let reader = RangeReader::new(fd.clone(), 2, 11, 5);
+        let (parts_fd, offset, remaining) = reader.into_parts();
+        assert!(Arc::ptr_eq(&parts_fd, &fd));
+        assert_eq!(offset, 2);
+        assert_eq!(remaining, 11);
+
+        // A partially consumed reader accounts for the buffered data.
+        let mut reader = RangeReader::new(fd, 2, 11, 5);
+        assert_eq!(reader.fill_buf().await.unwrap(), b"llo, ");
+        reader.consume(2);
+        let (_, offset, remaining) = reader.into_parts();
+        assert_eq!(offset, 4);
+        assert_eq!(remaining, 9);
     }
 
     #[tokio::test]
