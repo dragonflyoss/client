@@ -369,7 +369,7 @@ pub async fn registry_mirror_https_handler(
 }
 
 /// Handles the http request by client.
-#[instrument(skip_all)]
+#[instrument(level = "debug", skip_all)]
 pub async fn http_handler(
     config: Arc<Config>,
     task: Arc<Task>,

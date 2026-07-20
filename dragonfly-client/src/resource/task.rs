@@ -833,9 +833,9 @@ impl Task {
                         }
                     };
                 }
-                announce_peer_response::Response::NeedBackToSourceResponse(response) => {
+                announce_peer_response::Response::NeedBackToSourceResponse(_) => {
                     // If the task need back to source, download the pieces from the source.
-                    info!("need back to source response: {:?}", response);
+                    info!("need back to source response");
 
                     // Send the download peer back-to-source request.
                     match in_stream_tx
