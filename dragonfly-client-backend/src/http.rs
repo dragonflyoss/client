@@ -59,7 +59,8 @@ use dragonfly_client_core::{
 use dragonfly_client_util::tls::NoVerifier;
 use futures::TryStreamExt;
 use http::header::{
-    HeaderName, HeaderValue, CONTENT_LENGTH, LOCATION, RANGE, TRANSFER_ENCODING, USER_AGENT,
+    HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_RANGE, LOCATION, RANGE, TRANSFER_ENCODING,
+    USER_AGENT,
 };
 use lru::LruCache;
 use reqwest::header::HeaderMap;
@@ -396,8 +397,16 @@ impl Backend for HTTP {
                 error!("request header is missing");
             })?;
 
-        // Make the custom request headers.
-        self.make_request_headers(&mut request_header, None)?;
+        // Make the custom request headers with "Range: bytes=0-0", so the origin returns
+        // 206 Partial Content with the total length in the Content-Range header and a
+        // one-byte body, instead of streaming the whole object body for the stat request.
+        self.make_request_headers(
+            &mut request_header,
+            Some(Range {
+                start: 0,
+                length: 1,
+            }),
+        )?;
 
         // Check if we have a cached temporary redirect for this URL.
         let (request_url, request_header) =
@@ -497,7 +506,7 @@ impl Backend for HTTP {
             {
                 // If the response has Transfer-Encoding header but no Content-Length header,
                 // retry with HEAD request to get the correct Content-Length.
-                info!(
+                debug!(
                     "stat request got Transfer-Encoding header, retrying with HEAD {} {}",
                     request.task_id, request.url,
                 );
@@ -514,6 +523,43 @@ impl Backend for HTTP {
                     Err(err) => {
                         error!(
                             "stat request failed with HEAD {} {}: {}",
+                            request.task_id, request_url, err
+                        );
+
+                        return Ok(StatResponse {
+                            success: false,
+                            content_length: None,
+                            http_header: None,
+                            http_status_code: None,
+                            entries: Vec::new(),
+                            error_message: Some(err.to_string()),
+                        });
+                    }
+                }
+            }
+            Ok(response) if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE => {
+                // For zero-byte files, some servers return 416 Range Not Satisfiable for
+                // the "bytes=0-0" request. Retry with a GET request without the Range
+                // header to retrieve headers.
+                debug!(
+                    "stat request got 416 Range Not Satisfiable, retrying without Range {} {}",
+                    request.task_id, request_url,
+                );
+
+                let mut request_header = request_header.clone();
+                request_header.remove(RANGE);
+                match self
+                    .client(request.client_cert.clone(), self.enable_hickory_dns)?
+                    .get(&request_url)
+                    .headers(request_header)
+                    .timeout(request.timeout)
+                    .send()
+                    .await
+                {
+                    Ok(response) => response,
+                    Err(err) => {
+                        error!(
+                            "stat request failed without Range {} {}: {}",
                             request.task_id, request_url, err
                         );
 
@@ -547,10 +593,50 @@ impl Backend for HTTP {
         };
 
         let response_status_code = response.status();
-        let response_header = response.headers().clone();
-        let content_length = match response_header.get(CONTENT_LENGTH) {
-            Some(content_length) => content_length.to_str()?.parse::<u64>().ok(),
-            None => response.content_length(),
+        let mut response_header = response.headers().clone();
+        let content_length = if response_status_code == reqwest::StatusCode::PARTIAL_CONTENT {
+            // The total length of a ranged response is in the Content-Range header,
+            // e.g. "bytes 0-0/1048576".
+            let content_length = response_header
+                .get(CONTENT_RANGE)
+                .and_then(|content_range| content_range.to_str().ok())
+                .and_then(|content_range| content_range.rsplit_once('/'))
+                .and_then(|(_, total)| total.parse::<u64>().ok());
+
+            if content_length.is_none() {
+                error!(
+                    "stat request got 206 Partial Content without valid Content-Range {} {}",
+                    request.task_id, request_url
+                );
+            }
+
+            // Read the one-byte body to completion, so the connection can be reused by
+            // the connection pool instead of being closed with an unread body.
+            if let Err(err) = response.bytes().await {
+                debug!(
+                    "stat request failed to read response body {} {}: {}",
+                    request.task_id, request_url, err
+                );
+            }
+
+            // Rewrite the 206-shaped headers to look like the full-object response, since
+            // the response header is persisted as the task response header and echoed to
+            // the clients.
+            response_header.remove(CONTENT_RANGE);
+            if let Some(content_length) = content_length {
+                response_header.insert(CONTENT_LENGTH, HeaderValue::from(content_length));
+            }
+
+            content_length
+        } else {
+            let content_length = match response_header.get(CONTENT_LENGTH) {
+                Some(content_length) => content_length.to_str()?.parse::<u64>().ok(),
+                None => response.content_length(),
+            };
+
+            // Drop the response body to avoid reading it.
+            drop(response);
+            content_length
         };
 
         debug!(
@@ -558,8 +644,6 @@ impl Backend for HTTP {
             request.task_id, request_url, response_status_code, content_length, response_header
         );
 
-        // Drop the response body to avoid reading it.
-        drop(response);
         Ok(StatResponse {
             success: response_status_code.is_success(),
             content_length,
@@ -838,7 +922,7 @@ mod tests {
     use tokio_rustls::rustls::ServerConfig;
     use tokio_rustls::TlsAcceptor;
     use wiremock::{
-        matchers::{method, path},
+        matchers::{header, method, path},
         Mock, ResponseTemplate,
     };
 
@@ -1015,6 +1099,83 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .unwrap();
 
         assert_eq!(resp.http_status_code, Some(StatusCode::OK))
+    }
+
+    #[tokio::test]
+    async fn should_stat_response_with_partial_content() {
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/stat"))
+            .and(header("range", "bytes=0-0"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header("Content-Range", "bytes 0-0/1048576")
+                    .set_body_bytes(vec![0u8]),
+            )
+            .mount(&server)
+            .await;
+
+        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
+            .unwrap()
+            .stat(StatRequest {
+                task_id: "test".to_string(),
+                url: format!("{}/stat", server.uri()),
+                http_header: Some(HeaderMap::new()),
+                timeout: std::time::Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(resp.success);
+        assert_eq!(resp.http_status_code, Some(StatusCode::PARTIAL_CONTENT));
+        assert_eq!(resp.content_length, Some(1048576));
+
+        // The 206-shaped headers should be rewritten to look like the full-object
+        // response.
+        let response_header = resp.http_header.unwrap();
+        assert!(response_header.get("content-range").is_none());
+        assert_eq!(response_header.get("content-length").unwrap(), "1048576");
+    }
+
+    #[tokio::test]
+    async fn should_stat_response_when_range_not_satisfiable() {
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/stat"))
+            .and(header("range", "bytes=0-0"))
+            .respond_with(ResponseTemplate::new(416))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/stat"))
+            .respond_with(ResponseTemplate::new(200).insert_header("Content-Length", "0"))
+            .mount(&server)
+            .await;
+
+        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
+            .unwrap()
+            .stat(StatRequest {
+                task_id: "test".to_string(),
+                url: format!("{}/stat", server.uri()),
+                http_header: Some(HeaderMap::new()),
+                timeout: std::time::Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(resp.success);
+        assert_eq!(resp.http_status_code, Some(StatusCode::OK));
+        assert_eq!(resp.content_length, Some(0));
     }
 
     #[tokio::test]
