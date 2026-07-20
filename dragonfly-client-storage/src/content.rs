@@ -182,6 +182,99 @@ impl FDCache {
     }
 }
 
+/// The maximum total capacity in bytes of the idle buffers retained by the shared
+/// buffer pool: 64MiB, i.e. 128 idle buffers with the default 512KiB buffer size.
+const MAX_BUFFER_POOL_IDLE_BYTES: usize = 64 * 1024 * 1024;
+
+/// BufferPool is a bounded pool of staging buffers shared by the piece write path
+/// ([`write_range`]) and the piece read path ([`RangeReader::read_chunk`]), so the
+/// hot paths reuse a few large buffers instead of allocating (and zeroing, on the
+/// read side) a fresh one per chunk.
+///
+/// Invariant: every buffer created by the pool has its full capacity initialized
+/// (it is born with [`BytesMut::zeroed`]), and the write and read paths only
+/// overwrite the buffers in place and never grow them past their capacity, so the
+/// initialization holds across reuses. This is what makes the unchecked `set_len`
+/// in [`BufferPool::checkout_for_read`] sound.
+struct BufferPool {
+    /// The idle buffers and their total capacity in bytes.
+    idle: Mutex<(Vec<BytesMut>, usize)>,
+
+    /// The maximum total capacity in bytes of the idle buffers.
+    max_idle_bytes: usize,
+}
+
+/// The shared buffer pool instance.
+static BUFFER_POOL: BufferPool = BufferPool {
+    idle: Mutex::new((Vec::new(), 0)),
+    max_idle_bytes: MAX_BUFFER_POOL_IDLE_BYTES,
+};
+
+/// Implements the buffer pool.
+impl BufferPool {
+    /// Checks out an empty buffer with at least the given capacity, reusing an
+    /// idle buffer when one is available.
+    fn checkout(&self, capacity: usize) -> BytesMut {
+        let mut idle = self.idle.lock().unwrap();
+        while let Some(buffer) = idle.0.pop() {
+            idle.1 -= buffer.capacity();
+            if buffer.capacity() >= capacity {
+                return buffer;
+            }
+
+            // Drop the undersized buffer, so the pool converges on the largest
+            // buffer size in use.
+        }
+        drop(idle);
+
+        // Zero the new buffer to fully initialize its capacity, upholding the pool
+        // invariant. The cost is paid once per buffer creation instead of once per
+        // chunk.
+        let mut buffer = BytesMut::zeroed(capacity);
+        buffer.clear();
+        buffer
+    }
+
+    /// Checks out a buffer with `len` readable bytes for a positional read to
+    /// overwrite, without zeroing them.
+    fn checkout_for_read(&self, len: usize) -> BytesMut {
+        let mut buffer = self.checkout(len);
+        // SAFETY: the pool invariant guarantees the full capacity of the buffer is
+        // initialized, and `len` is not greater than the capacity.
+        unsafe { buffer.set_len(len) };
+        buffer
+    }
+
+    /// Returns a buffer to the pool, dropping it when the pool is full.
+    fn give_back(&self, mut buffer: BytesMut) {
+        buffer.clear();
+        let mut idle = self.idle.lock().unwrap();
+        if idle.1 + buffer.capacity() <= self.max_idle_bytes {
+            idle.1 += buffer.capacity();
+            idle.0.push(buffer);
+        }
+    }
+}
+
+/// PooledChunk owns a pooled buffer inside a [`Bytes`] handle created by
+/// [`Bytes::from_owner`], returning the buffer to the pool when the last
+/// reference to the chunk drops.
+struct PooledChunk(BytesMut);
+
+/// Implements the byte view of the pooled chunk.
+impl AsRef<[u8]> for PooledChunk {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// Implements the drop of the pooled chunk.
+impl Drop for PooledChunk {
+    fn drop(&mut self) {
+        BUFFER_POOL.give_back(std::mem::take(&mut self.0));
+    }
+}
+
 /// The state of the in-flight read of the RangeReader.
 enum RangeReaderState {
     /// No read is in flight, the buffer may hold unread data.
@@ -252,8 +345,9 @@ impl RangeReader {
     /// Reads the next chunk of the range with a positional read on the
     /// blocking thread pool, directly into the owned buffer it returns, so
     /// callers that send the chunk downstream get the bytes without copying
-    /// them out of a reusable buffer. Returns an empty Bytes at the end of
-    /// the range.
+    /// them out of a reusable buffer. The buffer is checked out from the
+    /// shared buffer pool and returned to it when the returned Bytes drops.
+    /// Returns an empty Bytes at the end of the range.
     pub async fn read_chunk(&mut self) -> Result<Bytes> {
         // Drain the data buffered by the buffered read interface first.
         if self.pos < self.filled {
@@ -267,7 +361,7 @@ impl RangeReader {
         }
 
         let len = min(self.capacity as u64, self.remaining) as usize;
-        let mut buf = BytesMut::zeroed(len);
+        let mut buf = BUFFER_POOL.checkout_for_read(len);
         let fd = self.fd.clone();
         let offset = self.offset;
         let (mut buf, n) = tokio::task::spawn_blocking(move || {
@@ -281,7 +375,7 @@ impl RangeReader {
         self.remaining = if n == 0 { 0 } else { self.remaining - n as u64 };
 
         buf.truncate(n);
-        Ok(buf.freeze())
+        Ok(Bytes::from_owner(PooledChunk(buf)))
     }
 }
 
@@ -370,8 +464,9 @@ pub async fn write_range<R: AsyncRead + Unpin + ?Sized>(
     let mut reader = reader.take(expected_length);
 
     // The buffer being filled from the reader, swapped with the recycled
-    // buffer of the completed write.
-    let mut buffer = BytesMut::with_capacity(buffer_size);
+    // buffer of the completed write. Both staging buffers are checked out
+    // from the shared buffer pool and returned to it at the end.
+    let mut buffer = BUFFER_POOL.checkout(buffer_size);
 
     // The in-flight write on the blocking thread pool, owning the other
     // buffer until it completes.
@@ -399,7 +494,7 @@ pub async fn write_range<R: AsyncRead + Unpin + ?Sized>(
         // Wait for the previous write to take back its buffer.
         let recycled = match in_flight.take() {
             Some(handle) => handle.await.map_err(io::Error::other)??,
-            None => BytesMut::with_capacity(buffer_size),
+            None => BUFFER_POOL.checkout(buffer_size),
         };
 
         let full = std::mem::replace(&mut buffer, recycled);
@@ -417,10 +512,12 @@ pub async fn write_range<R: AsyncRead + Unpin + ?Sized>(
         }));
     }
 
-    // Wait for the last write to complete.
+    // Wait for the last write to complete and return the staging buffers to
+    // the pool.
     if let Some(handle) = in_flight.take() {
-        handle.await.map_err(io::Error::other)??;
+        BUFFER_POOL.give_back(handle.await.map_err(io::Error::other)??);
     }
+    BUFFER_POOL.give_back(buffer);
 
     if length != expected_length {
         return Err(Error::Unknown(format!(
@@ -1000,6 +1097,57 @@ mod tests {
         }
 
         assert_eq!(tokio::fs::read(&path).await.unwrap(), data);
+    }
+
+    #[test]
+    fn test_buffer_pool_reuse() {
+        let pool = BufferPool {
+            idle: Mutex::new((Vec::new(), 0)),
+            max_idle_bytes: 4096,
+        };
+
+        let buffer = pool.checkout(1024);
+        assert_eq!(buffer.capacity(), 1024);
+        assert!(buffer.is_empty());
+
+        let ptr = buffer.as_ptr();
+        pool.give_back(buffer);
+
+        // A smaller request reuses the idle buffer.
+        let buffer = pool.checkout(512);
+        assert_eq!(buffer.as_ptr(), ptr);
+        assert_eq!(buffer.capacity(), 1024);
+        pool.give_back(buffer);
+
+        // An undersized idle buffer is dropped and a new one is created.
+        let buffer = pool.checkout(2048);
+        assert_eq!(buffer.capacity(), 2048);
+        assert!(pool.idle.lock().unwrap().0.is_empty());
+        pool.give_back(buffer);
+
+        // Buffers beyond the idle capacity are dropped.
+        pool.give_back(BytesMut::zeroed(4096));
+        let idle = pool.idle.lock().unwrap();
+        assert_eq!(idle.0.len(), 1);
+        assert_eq!(idle.1, 2048);
+    }
+
+    #[test]
+    fn test_buffer_pool_checkout_for_read() {
+        let pool = BufferPool {
+            idle: Mutex::new((Vec::new(), 0)),
+            max_idle_bytes: 4096,
+        };
+
+        let mut buffer = pool.checkout_for_read(256);
+        assert_eq!(buffer.len(), 256);
+        buffer.fill(0xAB);
+        pool.give_back(buffer);
+
+        // The reused buffer keeps its full capacity initialized and readable.
+        let buffer = pool.checkout_for_read(128);
+        assert_eq!(buffer.len(), 128);
+        assert!(buffer.iter().all(|&b| b == 0xAB));
     }
 
     #[tokio::test]
