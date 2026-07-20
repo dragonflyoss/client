@@ -15,9 +15,10 @@
  */
 
 use crate::cache::lru_cache::LruCache;
+use bytes::BytesMut;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
-use dragonfly_client_core::Result;
+use dragonfly_client_core::{Error, Result};
 use std::cmp::{max, min};
 use std::fs::{File, OpenOptions};
 use std::future::Future;
@@ -27,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{ready, Context, Poll};
-use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, ReadBuf};
 use tokio::task::JoinHandle;
 
 #[cfg(target_os = "linux")]
@@ -310,119 +311,87 @@ impl AsyncRead for RangeReader {
     }
 }
 
-/// The state of the in-flight write of the RangeWriter.
-enum RangeWriterState {
-    /// No write is in flight, the buffer may hold buffered data.
-    Idle,
-
-    /// A positional write is running on the blocking thread pool, owning the
-    /// buffer until it completes.
-    Writing(JoinHandle<io::Result<Vec<u8>>>),
-}
-
-/// RangeWriter writes sequential data starting at a fixed offset of a file
-/// with positional writes on a shared file descriptor. It never seeks the
-/// descriptor and buffers the data into a single reusable buffer, instead of
-/// reopening and seeking the file for every piece.
-pub struct RangeWriter {
-    /// The shared file descriptor to write to.
+/// Writes exactly `expected_length` bytes from the reader to the file with
+/// positional writes starting at `offset`, and calculates the CRC32 hash of
+/// the written content. The reader fills one buffer on the runtime while the
+/// other buffer is hashed and written on the blocking thread pool, so the
+/// buffers are swapped between the two sides instead of copied, and the read
+/// overlaps the hash and the write. Only one write is in flight at a time,
+/// so the hasher updates stay in order.
+pub async fn write_range<R: AsyncRead + Unpin + ?Sized>(
     fd: Arc<File>,
-
-    /// The offset of the next positional write.
     offset: u64,
+    expected_length: u64,
+    buffer_size: usize,
+    reader: &mut R,
+) -> Result<WritePieceResponse> {
+    let buffer_size = max(buffer_size, 1);
+    let mut reader = reader.take(expected_length);
 
-    /// The reusable write buffer, moved into the blocking task while writing.
-    buf: Vec<u8>,
+    // The buffer being filled from the reader, swapped with the recycled
+    // buffer of the completed write.
+    let mut buffer = BytesMut::with_capacity(buffer_size);
 
-    /// The capacity of the write buffer.
-    capacity: usize,
+    // The in-flight hash-and-write on the blocking thread pool, owning the
+    // other buffer and the hasher until it completes.
+    let mut in_flight: Option<JoinHandle<io::Result<(BytesMut, crc32fast::Hasher)>>> = None;
 
-    /// The state of the in-flight write.
-    state: RangeWriterState,
-}
-
-/// Implements the range writer.
-impl RangeWriter {
-    /// Creates a new RangeWriter writing at `offset` with a reusable buffer of
-    /// `buffer_size` bytes.
-    pub fn new(fd: Arc<File>, offset: u64, buffer_size: usize) -> Self {
-        let capacity = max(buffer_size, 1);
-        Self {
-            fd,
-            offset,
-            buf: Vec::with_capacity(capacity),
-            capacity,
-            state: RangeWriterState::Idle,
+    let mut write_offset = offset;
+    let mut length: u64 = 0;
+    loop {
+        // Fill the buffer until it is full or the reader reaches EOF.
+        while buffer.len() < buffer_size {
+            if reader.read_buf(&mut buffer).await? == 0 {
+                break;
+            }
         }
-    }
 
-    /// Moves the buffered data into a positional write on the blocking thread
-    /// pool and advances the offset.
-    fn dispatch(&mut self) {
-        let buf = std::mem::take(&mut self.buf);
-        let fd = self.fd.clone();
-        let offset = self.offset;
-        self.offset += buf.len() as u64;
-        self.state = RangeWriterState::Writing(tokio::task::spawn_blocking(move || {
-            fd.write_all_at(&buf, offset)?;
-            Ok(buf)
+        if buffer.is_empty() {
+            break;
+        }
+
+        // Wait for the previous hash-and-write to take back its buffer and
+        // the hasher.
+        let (recycled, mut hasher) = match in_flight.take() {
+            Some(handle) => handle.await.map_err(io::Error::other)??,
+            None => (
+                BytesMut::with_capacity(buffer_size),
+                crc32fast::Hasher::new(),
+            ),
+        };
+
+        let full = std::mem::replace(&mut buffer, recycled);
+        length += full.len() as u64;
+
+        let fd = fd.clone();
+        let full_offset = write_offset;
+        write_offset += full.len() as u64;
+        in_flight = Some(tokio::task::spawn_blocking(move || {
+            hasher.update(&full);
+            fd.write_all_at(&full, full_offset)?;
+
+            let mut recycled = full;
+            recycled.clear();
+            Ok((recycled, hasher))
         }));
     }
 
-    /// Polls the in-flight write to complete, restoring the buffer for reuse.
-    fn poll_idle(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        match &mut self.state {
-            RangeWriterState::Idle => Poll::Ready(Ok(())),
-            RangeWriterState::Writing(handle) => {
-                let result = ready!(Pin::new(handle).poll(cx));
-                self.state = RangeWriterState::Idle;
-                self.buf = result.map_err(io::Error::other)??;
-                self.buf.clear();
-                Poll::Ready(Ok(()))
-            }
-        }
-    }
-}
+    // Wait for the last hash-and-write to complete.
+    let hasher = match in_flight.take() {
+        Some(handle) => handle.await.map_err(io::Error::other)??.1,
+        None => crc32fast::Hasher::new(),
+    };
 
-/// Implements the buffered write for the RangeWriter.
-impl AsyncWrite for RangeWriter {
-    /// Polls the write to buffer the data, dispatching a positional write on the
-    /// blocking thread pool when the buffer is full. The buffer is reused for
-    /// subsequent writes.
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        data: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        let this = self.get_mut();
-        ready!(this.poll_idle(cx))?;
-
-        let n = min(this.capacity - this.buf.len(), data.len());
-        this.buf.extend_from_slice(&data[..n]);
-        if this.buf.len() == this.capacity {
-            this.dispatch();
-        }
-
-        Poll::Ready(Ok(n))
+    if length != expected_length {
+        return Err(Error::Unknown(format!(
+            "expected length {expected_length} but got {length}"
+        )));
     }
 
-    /// Polls the flush to dispatch the buffered data and wait for the writes
-    /// to complete.
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        ready!(this.poll_idle(cx))?;
-        if !this.buf.is_empty() {
-            this.dispatch();
-            ready!(this.poll_idle(cx))?;
-        }
-
-        Poll::Ready(Ok(()))
-    }
-
-    /// Polls the shutdown to flush the buffered data.
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        self.poll_flush(cx)
-    }
+    Ok(WritePieceResponse {
+        length,
+        hash: hasher.finalize().to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -430,7 +399,7 @@ mod tests {
     use super::*;
     use std::io::Cursor;
     use tempfile::tempdir;
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 
     fn pattern(length: usize) -> Vec<u8> {
         (0..length).map(|i| (i % 251) as u8).collect()
@@ -517,22 +486,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_range_writer_poll_after_write_error() {
+    async fn test_write_range_write_error() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("task");
         tokio::fs::write(&path, b"hello, world!").await.unwrap();
+
+        // Writing to a read-only file descriptor must surface the error.
         let fd = Arc::new(File::open(&path).unwrap());
-
-        let mut writer = RangeWriter::new(fd, 0, 4);
-        assert!(writer.write_all(b"data!").await.is_err());
-
-        // Polling again after the error must not panic.
-        let _ = writer.write_all(b"more").await;
-        let _ = writer.flush().await;
+        let data = pattern(16 * 1024);
+        assert!(
+            write_range(fd, 0, data.len() as u64, 4, &mut data.as_slice())
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
-    async fn test_range_writer_then_range_reader_shared_cache() {
+    async fn test_write_range_then_range_reader_shared_cache() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("task");
         tokio::fs::write(&path, b"").await.unwrap();
@@ -540,9 +510,15 @@ mod tests {
         let cache = FDCache::new(DEFAULT_FD_CACHE_CAPACITY);
 
         let data = pattern(16 * 1024);
-        let mut writer = RangeWriter::new(cache.open_write(&path).await.unwrap(), 0, 4 * 1024);
-        writer.write_all(&data).await.unwrap();
-        writer.flush().await.unwrap();
+        write_range(
+            cache.open_write(&path).await.unwrap(),
+            0,
+            data.len() as u64,
+            4 * 1024,
+            &mut data.as_slice(),
+        )
+        .await
+        .unwrap();
 
         let mut reader = RangeReader::new(
             cache.open(&path).await.unwrap(),
@@ -746,7 +722,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_range_writer() {
+    async fn test_write_range() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("task");
         tokio::fs::write(&path, b"").await.unwrap();
@@ -758,14 +734,17 @@ mod tests {
                 .unwrap(),
         );
 
-        let mut writer = RangeWriter::new(fd, 0, 512);
-        writer.write_all(b"hello, world!").await.unwrap();
-        writer.flush().await.unwrap();
-        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"hello, world!");
+        let data = b"hello, world!";
+        let response = write_range(fd, 0, data.len() as u64, 512, &mut data.as_slice())
+            .await
+            .unwrap();
+        assert_eq!(response.length, data.len() as u64);
+        assert_eq!(response.hash, crc32fast::hash(data).to_string());
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), data);
     }
 
     #[tokio::test]
-    async fn test_range_writer_multiple_fills() {
+    async fn test_write_range_multiple_fills() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("task");
         tokio::fs::write(&path, b"").await.unwrap();
@@ -778,14 +757,16 @@ mod tests {
         );
 
         let data = pattern(256 * 1024);
-        let mut writer = RangeWriter::new(fd, 0, 4 * 1024);
-        writer.write_all(&data).await.unwrap();
-        writer.flush().await.unwrap();
+        let response = write_range(fd, 0, data.len() as u64, 4 * 1024, &mut data.as_slice())
+            .await
+            .unwrap();
+        assert_eq!(response.length, data.len() as u64);
+        assert_eq!(response.hash, crc32fast::hash(&data).to_string());
         assert_eq!(tokio::fs::read(&path).await.unwrap(), data);
     }
 
     #[tokio::test]
-    async fn test_range_writer_offset() {
+    async fn test_write_range_offset() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("task");
         tokio::fs::write(&path, vec![0u8; 64]).await.unwrap();
@@ -797,9 +778,9 @@ mod tests {
                 .unwrap(),
         );
 
-        let mut writer = RangeWriter::new(fd, 7, 2);
-        writer.write_all(b"world").await.unwrap();
-        writer.flush().await.unwrap();
+        write_range(fd, 7, 5, 2, &mut b"world".as_slice())
+            .await
+            .unwrap();
 
         let content = tokio::fs::read(&path).await.unwrap();
         assert_eq!(&content[7..12], b"world");
@@ -807,9 +788,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_range_writer_small_chunk_writes() {
+    async fn test_write_range_length_mismatch() {
         let temp_dir = tempdir().unwrap();
-        let path = temp_dir.path().join("task");
+        let data = pattern(1024);
+
+        // The reader is shorter than the expected length.
+        let path = temp_dir.path().join("short");
         tokio::fs::write(&path, b"").await.unwrap();
         let fd = Arc::new(
             OpenOptions::new()
@@ -818,18 +802,30 @@ mod tests {
                 .open(&path)
                 .unwrap(),
         );
+        assert!(write_range(fd, 0, 2048, 512, &mut data.as_slice())
+            .await
+            .is_err());
 
-        let data = pattern(1024);
-        let mut writer = RangeWriter::new(fd, 0, 16);
-        for chunk in data.chunks(3) {
-            writer.write_all(chunk).await.unwrap();
-        }
-        writer.flush().await.unwrap();
-        assert_eq!(tokio::fs::read(&path).await.unwrap(), data);
+        // The reader is longer than the expected length, the rest is ignored.
+        let path = temp_dir.path().join("long");
+        tokio::fs::write(&path, b"").await.unwrap();
+        let fd = Arc::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap(),
+        );
+        let response = write_range(fd, 0, 512, 512, &mut data.as_slice())
+            .await
+            .unwrap();
+        assert_eq!(response.length, 512);
+        assert_eq!(response.hash, crc32fast::hash(&data[..512]).to_string());
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), &data[..512]);
     }
 
     #[tokio::test]
-    async fn test_range_writer_buffer_sizes() {
+    async fn test_write_range_buffer_sizes() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("task");
 
@@ -843,15 +839,17 @@ mod tests {
                     .unwrap(),
             );
 
-            let mut writer = RangeWriter::new(fd, 0, buffer_size);
-            writer.write_all(b"hello, world!").await.unwrap();
-            writer.flush().await.unwrap();
-            assert_eq!(tokio::fs::read(&path).await.unwrap(), b"hello, world!");
+            let data = b"hello, world!";
+            let response = write_range(fd, 0, data.len() as u64, buffer_size, &mut data.as_slice())
+                .await
+                .unwrap();
+            assert_eq!(response.hash, crc32fast::hash(data).to_string());
+            assert_eq!(tokio::fs::read(&path).await.unwrap(), data);
         }
     }
 
     #[tokio::test]
-    async fn test_range_writer_concurrent_writers() {
+    async fn test_write_range_concurrent_writers() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("task");
         let data = pattern(64 * 1024);
@@ -872,9 +870,15 @@ mod tests {
                 let fd = fd.clone();
                 let piece = data[i * range_length..(i + 1) * range_length].to_vec();
                 tokio::spawn(async move {
-                    let mut writer = RangeWriter::new(fd, (i * range_length) as u64, 1024);
-                    writer.write_all(&piece).await.unwrap();
-                    writer.flush().await.unwrap();
+                    write_range(
+                        fd,
+                        (i * range_length) as u64,
+                        piece.len() as u64,
+                        1024,
+                        &mut piece.as_slice(),
+                    )
+                    .await
+                    .unwrap();
                 })
             })
             .collect();

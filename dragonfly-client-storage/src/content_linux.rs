@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-use bytes::BytesMut;
 use bytesize::ByteSize;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
@@ -24,7 +23,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncRead;
 use tracing::{error, info, instrument, warn};
 use walkdir::WalkDir;
 
@@ -272,54 +271,16 @@ impl Content {
                 error!("open {:?} failed: {}", task_path, err);
             })?;
 
-        let mut writer =
-            super::content::RangeWriter::new(fd, offset, self.config.storage.write_buffer_size);
-        let mut reader = reader.take(expected_length);
-
-        // Copy the piece to the writer and update the CRC32 value, so the hash
-        // update and the file write operate on large chunks.
-        let mut buffer = BytesMut::with_capacity(self.config.storage.write_buffer_size);
-        let mut hasher = crc32fast::Hasher::new();
-        let mut length: u64 = 0;
-        loop {
-            // Fill the buffer until it is full or the reader reaches EOF.
-            while buffer.len() < self.config.storage.write_buffer_size {
-                let n = reader.read_buf(&mut buffer).await.inspect_err(|err| {
-                    error!("read {:?} failed: {}", task_path, err);
-                })?;
-
-                if n == 0 {
-                    break;
-                }
-            }
-
-            if buffer.is_empty() {
-                break;
-            }
-
-            hasher.update(&buffer);
-            writer.write_all(&buffer).await.inspect_err(|err| {
-                error!("write {:?} failed: {}", task_path, err);
-            })?;
-
-            length += buffer.len() as u64;
-            buffer.clear();
-        }
-
-        writer.flush().await.inspect_err(|err| {
-            error!("flush {:?} failed: {}", task_path, err);
-        })?;
-
-        if length != expected_length {
-            return Err(Error::Unknown(format!(
-                "expected length {expected_length} but got {length}"
-            )));
-        }
-
-        // Calculate the hash of the piece.
-        Ok(super::content::WritePieceResponse {
-            length,
-            hash: hasher.finalize().to_string(),
+        super::content::write_range(
+            fd,
+            offset,
+            expected_length,
+            self.config.storage.write_buffer_size,
+            reader,
+        )
+        .await
+        .inspect_err(|err| {
+            error!("write {:?} failed: {}", task_path, err);
         })
     }
 
@@ -511,54 +472,16 @@ impl Content {
                 error!("open {:?} failed: {}", task_path, err);
             })?;
 
-        let mut writer =
-            super::content::RangeWriter::new(fd, offset, self.config.storage.write_buffer_size);
-        let mut reader = reader.take(expected_length);
-
-        // Copy the piece to the writer and update the CRC32 value, so the hash
-        // update and the file write operate on large chunks.
-        let mut buffer = BytesMut::with_capacity(self.config.storage.write_buffer_size);
-        let mut hasher = crc32fast::Hasher::new();
-        let mut length: u64 = 0;
-        loop {
-            // Fill the buffer until it is full or the reader reaches EOF.
-            while buffer.len() < self.config.storage.write_buffer_size {
-                let n = reader.read_buf(&mut buffer).await.inspect_err(|err| {
-                    error!("read {:?} failed: {}", task_path, err);
-                })?;
-
-                if n == 0 {
-                    break;
-                }
-            }
-
-            if buffer.is_empty() {
-                break;
-            }
-
-            hasher.update(&buffer);
-            writer.write_all(&buffer).await.inspect_err(|err| {
-                error!("write {:?} failed: {}", task_path, err);
-            })?;
-
-            length += buffer.len() as u64;
-            buffer.clear();
-        }
-
-        writer.flush().await.inspect_err(|err| {
-            error!("flush {:?} failed: {}", task_path, err);
-        })?;
-
-        if length != expected_length {
-            return Err(Error::Unknown(format!(
-                "expected length {expected_length} but got {length}"
-            )));
-        }
-
-        // Calculate the hash of the piece.
-        Ok(super::content::WritePieceResponse {
-            length,
-            hash: hasher.finalize().to_string(),
+        super::content::write_range(
+            fd,
+            offset,
+            expected_length,
+            self.config.storage.write_buffer_size,
+            reader,
+        )
+        .await
+        .inspect_err(|err| {
+            error!("write {:?} failed: {}", task_path, err);
         })
     }
 
@@ -779,54 +702,16 @@ impl Content {
                 error!("open {:?} failed: {}", task_path, err);
             })?;
 
-        let mut writer =
-            super::content::RangeWriter::new(fd, offset, self.config.storage.write_buffer_size);
-        let mut reader = reader.take(expected_length);
-
-        // Copy the piece to the writer and update the CRC32 value, so the hash
-        // update and the file write operate on large chunks.
-        let mut buffer = BytesMut::with_capacity(self.config.storage.write_buffer_size);
-        let mut hasher = crc32fast::Hasher::new();
-        let mut length: u64 = 0;
-        loop {
-            // Fill the buffer until it is full or the reader reaches EOF.
-            while buffer.len() < self.config.storage.write_buffer_size {
-                let n = reader.read_buf(&mut buffer).await.inspect_err(|err| {
-                    error!("read {:?} failed: {}", task_path, err);
-                })?;
-
-                if n == 0 {
-                    break;
-                }
-            }
-
-            if buffer.is_empty() {
-                break;
-            }
-
-            hasher.update(&buffer);
-            writer.write_all(&buffer).await.inspect_err(|err| {
-                error!("write {:?} failed: {}", task_path, err);
-            })?;
-
-            length += buffer.len() as u64;
-            buffer.clear();
-        }
-
-        writer.flush().await.inspect_err(|err| {
-            error!("flush {:?} failed: {}", task_path, err);
-        })?;
-
-        if length != expected_length {
-            return Err(Error::Unknown(format!(
-                "expected length {expected_length} but got {length}"
-            )));
-        }
-
-        // Calculate the hash of the piece.
-        Ok(super::content::WritePieceResponse {
-            length,
-            hash: hasher.finalize().to_string(),
+        super::content::write_range(
+            fd,
+            offset,
+            expected_length,
+            self.config.storage.write_buffer_size,
+            reader,
+        )
+        .await
+        .inspect_err(|err| {
+            error!("write {:?} failed: {}", task_path, err);
         })
     }
 
@@ -869,6 +754,7 @@ mod tests {
     use crate::content;
     use std::io::Cursor;
     use tempfile::tempdir;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[tokio::test]
     async fn test_create_task() {
