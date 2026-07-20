@@ -65,12 +65,12 @@ pub fn init_tracing(
             .with_timer(SystemTime)
     };
 
+    fs::create_dir_all(&log_dir).expect("failed to create log directory");
     let logging_layer: Box<dyn tracing_subscriber::Layer<Registry> + Send + Sync> = if console {
         let (writer, guard) = tracing_appender::non_blocking(std::io::stdout());
         guards.push(guard);
         base_layer(writer).boxed()
     } else {
-        fs::create_dir_all(&log_dir).expect("failed to create log directory");
         let appender = BasicRollingFileAppender::new(
             log_dir.join(name).with_extension("log"),
             RollingConditionBasic::new().hourly(),
