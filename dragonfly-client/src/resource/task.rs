@@ -547,6 +547,36 @@ impl Task {
         Ok(())
     }
 
+    /// Downloads a task and announces the peer to the scheduler, even if all pieces are
+    /// hit in the local cache.
+    #[instrument(level = "debug", skip_all)]
+    pub async fn download_and_ensure_announcement(
+        &self,
+        task: &metadata::Task,
+        host_id: &str,
+        peer_id: &str,
+        request: Download,
+        download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
+    ) -> ClientResult<()> {
+        if task.is_finished() {
+            return self
+                .download_partial_with_scheduler_from_local(task, host_id, peer_id, request)
+                .await
+                .inspect_err(|err| {
+                    error!("announce peer with scheduler failed: {:?}", err);
+                });
+        }
+
+        self.download(
+            task,
+            host_id,
+            peer_id,
+            request.clone(),
+            download_progress_tx.clone(),
+        )
+        .await
+    }
+
     /// Downloads a partial task with scheduler.
     #[allow(clippy::too_many_arguments)]
     #[instrument(level = "debug", skip_all)]
@@ -964,12 +994,146 @@ impl Task {
                     in_stream_tx.closed().await;
                     return Ok(finished_pieces);
                 }
+                announce_peer_response::Response::HitLocalCacheResponse(_) => {
+                    // HitLocalCacheResponse is only sent when the register request has the
+                    // hit_local_cache flag, which is not set in this flow.
+                    error!("receive unexpected HitLocalCacheResponse");
+                    return Err(Error::UnexpectedResponse);
+                }
             }
         }
 
         // If the stream is finished abnormally, return an error.
         error!("stream is finished abnormally");
         Ok(finished_pieces)
+    }
+
+    /// Announces a task that hits the local cache completely with the scheduler. It only
+    /// reports the metadata of the peer to the scheduler by the register request with the
+    /// hit_local_cache flag and the download peer started/finished requests, no pieces need
+    /// to be downloaded. The scheduler registers the peer and can schedule it as a candidate
+    /// parent for other peers.
+    #[instrument(level = "debug", skip_all)]
+    async fn download_partial_with_scheduler_from_local(
+        &self,
+        task: &metadata::Task,
+        host_id: &str,
+        peer_id: &str,
+        request: Download,
+    ) -> ClientResult<()> {
+        // Get the id of the task.
+        let task_id = task.id.as_str();
+
+        // Set the hit_local_cache flag, so the scheduler only needs the metadata report
+        // and does not schedule the peer for downloading pieces.
+        let request = Download {
+            hit_local_cache: true,
+            need_back_to_source: false,
+            ..request
+        };
+
+        // Initialize stream channel.
+        let (in_stream_tx, in_stream_rx) = mpsc::channel(4);
+
+        // Send the register peer request.
+        in_stream_tx
+            .send_timeout(
+                AnnouncePeerRequest {
+                    host_id: host_id.to_string(),
+                    task_id: task_id.to_string(),
+                    peer_id: peer_id.to_string(),
+                    request: Some(announce_peer_request::Request::RegisterPeerRequest(
+                        RegisterPeerRequest {
+                            download: Some(request),
+                        },
+                    )),
+                },
+                REQUEST_TIMEOUT,
+            )
+            .await
+            .inspect_err(|err| {
+                error!("send RegisterPeerRequest failed: {:?}", err);
+            })?;
+        debug!("sent RegisterPeerRequest");
+
+        // Initialize the stream.
+        let in_stream = ReceiverStream::new(in_stream_rx);
+        let request_stream = Request::new(in_stream);
+        let response = self
+            .scheduler_client
+            .announce_peer(task_id, peer_id, request_stream)
+            .await
+            .inspect_err(|err| {
+                error!("announce peer failed: {:?}", err);
+            })?;
+        debug!("announced peer has been connected");
+
+        let out_stream = response
+            .into_inner()
+            .timeout(self.config.scheduler.schedule_timeout);
+        tokio::pin!(out_stream);
+
+        // Receive the response of the register peer request, which should be the
+        // hit local cache response.
+        let message = out_stream
+            .try_next()
+            .await
+            .inspect_err(|err| {
+                error!("receive message from scheduler failed: {:?}", err);
+            })?
+            .ok_or_else(|| {
+                error!("stream is finished abnormally");
+                Error::Unknown("stream is finished abnormally".to_string())
+            })?;
+
+        let response = message?.response.ok_or(Error::UnexpectedResponse)?;
+        let announce_peer_response::Response::HitLocalCacheResponse(_) = response else {
+            error!("receive unexpected response: {:?}", response);
+            return Err(Error::UnexpectedResponse);
+        };
+        info!("hit local cache response");
+
+        // Send the download peer started request.
+        in_stream_tx
+            .send_timeout(
+                AnnouncePeerRequest {
+                    host_id: host_id.to_string(),
+                    task_id: task_id.to_string(),
+                    peer_id: peer_id.to_string(),
+                    request: Some(announce_peer_request::Request::DownloadPeerStartedRequest(
+                        DownloadPeerStartedRequest {},
+                    )),
+                },
+                REQUEST_TIMEOUT,
+            )
+            .await
+            .inspect_err(|err| {
+                error!("send DownloadPeerStartedRequest failed: {:?}", err);
+            })?;
+        debug!("sent DownloadPeerStartedRequest");
+
+        // Send the download peer finished request.
+        in_stream_tx
+            .send_timeout(
+                AnnouncePeerRequest {
+                    host_id: host_id.to_string(),
+                    task_id: task_id.to_string(),
+                    peer_id: peer_id.to_string(),
+                    request: Some(announce_peer_request::Request::DownloadPeerFinishedRequest(
+                        DownloadPeerFinishedRequest {},
+                    )),
+                },
+                REQUEST_TIMEOUT,
+            )
+            .await
+            .inspect_err(|err| {
+                error!("send DownloadPeerFinishedRequest failed: {:?}", err);
+            })?;
+        debug!("sent DownloadPeerFinishedRequest");
+
+        // Wait for the latest message to be sent.
+        in_stream_tx.closed().await;
+        Ok(())
     }
 
     /// Downloads a partial task with scheduler from a parent.

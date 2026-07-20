@@ -1108,6 +1108,7 @@ async fn download(
                 actual_content_length: None,
                 actual_piece_count: None,
                 enable_task_id_based_blob_digest: false,
+                hit_local_cache: false,
             }),
         })
         .await
