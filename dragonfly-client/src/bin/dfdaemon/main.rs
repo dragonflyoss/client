@@ -52,10 +52,6 @@ use tracing::{error, info, Level};
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-// Heap profiling is enabled in debug builds only, because the per-allocation
-// backtrace sampling costs a few percent of CPU. Release builds default to
-// `prof:false`; to profile a release binary, restart it with
-// MALLOC_CONF="prof:true,prof_active:true,lg_prof_sample:19".
 #[cfg(debug_assertions)]
 #[allow(non_upper_case_globals)]
 #[export_name = "malloc_conf"]

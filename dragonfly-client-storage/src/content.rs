@@ -354,11 +354,11 @@ impl AsyncRead for RangeReader {
 
 /// Writes exactly `expected_length` bytes from the reader to the file with
 /// positional writes starting at `offset`, and calculates the CRC32 hash of
-/// the written content. The reader fills one buffer on the runtime while the
-/// other buffer is hashed and written on the blocking thread pool, so the
-/// buffers are swapped between the two sides instead of copied, and the read
-/// overlaps the hash and the write. Only one write is in flight at a time,
-/// so the hasher updates stay in order.
+/// the written content. The reader fills one buffer on the runtime and hashes
+/// it while the data is still hot in the cache of the filling core, then
+/// hands it to the blocking thread pool for the positional write, swapping
+/// the recycled buffer of the completed write back for the next fill instead
+/// of copying, so the read and the hash overlap the write.
 pub async fn write_range<R: AsyncRead + Unpin + ?Sized>(
     fd: Arc<File>,
     offset: u64,
@@ -373,10 +373,11 @@ pub async fn write_range<R: AsyncRead + Unpin + ?Sized>(
     // buffer of the completed write.
     let mut buffer = BytesMut::with_capacity(buffer_size);
 
-    // The in-flight hash-and-write on the blocking thread pool, owning the
-    // other buffer and the hasher until it completes.
-    let mut in_flight: Option<JoinHandle<io::Result<(BytesMut, crc32fast::Hasher)>>> = None;
+    // The in-flight write on the blocking thread pool, owning the other
+    // buffer until it completes.
+    let mut in_flight: Option<JoinHandle<io::Result<BytesMut>>> = None;
 
+    let mut hasher = crc32fast::Hasher::new();
     let mut write_offset = offset;
     let mut length: u64 = 0;
     loop {
@@ -391,14 +392,14 @@ pub async fn write_range<R: AsyncRead + Unpin + ?Sized>(
             break;
         }
 
-        // Wait for the previous hash-and-write to take back its buffer and
-        // the hasher.
-        let (recycled, mut hasher) = match in_flight.take() {
+        // Hash the buffer while its data is still hot in the cache of the
+        // core that filled it.
+        hasher.update(&buffer);
+
+        // Wait for the previous write to take back its buffer.
+        let recycled = match in_flight.take() {
             Some(handle) => handle.await.map_err(io::Error::other)??,
-            None => (
-                BytesMut::with_capacity(buffer_size),
-                crc32fast::Hasher::new(),
-            ),
+            None => BytesMut::with_capacity(buffer_size),
         };
 
         let full = std::mem::replace(&mut buffer, recycled);
@@ -408,20 +409,18 @@ pub async fn write_range<R: AsyncRead + Unpin + ?Sized>(
         let full_offset = write_offset;
         write_offset += full.len() as u64;
         in_flight = Some(tokio::task::spawn_blocking(move || {
-            hasher.update(&full);
             fd.write_all_at(&full, full_offset)?;
 
             let mut recycled = full;
             recycled.clear();
-            Ok((recycled, hasher))
+            Ok(recycled)
         }));
     }
 
-    // Wait for the last hash-and-write to complete.
-    let hasher = match in_flight.take() {
-        Some(handle) => handle.await.map_err(io::Error::other)??.1,
-        None => crc32fast::Hasher::new(),
-    };
+    // Wait for the last write to complete.
+    if let Some(handle) = in_flight.take() {
+        handle.await.map_err(io::Error::other)??;
+    }
 
     if length != expected_length {
         return Err(Error::Unknown(format!(
