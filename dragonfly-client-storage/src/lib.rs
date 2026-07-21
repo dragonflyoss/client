@@ -20,7 +20,7 @@ use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::digest::{Algorithm, Digest};
-use piece_notifier::PieceNotifier;
+use piece_notifier::{Claim, PieceNotifier};
 use reqwest::header::HeaderMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -729,15 +729,44 @@ impl Storage {
         piece_id: &str,
         number: u32,
     ) -> Result<metadata::Piece> {
-        // Wait for the piece to be finished.
-        match self.wait_for_piece_finished(piece_id).await {
-            Ok(piece) => Ok(piece),
-            // If piece is not found or wait timeout, create piece metadata.
-            Err(_) => {
-                self.piece_notifier.register(piece_id);
-                self.metadata
-                    .download_piece_started(piece_id, number)
-                    .inspect_err(|_| self.piece_notifier.remove_and_notify(piece_id))
+        loop {
+            // Wait for the piece to be finished.
+            match self.wait_for_piece_finished(piece_id).await {
+                Ok(piece) => return Ok(piece),
+                // If piece is not found or wait timeout, claim the download. Exactly
+                // one of the concurrent claimers becomes the downloader, so the same
+                // piece is never downloaded from source or parent twice.
+                Err(_) => match self.piece_notifier.claim(piece_id) {
+                    Claim::Owner => {
+                        match self
+                            .get_piece(piece_id)
+                            .inspect_err(|_| self.piece_notifier.remove_and_notify(piece_id))?
+                        {
+                            Some(piece) if piece.is_finished() => {
+                                self.piece_notifier.remove_and_notify(piece_id);
+                                return Ok(piece);
+                            }
+                            _ => {
+                                return self
+                                    .metadata
+                                    .download_piece_started(piece_id, number)
+                                    .inspect_err(|_| {
+                                        self.piece_notifier.remove_and_notify(piece_id)
+                                    })
+                            }
+                        }
+                    }
+                    Claim::InFlight(notifier) => {
+                        let notified = notifier.notified();
+                        tokio::pin!(notified);
+                        notified.as_mut().enable();
+
+                        tokio::select! {
+                            _ = notified => {}
+                            _ = sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_FALLBACK_INTERVAL) => {}
+                        }
+                    }
+                },
             }
         }
     }
@@ -942,15 +971,44 @@ impl Storage {
         piece_id: &str,
         number: u32,
     ) -> Result<metadata::Piece> {
-        // Wait for the piece to be finished.
-        match self.wait_for_persistent_piece_finished(piece_id).await {
-            Ok(piece) => Ok(piece),
-            // If piece is not found or wait timeout, create piece metadata.
-            Err(_) => {
-                self.piece_notifier.register(piece_id);
-                self.metadata
-                    .download_piece_started(piece_id, number)
-                    .inspect_err(|_| self.piece_notifier.remove_and_notify(piece_id))
+        loop {
+            // Wait for the piece to be finished.
+            match self.wait_for_persistent_piece_finished(piece_id).await {
+                Ok(piece) => return Ok(piece),
+                // If piece is not found or wait timeout, claim the download. Exactly
+                // one of the concurrent claimers becomes the downloader, so the same
+                // piece is never downloaded from source or parent twice.
+                Err(_) => match self.piece_notifier.claim(piece_id) {
+                    Claim::Owner => {
+                        match self
+                            .get_persistent_piece(piece_id)
+                            .inspect_err(|_| self.piece_notifier.remove_and_notify(piece_id))?
+                        {
+                            Some(piece) if piece.is_finished() => {
+                                self.piece_notifier.remove_and_notify(piece_id);
+                                return Ok(piece);
+                            }
+                            _ => {
+                                return self
+                                    .metadata
+                                    .download_piece_started(piece_id, number)
+                                    .inspect_err(|_| {
+                                        self.piece_notifier.remove_and_notify(piece_id)
+                                    })
+                            }
+                        }
+                    }
+                    Claim::InFlight(notifier) => {
+                        let notified = notifier.notified();
+                        tokio::pin!(notified);
+                        notified.as_mut().enable();
+
+                        tokio::select! {
+                            _ = notified => {}
+                            _ = sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_FALLBACK_INTERVAL) => {}
+                        }
+                    }
+                },
             }
         }
     }
@@ -1124,18 +1182,47 @@ impl Storage {
         piece_id: &str,
         number: u32,
     ) -> Result<metadata::Piece> {
-        // Wait for the piece to be finished.
-        match self
-            .wait_for_persistent_cache_piece_finished(piece_id)
-            .await
-        {
-            Ok(piece) => Ok(piece),
-            // If piece is not found or wait timeout, create piece metadata.
-            Err(_) => {
-                self.piece_notifier.register(piece_id);
-                self.metadata
-                    .download_piece_started(piece_id, number)
-                    .inspect_err(|_| self.piece_notifier.remove_and_notify(piece_id))
+        loop {
+            // Wait for the piece to be finished.
+            match self
+                .wait_for_persistent_cache_piece_finished(piece_id)
+                .await
+            {
+                Ok(piece) => return Ok(piece),
+                // If piece is not found or wait timeout, claim the download. Exactly
+                // one of the concurrent claimers becomes the downloader, so the same
+                // piece is never downloaded from source or parent twice.
+                Err(_) => match self.piece_notifier.claim(piece_id) {
+                    Claim::Owner => {
+                        match self
+                            .get_persistent_cache_piece(piece_id)
+                            .inspect_err(|_| self.piece_notifier.remove_and_notify(piece_id))?
+                        {
+                            Some(piece) if piece.is_finished() => {
+                                self.piece_notifier.remove_and_notify(piece_id);
+                                return Ok(piece);
+                            }
+                            _ => {
+                                return self
+                                    .metadata
+                                    .download_piece_started(piece_id, number)
+                                    .inspect_err(|_| {
+                                        self.piece_notifier.remove_and_notify(piece_id)
+                                    })
+                            }
+                        }
+                    }
+                    Claim::InFlight(notifier) => {
+                        let notified = notifier.notified();
+                        tokio::pin!(notified);
+                        notified.as_mut().enable();
+
+                        tokio::select! {
+                            _ = notified => {}
+                            _ = sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_FALLBACK_INTERVAL) => {}
+                        }
+                    }
+                },
             }
         }
     }
@@ -1500,15 +1587,44 @@ impl Storage {
         piece_id: &str,
         number: u32,
     ) -> Result<metadata::Piece> {
-        // Wait for the piece to be finished.
-        match self.wait_for_cache_piece_finished(piece_id).await {
-            Ok(piece) => Ok(piece),
-            // If piece is not found or wait timeout, create piece metadata.
-            Err(_) => {
-                self.piece_notifier.register(piece_id);
-                self.metadata
-                    .download_piece_started(piece_id, number)
-                    .inspect_err(|_| self.piece_notifier.remove_and_notify(piece_id))
+        loop {
+            // Wait for the piece to be finished.
+            match self.wait_for_cache_piece_finished(piece_id).await {
+                Ok(piece) => return Ok(piece),
+                // If piece is not found or wait timeout, claim the download. Exactly
+                // one of the concurrent claimers becomes the downloader, so the same
+                // piece is never downloaded from source or parent twice.
+                Err(_) => match self.piece_notifier.claim(piece_id) {
+                    Claim::Owner => {
+                        match self
+                            .get_cache_piece(piece_id)
+                            .inspect_err(|_| self.piece_notifier.remove_and_notify(piece_id))?
+                        {
+                            Some(piece) if piece.is_finished() => {
+                                self.piece_notifier.remove_and_notify(piece_id);
+                                return Ok(piece);
+                            }
+                            _ => {
+                                return self
+                                    .metadata
+                                    .download_piece_started(piece_id, number)
+                                    .inspect_err(|_| {
+                                        self.piece_notifier.remove_and_notify(piece_id)
+                                    })
+                            }
+                        }
+                    }
+                    Claim::InFlight(notifier) => {
+                        let notified = notifier.notified();
+                        tokio::pin!(notified);
+                        notified.as_mut().enable();
+
+                        tokio::select! {
+                            _ = notified => {}
+                            _ = sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_FALLBACK_INTERVAL) => {}
+                        }
+                    }
+                },
             }
         }
     }
@@ -1904,6 +2020,65 @@ mod tests {
             elapsed < Duration::from_millis(800),
             "waiter took {elapsed:?}, expected a notification-driven wake"
         );
+        assert!(storage
+            .in_flight_piece_notifier(piece_id.as_str())
+            .is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_download_piece_started_elects_single_downloader() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(Config::default());
+        let storage = Arc::new(
+            Storage::new(config, dir.path(), dir.path().to_path_buf())
+                .await
+                .unwrap(),
+        );
+
+        const TASK_ID: &str = "f5add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14c";
+        const CONTENT: &[u8] = b"piece content";
+        storage
+            .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
+            .await
+            .unwrap();
+
+        let piece_id = storage.piece_id(TASK_ID, 0);
+        let mut claimers = tokio::task::JoinSet::new();
+        for _ in 0..16 {
+            let storage = storage.clone();
+            let piece_id = piece_id.clone();
+            claimers.spawn(async move {
+                let piece = storage
+                    .download_piece_started(piece_id.as_str(), 0)
+                    .await
+                    .unwrap();
+                if piece.is_finished() {
+                    return false;
+                }
+
+                let mut reader = CONTENT;
+                storage
+                    .download_piece_from_source_finished(
+                        piece_id.as_str(),
+                        TASK_ID,
+                        0,
+                        CONTENT.len() as u64,
+                        &mut reader,
+                        Duration::from_secs(5),
+                    )
+                    .await
+                    .unwrap();
+                true
+            });
+        }
+
+        let downloaders = claimers
+            .join_all()
+            .await
+            .into_iter()
+            .filter(|downloader| *downloader)
+            .count();
+        assert_eq!(downloaders, 1, "expected exactly one downloader");
         assert!(storage
             .in_flight_piece_notifier(piece_id.as_str())
             .is_none());

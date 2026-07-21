@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -22,7 +23,7 @@ use tokio::sync::Notify;
 /// (finished, failed or its metadata deleted), so the waiters do not need to poll
 /// the piece metadata on an interval.
 ///
-/// The notifier is registered just before the piece metadata is created when the
+/// The notifier is claimed just before the piece metadata is created when the
 /// piece download starts, and removed (waking all its waiters) when the download
 /// reaches a terminal state. The piece metadata remains the source of truth:
 /// waiters must re-check it after being notified.
@@ -32,12 +33,32 @@ pub(crate) struct PieceNotifier {
     notifiers: DashMap<String, Arc<Notify>>,
 }
 
+/// Claim is the result of claiming the download of a piece.
+pub(crate) enum Claim {
+    /// The caller inserted the notifier and is the sole downloader of the piece.
+    Owner,
+
+    /// Another download of the piece is already in flight. The caller should
+    /// wait on its notifier and re-check the piece metadata.
+    InFlight(Arc<Notify>),
+}
+
+/// PieceNotifier notifies the waiters when an in-flight piece download completes
+/// (finished, failed or its metadata deleted), so the waiters do not need to poll
+/// the piece metadata on an interval.
 impl PieceNotifier {
-    /// Registers the notifier of the piece when its download starts. If the piece
-    /// is already registered by a concurrent download, the existing notifier is
-    /// kept.
-    pub(crate) fn register(&self, piece_id: &str) {
-        self.notifiers.entry(piece_id.to_string()).or_default();
+    /// Atomically claims the download of the piece when its download starts.
+    /// Exactly one of the concurrent claimers becomes the owner; the others get
+    /// the owner's notifier to wait on, so the same piece is never downloaded
+    /// twice concurrently.
+    pub(crate) fn claim(&self, piece_id: &str) -> Claim {
+        match self.notifiers.entry(piece_id.to_string()) {
+            Entry::Occupied(entry) => Claim::InFlight(entry.get().clone()),
+            Entry::Vacant(entry) => {
+                entry.insert(Arc::new(Notify::new()));
+                Claim::Owner
+            }
+        }
     }
 
     /// Returns the notifier of the in-flight piece, or `None` if the piece is not
@@ -68,14 +89,13 @@ mod tests {
         let piece_id = "d3add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14a-0";
         assert!(piece_notifier.get(piece_id).is_none());
 
-        piece_notifier.register(piece_id);
+        assert!(matches!(piece_notifier.claim(piece_id), Claim::Owner));
         let notifier = piece_notifier.get(piece_id).unwrap();
 
-        piece_notifier.register(piece_id);
-        assert!(Arc::ptr_eq(
-            &notifier,
-            &piece_notifier.get(piece_id).unwrap()
-        ));
+        match piece_notifier.claim(piece_id) {
+            Claim::InFlight(in_flight) => assert!(Arc::ptr_eq(&notifier, &in_flight)),
+            Claim::Owner => panic!("expected the second claim to lose"),
+        }
 
         let notified = notifier.notified();
         tokio::pin!(notified);
@@ -88,5 +108,6 @@ mod tests {
 
         assert!(piece_notifier.get(piece_id).is_none());
         piece_notifier.remove_and_notify(piece_id);
+        assert!(matches!(piece_notifier.claim(piece_id), Claim::Owner));
     }
 }
