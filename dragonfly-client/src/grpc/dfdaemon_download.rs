@@ -62,7 +62,10 @@ use dragonfly_client_metric::{
 };
 use dragonfly_client_util::{
     digest::{is_blob_url, verify_file_digest, Digest},
-    http::{hashmap_to_headermap, headermap_to_hashmap, parse_range_header},
+    http::{
+        hashmap_to_headermap, headermap_to_hashmap, parse_range_header,
+        signature_bound_range_from_hashmap,
+    },
     id_generator::{PersistentCacheTaskIDParameter, PersistentTaskIDParameter, TaskIDParameter},
     ratelimiter::bbr::BBR,
     shutdown,
@@ -342,6 +345,18 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // If concurrent_piece_count is not set in the request, use the default value in the config.
         download.concurrent_piece_count = Some(self.config.download.concurrent_piece_count);
 
+        // A signature-bound Range cannot be removed for a full-object prefetch or
+        // rewritten as a Dragonfly piece range without invalidating AWS SigV4.
+        let signature_bound_range =
+            signature_bound_range_from_hashmap(&download.request_header, &download.url)
+                .map(str::to_owned);
+        if signature_bound_range.is_some() {
+            download.prefetch = false;
+            // Parse the authoritative signed header after stat determines the full
+            // object length. Do not allow a separate protobuf range to diverge.
+            download.range = None;
+        }
+
         // Generate the task id.
         let task_id = self
             .task
@@ -372,6 +387,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 error!("generate task id: {}", e);
                 Status::invalid_argument(e.to_string())
             })?;
+        let task_id = match signature_bound_range {
+            Some(range) => self.task.id_generator.range_task_id(&task_id, &range),
+            None => task_id,
+        };
 
         // Generate the host id.
         let host_id = self.task.id_generator.host_id();

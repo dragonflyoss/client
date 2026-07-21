@@ -19,7 +19,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, RANGE};
 use std::collections::HashMap;
 
 pub mod basic_auth;
@@ -64,6 +64,103 @@ pub fn header_vec_to_hashmap(raw_header: Vec<String>) -> Result<HashMap<String, 
 /// Converts a vector of header string to a reqwest headermap.
 pub fn header_vec_to_headermap(raw_header: Vec<String>) -> Result<HeaderMap> {
     hashmap_to_headermap(&header_vec_to_hashmap(raw_header)?)
+}
+
+/// Returns the Range header when it is covered by an AWS Signature Version 4
+/// Authorization header or presigned URL.
+///
+/// A signature-bound Range must be forwarded unchanged. Replacing it with a
+/// piece range invalidates the request signature.
+pub fn signature_bound_range<'a>(header: &'a HeaderMap, url: &str) -> Option<&'a str> {
+    let range = header.get(RANGE)?.to_str().ok()?;
+    let authorization = header
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok());
+
+    has_signature_bound_range(authorization, url).then_some(range)
+}
+
+/// Returns the Range header from a string map when it is covered by an AWS
+/// Signature Version 4 Authorization header or presigned URL.
+pub fn signature_bound_range_from_hashmap<'a>(
+    header: &'a HashMap<String, String>,
+    url: &str,
+) -> Option<&'a str> {
+    let range = find_header(header, RANGE.as_str())?;
+    let authorization = find_header(header, AUTHORIZATION.as_str());
+
+    has_signature_bound_range(authorization, url).then_some(range)
+}
+
+fn find_header<'a>(header: &'a HashMap<String, String>, name: &str) -> Option<&'a str> {
+    header
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
+}
+
+fn has_signature_bound_range(authorization: Option<&str>, url: &str) -> bool {
+    authorization.is_some_and(is_range_signed_in_authorization)
+        || is_range_signed_in_presigned_url(url)
+}
+
+fn is_range_signed_in_authorization(authorization: &str) -> bool {
+    let Some((algorithm, parameters)) = authorization.split_once(' ') else {
+        return false;
+    };
+    if !is_aws_v4_algorithm(algorithm) {
+        return false;
+    }
+
+    let mut has_credential = false;
+    let mut has_signature = false;
+    let mut range_is_signed = false;
+    for parameter in parameters.split(',') {
+        let Some((name, value)) = parameter.trim().split_once('=') else {
+            continue;
+        };
+
+        if name.eq_ignore_ascii_case("Credential") {
+            has_credential = !value.is_empty();
+        } else if name.eq_ignore_ascii_case("Signature") {
+            has_signature = !value.is_empty();
+        } else if name.eq_ignore_ascii_case("SignedHeaders") {
+            range_is_signed = signed_headers_contain_range(value);
+        }
+    }
+
+    has_credential && has_signature && range_is_signed
+}
+
+fn is_range_signed_in_presigned_url(url: &str) -> bool {
+    let Ok(url) = url::Url::parse(url) else {
+        return false;
+    };
+
+    let mut has_algorithm = false;
+    let mut has_signature = false;
+    let mut range_is_signed = false;
+    for (name, value) in url.query_pairs() {
+        if name.eq_ignore_ascii_case("X-Amz-Algorithm") {
+            has_algorithm = is_aws_v4_algorithm(&value);
+        } else if name.eq_ignore_ascii_case("X-Amz-Signature") {
+            has_signature = !value.is_empty();
+        } else if name.eq_ignore_ascii_case("X-Amz-SignedHeaders") {
+            range_is_signed = signed_headers_contain_range(&value);
+        }
+    }
+
+    has_algorithm && has_signature && range_is_signed
+}
+
+fn is_aws_v4_algorithm(algorithm: &str) -> bool {
+    matches!(algorithm, "AWS4-HMAC-SHA256" | "AWS4-ECDSA-P256-SHA256")
+}
+
+fn signed_headers_contain_range(signed_headers: &str) -> bool {
+    signed_headers
+        .split(';')
+        .any(|header| header.trim().eq_ignore_ascii_case(RANGE.as_str()))
 }
 
 /// Gets the range from http header.
@@ -167,5 +264,100 @@ mod tests {
         let range = parse_range_header("bytes=0-100", 200).unwrap();
         assert_eq!(range.start, 0);
         assert_eq!(range.length, 101);
+    }
+
+    #[test]
+    fn test_signature_bound_range_with_authorization_header() {
+        let mut header = HeaderMap::new();
+        header.insert(RANGE, HeaderValue::from_static("bytes=100-199"));
+        header.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static(
+                "AWS4-HMAC-SHA256 Credential=key/scope, SignedHeaders=host;range;x-amz-date, Signature=abc",
+            ),
+        );
+
+        assert_eq!(
+            signature_bound_range(&header, "https://example.com/object"),
+            Some("bytes=100-199")
+        );
+    }
+
+    #[test]
+    fn test_signature_bound_range_with_sigv4a_authorization_header() {
+        let mut header = HeaderMap::new();
+        header.insert(RANGE, HeaderValue::from_static("bytes=100-199"));
+        header.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static(
+                "AWS4-ECDSA-P256-SHA256 Credential=key/scope, SignedHeaders=host;range;x-amz-date, Signature=abc",
+            ),
+        );
+
+        assert_eq!(
+            signature_bound_range(&header, "https://example.com/object"),
+            Some("bytes=100-199")
+        );
+    }
+
+    #[test]
+    fn test_signature_bound_range_with_presigned_url() {
+        let mut header = HeaderMap::new();
+        header.insert(RANGE, HeaderValue::from_static("bytes=100-199"));
+        let url = "https://example.com/object?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-SignedHeaders=host%3Brange&X-Amz-Signature=abc";
+
+        assert_eq!(signature_bound_range(&header, url), Some("bytes=100-199"));
+    }
+
+    #[test]
+    fn test_signature_bound_range_rejects_incomplete_signatures() {
+        let mut header = HeaderMap::new();
+        header.insert(RANGE, HeaderValue::from_static("bytes=100-199"));
+        header.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer SignedHeaders=host;range"),
+        );
+
+        assert_eq!(
+            signature_bound_range(
+                &header,
+                "https://example.com/object?X-Amz-SignedHeaders=host%3Brange"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn test_signature_bound_range_requires_range_in_signed_headers() {
+        let mut header = HeaderMap::new();
+        header.insert(RANGE, HeaderValue::from_static("bytes=100-199"));
+        header.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static(
+                "AWS4-HMAC-SHA256 Credential=key/scope, SignedHeaders=host;x-amz-date, Signature=abc",
+            ),
+        );
+
+        assert_eq!(
+            signature_bound_range(&header, "https://example.com/object"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_signature_bound_range_from_hashmap_is_case_insensitive() {
+        let header = HashMap::from([
+            ("Range".to_string(), "bytes=100-199".to_string()),
+            (
+                "Authorization".to_string(),
+                "AWS4-HMAC-SHA256 Credential=key/scope, SignedHeaders=host;range, Signature=abc"
+                    .to_string(),
+            ),
+        ]);
+
+        assert_eq!(
+            signature_bound_range_from_hashmap(&header, "https://example.com/object"),
+            Some("bytes=100-199")
+        );
     }
 }

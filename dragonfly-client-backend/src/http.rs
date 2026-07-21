@@ -56,7 +56,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
-use dragonfly_client_util::tls::NoVerifier;
+use dragonfly_client_util::{http::signature_bound_range, tls::NoVerifier};
 use futures::TryStreamExt;
 use http::header::{
     HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_RANGE, LOCATION, RANGE, TRANSFER_ENCODING,
@@ -397,12 +397,14 @@ impl Backend for HTTP {
                 error!("request header is missing");
             })?;
 
+        let preserve_range = signature_bound_range(&request_header, &request.url).is_some();
+
         // Make the custom request headers with "Range: bytes=0-0", so the origin returns
         // 206 Partial Content with the total length in the Content-Range header and a
         // one-byte body, instead of streaming the whole object body for the stat request.
         self.make_request_headers(
             &mut request_header,
-            Some(Range {
+            (!preserve_range).then_some(Range {
                 start: 0,
                 length: 1,
             }),
@@ -502,7 +504,8 @@ impl Backend for HTTP {
             }
             Ok(response)
                 if response.headers().get(TRANSFER_ENCODING).is_some()
-                    && response.headers().get(CONTENT_LENGTH).is_none() =>
+                    && response.headers().get(CONTENT_LENGTH).is_none()
+                    && !preserve_range =>
             {
                 // If the response has Transfer-Encoding header but no Content-Length header,
                 // retry with HEAD request to get the correct Content-Length.
@@ -537,7 +540,10 @@ impl Backend for HTTP {
                     }
                 }
             }
-            Ok(response) if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE => {
+            Ok(response)
+                if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE
+                    && !preserve_range =>
+            {
                 // For zero-byte files, some servers return 416 Range Not Satisfiable for
                 // the "bytes=0-0" request. Retry with a GET request without the Range
                 // header to retrieve headers.
@@ -610,13 +616,19 @@ impl Backend for HTTP {
                 );
             }
 
-            // Read the one-byte body to completion, so the connection can be reused by
-            // the connection pool instead of being closed with an unread body.
-            if let Err(err) = response.bytes().await {
-                debug!(
-                    "stat request failed to read response body {} {}: {}",
-                    request.task_id, request_url, err
-                );
+            if preserve_range {
+                // A signature-bound range may be large. Do not download it once for
+                // stat and then again for the actual piece request.
+                drop(response);
+            } else {
+                // Read the one-byte body to completion, so the connection can be reused
+                // by the connection pool instead of being closed with an unread body.
+                if let Err(err) = response.bytes().await {
+                    debug!(
+                        "stat request failed to read response body {} {}: {}",
+                        request.task_id, request_url, err
+                    );
+                }
             }
 
             // Rewrite the 206-shaped headers to look like the full-object response, since
@@ -1140,6 +1152,53 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
         let response_header = resp.http_header.unwrap();
         assert!(response_header.get("content-range").is_none());
         assert_eq!(response_header.get("content-length").unwrap(), "1048576");
+    }
+
+    #[tokio::test]
+    async fn should_preserve_signature_bound_range_when_statting() {
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/stat"))
+            .and(header("range", "bytes=1048576-2097151"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header("Content-Range", "bytes 1048576-2097151/4194304")
+                    .set_body_bytes(vec![0u8; 1024]),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut request_header = HeaderMap::new();
+        request_header.insert(
+            reqwest::header::RANGE,
+            HeaderValue::from_static("bytes=1048576-2097151"),
+        );
+        request_header.insert(
+            reqwest::header::AUTHORIZATION,
+            HeaderValue::from_static(
+                "AWS4-HMAC-SHA256 Credential=key/scope, SignedHeaders=host;range, Signature=abc",
+            ),
+        );
+
+        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
+            .unwrap()
+            .stat(StatRequest {
+                task_id: "test".to_string(),
+                url: format!("{}/stat", server.uri()),
+                http_header: Some(request_header),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(resp.success);
+        assert_eq!(resp.content_length, Some(4194304));
     }
 
     #[tokio::test]

@@ -25,7 +25,7 @@ use dragonfly_client_metric::{
     collect_backend_request_started_metrics, collect_download_piece_traffic_metrics,
 };
 use dragonfly_client_storage::{content::RangeReader, metadata, Storage};
-use dragonfly_client_util::net::format_socket_addr;
+use dragonfly_client_util::{http::signature_bound_range, net::format_socket_addr};
 use leaky_bucket::RateLimiter;
 use reqwest::header::HeaderMap;
 use std::collections::HashMap;
@@ -530,15 +530,14 @@ impl Piece {
             http::Method::GET.as_str(),
         );
 
+        let range = Self::source_request_range(&request_header, url, offset, length);
+
         let mut response = backend
             .get(GetRequest {
                 task_id: task_id.to_string(),
                 piece_id: piece_id.to_string(),
                 url: url.to_string(),
-                range: Some(Range {
-                    start: offset,
-                    length,
-                }),
+                range,
                 http_header: Some(request_header),
                 timeout: self.config.download.piece_timeout,
                 client_cert: None,
@@ -614,6 +613,24 @@ impl Piece {
                 error!("download piece finished: {}", err);
                 Err(err)
             }
+        }
+    }
+
+    fn source_request_range(
+        request_header: &HeaderMap,
+        url: &str,
+        offset: u64,
+        length: u64,
+    ) -> Option<Range> {
+        if signature_bound_range(request_header, url).is_some() {
+            // Keep the caller's Range header unchanged because it is covered by
+            // the AWS signature.
+            None
+        } else {
+            Some(Range {
+                start: offset,
+                length,
+            })
         }
     }
 
@@ -1155,6 +1172,7 @@ impl Piece {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reqwest::header::{HeaderValue, AUTHORIZATION, RANGE};
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -1255,5 +1273,31 @@ mod tests {
             assert_eq!(last_piece.offset, expected_last_piece_offset);
             assert_eq!(last_piece.length, expected_last_piece_length);
         }
+    }
+
+    #[test]
+    fn test_source_request_range_preserves_signature_bound_header() {
+        let mut request_header = HeaderMap::new();
+        request_header.insert(RANGE, HeaderValue::from_static("bytes=100-199"));
+        request_header.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static(
+                "AWS4-HMAC-SHA256 Credential=key/scope, SignedHeaders=host;range, Signature=abc",
+            ),
+        );
+
+        assert_eq!(
+            Piece::source_request_range(&request_header, "https://example.com/object", 0, 1024,),
+            None
+        );
+
+        request_header.remove(AUTHORIZATION);
+        assert_eq!(
+            Piece::source_request_range(&request_header, "https://example.com/object", 0, 1024,),
+            Some(Range {
+                start: 0,
+                length: 1024,
+            })
+        );
     }
 }

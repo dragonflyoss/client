@@ -16,8 +16,9 @@
 
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
 use crate::resource::parent_selector::ParentSelector;
+use chrono::Utc;
 use dragonfly_api::common::v2::{
-    Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, Peer, Piece, Task as CommonTask,
+    Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, Peer, Piece, Range, Task as CommonTask,
     TrafficType,
 };
 use dragonfly_api::dfdaemon::{
@@ -48,7 +49,10 @@ use dragonfly_client_metric::{
 };
 use dragonfly_client_storage::{metadata, Storage};
 use dragonfly_client_util::{
-    http::{hashmap_to_headermap, headermap_to_hashmap},
+    http::{
+        hashmap_to_headermap, headermap_to_hashmap, signature_bound_range,
+        signature_bound_range_from_hashmap,
+    },
     id_generator::IDGenerator,
     shutdown,
 };
@@ -180,10 +184,14 @@ impl Task {
                 error!("convert header: {}", err);
             })?;
 
+        let preserve_range = signature_bound_range(&request_header, &request.url).is_some();
+
         // Remove the range header to prevent the server from
         // returning a 206 partial content and returning
         // a 200 full content.
-        request_header.remove(reqwest::header::RANGE);
+        if !preserve_range {
+            request_header.remove(reqwest::header::RANGE);
+        }
 
         // Head the url to get the content length.
         let backend = self.backend_factory.build(request.url.as_str())?;
@@ -244,17 +252,21 @@ impl Task {
             None => return Err(Error::InvalidContentLength),
         };
 
-        let piece_length = match request.piece_length {
-            Some(piece_length) => self
-                .piece
-                .calculate_piece_length(piece::PieceLengthStrategy::FixedPieceLength(piece_length)),
-            None => {
-                self.piece
-                    .calculate_piece_length(piece::PieceLengthStrategy::OptimizeByFileLength(
-                        content_length,
-                    ))
-            }
-        };
+        let piece_length =
+            if preserve_range {
+                // The origin must receive the signature-bound Range exactly once, so
+                // represent this range-specific task as a single piece.
+                content_length
+            } else {
+                match request.piece_length {
+                    Some(piece_length) => self.piece.calculate_piece_length(
+                        piece::PieceLengthStrategy::FixedPieceLength(piece_length),
+                    ),
+                    None => self.piece.calculate_piece_length(
+                        piece::PieceLengthStrategy::OptimizeByFileLength(content_length),
+                    ),
+                }
+            };
 
         // If the task is not finished, check if the storage has enough space to
         // store the task.
@@ -355,17 +367,18 @@ impl Task {
         };
 
         // Calculate the interested pieces to download.
-        let interested_pieces =
-            match self
-                .piece
-                .calculate_interested(piece_length, content_length, request.range)
-            {
-                Ok(interested_pieces) => interested_pieces,
-                Err(err) => {
-                    error!("calculate interested pieces error: {:?}", err);
-                    return Err(err);
-                }
-            };
+        let interested_pieces = match Self::calculate_interested_pieces(
+            &self.piece,
+            piece_length,
+            content_length,
+            &request,
+        ) {
+            Ok(interested_pieces) => interested_pieces,
+            Err(err) => {
+                error!("calculate interested pieces error: {:?}", err);
+                return Err(err);
+            }
+        };
         debug!(
             "interested pieces: {:?}",
             interested_pieces
@@ -2185,6 +2198,37 @@ impl Task {
         return Ok(finished_pieces);
     }
 
+    fn calculate_interested_pieces(
+        piece_manager: &piece::Piece,
+        piece_length: u64,
+        content_length: u64,
+        request: &Download,
+    ) -> ClientResult<Vec<metadata::Piece>> {
+        if signature_bound_range_from_hashmap(&request.request_header, &request.url).is_some() {
+            if let Some(range) = request.range {
+                return Ok(vec![Self::signature_bound_range_piece(range)]);
+            }
+        }
+
+        piece_manager.calculate_interested(piece_length, content_length, request.range)
+    }
+
+    fn signature_bound_range_piece(range: Range) -> metadata::Piece {
+        let now = Utc::now().naive_utc();
+        metadata::Piece {
+            number: 0,
+            offset: range.start,
+            length: range.length,
+            digest: String::new(),
+            parent_id: None,
+            uploading_count: 0,
+            uploaded_count: 0,
+            updated_at: now,
+            created_at: now,
+            finished_at: None,
+        }
+    }
+
     /// Returns the task metadata from scheduler.
     #[instrument(level = "debug", skip_all)]
     pub async fn stat(&self, task_id: &str, host_id: &str) -> ClientResult<CommonTask> {
@@ -2351,5 +2395,18 @@ mod tests {
         // Verify that the task has been deleted.
         let task = storage.get_task(task_id).unwrap();
         assert!(task.is_none(), "task should be deleted");
+    }
+
+    #[test]
+    fn test_signature_bound_range_piece_uses_original_range() {
+        let range = Range {
+            start: 5 * 1024 * 1024,
+            length: 5 * 1024 * 1024,
+        };
+
+        let piece = Task::signature_bound_range_piece(range);
+        assert_eq!(piece.number, 0);
+        assert_eq!(piece.offset, range.start);
+        assert_eq!(piece.length, range.length);
     }
 }
