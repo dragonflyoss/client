@@ -89,6 +89,7 @@ impl fmt::Debug for RedactedDownload<'_> {
             enable_task_id_based_blob_digest,
             hugging_face,
             model_scope,
+            metadata_only,
         } = self.0;
 
         f.debug_struct("Download")
@@ -132,6 +133,7 @@ impl fmt::Debug for RedactedDownload<'_> {
             )
             .field("hugging_face", &scrubbed(hugging_face, scrub_hugging_face))
             .field("model_scope", &scrubbed(model_scope, scrub_model_scope))
+            .field("metadata_only", metadata_only)
             .finish()
     }
 }
