@@ -2056,8 +2056,6 @@ impl Task {
                 .iter()
                 .map(|(number, notifier)| {
                     let mut notified = Box::pin(notifier.notified());
-                    // Enable the notified future, so a completion signaled before
-                    // the select below still wakes it.
                     notified.as_mut().enable();
                     (*number, notified)
                 })

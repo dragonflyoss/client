@@ -238,7 +238,7 @@ impl Storage {
     }
 
     /// Copies the persistent task content to the destination.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn copy_persistent_task(&self, id: &str, to: &Path) -> Result<()> {
         self.content.copy_persistent_task(id, to).await
     }
@@ -403,7 +403,7 @@ impl Storage {
     }
 
     /// Copies the persistent cache task content to the destination.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn copy_persistent_cache_task(&self, id: &str, to: &Path) -> Result<()> {
         self.content.copy_persistent_cache_task(id, to).await
     }
@@ -726,7 +726,7 @@ impl Storage {
 
     /// Updates the metadata of the piece and writes
     /// the data of piece to file when the piece downloads started.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn download_piece_started(
         &self,
         piece_id: &str,
@@ -747,7 +747,7 @@ impl Storage {
 
     /// Used for downloading piece from source.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn download_piece_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -771,7 +771,7 @@ impl Storage {
     }
 
     // handle_downloaded_from_source_finished handles the downloaded piece from source.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn handle_downloaded_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -797,7 +797,7 @@ impl Storage {
 
     /// Used for downloading piece from parent.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn download_piece_from_parent_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -824,7 +824,7 @@ impl Storage {
 
     // handle_downloaded_piece_from_parent_finished handles the downloaded piece from parent.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn handle_downloaded_piece_from_parent_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -882,7 +882,7 @@ impl Storage {
 
     /// Updates the metadata of the piece and
     /// returns the data of the piece.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn upload_piece(
         &self,
         piece_id: &str,
@@ -939,7 +939,7 @@ impl Storage {
 
     /// Updates the metadata of the persistent piece and writes
     /// the data of piece to file when the persistent piece downloads started.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn download_persistent_piece_started(
         &self,
         piece_id: &str,
@@ -960,7 +960,7 @@ impl Storage {
 
     /// Used for downloading persistent piece from parent.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn download_persistent_piece_from_parent_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -1006,7 +1006,7 @@ impl Storage {
 
     /// Used for downloading piece from source.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn download_persistent_piece_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -1030,7 +1030,7 @@ impl Storage {
     }
 
     // handle_persistent_downloaded_from_source_finished handles the downloaded persistent piece from source.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn handle_persistent_downloaded_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -1064,7 +1064,7 @@ impl Storage {
 
     /// Updates the metadata of the piece and_then
     /// returns the data of the piece.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn upload_persistent_piece(
         &self,
         piece_id: &str,
@@ -1121,7 +1121,7 @@ impl Storage {
 
     /// Updates the metadata of the persistent cache piece and writes
     /// the data of piece to file when the persistent cache piece downloads started.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn download_persistent_cache_piece_started(
         &self,
         piece_id: &str,
@@ -1145,7 +1145,7 @@ impl Storage {
 
     /// Used for downloading persistent cache piece from parent.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn download_persistent_cache_piece_from_parent_finished<
         R: AsyncRead + Unpin + ?Sized,
     >(
@@ -1201,7 +1201,7 @@ impl Storage {
 
     /// Updates the metadata of the piece and_then
     /// returns the data of the piece.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn upload_persistent_cache_piece(
         &self,
         piece_id: &str,
@@ -1259,7 +1259,7 @@ impl Storage {
     }
 
     /// Waits for the piece to be finished.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn wait_for_piece_finished(&self, piece_id: &str) -> Result<metadata::Piece> {
         let piece = self
             .get_piece(piece_id)?
@@ -1337,7 +1337,7 @@ impl Storage {
     }
 
     /// Waits for the persistent piece to be finished.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn wait_for_persistent_piece_finished(&self, piece_id: &str) -> Result<metadata::Piece> {
         let piece = self
             .get_persistent_piece(piece_id)?
@@ -1415,7 +1415,7 @@ impl Storage {
     }
 
     /// Waits for the persistent cache piece to be finished.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn wait_for_persistent_cache_piece_finished(
         &self,
         piece_id: &str,
@@ -1497,7 +1497,7 @@ impl Storage {
 
     /// Updates the metadata of the cache piece and writes
     /// the data of cache piece to file when the cache piece downloads started.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn download_cache_piece_started(
         &self,
         piece_id: &str,
@@ -1507,13 +1507,18 @@ impl Storage {
         match self.wait_for_cache_piece_finished(piece_id).await {
             Ok(piece) => Ok(piece),
             // If piece is not found or wait timeout, create piece metadata.
-            Err(_) => self.metadata.download_piece_started(piece_id, number),
+            Err(_) => {
+                self.piece_notifier.register(piece_id);
+                self.metadata
+                    .download_piece_started(piece_id, number)
+                    .inspect_err(|_| self.piece_notifier.remove_and_notify(piece_id))
+            }
         }
     }
 
     /// Used for downloading cache piece from source.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn download_cache_piece_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -1523,18 +1528,21 @@ impl Storage {
         reader: &mut R,
         timeout: Duration,
     ) -> Result<metadata::Piece> {
-        tokio::select! {
+        let piece = tokio::select! {
             piece = self.handle_downloaded_cache_piece_from_source_finished(piece_id, task_id, offset, length, reader) => {
                 piece
             }
             _ = sleep(timeout) => {
                 Err(Error::DownloadPieceFinishedTimeout(piece_id.to_string()))
             }
-        }
+        }?;
+
+        self.piece_notifier.remove_and_notify(piece_id);
+        Ok(piece)
     }
 
     // handle_downloaded_cache_piece_from_source_finished handles the downloaded cache piece from source.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn handle_downloaded_cache_piece_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -1569,7 +1577,7 @@ impl Storage {
 
     /// Used for downloading cache piece from parent.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn download_cache_piece_from_parent_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -1581,19 +1589,22 @@ impl Storage {
         reader: &mut R,
         timeout: Duration,
     ) -> Result<metadata::Piece> {
-        tokio::select! {
+        let piece = tokio::select! {
             piece = self.handle_downloaded_cache_piece_from_parent_finished(piece_id, task_id, offset, length, expected_digest, parent_id, reader) => {
                 piece
             }
             _ = sleep(timeout) => {
                 Err(Error::DownloadPieceFinishedTimeout(piece_id.to_string()))
             }
-        }
+        }?;
+
+        self.piece_notifier.remove_and_notify(piece_id);
+        Ok(piece)
     }
 
     // handle_downloaded_cache_piece_from_parent_finished handles the downloaded cache piece from parent.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn handle_downloaded_cache_piece_from_parent_finished<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -1644,12 +1655,14 @@ impl Storage {
     /// Updates the metadata of the cache piece when the cache piece downloads failed.
     #[instrument(level = "debug", skip_all)]
     pub fn download_cache_piece_failed(&self, piece_id: &str) -> Result<()> {
-        self.metadata.download_piece_failed(piece_id)
+        let result = self.metadata.download_piece_failed(piece_id);
+        self.piece_notifier.remove_and_notify(piece_id);
+        result
     }
 
     /// Updates the metadata of the piece and
     /// returns the data of the piece.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn upload_cache_piece(
         &self,
         piece_id: &str,
@@ -1708,10 +1721,8 @@ impl Storage {
     }
 
     /// Waits for the cache piece to be finished.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn wait_for_cache_piece_finished(&self, piece_id: &str) -> Result<metadata::Piece> {
-        // Fast path: the piece is usually already finished when the upload
-        // starts, so check once before setting up the timers.
         let piece = self
             .get_cache_piece(piece_id)?
             .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
@@ -1725,23 +1736,63 @@ impl Storage {
         );
         tokio::pin!(wait_timeout);
 
-        let mut interval = tokio::time::interval(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL);
         loop {
-            tokio::select! {
-                _ = interval.tick() => {
+            match self.piece_notifier.get(piece_id) {
+                Some(notifier) => {
+                    let notified = notifier.notified();
+                    tokio::pin!(notified);
+                    notified.as_mut().enable();
+
                     let piece = self
                         .get_cache_piece(piece_id)?
                         .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
 
-                    // If the piece is finished, return.
                     if piece.is_finished() {
                         debug!("wait piece finished success");
                         return Ok(piece);
                     }
+
+                    tokio::select! {
+                        _ = notified => {}
+                        _ = sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_FALLBACK_INTERVAL) => {}
+                        _ = &mut wait_timeout => {
+                            self.metadata.wait_for_piece_finished_failed(piece_id).unwrap_or_else(|err| error!("delete piece metadata failed: {}", err));
+                            self.piece_notifier.remove_and_notify(piece_id);
+                            return Err(Error::WaitForPieceFinishedTimeout(piece_id.to_string()));
+                        }
+                    }
                 }
-                _ = &mut wait_timeout => {
-                    self.metadata.wait_for_piece_finished_failed(piece_id).unwrap_or_else(|err| error!("delete piece metadata failed: {}", err));
-                    return Err(Error::WaitForPieceFinishedTimeout(piece_id.to_string()));
+                None => {
+                    let piece = self
+                        .get_cache_piece(piece_id)?
+                        .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
+
+                    if piece.is_finished() {
+                        debug!("wait piece finished success");
+                        return Ok(piece);
+                    }
+
+                    if self.piece_notifier.get(piece_id).is_some() {
+                        continue;
+                    }
+
+                    let piece = self
+                        .get_cache_piece(piece_id)?
+                        .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
+
+                    if piece.is_finished() {
+                        debug!("wait piece finished success");
+                        return Ok(piece);
+                    }
+
+                    if self.piece_notifier.get(piece_id).is_some() {
+                        continue;
+                    }
+
+                    self.metadata
+                        .wait_for_piece_finished_failed(piece_id)
+                        .unwrap_or_else(|err| error!("delete piece metadata failed: {}", err));
+                    return Err(Error::PieceNotFound(piece_id.to_string()));
                 }
             }
         }
