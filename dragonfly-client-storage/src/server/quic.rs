@@ -150,7 +150,7 @@ pub struct QUICServerHandler {
 /// Implements the request handler.
 impl QUICServerHandler {
     /// Handles a single QUIC connection.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn handle(
         &self,
         connection: quinn::Connection,
@@ -495,7 +495,7 @@ impl QUICServerHandler {
     /// upload rate limiting, and prepares both the piece metadata and
     /// content stream for transmission. It's the core handler for regular
     /// piece download requests in the P2P network.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn handle_piece(
         &self,
         piece_id: &str,
@@ -559,7 +559,7 @@ impl QUICServerHandler {
     /// which have different storage semantics and metadata structure. This
     /// enables efficient serving of frequently accessed content from the
     /// persistent layer.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn handle_persistent_piece(
         &self,
         piece_id: &str,
@@ -623,7 +623,7 @@ impl QUICServerHandler {
     /// which have different storage semantics and metadata structure. This
     /// enables efficient serving of frequently accessed content from the
     /// persistent cache layer.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn handle_persistent_cache_piece(
         &self,
         piece_id: &str,
@@ -728,7 +728,7 @@ impl QUICServerHandler {
     /// This function sends the provided bytes as a response and ensures
     /// all data is flushed to the underlying transport. This is typically
     /// used for sending headers and small payloads in a single operation.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn write_response(
         &self,
         request: Bytes,
@@ -750,7 +750,7 @@ impl QUICServerHandler {
     /// reader's internal buffer directly without an intermediate copy buffer.
     /// It's designed for streaming large piece content without loading
     /// everything into memory. The operation is flushed to ensure data delivery.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn write_stream<R: AsyncBufRead + Unpin + ?Sized>(
         &self,
         stream: &mut R,

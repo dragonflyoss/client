@@ -608,7 +608,7 @@ impl crate::Backend for ObjectStorage {
     }
 
     /// Stat the metadata from the backend.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn stat(&self, request: StatRequest) -> ClientResult<StatResponse> {
         debug!(
             "stat request {} {}: {:?}",
@@ -695,7 +695,7 @@ impl crate::Backend for ObjectStorage {
     }
 
     /// Get the content from the backend.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn get(&self, request: GetRequest) -> ClientResult<GetResponse<Body>> {
         debug!(
             "get request {} {}: {:?}",
@@ -773,7 +773,7 @@ impl crate::Backend for ObjectStorage {
     }
 
     /// Put the content to the backend.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn put(&self, request: PutRequest) -> ClientResult<PutResponse> {
         debug!("put request {:?} {}", request.path, request.url);
 
@@ -875,7 +875,7 @@ impl crate::Backend for ObjectStorage {
     }
 
     /// Exists checks whether the file exists in the backend.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn exists(&self, request: ExistsRequest) -> ClientResult<bool> {
         debug!(
             "exists request {} {}: {:?}",

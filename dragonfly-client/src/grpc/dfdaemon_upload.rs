@@ -88,6 +88,9 @@ use url::Url;
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
 use super::middleware::BBRLayer;
 
+/// The default interval for waiting for the piece to be finished.
+pub const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_millis(100);
+
 /// gRPC server for upload operations.
 pub struct DfdaemonUploadServer {
     /// Configuration of the dfdaemon.
@@ -474,7 +477,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         tokio::spawn(
             async move {
                 match task_manager_clone
-                    .download_and_ensure_announcement(
+                    .download_with_scheduler(
                         &task_clone,
                         host_id.as_str(),
                         peer_id.as_str(),
@@ -646,7 +649,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         if download.prefetch {
             match self.task.prefetch_task_started(task_id.as_str()).await {
                 Ok(_) => {
-                    info!("prefetch task started");
                     let socket_path = self.socket_path.clone();
                     let task_manager_clone = self.task.clone();
                     tokio::spawn(
@@ -679,7 +681,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                     );
                 }
                 // If the task is already prefetched, ignore the error.
-                Err(ClientError::InvalidState(_)) => info!("task is already prefetched"),
+                Err(ClientError::InvalidState(_)) => debug!("task is already prefetched"),
                 Err(err) => {
                     error!("prefetch task started: {}", err);
                 }
@@ -1095,10 +1097,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                     }
 
                     // Wait for the piece to be finished.
-                    tokio::time::sleep(
-                        dragonfly_client_storage::DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL,
-                    )
-                    .await;
+                    tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL).await;
                 }
             }
             .in_current_span(),
@@ -1852,10 +1851,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                     }
 
                     // Wait for the piece to be finished.
-                    tokio::time::sleep(
-                        dragonfly_client_storage::DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL,
-                    )
-                    .await;
+                    tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL).await;
                 }
             }
             .in_current_span(),
@@ -2415,10 +2411,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                     }
 
                     // Wait for the piece to be finished.
-                    tokio::time::sleep(
-                        dragonfly_client_storage::DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL,
-                    )
-                    .await;
+                    tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL).await;
                 }
             }
             .in_current_span(),
