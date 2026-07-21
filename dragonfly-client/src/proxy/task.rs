@@ -350,7 +350,7 @@ pub async fn download(
 ///  Prefetch the full task by the task manager directly. It is similar to the
 /// prefetch_task of the dfdaemon gRPC module, but downloads the task by the task manager
 /// instead of the dfdaemon download gRPC client.
-#[instrument(level = "debug", skip_all)]
+#[instrument(skip_all)]
 pub async fn prefetch(
     config: Arc<Config>,
     task_manager: Arc<Task>,
@@ -384,6 +384,7 @@ pub async fn prefetch(
     let priority = download.priority;
 
     // Download the task by the task manager.
+    info!("prefetch task started");
     let mut out_stream_rx = self::download(config, task_manager, dynconfig, request)
         .await
         .inspect_err(|err| {

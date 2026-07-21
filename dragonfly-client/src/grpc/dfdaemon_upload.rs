@@ -646,7 +646,6 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         if download.prefetch {
             match self.task.prefetch_task_started(task_id.as_str()).await {
                 Ok(_) => {
-                    info!("prefetch task started");
                     let socket_path = self.socket_path.clone();
                     let task_manager_clone = self.task.clone();
                     tokio::spawn(
