@@ -1479,12 +1479,28 @@ impl<E: StorageEngineOwned> Metadata<E> {
     /// Updates the metadata of the piece when the piece downloads failed.
     #[instrument(level = "debug", skip_all)]
     pub fn download_piece_failed(&self, piece_id: &str) -> Result<()> {
+        // A failed download must never erase a piece another download completed,
+        // e.g. a duplicate downloader failing after the winner finished the piece.
+        if let Some(piece) = self.get_piece(piece_id)? {
+            if piece.is_finished() {
+                return Ok(());
+            }
+        }
+
         self.delete_piece(piece_id)
     }
 
     /// Waits for the piece to be finished or failed.
     #[instrument(level = "debug", skip_all)]
     pub fn wait_for_piece_finished_failed(&self, piece_id: &str) -> Result<()> {
+        // A timed-out or stale-detecting waiter must never erase a piece that
+        // has just been finished by its downloader.
+        if let Some(piece) = self.get_piece(piece_id)? {
+            if piece.is_finished() {
+                return Ok(());
+            }
+        }
+
         self.delete_piece(piece_id)
     }
 
@@ -1774,5 +1790,31 @@ mod tests {
         metadata.delete_pieces(task_id).unwrap();
         let pieces = metadata.get_pieces(task_id).unwrap();
         assert!(pieces.is_empty());
+    }
+
+    #[test]
+    fn test_download_piece_failed_keeps_finished_piece() {
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path().join("log");
+        let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
+        let task_id = "e4c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062d";
+        let piece_id = metadata.piece_id(task_id, 1);
+
+        metadata
+            .download_piece_started(piece_id.as_str(), 1)
+            .unwrap();
+        metadata
+            .download_piece_finished(piece_id.as_str(), 0, 1024, "digest1", None)
+            .unwrap();
+
+        metadata.download_piece_failed(piece_id.as_str()).unwrap();
+        let piece = metadata.get_piece(piece_id.as_str()).unwrap().unwrap();
+        assert!(piece.is_finished());
+
+        metadata
+            .wait_for_piece_finished_failed(piece_id.as_str())
+            .unwrap();
+        let piece = metadata.get_piece(piece_id.as_str()).unwrap().unwrap();
+        assert!(piece.is_finished());
     }
 }

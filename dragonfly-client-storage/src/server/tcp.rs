@@ -188,11 +188,7 @@ impl TCPServerHandler {
     /// It reads the protocol header to determine the request type and dispatches
     /// to the appropriate handler. Supports both regular piece downloads and
     /// persistent cache piece downloads with proper request/response framing.
-    #[instrument(
-        level = "debug",
-        skip_all,
-        fields(host_id, remote_address, task_id, piece_id)
-    )]
+    #[instrument(skip_all, fields(host_id, remote_address, task_id, piece_id))]
     async fn handle(&self, stream: TcpStream, remote_address: String) -> ClientResult<()> {
         let (mut reader, mut writer) = stream.into_split();
         let header = self.read_header(&mut reader).await?;
@@ -455,7 +451,7 @@ impl TCPServerHandler {
     /// upload rate limiting, and prepares both the piece metadata and
     /// content stream for transmission. It's the core handler for regular
     /// piece download requests in the P2P network.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn handle_piece(
         &self,
         piece_id: &str,
@@ -519,7 +515,7 @@ impl TCPServerHandler {
     /// which have different storage semantics and metadata structure. This
     /// enables efficient serving of frequently accessed content from the
     /// persistent layer.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn handle_persistent_piece(
         &self,
         piece_id: &str,
@@ -583,7 +579,7 @@ impl TCPServerHandler {
     /// which have different storage semantics and metadata structure. This
     /// enables efficient serving of frequently accessed content from the
     /// persistent cache layer.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn handle_persistent_cache_piece(
         &self,
         piece_id: &str,
@@ -690,7 +686,7 @@ impl TCPServerHandler {
     /// This function sends the provided bytes as a response and ensures
     /// all data is flushed to the underlying transport. This is typically
     /// used for sending headers and small payloads in a single operation.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn write_response(
         &self,
         request: Bytes,
@@ -711,7 +707,7 @@ impl TCPServerHandler {
     /// socket with sendfile, so the piece bytes move from the page cache to
     /// the socket inside the kernel without passing through user space.
     #[cfg(target_os = "linux")]
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn write_stream(
         &self,
         reader: RangeReader,
@@ -741,7 +737,7 @@ impl TCPServerHandler {
     /// It's designed for streaming large piece content without loading
     /// everything into memory. The operation is flushed to ensure data delivery.
     #[cfg(not(target_os = "linux"))]
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn write_stream(
         &self,
         mut reader: RangeReader,

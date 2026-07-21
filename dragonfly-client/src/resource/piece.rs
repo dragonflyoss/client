@@ -333,7 +333,7 @@ impl Piece {
 
     /// Downloads a single piece from a parent.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(level = "debug", skip_all, fields(piece_id))]
+    #[instrument(skip_all, fields(piece_id))]
     pub async fn download_from_parent(
         &self,
         piece_id: &str,
@@ -348,13 +348,6 @@ impl Piece {
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
 
-        // Clean up residual piece metadata if error occurred.
-        let guard = scopeguard::guard((), |_| {
-            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
-                error!("set piece metadata failed: {}", err)
-            };
-        });
-
         // Record the start of downloading piece.
         let piece = self
             .storage
@@ -365,9 +358,14 @@ impl Piece {
         // return the piece directly.
         if piece.is_finished() {
             debug!("finished piece {} from local", piece_id);
-            scopeguard::ScopeGuard::into_inner(guard);
             return Ok(piece);
         }
+
+        let guard = scopeguard::guard((), |_| {
+            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
+                error!("set piece metadata failed: {}", err)
+            };
+        });
 
         if is_prefetch {
             // Acquire the prefetch rate limiter.
@@ -458,7 +456,7 @@ impl Piece {
 
     /// Downloads a single piece from the source.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(level = "debug", skip_all, fields(piece_id))]
+    #[instrument(skip_all, fields(piece_id))]
     pub async fn download_from_source(
         &self,
         piece_id: &str,
@@ -478,13 +476,6 @@ impl Piece {
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
 
-        // Clean up residual piece metadata if error occurred.
-        let guard = scopeguard::guard((), |_| {
-            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
-                error!("set piece metadata failed: {}", err)
-            };
-        });
-
         // Record the start of downloading piece.
         let piece = self
             .storage
@@ -495,9 +486,14 @@ impl Piece {
         // return the piece directly.
         if piece.is_finished() {
             debug!("finished piece {} from local", piece_id);
-            scopeguard::ScopeGuard::into_inner(guard);
             return Ok(piece);
         }
+
+        let guard = scopeguard::guard((), |_| {
+            if let Some(err) = self.storage.download_piece_failed(piece_id).err() {
+                error!("set piece metadata failed: {}", err)
+            };
+        });
 
         if is_prefetch {
             // Acquire the prefetch rate limiter.
@@ -630,7 +626,7 @@ impl Piece {
     }
 
     /// Creates a new persistent piece.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn create_persistent<R: AsyncRead + Unpin + ?Sized>(
         &self,
         piece_id: &str,
@@ -646,7 +642,7 @@ impl Piece {
     }
 
     /// Registers a new persistent piece.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub fn register_persistent(
         &self,
         piece_id: &str,
@@ -686,7 +682,7 @@ impl Piece {
 
     /// Downloads a persistent piece from a parent.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(level = "debug", skip_all, fields(piece_id))]
+    #[instrument(skip_all, fields(piece_id))]
     pub async fn download_persistent_from_parent(
         &self,
         piece_id: &str,
@@ -699,17 +695,6 @@ impl Piece {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
-
-        // Clean up residual persistent metadata if error occurred.
-        let guard = scopeguard::guard((), |_| {
-            if let Some(err) = self
-                .storage
-                .download_persistent_piece_failed(piece_id)
-                .err()
-            {
-                error!("set persistent piece metadata failed: {}", err)
-            };
-        });
 
         // Acquire the download rate limiter.
         self.download_bandwidth_limiter
@@ -726,9 +711,18 @@ impl Piece {
         // return the piece directly.
         if piece.is_finished() {
             debug!("finished persistent piece {} from local", piece_id);
-            scopeguard::ScopeGuard::into_inner(guard);
             return Ok(piece);
         }
+
+        let guard = scopeguard::guard((), |_| {
+            if let Some(err) = self
+                .storage
+                .download_persistent_piece_failed(piece_id)
+                .err()
+            {
+                error!("set persistent piece metadata failed: {}", err)
+            };
+        });
 
         let (mut reader, offset, digest) = match (
             self.config.download.protocol.as_str(),
@@ -808,7 +802,7 @@ impl Piece {
 
     /// Downloads a single persistent piece from the source.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(level = "debug", skip_all, fields(piece_id))]
+    #[instrument(skip_all, fields(piece_id))]
     pub async fn download_persistent_from_source(
         &self,
         piece_id: &str,
@@ -827,17 +821,6 @@ impl Piece {
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
 
-        // Clean up residual piece metadata if error occurred.
-        let guard = scopeguard::guard((), |_| {
-            if let Some(err) = self
-                .storage
-                .download_persistent_piece_failed(piece_id)
-                .err()
-            {
-                error!("set piece metadata failed: {}", err)
-            };
-        });
-
         // Record the start of downloading piece.
         let piece = self
             .storage
@@ -848,9 +831,18 @@ impl Piece {
         // return the piece directly.
         if piece.is_finished() {
             debug!("finished piece {} from local", piece_id);
-            scopeguard::ScopeGuard::into_inner(guard);
             return Ok(piece);
         }
+
+        let guard = scopeguard::guard((), |_| {
+            if let Some(err) = self
+                .storage
+                .download_persistent_piece_failed(piece_id)
+                .err()
+            {
+                error!("set piece metadata failed: {}", err)
+            };
+        });
 
         // Acquire the back to source rate limiter.
         self.back_to_source_bandwidth_limiter
@@ -1031,7 +1023,7 @@ impl Piece {
 
     /// Downloads a persistent cache piece from a parent.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(level = "debug", skip_all, fields(piece_id))]
+    #[instrument(skip_all, fields(piece_id))]
     pub async fn download_persistent_cache_from_parent(
         &self,
         piece_id: &str,
@@ -1044,17 +1036,6 @@ impl Piece {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
-
-        // Clean up residual persistent cache metadata if error occurred.
-        let guard = scopeguard::guard((), |_| {
-            if let Some(err) = self
-                .storage
-                .download_persistent_cache_piece_failed(piece_id)
-                .err()
-            {
-                error!("set persistent cache piece metadata failed: {}", err)
-            };
-        });
 
         // Acquire the download rate limiter.
         self.download_bandwidth_limiter
@@ -1071,9 +1052,18 @@ impl Piece {
         // return the piece directly.
         if piece.is_finished() {
             debug!("finished persistent cache piece {} from local", piece_id);
-            scopeguard::ScopeGuard::into_inner(guard);
             return Ok(piece);
         }
+
+        let guard = scopeguard::guard((), |_| {
+            if let Some(err) = self
+                .storage
+                .download_persistent_cache_piece_failed(piece_id)
+                .err()
+            {
+                error!("set persistent cache piece metadata failed: {}", err)
+            };
+        });
 
         let (mut reader, offset, digest) = match (
             self.config.download.protocol.as_str(),

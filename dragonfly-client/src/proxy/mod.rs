@@ -369,7 +369,7 @@ pub async fn registry_mirror_https_handler(
 }
 
 /// Handles the http request by client.
-#[instrument(level = "debug", skip_all)]
+#[instrument(skip_all)]
 pub async fn http_handler(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -599,7 +599,7 @@ async fn upgraded_tunnel(
 
 /// Handles the upgraded https request from the client.
 #[allow(clippy::too_many_arguments)]
-#[instrument(level = "debug", skip_all, fields(url, method))]
+#[instrument(skip_all, fields(url, method))]
 pub async fn upgraded_handler(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -735,7 +735,7 @@ pub async fn upgraded_handler(
 }
 
 /// Proxies the request via the dfdaemon.
-#[instrument(level = "debug", skip_all, fields(host_id, task_id, peer_id))]
+#[instrument(skip_all, fields(host_id, task_id, peer_id))]
 async fn proxy_via_dfdaemon(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -837,7 +837,6 @@ async fn proxy_via_dfdaemon(
         let task_id = message.task_id.clone();
         match task.prefetch_task_started(task_id.as_str()).await {
             Ok(_) => {
-                info!("prefetch task started");
                 let config = config.clone();
                 let task_manager = task.clone();
                 let dynconfig = dynconfig.clone();
