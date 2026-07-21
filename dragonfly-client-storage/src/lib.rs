@@ -2008,4 +2008,51 @@ mod tests {
         );
         assert!(storage.get_piece(piece_id.as_str()).unwrap().is_none());
     }
+
+    #[tokio::test]
+    async fn test_download_piece_failed_keeps_finished_piece_serving() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(Config::default());
+        let storage = Arc::new(
+            Storage::new(config, dir.path(), dir.path().to_path_buf())
+                .await
+                .unwrap(),
+        );
+
+        const TASK_ID: &str = "b7add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14e";
+        const CONTENT: &[u8] = b"piece content";
+        storage
+            .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
+            .await
+            .unwrap();
+
+        // The winner downloads and finishes the piece.
+        let piece_id = storage.piece_id(TASK_ID, 0);
+        storage
+            .download_piece_started(piece_id.as_str(), 0)
+            .await
+            .unwrap();
+        let mut reader = CONTENT;
+        storage
+            .download_piece_from_source_finished(
+                piece_id.as_str(),
+                TASK_ID,
+                0,
+                CONTENT.len() as u64,
+                &mut reader,
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+
+        // A duplicate downloader failing afterwards must not erase the finished
+        // piece, and serving keeps working.
+        storage.download_piece_failed(piece_id.as_str()).unwrap();
+        let piece = storage.get_piece(piece_id.as_str()).unwrap().unwrap();
+        assert!(piece.is_finished());
+        storage
+            .upload_piece(piece_id.as_str(), TASK_ID, None)
+            .await
+            .unwrap();
+    }
 }
