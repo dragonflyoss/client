@@ -66,22 +66,17 @@ mod tests {
     async fn test_piece_notifier_wakes_enabled_waiters() {
         let piece_notifier = PieceNotifier::default();
         let piece_id = "d3add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14a-0";
-
-        // Not registered yet, so there is no notifier.
         assert!(piece_notifier.get(piece_id).is_none());
 
         piece_notifier.register(piece_id);
         let notifier = piece_notifier.get(piece_id).unwrap();
 
-        // Registering again keeps the existing notifier.
         piece_notifier.register(piece_id);
         assert!(Arc::ptr_eq(
             &notifier,
             &piece_notifier.get(piece_id).unwrap()
         ));
 
-        // A notification signaled after the notified future is enabled wakes it,
-        // even if it is awaited later.
         let notified = notifier.notified();
         tokio::pin!(notified);
         notified.as_mut().enable();
@@ -91,10 +86,7 @@ mod tests {
             .await
             .unwrap();
 
-        // The notifier is removed after the completion.
         assert!(piece_notifier.get(piece_id).is_none());
-
-        // Removing a non-registered piece is a no-op.
         piece_notifier.remove_and_notify(piece_id);
     }
 }

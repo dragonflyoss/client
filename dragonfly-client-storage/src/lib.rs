@@ -1989,8 +1989,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Simulate unfinished piece metadata left over from a previous run:
-        // the metadata exists but no notifier is registered in this process.
         let piece_id = storage.piece_id(TASK_ID, 0);
         storage
             .metadata
@@ -2000,8 +1998,6 @@ mod tests {
             .in_flight_piece_notifier(piece_id.as_str())
             .is_none());
 
-        // The waiter fails fast with PieceNotFound instead of polling until
-        // the wait timeout, and the stale metadata is cleaned up.
         let started_at = std::time::Instant::now();
         let result = storage.upload_piece(piece_id.as_str(), TASK_ID, None).await;
         assert!(matches!(result, Err(Error::PieceNotFound(_))));
