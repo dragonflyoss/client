@@ -75,7 +75,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tokio_util::io::StreamReader;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, instrument};
 use url::Url;
 
 /// The HTTP scheme.
@@ -382,7 +382,7 @@ impl Backend for HTTP {
     }
 
     /// Stat the metadata from the backend.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn stat(&self, request: StatRequest) -> Result<StatResponse> {
         debug!(
             "stat request {} {}: {:?}",
@@ -655,7 +655,7 @@ impl Backend for HTTP {
     }
 
     /// Get the content from the backend.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn get(&self, request: GetRequest) -> Result<GetResponse<Body>> {
         debug!(
             "get request {} {} {}: {:?}",
@@ -802,7 +802,7 @@ impl Backend for HTTP {
     }
 
     /// Exists checks whether the file exists in the backend.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn exists(&self, request: ExistsRequest) -> Result<bool> {
         debug!(
             "exists request {} {}: {:?}",
@@ -842,7 +842,7 @@ impl Backend for HTTP {
             Ok(response) if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE => {
                 // For zero-byte files, some servers return 416 Range Not Satisfiable.
                 // Retry with a GET request without the Range header to retrieve headers.
-                info!(
+                debug!(
                     "exists request got 416 Range Not Satisfiable, retrying with HEAD {} {}",
                     request.task_id, request.url
                 );

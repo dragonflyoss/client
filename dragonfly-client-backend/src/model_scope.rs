@@ -335,6 +335,7 @@ impl Backend for ModelScope {
     }
 
     /// Stat the metadata from the backend.
+    #[instrument(skip_all)]
     async fn stat(&self, request: StatRequest) -> Result<StatResponse> {
         debug!(
             "stat request {} {}: {:?}",
@@ -545,7 +546,9 @@ impl Backend for ModelScope {
             }
         }
     }
+
     /// Get the content from the backend.
+    #[instrument(skip_all)]
     async fn get(&self, request: GetRequest) -> Result<GetResponse<Body>> {
         debug!(
             "get request {} {} {}: {:?}",
@@ -637,11 +640,13 @@ impl Backend for ModelScope {
     }
 
     /// Put the content to the backend.
+    #[instrument(skip_all)]
     async fn put(&self, _request: PutRequest) -> Result<PutResponse> {
         unimplemented!()
     }
 
     /// Exists checks whether the file exists in the backend.
+    #[instrument(skip_all)]
     async fn exists(&self, request: ExistsRequest) -> Result<bool> {
         debug!(
             "exists request {} {}: {:?}",

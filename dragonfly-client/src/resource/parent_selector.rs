@@ -132,7 +132,7 @@ pub struct ParentSelector {
 /// Implements parent peer selection and connection management logic.
 impl ParentSelector {
     /// Creates a new parent selector instance.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,
@@ -154,7 +154,7 @@ impl ParentSelector {
     /// This function performs weighted random selection where parents with higher weights
     /// (better idle bandwidth) have a higher probability of being selected. If weight
     /// calculation fails, falls back to uniform random selection.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub fn select(&self, parents: Vec<CollectedParent>) -> CollectedParent {
         let weights: Vec<u64> = parents
             .iter()
@@ -201,7 +201,7 @@ impl ParentSelector {
     /// - Creates a new gRPC connection if one doesn't exist.
     /// - Spawns a background task to continuously sync host metrics (bandwidth, load).
     /// - Updates the connection's request counter.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn register(&self, parents: &[Peer]) -> Result<()> {
         let dfdaemon_shutdown = self.shutdown.clone();
         let mut join_set = JoinSet::new();
@@ -295,7 +295,7 @@ impl ParentSelector {
     /// - Triggers connection shutdown.
     /// - Removes the weight entry.
     /// - Removes the connection from the pool.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub fn unregister(&self, parents: &[Peer]) {
         for parent in parents {
             debug!("unregister parent {}", parent.id);
@@ -330,7 +330,7 @@ impl ParentSelector {
     /// - Updates the parent's weight based on idle TX bandwidth.
     /// - Runs until shutdown signal or connection failure.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn sync_host(
         host_id: String,
         peer_id: String,
@@ -453,7 +453,7 @@ pub struct PersistentParentSelector {
 /// Implements persistent parent peer selection and connection management logic.
 impl PersistentParentSelector {
     /// Creates a new persistent parent selector instance.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,
@@ -475,7 +475,7 @@ impl PersistentParentSelector {
     /// This function performs weighted random selection where parents with higher weights
     /// (better idle bandwidth) have a higher probability of being selected. If weight
     /// calculation fails, falls back to uniform random selection.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub fn select(&self, parents: Vec<CollectedParent>) -> CollectedParent {
         let weights: Vec<u64> = parents
             .iter()
@@ -523,7 +523,7 @@ impl PersistentParentSelector {
     /// - Creates a new gRPC connection if one doesn't exist.
     /// - Spawns a background task to continuously sync host metrics (bandwidth, load).
     /// - Updates the connection's request counter.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn register(&self, parents: &[PersistentPeer]) -> Result<()> {
         let dfdaemon_shutdown = self.shutdown.clone();
         let mut join_set = JoinSet::new();
@@ -617,7 +617,7 @@ impl PersistentParentSelector {
     /// - Triggers connection shutdown.
     /// - Removes the weight entry.
     /// - Removes the connection from the pool.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub fn unregister(&self, parents: &[PersistentPeer]) {
         for parent in parents {
             debug!("unregister persistent parent {}", parent.id);
@@ -652,7 +652,7 @@ impl PersistentParentSelector {
     /// - Updates the parent's weight based on idle TX bandwidth.
     /// - Runs until shutdown signal or connection failure.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn sync_host(
         host_id: String,
         peer_id: String,
@@ -775,7 +775,7 @@ pub struct PersistentCacheParentSelector {
 /// Implements persistent cache parent peer selection and connection management logic.
 impl PersistentCacheParentSelector {
     /// Creates a new persistent cache parent selector instance.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,
@@ -797,7 +797,7 @@ impl PersistentCacheParentSelector {
     /// This function performs weighted random selection where parents with higher weights
     /// (better idle bandwidth) have a higher probability of being selected. If weight
     /// calculation fails, falls back to uniform random selection.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub fn select(&self, parents: Vec<CollectedParent>) -> CollectedParent {
         let weights: Vec<u64> = parents
             .iter()
@@ -845,7 +845,7 @@ impl PersistentCacheParentSelector {
     /// - Creates a new gRPC connection if one doesn't exist.
     /// - Spawns a background task to continuously sync host metrics (bandwidth, load).
     /// - Updates the connection's request counter.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn register(&self, parents: &[PersistentCachePeer]) -> Result<()> {
         let dfdaemon_shutdown = self.shutdown.clone();
         let mut join_set = JoinSet::new();
@@ -942,7 +942,7 @@ impl PersistentCacheParentSelector {
     /// - Triggers connection shutdown.
     /// - Removes the weight entry.
     /// - Removes the connection from the pool.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub fn unregister(&self, parents: &[PersistentCachePeer]) {
         for parent in parents {
             debug!("unregister persistent cache parent {}", parent.id);
@@ -980,7 +980,7 @@ impl PersistentCacheParentSelector {
     /// - Updates the parent's weight based on idle TX bandwidth.
     /// - Runs until shutdown signal or connection failure.
     #[allow(clippy::too_many_arguments)]
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn sync_host(
         host_id: String,
         peer_id: String,
