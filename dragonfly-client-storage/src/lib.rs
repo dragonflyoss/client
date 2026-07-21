@@ -16,11 +16,11 @@
 
 use bytes::BytesMut;
 use chrono::NaiveDateTime;
-use dashmap::DashMap;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::digest::{Algorithm, Digest};
+use piece_notifier::PieceNotifier;
 use reqwest::header::HeaderMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -33,6 +33,8 @@ use tokio::{
 };
 use tokio_util::io::InspectReader;
 use tracing::{debug, error, info, instrument, warn};
+
+mod piece_notifier;
 
 #[cfg(target_os = "linux")]
 mod content_linux;
@@ -64,45 +66,6 @@ const DEFAULT_WAIT_FOR_PIECE_FINISHED_FALLBACK_INTERVAL: Duration = Duration::fr
 /// hostPath mount point, which prevents hardlinks from being created across different
 /// quota contexts.
 pub const DEFAULT_TMP_DIR: &str = "tmp";
-
-/// PieceNotifier notifies the waiters when an in-flight piece download completes
-/// (finished, failed or its metadata deleted), so the waiters do not need to poll
-/// the piece metadata on an interval.
-///
-/// The notifier is registered just before the piece metadata is created when the
-/// piece download starts, and removed (waking all its waiters) when the download
-/// reaches a terminal state. The piece metadata remains the source of truth:
-/// waiters must re-check it after being notified.
-#[derive(Default)]
-struct PieceNotifier {
-    /// The notifiers of the in-flight pieces, keyed by the piece id.
-    notifiers: DashMap<String, Arc<Notify>>,
-}
-
-impl PieceNotifier {
-    /// Registers the notifier of the piece when its download starts. If the piece
-    /// is already registered by a concurrent download, the existing notifier is
-    /// kept.
-    fn register(&self, piece_id: &str) {
-        self.notifiers.entry(piece_id.to_string()).or_default();
-    }
-
-    /// Returns the notifier of the in-flight piece, or `None` if the piece is not
-    /// being downloaded by this process.
-    fn get(&self, piece_id: &str) -> Option<Arc<Notify>> {
-        self.notifiers
-            .get(piece_id)
-            .map(|notifier| notifier.value().clone())
-    }
-
-    /// Removes the notifier of the piece and wakes all its waiters when the piece
-    /// download completes.
-    fn remove_and_notify(&self, piece_id: &str) {
-        if let Some((_, notifier)) = self.notifiers.remove(piece_id) {
-            notifier.notify_waiters();
-        }
-    }
-}
 
 /// The storage of the task.
 pub struct Storage {
@@ -773,7 +736,12 @@ impl Storage {
         match self.wait_for_piece_finished(piece_id).await {
             Ok(piece) => Ok(piece),
             // If piece is not found or wait timeout, create piece metadata.
-            Err(_) => self.metadata.download_piece_started(piece_id, number),
+            Err(_) => {
+                self.piece_notifier.register(piece_id);
+                self.metadata
+                    .download_piece_started(piece_id, number)
+                    .inspect_err(|_| self.piece_notifier.remove_and_notify(piece_id))
+            }
         }
     }
 
@@ -789,14 +757,17 @@ impl Storage {
         reader: &mut R,
         timeout: Duration,
     ) -> Result<metadata::Piece> {
-        tokio::select! {
+        let piece = tokio::select! {
             piece = self.handle_downloaded_from_source_finished(piece_id, task_id, offset, length, reader) => {
                 piece
             }
             _ = sleep(timeout) => {
                 Err(Error::DownloadPieceFinishedTimeout(piece_id.to_string()))
             }
-        }
+        }?;
+
+        self.piece_notifier.remove_and_notify(piece_id);
+        Ok(piece)
     }
 
     // handle_downloaded_from_source_finished handles the downloaded piece from source.
@@ -838,14 +809,17 @@ impl Storage {
         reader: &mut R,
         timeout: Duration,
     ) -> Result<metadata::Piece> {
-        tokio::select! {
+        let piece = tokio::select! {
             piece = self.handle_downloaded_piece_from_parent_finished(piece_id, task_id, offset, length, expected_digest, parent_id, reader) => {
                 piece
             }
             _ = sleep(timeout) => {
                 Err(Error::DownloadPieceFinishedTimeout(piece_id.to_string()))
             }
-        }
+        }?;
+
+        self.piece_notifier.remove_and_notify(piece_id);
+        Ok(piece)
     }
 
     // handle_downloaded_piece_from_parent_finished handles the downloaded piece from parent.
@@ -894,7 +868,16 @@ impl Storage {
     /// Updates the metadata of the piece when the piece downloads failed.
     #[instrument(level = "debug", skip_all)]
     pub fn download_piece_failed(&self, piece_id: &str) -> Result<()> {
-        self.metadata.download_piece_failed(piece_id)
+        let result = self.metadata.download_piece_failed(piece_id);
+        self.piece_notifier.remove_and_notify(piece_id);
+        result
+    }
+
+    /// Returns the completion notifier of the in-flight piece, or `None` if the
+    /// piece is not being downloaded by this process. The piece metadata remains
+    /// the source of truth: re-check it after being notified.
+    pub fn in_flight_piece_notifier(&self, piece_id: &str) -> Option<Arc<Notify>> {
+        self.piece_notifier.get(piece_id)
     }
 
     /// Updates the metadata of the piece and
@@ -966,7 +949,12 @@ impl Storage {
         match self.wait_for_persistent_piece_finished(piece_id).await {
             Ok(piece) => Ok(piece),
             // If piece is not found or wait timeout, create piece metadata.
-            Err(_) => self.metadata.download_piece_started(piece_id, number),
+            Err(_) => {
+                self.piece_notifier.register(piece_id);
+                self.metadata
+                    .download_piece_started(piece_id, number)
+                    .inspect_err(|_| self.piece_notifier.remove_and_notify(piece_id))
+            }
         }
     }
 
@@ -1004,13 +992,16 @@ impl Storage {
             ));
         }
 
-        self.metadata.download_piece_finished(
+        let piece = self.metadata.download_piece_finished(
             piece_id,
             offset,
             length,
             digest.to_string().as_str(),
             Some(parent_id.to_string()),
-        )
+        )?;
+
+        self.piece_notifier.remove_and_notify(piece_id);
+        Ok(piece)
     }
 
     /// Used for downloading piece from source.
@@ -1025,14 +1016,17 @@ impl Storage {
         reader: &mut R,
         timeout: Duration,
     ) -> Result<metadata::Piece> {
-        tokio::select! {
+        let piece = tokio::select! {
             piece = self.handle_persistent_downloaded_from_source_finished(piece_id, task_id, offset, length, reader) => {
                 piece
             }
             _ = sleep(timeout) => {
                 Err(Error::DownloadPieceFinishedTimeout(piece_id.to_string()))
             }
-        }
+        }?;
+
+        self.piece_notifier.remove_and_notify(piece_id);
+        Ok(piece)
     }
 
     // handle_persistent_downloaded_from_source_finished handles the downloaded persistent piece from source.
@@ -1063,7 +1057,9 @@ impl Storage {
     /// Updates the metadata of the persistent piece when the persistent piece downloads failed.
     #[instrument(level = "debug", skip_all)]
     pub fn download_persistent_piece_failed(&self, piece_id: &str) -> Result<()> {
-        self.metadata.download_piece_failed(piece_id)
+        let result = self.metadata.download_piece_failed(piece_id);
+        self.piece_notifier.remove_and_notify(piece_id);
+        result
     }
 
     /// Updates the metadata of the piece and_then
@@ -1138,7 +1134,12 @@ impl Storage {
         {
             Ok(piece) => Ok(piece),
             // If piece is not found or wait timeout, create piece metadata.
-            Err(_) => self.metadata.download_piece_started(piece_id, number),
+            Err(_) => {
+                self.piece_notifier.register(piece_id);
+                self.metadata
+                    .download_piece_started(piece_id, number)
+                    .inspect_err(|_| self.piece_notifier.remove_and_notify(piece_id))
+            }
         }
     }
 
@@ -1178,19 +1179,24 @@ impl Storage {
             ));
         }
 
-        self.metadata.download_piece_finished(
+        let piece = self.metadata.download_piece_finished(
             piece_id,
             offset,
             length,
             digest.to_string().as_str(),
             Some(parent_id.to_string()),
-        )
+        )?;
+
+        self.piece_notifier.remove_and_notify(piece_id);
+        Ok(piece)
     }
 
     /// Updates the metadata of the persistent cache piece when the persistent cache piece downloads failed.
     #[instrument(level = "debug", skip_all)]
     pub fn download_persistent_cache_piece_failed(&self, piece_id: &str) -> Result<()> {
-        self.metadata.download_piece_failed(piece_id)
+        let result = self.metadata.download_piece_failed(piece_id);
+        self.piece_notifier.remove_and_notify(piece_id);
+        result
     }
 
     /// Updates the metadata of the piece and_then
@@ -1255,8 +1261,6 @@ impl Storage {
     /// Waits for the piece to be finished.
     #[instrument(level = "debug", skip_all)]
     async fn wait_for_piece_finished(&self, piece_id: &str) -> Result<metadata::Piece> {
-        // Fast path: the piece is usually already finished when the upload
-        // starts, so check once before setting up the timers.
         let piece = self
             .get_piece(piece_id)?
             .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
@@ -1265,29 +1269,68 @@ impl Storage {
             return Ok(piece);
         }
 
-        // Total timeout for downloading a piece, combining the download time and the time to write to storage.
         let wait_timeout = tokio::time::sleep(
             self.config.download.piece_timeout + self.config.storage.write_piece_timeout,
         );
         tokio::pin!(wait_timeout);
 
-        let mut interval = tokio::time::interval(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL);
         loop {
-            tokio::select! {
-                _ = interval.tick() => {
+            match self.piece_notifier.get(piece_id) {
+                Some(notifier) => {
+                    let notified = notifier.notified();
+                    tokio::pin!(notified);
+                    notified.as_mut().enable();
+
                     let piece = self
                         .get_piece(piece_id)?
                         .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
 
-                    // If the piece is finished, return.
                     if piece.is_finished() {
                         debug!("wait piece finished success");
                         return Ok(piece);
                     }
+
+                    tokio::select! {
+                        _ = notified => {}
+                        _ = sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_FALLBACK_INTERVAL) => {}
+                        _ = &mut wait_timeout => {
+                            self.metadata.wait_for_piece_finished_failed(piece_id).unwrap_or_else(|err| error!("delete piece metadata failed: {}", err));
+                            self.piece_notifier.remove_and_notify(piece_id);
+                            return Err(Error::WaitForPieceFinishedTimeout(piece_id.to_string()));
+                        }
+                    }
                 }
-                _ = &mut wait_timeout => {
-                    self.metadata.wait_for_piece_finished_failed(piece_id).unwrap_or_else(|err| error!("delete piece metadata failed: {}", err));
-                    return Err(Error::WaitForPieceFinishedTimeout(piece_id.to_string()));
+                None => {
+                    let piece = self
+                        .get_piece(piece_id)?
+                        .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
+
+                    if piece.is_finished() {
+                        debug!("wait piece finished success");
+                        return Ok(piece);
+                    }
+
+                    if self.piece_notifier.get(piece_id).is_some() {
+                        continue;
+                    }
+
+                    let piece = self
+                        .get_piece(piece_id)?
+                        .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
+
+                    if piece.is_finished() {
+                        debug!("wait piece finished success");
+                        return Ok(piece);
+                    }
+
+                    if self.piece_notifier.get(piece_id).is_some() {
+                        continue;
+                    }
+
+                    self.metadata
+                        .wait_for_piece_finished_failed(piece_id)
+                        .unwrap_or_else(|err| error!("delete piece metadata failed: {}", err));
+                    return Err(Error::PieceNotFound(piece_id.to_string()));
                 }
             }
         }
@@ -1296,8 +1339,6 @@ impl Storage {
     /// Waits for the persistent piece to be finished.
     #[instrument(level = "debug", skip_all)]
     async fn wait_for_persistent_piece_finished(&self, piece_id: &str) -> Result<metadata::Piece> {
-        // Fast path: the piece is usually already finished when the upload
-        // starts, so check once before setting up the timers.
         let piece = self
             .get_persistent_piece(piece_id)?
             .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
@@ -1306,29 +1347,68 @@ impl Storage {
             return Ok(piece);
         }
 
-        // Total timeout for downloading a piece, combining the download time and the time to write to storage.
         let wait_timeout = tokio::time::sleep(
             self.config.download.piece_timeout + self.config.storage.write_piece_timeout,
         );
         tokio::pin!(wait_timeout);
 
-        let mut interval = tokio::time::interval(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL);
         loop {
-            tokio::select! {
-                _ = interval.tick() => {
+            match self.piece_notifier.get(piece_id) {
+                Some(notifier) => {
+                    let notified = notifier.notified();
+                    tokio::pin!(notified);
+                    notified.as_mut().enable();
+
                     let piece = self
                         .get_persistent_piece(piece_id)?
                         .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
 
-                    // If the piece is finished, return.
                     if piece.is_finished() {
                         debug!("wait piece finished success");
                         return Ok(piece);
                     }
+
+                    tokio::select! {
+                        _ = notified => {}
+                        _ = sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_FALLBACK_INTERVAL) => {}
+                        _ = &mut wait_timeout => {
+                            self.metadata.wait_for_piece_finished_failed(piece_id).unwrap_or_else(|err| error!("delete piece metadata failed: {}", err));
+                            self.piece_notifier.remove_and_notify(piece_id);
+                            return Err(Error::WaitForPieceFinishedTimeout(piece_id.to_string()));
+                        }
+                    }
                 }
-                _ = &mut wait_timeout => {
-                    self.metadata.wait_for_piece_finished_failed(piece_id).unwrap_or_else(|err| error!("delete piece metadata failed: {}", err));
-                    return Err(Error::WaitForPieceFinishedTimeout(piece_id.to_string()));
+                None => {
+                    let piece = self
+                        .get_persistent_piece(piece_id)?
+                        .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
+
+                    if piece.is_finished() {
+                        debug!("wait piece finished success");
+                        return Ok(piece);
+                    }
+
+                    if self.piece_notifier.get(piece_id).is_some() {
+                        continue;
+                    }
+
+                    let piece = self
+                        .get_persistent_piece(piece_id)?
+                        .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
+
+                    if piece.is_finished() {
+                        debug!("wait piece finished success");
+                        return Ok(piece);
+                    }
+
+                    if self.piece_notifier.get(piece_id).is_some() {
+                        continue;
+                    }
+
+                    self.metadata
+                        .wait_for_piece_finished_failed(piece_id)
+                        .unwrap_or_else(|err| error!("delete piece metadata failed: {}", err));
+                    return Err(Error::PieceNotFound(piece_id.to_string()));
                 }
             }
         }
@@ -1340,8 +1420,6 @@ impl Storage {
         &self,
         piece_id: &str,
     ) -> Result<metadata::Piece> {
-        // Fast path: the piece is usually already finished when the upload
-        // starts, so check once before setting up the timers.
         let piece = self
             .get_persistent_cache_piece(piece_id)?
             .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
@@ -1350,29 +1428,68 @@ impl Storage {
             return Ok(piece);
         }
 
-        // Total timeout for downloading a piece, combining the download time and the time to write to storage.
         let wait_timeout = tokio::time::sleep(
             self.config.download.piece_timeout + self.config.storage.write_piece_timeout,
         );
         tokio::pin!(wait_timeout);
 
-        let mut interval = tokio::time::interval(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL);
         loop {
-            tokio::select! {
-                _ = interval.tick() => {
+            match self.piece_notifier.get(piece_id) {
+                Some(notifier) => {
+                    let notified = notifier.notified();
+                    tokio::pin!(notified);
+                    notified.as_mut().enable();
+
                     let piece = self
                         .get_persistent_cache_piece(piece_id)?
                         .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
 
-                    // If the piece is finished, return.
                     if piece.is_finished() {
                         debug!("wait piece finished success");
                         return Ok(piece);
                     }
+
+                    tokio::select! {
+                        _ = notified => {}
+                        _ = sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_FALLBACK_INTERVAL) => {}
+                        _ = &mut wait_timeout => {
+                            self.metadata.wait_for_piece_finished_failed(piece_id).unwrap_or_else(|err| error!("delete piece metadata failed: {}", err));
+                            self.piece_notifier.remove_and_notify(piece_id);
+                            return Err(Error::WaitForPieceFinishedTimeout(piece_id.to_string()));
+                        }
+                    }
                 }
-                _ = &mut wait_timeout => {
-                    self.metadata.wait_for_piece_finished_failed(piece_id).unwrap_or_else(|err| error!("delete piece metadata failed: {}", err));
-                    return Err(Error::WaitForPieceFinishedTimeout(piece_id.to_string()));
+                None => {
+                    let piece = self
+                        .get_persistent_cache_piece(piece_id)?
+                        .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
+
+                    if piece.is_finished() {
+                        debug!("wait piece finished success");
+                        return Ok(piece);
+                    }
+
+                    if self.piece_notifier.get(piece_id).is_some() {
+                        continue;
+                    }
+
+                    let piece = self
+                        .get_persistent_cache_piece(piece_id)?
+                        .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
+
+                    if piece.is_finished() {
+                        debug!("wait piece finished success");
+                        return Ok(piece);
+                    }
+
+                    if self.piece_notifier.get(piece_id).is_some() {
+                        continue;
+                    }
+
+                    self.metadata
+                        .wait_for_piece_finished_failed(piece_id)
+                        .unwrap_or_else(|err| error!("delete piece metadata failed: {}", err));
+                    return Err(Error::PieceNotFound(piece_id.to_string()));
                 }
             }
         }
@@ -1628,5 +1745,223 @@ impl Storage {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_wait_for_piece_finished_wakes_on_notification() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(Config::default());
+        let storage = Arc::new(
+            Storage::new(config, dir.path(), dir.path().to_path_buf())
+                .await
+                .unwrap(),
+        );
+
+        const TASK_ID: &str = "d3add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14a";
+        const CONTENT: &[u8] = b"piece content";
+        storage
+            .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
+            .await
+            .unwrap();
+
+        let piece_id = storage.piece_id(TASK_ID, 0);
+        let piece = storage
+            .download_piece_started(piece_id.as_str(), 0)
+            .await
+            .unwrap();
+        assert!(!piece.is_finished());
+        assert!(storage
+            .in_flight_piece_notifier(piece_id.as_str())
+            .is_some());
+
+        let storage_clone = storage.clone();
+        let piece_id_clone = piece_id.clone();
+        let waiter = tokio::spawn(async move {
+            let started_at = std::time::Instant::now();
+            storage_clone
+                .upload_piece(piece_id_clone.as_str(), TASK_ID, None)
+                .await
+                .unwrap();
+            started_at.elapsed()
+        });
+
+        sleep(Duration::from_millis(100)).await;
+        let mut reader = CONTENT;
+        storage
+            .download_piece_from_source_finished(
+                piece_id.as_str(),
+                TASK_ID,
+                0,
+                CONTENT.len() as u64,
+                &mut reader,
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+
+        let elapsed = waiter.await.unwrap();
+        assert!(
+            elapsed < Duration::from_millis(800),
+            "waiter took {elapsed:?}, expected a notification-driven wake"
+        );
+
+        assert!(storage
+            .in_flight_piece_notifier(piece_id.as_str())
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn test_download_piece_failed_wakes_waiters_with_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(Config::default());
+        let storage = Arc::new(
+            Storage::new(config, dir.path(), dir.path().to_path_buf())
+                .await
+                .unwrap(),
+        );
+
+        const TASK_ID: &str = "e4add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14b";
+        storage
+            .download_task_started(TASK_ID, 1024, 1024, None)
+            .await
+            .unwrap();
+
+        let piece_id = storage.piece_id(TASK_ID, 0);
+        storage
+            .download_piece_started(piece_id.as_str(), 0)
+            .await
+            .unwrap();
+
+        let storage_clone = storage.clone();
+        let piece_id_clone = piece_id.clone();
+        let waiter = tokio::spawn(async move {
+            let started_at = std::time::Instant::now();
+            let result = storage_clone
+                .upload_piece(piece_id_clone.as_str(), TASK_ID, None)
+                .await;
+            (started_at.elapsed(), result)
+        });
+
+        sleep(Duration::from_millis(100)).await;
+        storage.download_piece_failed(piece_id.as_str()).unwrap();
+
+        let (elapsed, result) = waiter.await.unwrap();
+        assert!(result.is_err());
+        assert!(
+            elapsed < Duration::from_millis(800),
+            "waiter took {elapsed:?}, expected a notification-driven wake"
+        );
+        assert!(storage
+            .in_flight_piece_notifier(piece_id.as_str())
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_persistent_piece_finished_wakes_on_notification() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(Config::default());
+        let storage = Arc::new(
+            Storage::new(config, dir.path(), dir.path().to_path_buf())
+                .await
+                .unwrap(),
+        );
+
+        const TASK_ID: &str = "f5add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14c";
+        const CONTENT: &[u8] = b"piece content";
+        storage
+            .create_persistent_task(TASK_ID, CONTENT.len() as u64)
+            .await
+            .unwrap();
+
+        let piece_id = storage.persistent_piece_id(TASK_ID, 0);
+        let piece = storage
+            .download_persistent_piece_started(piece_id.as_str(), 0)
+            .await
+            .unwrap();
+        assert!(!piece.is_finished());
+        assert!(storage
+            .in_flight_piece_notifier(piece_id.as_str())
+            .is_some());
+
+        let storage_clone = storage.clone();
+        let piece_id_clone = piece_id.clone();
+        let waiter = tokio::spawn(async move {
+            let started_at = std::time::Instant::now();
+            let piece = storage_clone
+                .download_persistent_piece_started(piece_id_clone.as_str(), 0)
+                .await
+                .unwrap();
+            (started_at.elapsed(), piece)
+        });
+
+        sleep(Duration::from_millis(100)).await;
+        let mut reader = CONTENT;
+        storage
+            .download_persistent_piece_from_source_finished(
+                piece_id.as_str(),
+                TASK_ID,
+                0,
+                CONTENT.len() as u64,
+                &mut reader,
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+
+        let (elapsed, piece) = waiter.await.unwrap();
+        assert!(piece.is_finished());
+        assert!(
+            elapsed < Duration::from_millis(800),
+            "waiter took {elapsed:?}, expected a notification-driven wake"
+        );
+
+        assert!(storage
+            .in_flight_piece_notifier(piece_id.as_str())
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_piece_finished_fails_fast_on_stale_piece() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = Arc::new(Config::default());
+        let storage = Arc::new(
+            Storage::new(config, dir.path(), dir.path().to_path_buf())
+                .await
+                .unwrap(),
+        );
+
+        const TASK_ID: &str = "a6add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14d";
+        storage
+            .download_task_started(TASK_ID, 1024, 1024, None)
+            .await
+            .unwrap();
+
+        // Simulate unfinished piece metadata left over from a previous run:
+        // the metadata exists but no notifier is registered in this process.
+        let piece_id = storage.piece_id(TASK_ID, 0);
+        storage
+            .metadata
+            .download_piece_started(piece_id.as_str(), 0)
+            .unwrap();
+        assert!(storage
+            .in_flight_piece_notifier(piece_id.as_str())
+            .is_none());
+
+        // The waiter fails fast with PieceNotFound instead of polling until
+        // the wait timeout, and the stale metadata is cleaned up.
+        let started_at = std::time::Instant::now();
+        let result = storage.upload_piece(piece_id.as_str(), TASK_ID, None).await;
+        assert!(matches!(result, Err(Error::PieceNotFound(_))));
+        assert!(
+            started_at.elapsed() < Duration::from_millis(100),
+            "waiter took {:?}, expected an immediate fail-fast",
+            started_at.elapsed()
+        );
+        assert!(storage.get_piece(piece_id.as_str()).unwrap().is_none());
     }
 }

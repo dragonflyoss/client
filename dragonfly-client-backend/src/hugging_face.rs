@@ -52,7 +52,7 @@ use std::error::Error as _;
 use std::io::Error as IOError;
 use std::sync::Arc;
 use tokio_util::io::StreamReader;
-use tracing::{debug, error};
+use tracing::{debug, error, instrument};
 use url::Url;
 
 /// The URL scheme for Hugging Face backend.

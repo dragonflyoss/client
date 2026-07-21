@@ -46,12 +46,13 @@ use dragonfly_client_metric::{
     collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
     collect_backend_request_started_metrics,
 };
-use dragonfly_client_storage::{metadata, Storage, DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL};
+use dragonfly_client_storage::{metadata, Storage};
 use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
     id_generator::IDGenerator,
     shutdown,
 };
+use futures::future::select_all;
 use leaky_bucket::RateLimiter;
 use reqwest::header::HeaderMap;
 use std::path::Path;
@@ -63,7 +64,7 @@ use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
 use tokio::sync::{
     mpsc::{self, Sender},
-    Mutex, Semaphore,
+    Mutex, Notify, Semaphore,
 };
 use tokio::task::JoinSet;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
@@ -2033,61 +2034,80 @@ impl Task {
         let wait_timeout = tokio::time::sleep(DEFAULT_WAIT_FOR_IN_FLIGHT_PIECE_TIMEOUT);
         tokio::pin!(wait_timeout);
 
-        // Delay the first tick by one interval, giving the concurrent downloads a
-        // chance to start downloading the interested pieces.
-        let mut interval = tokio::time::interval_at(
-            tokio::time::Instant::now() + DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL,
-            DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL,
-        );
-
         loop {
+            // Subscribe to the completion of the interested pieces before checking
+            // the local storage, so completions signaled during the check are not
+            // missed. The completion notifier is registered when the piece download
+            // starts and removed when it completes, so the pieces without a
+            // notifier are not in-flight and will not be written to the local
+            // storage soon.
+            let notifiers: Vec<(u32, Arc<Notify>)> = interested_pieces
+                .iter()
+                .filter_map(|interested_piece| {
+                    self.storage
+                        .in_flight_piece_notifier(
+                            self.piece.id(task_id, interested_piece.number).as_str(),
+                        )
+                        .map(|notifier| (interested_piece.number, notifier))
+                })
+                .collect();
+
+            let mut notifieds: Vec<(u32, _)> = notifiers
+                .iter()
+                .map(|(number, notifier)| {
+                    let mut notified = Box::pin(notifier.notified());
+                    // Enable the notified future, so a completion signaled before
+                    // the select below still wakes it.
+                    notified.as_mut().enable();
+                    (*number, notified)
+                })
+                .collect();
+
+            // Download the pieces from the local.
+            let partial_finished_pieces = self
+                .download_partial_from_local(
+                    task,
+                    host_id,
+                    peer_id,
+                    need_piece_content,
+                    interested_pieces.clone(),
+                    download_progress_tx.clone(),
+                )
+                .await?;
+
+            // Remove the finished pieces from the pieces.
+            interested_pieces = self.piece.remove_finished_from_interested(
+                partial_finished_pieces.clone(),
+                interested_pieces,
+            );
+
+            // Merge the finished pieces.
+            finished_pieces = self
+                .piece
+                .merge_finished_pieces(finished_pieces, partial_finished_pieces);
+
+            // If all pieces are finished, return.
+            if interested_pieces.is_empty() {
+                debug!("wait in-flight pieces finished success");
+                return Ok(finished_pieces);
+            }
+
+            // Keep only the subscriptions of the remaining interested pieces.
+            notifieds.retain(|(number, _)| {
+                interested_pieces
+                    .iter()
+                    .any(|interested_piece| interested_piece.number == *number)
+            });
+
+            // Stop waiting if none of the remaining interested pieces is in-flight.
+            if notifieds.is_empty() {
+                return Ok(finished_pieces);
+            }
+
+            // Wait for any of the in-flight pieces to complete, then collect it
+            // from the local storage in the next iteration.
             tokio::select! {
-                _ = interval.tick() => {
-                    // Download the pieces from the local.
-                    let partial_finished_pieces = self
-                        .download_partial_from_local(
-                            task,
-                            host_id,
-                            peer_id,
-                            need_piece_content,
-                            interested_pieces.clone(),
-                            download_progress_tx.clone(),
-                        )
-                        .await?;
-
-                    // Remove the finished pieces from the pieces.
-                    interested_pieces = self.piece.remove_finished_from_interested(
-                        partial_finished_pieces.clone(),
-                        interested_pieces,
-                    );
-
-                    // Merge the finished pieces.
-                    finished_pieces = self
-                        .piece
-                        .merge_finished_pieces(finished_pieces, partial_finished_pieces);
-
-                    // If all pieces are finished, return.
-                    if interested_pieces.is_empty() {
-                        debug!("wait in-flight pieces finished success");
-                        return Ok(finished_pieces);
-                    }
-
-                    // Stop waiting if none of the remaining interested pieces is in-flight.
-                    // The piece metadata is created when its download starts and removed
-                    // when its download fails, so the remaining pieces without metadata
-                    // will not be written to the local storage soon.
-                    let has_in_flight_piece = interested_pieces.iter().any(|interested_piece| {
-                        matches!(
-                            self.piece
-                                .get(self.piece.id(task_id, interested_piece.number).as_str()),
-                            Ok(Some(_))
-                        )
-                    });
-
-                    if !has_in_flight_piece {
-                        return Ok(finished_pieces);
-                    }
-                }
+                _ = select_all(notifieds.iter_mut().map(|(_, notified)| notified)) => {}
                 _ = &mut wait_timeout => {
                     return Ok(finished_pieces);
                 }
