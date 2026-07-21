@@ -508,9 +508,40 @@ impl Task {
         } else {
             interested_pieces
         };
-        debug!("download the pieces with scheduler");
+
+        // If the seed peer is enabled and the range length is less than or equal to the max piece
+        // length, download the pieces from the source directly.
+        if self.config.seed_peer.enable
+            && !request.disable_back_to_source
+            && request
+                .range
+                .is_some_and(|range| range.length <= super::piece::MAX_PIECE_LENGTH)
+        {
+            debug!(
+                "seed peer downloads the range task from source directly, skipping the scheduler"
+            );
+
+            if let Err(err) = self
+                .download_partial_from_source(
+                    task,
+                    host_id,
+                    peer_id,
+                    interested_pieces.clone(),
+                    request.clone(),
+                    download_progress_tx.clone(),
+                )
+                .await
+            {
+                error!("download from source error: {:?}", err);
+                return Err(err);
+            }
+
+            info!("all pieces are downloaded from source");
+            return Ok(());
+        }
 
         // Download the pieces with scheduler.
+        debug!("download the pieces with scheduler");
         let finished_pieces = match self
             .download_partial_with_scheduler(
                 task,
@@ -603,7 +634,7 @@ impl Task {
     /// Downloads a task and announces the peer to the scheduler, even if all pieces are
     /// hit in the local cache.
     #[instrument(skip_all)]
-    pub async fn download_and_ensure_announcement(
+    pub async fn download_with_scheduler(
         &self,
         task: &metadata::Task,
         host_id: &str,

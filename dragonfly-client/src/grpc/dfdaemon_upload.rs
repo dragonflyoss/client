@@ -477,7 +477,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         tokio::spawn(
             async move {
                 match task_manager_clone
-                    .download_and_ensure_announcement(
+                    .download_with_scheduler(
                         &task_clone,
                         host_id.as_str(),
                         peer_id.as_str(),
