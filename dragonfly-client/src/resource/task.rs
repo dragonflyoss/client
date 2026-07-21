@@ -994,10 +994,10 @@ impl Task {
                     in_stream_tx.closed().await;
                     return Ok(finished_pieces);
                 }
-                announce_peer_response::Response::HitLocalCacheResponse(_) => {
-                    // HitLocalCacheResponse is only sent when the register request has the
-                    // hit_local_cache flag, which is not set in this flow.
-                    error!("receive unexpected HitLocalCacheResponse");
+                announce_peer_response::Response::MetadataOnlyResponse(_) => {
+                    // MetadataOnlyResponse is only sent when the register request has the
+                    // metadata_only flag, which is not set in this flow.
+                    error!("receive unexpected MetadataOnlyResponse");
                     return Err(Error::UnexpectedResponse);
                 }
             }
@@ -1010,7 +1010,7 @@ impl Task {
 
     /// Announces a task that hits the local cache completely with the scheduler. It only
     /// reports the metadata of the peer to the scheduler by the register request with the
-    /// hit_local_cache flag and the download peer started/finished requests, no pieces need
+    /// metadata_only flag and the download peer started/finished requests, no pieces need
     /// to be downloaded.
     #[instrument(level = "debug", skip_all)]
     async fn download_partial_with_scheduler_from_local(
@@ -1023,10 +1023,10 @@ impl Task {
         // Get the id of the task.
         let task_id = task.id.as_str();
 
-        // Set the hit_local_cache flag, so the scheduler only needs the metadata report
+        // Set the metadata_only flag, so the scheduler only needs the metadata report
         // and does not schedule the peer for downloading pieces.
         let request = Download {
-            hit_local_cache: true,
+            metadata_only: true,
             need_back_to_source: false,
             ..request
         };
@@ -1086,7 +1086,7 @@ impl Task {
             })?;
 
         let response = message?.response.ok_or(Error::UnexpectedResponse)?;
-        let announce_peer_response::Response::HitLocalCacheResponse(_) = response else {
+        let announce_peer_response::Response::MetadataOnlyResponse(_) = response else {
             error!("receive unexpected response: {:?}", response);
             return Err(Error::UnexpectedResponse);
         };

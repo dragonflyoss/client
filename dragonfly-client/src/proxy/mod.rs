@@ -1275,7 +1275,7 @@ fn make_download_task_request(
                     .registry_mirror
                     .enable_task_id_based_blob_digest,
             ),
-            hit_local_cache: false,
+            metadata_only: false,
         }),
     })
 }
