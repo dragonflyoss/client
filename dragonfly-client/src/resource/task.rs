@@ -46,7 +46,7 @@ use dragonfly_client_metric::{
     collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
     collect_backend_request_started_metrics,
 };
-use dragonfly_client_storage::{metadata, Storage};
+use dragonfly_client_storage::{metadata, Storage, DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL};
 use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
     id_generator::IDGenerator,
@@ -59,7 +59,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
 use tokio::sync::{
     mpsc::{self, Sender},
@@ -71,6 +71,12 @@ use tonic::{Request, Status};
 use tracing::{debug, error, info, instrument, warn, Instrument};
 
 use super::*;
+
+/// DEFAULT_WAIT_FOR_IN_FLIGHT_PIECE_TIMEOUT is the maximum duration to wait for the
+/// interested pieces being downloaded by other concurrent downloads of the same task
+/// (e.g. the prefetch) to be written to the local storage, before falling back to
+/// downloading with the scheduler.
+const DEFAULT_WAIT_FOR_IN_FLIGHT_PIECE_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Represents a task manager.
 pub struct Task {
@@ -454,6 +460,52 @@ impl Task {
         if interested_pieces.is_empty() {
             info!("all pieces are downloaded from local");
             return Ok(());
+        };
+
+        // If the task is prefetched, the interested pieces are probably being downloaded
+        // by other concurrent downloads of the same task. Wait for the in-flight pieces
+        // to be written to the local storage before downloading with the scheduler, to
+        // avoid the scheduling stall when no candidate parent is available.
+        let interested_pieces = if !request.is_prefetch
+            && self
+                .storage
+                .get_task(task_id)
+                .ok()
+                .flatten()
+                .is_some_and(|task| task.is_prefetched())
+        {
+            let finished_pieces = self
+                .wait_for_in_flight_pieces(
+                    task,
+                    host_id,
+                    peer_id,
+                    request.need_piece_content,
+                    interested_pieces.clone(),
+                    download_progress_tx.clone(),
+                )
+                .await?;
+
+            // Remove the finished pieces from the pieces.
+            let interested_pieces = self
+                .piece
+                .remove_finished_from_interested(finished_pieces, interested_pieces);
+            info!(
+                "interested pieces after waiting for in-flight pieces: {:?}",
+                interested_pieces
+                    .iter()
+                    .map(|p| p.number)
+                    .collect::<Vec<u32>>()
+            );
+
+            // Check if all pieces are downloaded.
+            if interested_pieces.is_empty() {
+                info!("all pieces are downloaded from local");
+                return Ok(());
+            };
+
+            interested_pieces
+        } else {
+            interested_pieces
         };
         debug!("download the pieces with scheduler");
 
@@ -1952,6 +2004,95 @@ impl Task {
         }
 
         Ok(finished_pieces)
+    }
+
+    /// Waits for the interested pieces being downloaded by other concurrent downloads
+    /// of the same task (e.g. the prefetch) to be written to the local storage, and
+    /// downloads the finished ones from the local storage. Stops when all interested
+    /// pieces are finished, none of the remaining pieces is in-flight, or the wait
+    /// timeout is exceeded.
+    #[instrument(level = "debug", skip_all)]
+    async fn wait_for_in_flight_pieces(
+        &self,
+        task: &metadata::Task,
+        host_id: &str,
+        peer_id: &str,
+        need_piece_content: bool,
+        interested_pieces: Vec<metadata::Piece>,
+        download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
+    ) -> ClientResult<Vec<metadata::Piece>> {
+        // Get the id of the task.
+        let task_id = task.id.as_str();
+
+        // Initialize the finished pieces.
+        let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
+        let mut interested_pieces = interested_pieces;
+
+        // Total timeout for waiting for the in-flight pieces to be written to the
+        // local storage.
+        let wait_timeout = tokio::time::sleep(DEFAULT_WAIT_FOR_IN_FLIGHT_PIECE_TIMEOUT);
+        tokio::pin!(wait_timeout);
+
+        // Delay the first tick by one interval, giving the concurrent downloads a
+        // chance to start downloading the interested pieces.
+        let mut interval = tokio::time::interval_at(
+            tokio::time::Instant::now() + DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL,
+            DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL,
+        );
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    // Download the pieces from the local.
+                    let partial_finished_pieces = self
+                        .download_partial_from_local(
+                            task,
+                            host_id,
+                            peer_id,
+                            need_piece_content,
+                            interested_pieces.clone(),
+                            download_progress_tx.clone(),
+                        )
+                        .await?;
+
+                    // Remove the finished pieces from the pieces.
+                    interested_pieces = self.piece.remove_finished_from_interested(
+                        partial_finished_pieces.clone(),
+                        interested_pieces,
+                    );
+
+                    // Merge the finished pieces.
+                    finished_pieces = self
+                        .piece
+                        .merge_finished_pieces(finished_pieces, partial_finished_pieces);
+
+                    // If all pieces are finished, return.
+                    if interested_pieces.is_empty() {
+                        debug!("wait in-flight pieces finished success");
+                        return Ok(finished_pieces);
+                    }
+
+                    // Stop waiting if none of the remaining interested pieces is in-flight.
+                    // The piece metadata is created when its download starts and removed
+                    // when its download fails, so the remaining pieces without metadata
+                    // will not be written to the local storage soon.
+                    let has_in_flight_piece = interested_pieces.iter().any(|interested_piece| {
+                        matches!(
+                            self.piece
+                                .get(self.piece.id(task_id, interested_piece.number).as_str()),
+                            Ok(Some(_))
+                        )
+                    });
+
+                    if !has_in_flight_piece {
+                        return Ok(finished_pieces);
+                    }
+                }
+                _ = &mut wait_timeout => {
+                    return Ok(finished_pieces);
+                }
+            }
+        }
     }
 
     /// Downloads a partial task from the source.
