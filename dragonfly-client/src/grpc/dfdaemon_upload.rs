@@ -88,6 +88,9 @@ use url::Url;
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
 use super::middleware::BBRLayer;
 
+/// The default interval for waiting for the piece to be finished.
+pub const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_millis(100);
+
 /// gRPC server for upload operations.
 pub struct DfdaemonUploadServer {
     /// Configuration of the dfdaemon.
@@ -1094,10 +1097,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                     }
 
                     // Wait for the piece to be finished.
-                    tokio::time::sleep(
-                        dragonfly_client_storage::DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL,
-                    )
-                    .await;
+                    tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL).await;
                 }
             }
             .in_current_span(),
@@ -1851,10 +1851,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                     }
 
                     // Wait for the piece to be finished.
-                    tokio::time::sleep(
-                        dragonfly_client_storage::DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL,
-                    )
-                    .await;
+                    tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL).await;
                 }
             }
             .in_current_span(),
@@ -2414,10 +2411,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                     }
 
                     // Wait for the piece to be finished.
-                    tokio::time::sleep(
-                        dragonfly_client_storage::DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL,
-                    )
-                    .await;
+                    tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL).await;
                 }
             }
             .in_current_span(),

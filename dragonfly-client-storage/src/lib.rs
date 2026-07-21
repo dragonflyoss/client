@@ -49,9 +49,6 @@ pub mod metadata;
 pub mod server;
 pub mod storage_engine;
 
-/// The default interval for waiting for the piece to be finished.
-pub const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_millis(100);
-
 /// The fallback interval for re-checking the piece metadata while waiting for an
 /// in-flight piece completion notification, guarding against missed notifications
 /// (e.g. the piece metadata is deleted outside the download flow).
