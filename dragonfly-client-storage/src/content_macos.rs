@@ -226,7 +226,7 @@ impl Content {
     }
 
     /// Copies the task content to the destination.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn copy_task(&self, task_id: &str, to: &Path) -> Result<()> {
         fs::copy(self.get_task_path(task_id), to).await?;
         info!("copy to {:?} success", to);

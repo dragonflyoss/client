@@ -132,7 +132,6 @@ pub struct ParentSelector {
 /// Implements parent peer selection and connection management logic.
 impl ParentSelector {
     /// Creates a new parent selector instance.
-    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,
@@ -453,7 +452,6 @@ pub struct PersistentParentSelector {
 /// Implements persistent parent peer selection and connection management logic.
 impl PersistentParentSelector {
     /// Creates a new persistent parent selector instance.
-    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,
@@ -775,7 +773,6 @@ pub struct PersistentCacheParentSelector {
 /// Implements persistent cache parent peer selection and connection management logic.
 impl PersistentCacheParentSelector {
     /// Creates a new persistent cache parent selector instance.
-    #[instrument(skip_all)]
     pub fn new(
         config: Arc<Config>,
         id_generator: Arc<IDGenerator>,

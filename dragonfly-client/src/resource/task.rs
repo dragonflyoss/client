@@ -142,7 +142,7 @@ impl Task {
     }
 
     /// Gets the metadata of the task.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get(&self, id: &str) -> ClientResult<Option<metadata::Task>> {
         self.storage.get_task(id)
     }
@@ -300,25 +300,25 @@ impl Task {
     }
 
     /// Updates the metadata of the task when the task downloads finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_finished(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.download_task_finished(id)
     }
 
     /// Updates the metadata of the task when the task downloads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_failed(&self, id: &str) -> ClientResult<()> {
         self.storage.download_task_failed(id).await.map(|_| ())
     }
 
     /// Updates the metadata of the task when the task prefetch started.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn prefetch_task_started(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.prefetch_task_started(id).await
     }
 
     /// Updates the metadata of the task when the task prefetch failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn prefetch_task_failed(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.prefetch_task_failed(id).await
     }

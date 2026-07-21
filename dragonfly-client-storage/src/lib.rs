@@ -16,6 +16,7 @@
 
 use bytes::BytesMut;
 use chrono::NaiveDateTime;
+use dashmap::DashMap;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
@@ -27,6 +28,7 @@ use std::time::Duration;
 use tokio::{
     fs,
     io::{AsyncBufRead, AsyncRead, AsyncReadExt},
+    sync::Notify,
     time::sleep,
 };
 use tokio_util::io::InspectReader;
@@ -48,6 +50,11 @@ pub mod storage_engine;
 /// The default interval for waiting for the piece to be finished.
 pub const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_millis(100);
 
+/// The fallback interval for re-checking the piece metadata while waiting for an
+/// in-flight piece completion notification, guarding against missed notifications
+/// (e.g. the piece metadata is deleted outside the download flow).
+const DEFAULT_WAIT_FOR_PIECE_FINISHED_FALLBACK_INTERVAL: Duration = Duration::from_secs(1);
+
 /// Default temporary directory name for output operations.
 ///
 /// When users need to hardlink files from the client DaemonSet Pod's cache to the output
@@ -57,6 +64,45 @@ pub const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_mi
 /// hostPath mount point, which prevents hardlinks from being created across different
 /// quota contexts.
 pub const DEFAULT_TMP_DIR: &str = "tmp";
+
+/// PieceNotifier notifies the waiters when an in-flight piece download completes
+/// (finished, failed or its metadata deleted), so the waiters do not need to poll
+/// the piece metadata on an interval.
+///
+/// The notifier is registered just before the piece metadata is created when the
+/// piece download starts, and removed (waking all its waiters) when the download
+/// reaches a terminal state. The piece metadata remains the source of truth:
+/// waiters must re-check it after being notified.
+#[derive(Default)]
+struct PieceNotifier {
+    /// The notifiers of the in-flight pieces, keyed by the piece id.
+    notifiers: DashMap<String, Arc<Notify>>,
+}
+
+impl PieceNotifier {
+    /// Registers the notifier of the piece when its download starts. If the piece
+    /// is already registered by a concurrent download, the existing notifier is
+    /// kept.
+    fn register(&self, piece_id: &str) {
+        self.notifiers.entry(piece_id.to_string()).or_default();
+    }
+
+    /// Returns the notifier of the in-flight piece, or `None` if the piece is not
+    /// being downloaded by this process.
+    fn get(&self, piece_id: &str) -> Option<Arc<Notify>> {
+        self.notifiers
+            .get(piece_id)
+            .map(|notifier| notifier.value().clone())
+    }
+
+    /// Removes the notifier of the piece and wakes all its waiters when the piece
+    /// download completes.
+    fn remove_and_notify(&self, piece_id: &str) {
+        if let Some((_, notifier)) = self.notifiers.remove(piece_id) {
+            notifier.notify_waiters();
+        }
+    }
+}
 
 /// The storage of the task.
 pub struct Storage {
@@ -71,6 +117,10 @@ pub struct Storage {
 
     /// Implements the cache storage.
     cache: cache::Cache,
+
+    /// Notifies the waiters of the in-flight pieces when their downloads
+    /// complete.
+    piece_notifier: PieceNotifier,
 }
 
 /// Implements the storage.
@@ -88,6 +138,7 @@ impl Storage {
             metadata,
             content,
             cache,
+            piece_notifier: PieceNotifier::default(),
         })
     }
 
@@ -113,7 +164,7 @@ impl Storage {
     }
 
     /// Copies the task content to the destination.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn copy_task(&self, id: &str, to: &Path) -> Result<()> {
         self.content.copy_task(id, to).await
     }

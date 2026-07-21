@@ -141,7 +141,7 @@ impl PersistentTask {
     }
 
     /// Gets a persistent task from local.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get(&self, task_id: &str) -> ClientResult<Option<metadata::PersistentTask>> {
         self.storage.get_persistent_task(task_id)
     }
@@ -806,13 +806,13 @@ impl PersistentTask {
     }
 
     /// Updates the metadata of the persistent task when the task downloads finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_finished(&self, id: &str) -> ClientResult<metadata::PersistentTask> {
         self.storage.download_persistent_task_finished(id)
     }
 
     /// Updates the metadata of the persistent task when the task downloads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_failed(&self, id: &str) -> ClientResult<()> {
         let _ = self.storage.download_persistent_task_failed(id).await?;
         Ok(())
