@@ -38,7 +38,7 @@ pub async fn fallocate(f: &fs::File, length: u64) -> Result<()> {
         // Set length (potential truncation).
         f.set_len(length).await?;
         let f = f.try_clone().await?;
-        return tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             let fd = f.as_fd();
             let offset = 0;
             let flags = FallocateFlags::KEEP_SIZE;
@@ -61,9 +61,8 @@ pub async fn fallocate(f: &fs::File, length: u64) -> Result<()> {
             }
         })
         .await
-        .map_err(io::Error::other)?;
+        .map_err(io::Error::other)??;
     }
 
-    #[cfg(not(target_os = "linux"))]
     Ok(())
 }
