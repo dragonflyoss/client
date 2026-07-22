@@ -77,7 +77,7 @@ use super::*;
 /// interested pieces being downloaded by other concurrent downloads of the same task
 /// (e.g. the prefetch) to be written to the local storage, before falling back to
 /// downloading with the scheduler.
-const DEFAULT_WAIT_FOR_IN_FLIGHT_PIECE_TIMEOUT: Duration = Duration::from_millis(500);
+const DEFAULT_WAIT_FOR_IN_FLIGHT_PIECE_TIMEOUT: Duration = Duration::from_millis(1000);
 
 /// Represents a task manager.
 pub struct Task {
