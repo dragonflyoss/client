@@ -614,6 +614,7 @@ pub async fn upgraded_handler(
     // Span record the url and method.
     Span::current().record("url", request.uri().to_string().as_str());
     Span::current().record("method", request.method().as_str());
+    Span::current().record("remote_ip", remote_ip.to_string().as_str());
 
     // HTTPS requests are tunneled over a single upgraded connection, so a
     // per-connection check is not enough. The rate limit must be enforced on
@@ -807,11 +808,6 @@ async fn proxy_via_dfdaemon(
             None,
         ));
     };
-
-    // Span record the host_id, task_id, and peer_id.
-    Span::current().record("host_id", message.host_id.as_str());
-    Span::current().record("task_id", message.task_id.as_str());
-    Span::current().record("peer_id", message.peer_id.as_str());
 
     // Handle the download task started response.
     let Some(download_task_response::Response::DownloadTaskStartedResponse(
