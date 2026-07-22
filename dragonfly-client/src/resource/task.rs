@@ -509,10 +509,9 @@ impl Task {
             interested_pieces
         };
 
-        // If the seed peer is enabled and the range length is less than or equal to the max piece
+        // If the range length is less than or equal to the max piece
         // length, download the pieces from the source directly.
-        if self.config.seed_peer.enable
-            && !request.disable_back_to_source
+        if !request.disable_back_to_source
             && (request
                 .range
                 .is_some_and(|range| range.length <= super::piece::MAX_PIECE_LENGTH)
