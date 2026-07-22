@@ -47,10 +47,7 @@ type DownloadTaskStream = mpsc::Receiver<Result<DownloadTaskResponse, Status>>;
 /// Download the task by the task manager directly. It is similar to the
 /// download_task of the dfdaemon download gRPC server, but removes the gRPC-related
 /// content to avoid the gRPC overhead in the proxy.
-#[instrument(
-    skip_all,
-    fields(host_id, task_id, peer_id, url, remote_ip, content_length)
-)]
+#[instrument(skip_all, fields(host_id, task_id, peer_id, content_length))]
 pub async fn download(
     config: Arc<Config>,
     task_manager: Arc<Task>,
@@ -125,11 +122,6 @@ pub async fn download(
     Span::current().record("host_id", host_id.as_str());
     Span::current().record("task_id", task_id.as_str());
     Span::current().record("peer_id", peer_id.as_str());
-    Span::current().record("url", download.url.clone());
-    Span::current().record(
-        "remote_ip",
-        download.remote_ip.clone().unwrap_or_default().as_str(),
-    );
 
     // Download task started.
     info!("download task started: {:?}", RedactedDownload(&download));
