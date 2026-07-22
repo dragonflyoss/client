@@ -34,7 +34,7 @@ use warp::{Filter, Rejection, Reply};
 
 /// The threshold of download task level1 duration for
 /// recording slow download task.
-const DOWNLOAD_TASK_LEVEL1_DURATION_THRESHOLD: Duration = Duration::from_millis(1);
+const DOWNLOAD_TASK_LEVEL1_DURATION_THRESHOLD: Duration = Duration::from_millis(500);
 
 /// The threshold of upload task level1 duration for
 /// recording slow upload task.
