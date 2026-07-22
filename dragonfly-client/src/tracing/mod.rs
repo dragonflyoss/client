@@ -69,7 +69,7 @@ pub fn init_tracing(
     let logging_layer: Box<dyn tracing_subscriber::Layer<Registry> + Send + Sync> = if console {
         let (writer, guard) = tracing_appender::non_blocking(std::io::stdout());
         guards.push(guard);
-        base_layer(writer).boxed()
+        base_layer(writer).compact().boxed()
     } else {
         let appender = BasicRollingFileAppender::new(
             log_dir.join(name).with_extension("log"),
