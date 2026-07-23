@@ -464,6 +464,7 @@ mod tests {
     use std::io::Cursor;
     use tempfile::tempdir;
     use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+    use tokio_util::io::StreamReader;
 
     fn pattern(length: usize) -> Vec<u8> {
         (0..length).map(|i| (i % 251) as u8).collect()
@@ -497,11 +498,17 @@ mod tests {
         let path = temp_dir.path().join("task");
         tokio::fs::write(&path, b"hello, world!").await.unwrap();
 
-        // Writing to a read-only file descriptor must surface the error.
         let fd = Arc::new(File::open(&path).unwrap());
         let data = pattern(16 * 1024);
         assert!(
-            write_range(fd, 0, data.len() as u64, 4, &mut data.as_slice())
+            write_range(fd.clone(), 0, data.len() as u64, 4, &mut data.as_slice())
+                .await
+                .is_err()
+        );
+
+        let data = b"hello, world!";
+        assert!(
+            write_range(fd, 0, data.len() as u64, 512, &mut data.as_slice())
                 .await
                 .is_err()
         );
@@ -884,7 +891,6 @@ mod tests {
             .await
             .is_err());
 
-        // The reader is longer than the expected length, the rest is ignored.
         let path = temp_dir.path().join("long");
         tokio::fs::write(&path, b"").await.unwrap();
         let fd = Arc::new(
@@ -900,6 +906,26 @@ mod tests {
         assert_eq!(response.length, 512);
         assert_eq!(response.hash, crc32fast::hash(&data[..512]).to_string());
         assert_eq!(tokio::fs::read(&path).await.unwrap(), &data[..512]);
+    }
+
+    #[tokio::test]
+    async fn test_write_range_reader_error() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, b"").await.unwrap();
+        let fd = Arc::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap(),
+        );
+
+        let mut reader = StreamReader::new(futures::stream::iter(vec![
+            Ok(Bytes::from_static(b"hello")),
+            Err(io::Error::other("reader failed")),
+        ]));
+        assert!(write_range(fd, 0, 10, 512, &mut reader).await.is_err());
     }
 
     #[tokio::test]
@@ -924,6 +950,28 @@ mod tests {
             assert_eq!(response.hash, crc32fast::hash(data).to_string());
             assert_eq!(tokio::fs::read(&path).await.unwrap(), data);
         }
+    }
+
+    #[tokio::test]
+    async fn test_write_range_zero_expected_length() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, b"").await.unwrap();
+        let fd = Arc::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap(),
+        );
+
+        let data = b"hello, world!";
+        let response = write_range(fd, 0, 0, 512, &mut data.as_slice())
+            .await
+            .unwrap();
+        assert_eq!(response.length, 0);
+        assert_eq!(response.hash, crc32fast::hash(b"").to_string());
+        assert!(tokio::fs::read(&path).await.unwrap().is_empty());
     }
 
     fn chunk_stream(
@@ -1119,17 +1167,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_write_range_from_stream_stream_error_with_in_flight_write() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, b"").await.unwrap();
+        let fd = Arc::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap(),
+        );
+
+        let mut stream = futures::stream::iter(vec![
+            Ok(Bytes::from_static(b"hello")),
+            Err(io::Error::other("stream failed")),
+        ]);
+        assert!(write_range_from_stream(fd, 0, 10, 4, &mut stream)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
     async fn test_write_range_from_stream_write_error() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("task");
         tokio::fs::write(&path, b"hello, world!").await.unwrap();
 
-        // Writing to a read-only file descriptor must surface the error.
         let fd = Arc::new(File::open(&path).unwrap());
         let data = pattern(16 * 1024);
         let mut stream = chunk_stream(data.clone(), 512);
         assert!(
-            write_range_from_stream(fd, 0, data.len() as u64, 4, &mut stream)
+            write_range_from_stream(fd.clone(), 0, data.len() as u64, 4, &mut stream)
+                .await
+                .is_err()
+        );
+
+        let data = b"hello, world!";
+        let mut stream = chunk_stream(data.to_vec(), 5);
+        assert!(
+            write_range_from_stream(fd, 0, data.len() as u64, 512, &mut stream)
                 .await
                 .is_err()
         );
@@ -1159,6 +1236,28 @@ mod tests {
             assert_eq!(response.hash, crc32fast::hash(data).to_string());
             assert_eq!(tokio::fs::read(&path).await.unwrap(), data);
         }
+    }
+
+    #[tokio::test]
+    async fn test_write_range_from_stream_zero_expected_length() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, b"").await.unwrap();
+        let fd = Arc::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap(),
+        );
+
+        let mut stream = chunk_stream(b"hello, world!".to_vec(), 5);
+        let response = write_range_from_stream(fd, 0, 0, 512, &mut stream)
+            .await
+            .unwrap();
+        assert_eq!(response.length, 0);
+        assert_eq!(response.hash, crc32fast::hash(b"").to_string());
+        assert!(tokio::fs::read(&path).await.unwrap().is_empty());
     }
 
     #[tokio::test]
