@@ -1918,19 +1918,29 @@ impl Task {
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
-        // Download the piece from the local.
-        for interested_piece in interested_pieces {
-            let piece_id = self.piece.id(task_id, interested_piece.number);
+        // Get the metadata of the interested pieces from the local storage in a batch.
+        let piece_ids: Vec<String> = interested_pieces
+            .iter()
+            .map(|interested_piece| self.piece.id(task_id, interested_piece.number))
+            .collect();
 
+        let pieces = self
+            .piece
+            .get_by_ids(&piece_ids.iter().map(String::as_str).collect::<Vec<_>>())
+            .unwrap_or_else(|err| {
+                error!("get pieces from local storage error: {:?}", err);
+                vec![None; piece_ids.len()]
+            });
+
+        // Download the piece from the local.
+        for ((piece_id, piece), interested_piece) in
+            piece_ids.iter().zip(pieces).zip(interested_pieces.iter())
+        {
             // Get the piece metadata from the local storage.
-            let piece = match self.piece.get(piece_id.as_str()) {
-                Ok(Some(piece)) => piece,
-                Ok(None) => {
+            let piece = match piece {
+                Some(piece) => piece,
+                None => {
                     debug!("piece {} not found in local storage", piece_id);
-                    continue;
-                }
-                Err(err) => {
-                    error!("get piece {} from local storage error: {:?}", piece_id, err);
                     continue;
                 }
             };
