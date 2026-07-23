@@ -650,7 +650,7 @@ pub fn collect_upload_task_finished_metrics(
 ) {
     let task_size = TaskSize::calculate_size_level(content_length);
 
-    // Collect the slow upload Level0 & Level1 task for analysis.
+    // Collect the slow upload Level0, Level1 & Level2 task for analysis.
     if matches!(
         task_size,
         TaskSize::Level0 | TaskSize::Level1 | TaskSize::Level2
