@@ -42,6 +42,7 @@ use async_trait::async_trait;
 use dragonfly_api::common;
 use dragonfly_client_core::error::BackendError;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
+use futures::StreamExt;
 use opendal::{layers::TimeoutLayer, Operator};
 use percent_encoding::percent_decode_str;
 use std::time::Duration;
@@ -263,7 +264,7 @@ impl Backend for Hdfs {
             success: true,
             http_header: None,
             http_status_code: Some(reqwest::StatusCode::OK),
-            reader: Box::new(StreamReader::new(stream)),
+            reader: StreamReader::new(stream.boxed()),
             error_message: None,
         })
     }

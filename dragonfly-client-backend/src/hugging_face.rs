@@ -33,8 +33,9 @@
 //! For private repositories or to increase rate limits, use the `--hf-token` flag.
 
 use crate::{
-    Backend, Body, DirEntry, ExistsRequest, GetRequest, GetResponse, PutRequest, PutResponse,
-    StatRequest, StatResponse, DEFAULT_USER_AGENT, KEEP_ALIVE_INTERVAL, POOL_MAX_IDLE_PER_HOST,
+    empty_body, Backend, Body, DirEntry, ExistsRequest, GetRequest, GetResponse, PutRequest,
+    PutResponse, StatRequest, StatResponse, DEFAULT_USER_AGENT, KEEP_ALIVE_INTERVAL,
+    POOL_MAX_IDLE_PER_HOST,
 };
 use async_trait::async_trait;
 use dragonfly_api::common::v2::Range;
@@ -44,7 +45,7 @@ use dragonfly_client_core::{
     Error, Result,
 };
 use dragonfly_client_util::tls::NoVerifier;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_LENGTH, RANGE, USER_AGENT};
 use reqwest::Client;
 use serde::Deserialize;
@@ -630,7 +631,7 @@ impl Backend for HuggingFace {
                     success: false,
                     http_header: None,
                     http_status_code: None,
-                    reader: Box::new(tokio::io::empty()),
+                    reader: empty_body(),
                     error_message: Some(err.to_string()),
                 });
             }
@@ -638,19 +639,22 @@ impl Backend for HuggingFace {
 
         let response_header = response.headers().clone();
         let response_status_code = response.status();
-        let response_reader = Box::new(StreamReader::new(response.bytes_stream().map_err(
-            move |err| {
-                let mut chain = err.to_string();
-                let mut source = err.source();
-                while let Some(err) = source {
-                    chain.push_str(": ");
-                    chain.push_str(&err.to_string());
-                    source = err.source();
-                }
+        let response_reader = StreamReader::new(
+            response
+                .bytes_stream()
+                .map_err(move |err| {
+                    let mut chain = err.to_string();
+                    let mut source = err.source();
+                    while let Some(err) = source {
+                        chain.push_str(": ");
+                        chain.push_str(&err.to_string());
+                        source = err.source();
+                    }
 
-                IOError::other(chain)
-            },
-        )));
+                    IOError::other(chain)
+                })
+                .boxed(),
+        );
 
         debug!(
             "get response {} {}: {:?} {:?}",

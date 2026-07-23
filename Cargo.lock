@@ -1388,6 +1388,7 @@ name = "dragonfly-client-backend"
 version = "1.4.2"
 dependencies = [
  "async-trait",
+ "bytes",
  "dashmap",
  "dragonfly-api",
  "dragonfly-client-config",
@@ -1552,13 +1553,14 @@ dependencies = [
  "dragonfly-client-metric",
  "dragonfly-client-util",
  "fs2",
+ "futures",
  "leaky-bucket",
- "libc",
  "num_cpus",
  "prost-wkt-types",
  "quinn",
  "reqwest 0.12.28",
  "rocksdb",
+ "rustix 1.1.3",
  "rustls",
  "rustls-pki-types",
  "serde",

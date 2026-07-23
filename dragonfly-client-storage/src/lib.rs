@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use chrono::NaiveDateTime;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::digest::{Algorithm, Digest};
+use futures::Stream;
 use piece_notifier::{Claim, PieceNotifier};
 use reqwest::header::HeaderMap;
 use std::path::{Path, PathBuf};
@@ -774,17 +775,20 @@ impl Storage {
     /// Used for downloading piece from source.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
-    pub async fn download_piece_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
+    pub async fn download_piece_from_source_finished<S>(
         &self,
         piece_id: &str,
         task_id: &str,
         offset: u64,
         length: u64,
-        reader: &mut R,
+        stream: &mut S,
         timeout: Duration,
-    ) -> Result<metadata::Piece> {
+    ) -> Result<metadata::Piece>
+    where
+        S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
+    {
         let piece = tokio::select! {
-            piece = self.handle_downloaded_from_source_finished(piece_id, task_id, offset, length, reader) => {
+            piece = self.handle_downloaded_from_source_finished(piece_id, task_id, offset, length, stream) => {
                 piece
             }
             _ = sleep(timeout) => {
@@ -798,17 +802,20 @@ impl Storage {
 
     // handle_downloaded_from_source_finished handles the downloaded piece from source.
     #[instrument(skip_all)]
-    async fn handle_downloaded_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
+    async fn handle_downloaded_from_source_finished<S>(
         &self,
         piece_id: &str,
         task_id: &str,
         offset: u64,
         length: u64,
-        reader: &mut R,
-    ) -> Result<metadata::Piece> {
+        stream: &mut S,
+    ) -> Result<metadata::Piece>
+    where
+        S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
+    {
         let response = self
             .content
-            .write_piece(task_id, offset, length, reader)
+            .write_piece_from_stream(task_id, offset, length, stream)
             .await?;
 
         let digest = Digest::new(Algorithm::Crc32, response.hash);
@@ -1916,6 +1923,12 @@ impl Storage {
 mod tests {
     use super::*;
 
+    fn content_stream(
+        content: &'static [u8],
+    ) -> impl Stream<Item = std::io::Result<Bytes>> + Unpin {
+        futures::stream::iter([Ok(Bytes::from_static(content))])
+    }
+
     #[tokio::test]
     async fn test_wait_for_piece_finished_wakes_on_notification() {
         let dir = tempfile::tempdir().unwrap();
@@ -1955,14 +1968,14 @@ mod tests {
         });
 
         sleep(Duration::from_millis(100)).await;
-        let mut reader = CONTENT;
+        let mut stream = content_stream(CONTENT);
         storage
             .download_piece_from_source_finished(
                 piece_id.as_str(),
                 TASK_ID,
                 0,
                 CONTENT.len() as u64,
-                &mut reader,
+                &mut stream,
                 Duration::from_secs(5),
             )
             .await
@@ -2056,14 +2069,14 @@ mod tests {
                     return false;
                 }
 
-                let mut reader = CONTENT;
+                let mut stream = content_stream(CONTENT);
                 storage
                     .download_piece_from_source_finished(
                         piece_id.as_str(),
                         TASK_ID,
                         0,
                         CONTENT.len() as u64,
-                        &mut reader,
+                        &mut stream,
                         Duration::from_secs(5),
                     )
                     .await
@@ -2207,14 +2220,14 @@ mod tests {
             .download_piece_started(piece_id.as_str(), 0)
             .await
             .unwrap();
-        let mut reader = CONTENT;
+        let mut stream = content_stream(CONTENT);
         storage
             .download_piece_from_source_finished(
                 piece_id.as_str(),
                 TASK_ID,
                 0,
                 CONTENT.len() as u64,
-                &mut reader,
+                &mut stream,
                 Duration::from_secs(5),
             )
             .await

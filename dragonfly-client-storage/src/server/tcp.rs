@@ -770,8 +770,6 @@ async fn sendfile_range(
     mut offset: u64,
     mut remaining: u64,
 ) -> std::io::Result<()> {
-    use std::os::unix::io::AsRawFd;
-
     // The maximum number of bytes of a single sendfile call, limited by the
     // kernel to 0x7ffff000 on Linux.
     const MAX_SENDFILE_COUNT: u64 = 0x7fff_f000;
@@ -779,14 +777,11 @@ async fn sendfile_range(
     while remaining > 0 {
         stream.writable().await?;
         match stream.try_io(tokio::io::Interest::WRITABLE, || {
-            let mut off = offset as libc::off_t;
+            let mut off = offset;
             let count = remaining.min(MAX_SENDFILE_COUNT) as usize;
-            let n = unsafe { libc::sendfile(stream.as_raw_fd(), fd.as_raw_fd(), &mut off, count) };
-            if n < 0 {
-                Err(std::io::Error::last_os_error())
-            } else {
-                Ok(n as u64)
-            }
+            rustix::fs::sendfile(stream, fd, Some(&mut off), count)
+                .map(|n| n as u64)
+                .map_err(std::io::Error::from)
         }) {
             Ok(0) => break,
             Ok(n) => {

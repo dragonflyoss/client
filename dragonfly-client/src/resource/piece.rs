@@ -587,7 +587,7 @@ impl Piece {
             start_time.elapsed(),
         );
 
-        // Record the finish of downloading piece.
+        let mut stream = response.reader.into_inner();
         match self
             .storage
             .download_piece_from_source_finished(
@@ -595,7 +595,7 @@ impl Piece {
                 task_id,
                 offset,
                 length,
-                &mut response.reader,
+                &mut stream,
                 self.config.storage.write_piece_timeout,
             )
             .await

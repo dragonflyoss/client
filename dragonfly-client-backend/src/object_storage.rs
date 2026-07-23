@@ -68,6 +68,7 @@ use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::error::BackendError;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_util::tls::NoVerifier;
+use futures::StreamExt;
 use opendal::{layers::HttpClientLayer, layers::TimeoutLayer, raw::HttpClient, Operator};
 use percent_encoding::percent_decode_str;
 use std::fmt;
@@ -767,7 +768,7 @@ impl crate::Backend for ObjectStorage {
             success: true,
             http_header: None,
             http_status_code: Some(reqwest::StatusCode::OK),
-            reader: Box::new(StreamReader::new(stream)),
+            reader: StreamReader::new(stream.boxed()),
             error_message: None,
         })
     }

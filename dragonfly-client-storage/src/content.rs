@@ -19,6 +19,7 @@ use bytes::{Bytes, BytesMut};
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
+use futures::{Stream, TryStreamExt};
 use std::cmp::{max, min};
 use std::fs::{File, OpenOptions};
 use std::future::Future;
@@ -518,6 +519,164 @@ pub async fn write_range<R: AsyncRead + Unpin + ?Sized>(
         BUFFER_POOL.give_back(handle.await.map_err(io::Error::other)??);
     }
     BUFFER_POOL.give_back(buffer);
+
+    if length != expected_length {
+        return Err(Error::Unknown(format!(
+            "expected length {expected_length} but got {length}"
+        )));
+    }
+
+    Ok(WritePieceResponse {
+        length,
+        hash: hasher.finalize().to_string(),
+    })
+}
+
+/// The maximum number of chunks of a single pwritev call, matching the
+/// IOV_MAX of Linux and macOS.
+const MAX_WRITE_IOVECS: usize = 1024;
+
+/// Writes all the chunks to the file with vectored positional writes
+/// (`pwritev`) starting at `offset`, submitting up to [`MAX_WRITE_IOVECS`]
+/// chunks per syscall instead of one write per chunk, and resuming after
+/// partial writes.
+fn write_all_vectored_at(fd: &File, chunks: &[Bytes], offset: u64) -> io::Result<()> {
+    // The first chunk not fully written and the bytes of it already consumed
+    // by a partial write.
+    let mut index = 0;
+    let mut written = 0;
+    let mut write_offset = offset;
+    let mut iovecs = Vec::with_capacity(min(chunks.len(), MAX_WRITE_IOVECS));
+    while index < chunks.len() {
+        iovecs.clear();
+        iovecs.push(io::IoSlice::new(&chunks[index][written..]));
+        for chunk in chunks[index + 1..].iter().take(MAX_WRITE_IOVECS - 1) {
+            iovecs.push(io::IoSlice::new(chunk));
+        }
+
+        let mut n = match rustix::io::pwritev(fd, &iovecs, write_offset) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "failed to write whole buffer",
+                ))
+            }
+            Ok(n) => n,
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(err) => return Err(err.into()),
+        };
+
+        // Advance past the fully written chunks into the partially written
+        // one.
+        write_offset += n as u64;
+        while index < chunks.len() {
+            let remaining = chunks[index].len() - written;
+            if n < remaining {
+                written += n;
+                break;
+            }
+
+            n -= remaining;
+            written = 0;
+            index += 1;
+        }
+    }
+
+    Ok(())
+}
+
+/// Writes exactly `expected_length` bytes from the stream of bytes chunks to
+/// the file with positional writes starting at `offset`, and calculates the
+/// CRC32 hash of the written content. Each chunk is hashed on the runtime
+/// while its data is still hot in the cache of the polling core and staged
+/// without copying, then the staged chunks are handed to the blocking thread
+/// pool for a vectored positional write once they hold `buffer_size` bytes,
+/// swapping the emptied vector of the completed write back for the next
+/// batch, so the receive and the hash overlap the write and the chunks are
+/// dropped off the runtime.
+pub async fn write_range_from_stream<S>(
+    fd: Arc<File>,
+    offset: u64,
+    expected_length: u64,
+    buffer_size: usize,
+    stream: &mut S,
+) -> Result<WritePieceResponse>
+where
+    S: Stream<Item = io::Result<Bytes>> + Unpin + ?Sized,
+{
+    let buffer_size = max(buffer_size, 1);
+
+    // The chunks staged for the next write, swapped with the emptied vector
+    // of the completed write.
+    let mut batch: Vec<Bytes> = Vec::new();
+    let mut batch_size: usize = 0;
+
+    // The in-flight write on the blocking thread pool, owning the staged
+    // chunks until it completes.
+    let mut in_flight: Option<JoinHandle<io::Result<Vec<Bytes>>>> = None;
+    let mut hasher = crc32fast::Hasher::new();
+    let mut write_offset = offset;
+    let mut length: u64 = 0;
+    let mut eof = false;
+    loop {
+        // Stage the chunks until they hold buffer_size bytes, the expected
+        // length is reached or the stream ends.
+        while !eof && batch_size < buffer_size && length < expected_length {
+            match stream.try_next().await? {
+                Some(mut chunk) => {
+                    if chunk.is_empty() {
+                        continue;
+                    }
+
+                    // Cap the consumed bytes at the expected length, the rest
+                    // of the stream is ignored.
+                    let remaining = expected_length - length;
+                    if chunk.len() as u64 > remaining {
+                        chunk.truncate(remaining as usize);
+                    }
+
+                    // Hash the chunk while its data is still hot in the cache
+                    // of the polling core.
+                    hasher.update(&chunk);
+                    length += chunk.len() as u64;
+                    batch_size += chunk.len();
+                    batch.push(chunk);
+                }
+                None => eof = true,
+            }
+        }
+
+        if batch.is_empty() {
+            break;
+        }
+
+        // Wait for the previous write to take back its vector.
+        let recycled = match in_flight.take() {
+            Some(handle) => handle.await.map_err(io::Error::other)??,
+            None => Vec::new(),
+        };
+
+        let full = std::mem::replace(&mut batch, recycled);
+        let full_offset = write_offset;
+        write_offset += batch_size as u64;
+        batch_size = 0;
+
+        let fd = fd.clone();
+        in_flight = Some(tokio::task::spawn_blocking(move || {
+            let mut chunks = full;
+            write_all_vectored_at(&fd, &chunks, full_offset)?;
+
+            // Drop the chunks on the blocking thread and hand the emptied
+            // vector back for the next batch.
+            chunks.clear();
+            Ok(chunks)
+        }));
+    }
+
+    // Wait for the last write to complete.
+    if let Some(handle) = in_flight.take() {
+        handle.await.map_err(io::Error::other)??;
+    }
 
     if length != expected_length {
         return Err(Error::Unknown(format!(
@@ -1052,6 +1211,239 @@ mod tests {
             let response = write_range(fd, 0, data.len() as u64, buffer_size, &mut data.as_slice())
                 .await
                 .unwrap();
+            assert_eq!(response.hash, crc32fast::hash(data).to_string());
+            assert_eq!(tokio::fs::read(&path).await.unwrap(), data);
+        }
+    }
+
+    fn chunk_stream(
+        data: Vec<u8>,
+        chunk_size: usize,
+    ) -> impl Stream<Item = io::Result<Bytes>> + Unpin {
+        futures::stream::iter(
+            data.chunks(chunk_size)
+                .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_write_range_from_stream() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, b"").await.unwrap();
+        let fd = Arc::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap(),
+        );
+
+        let data = b"hello, world!";
+        let mut stream = chunk_stream(data.to_vec(), 5);
+        let response = write_range_from_stream(fd, 0, data.len() as u64, 512, &mut stream)
+            .await
+            .unwrap();
+        assert_eq!(response.length, data.len() as u64);
+        assert_eq!(response.hash, crc32fast::hash(data).to_string());
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), data);
+    }
+
+    #[tokio::test]
+    async fn test_write_range_from_stream_multiple_batches() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, b"").await.unwrap();
+        let fd = Arc::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap(),
+        );
+
+        // The chunk size is not aligned to the batch size.
+        let data = pattern(256 * 1024);
+        let mut stream = chunk_stream(data.clone(), 1000);
+        let response = write_range_from_stream(fd, 0, data.len() as u64, 4 * 1024, &mut stream)
+            .await
+            .unwrap();
+        assert_eq!(response.length, data.len() as u64);
+        assert_eq!(response.hash, crc32fast::hash(&data).to_string());
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), data);
+    }
+
+    #[tokio::test]
+    async fn test_write_range_from_stream_offset() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, vec![0u8; 64]).await.unwrap();
+        let fd = Arc::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap(),
+        );
+
+        let mut stream = chunk_stream(b"world".to_vec(), 2);
+        write_range_from_stream(fd, 7, 5, 2, &mut stream)
+            .await
+            .unwrap();
+
+        let content = tokio::fs::read(&path).await.unwrap();
+        assert_eq!(&content[7..12], b"world");
+        assert_eq!(content.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn test_write_range_from_stream_length_mismatch() {
+        let temp_dir = tempdir().unwrap();
+        let data = pattern(1024);
+        let path = temp_dir.path().join("short");
+        tokio::fs::write(&path, b"").await.unwrap();
+        let fd = Arc::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap(),
+        );
+        let mut stream = chunk_stream(data.clone(), 100);
+        assert!(write_range_from_stream(fd, 0, 2048, 512, &mut stream)
+            .await
+            .is_err());
+
+        let path = temp_dir.path().join("long");
+        tokio::fs::write(&path, b"").await.unwrap();
+        let fd = Arc::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap(),
+        );
+        let mut stream = chunk_stream(data.clone(), 100);
+        let response = write_range_from_stream(fd, 0, 512, 512, &mut stream)
+            .await
+            .unwrap();
+        assert_eq!(response.length, 512);
+        assert_eq!(response.hash, crc32fast::hash(&data[..512]).to_string());
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), &data[..512]);
+    }
+
+    #[tokio::test]
+    async fn test_write_range_from_stream_empty_chunks() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, b"").await.unwrap();
+        let fd = Arc::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap(),
+        );
+
+        let data = b"hello, world!";
+        let mut stream = futures::stream::iter(vec![
+            Ok(Bytes::new()),
+            Ok(Bytes::from_static(b"hello")),
+            Ok(Bytes::new()),
+            Ok(Bytes::from_static(b", world!")),
+        ]);
+        let response = write_range_from_stream(fd, 0, data.len() as u64, 512, &mut stream)
+            .await
+            .unwrap();
+        assert_eq!(response.length, data.len() as u64);
+        assert_eq!(response.hash, crc32fast::hash(data).to_string());
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), data);
+    }
+
+    #[tokio::test]
+    async fn test_write_range_from_stream_exceeds_max_iovecs() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, b"").await.unwrap();
+        let fd = Arc::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap(),
+        );
+
+        let data = pattern(2 * MAX_WRITE_IOVECS + 500);
+        let mut stream = chunk_stream(data.clone(), 1);
+        let response = write_range_from_stream(fd, 0, data.len() as u64, data.len(), &mut stream)
+            .await
+            .unwrap();
+        assert_eq!(response.length, data.len() as u64);
+        assert_eq!(response.hash, crc32fast::hash(&data).to_string());
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), data);
+    }
+
+    #[tokio::test]
+    async fn test_write_range_from_stream_stream_error() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, b"").await.unwrap();
+        let fd = Arc::new(
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .unwrap(),
+        );
+
+        let mut stream = futures::stream::iter(vec![
+            Ok(Bytes::from_static(b"hello")),
+            Err(io::Error::other("stream failed")),
+        ]);
+        assert!(write_range_from_stream(fd, 0, 10, 512, &mut stream)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_write_range_from_stream_write_error() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, b"hello, world!").await.unwrap();
+
+        // Writing to a read-only file descriptor must surface the error.
+        let fd = Arc::new(File::open(&path).unwrap());
+        let data = pattern(16 * 1024);
+        let mut stream = chunk_stream(data.clone(), 512);
+        assert!(
+            write_range_from_stream(fd, 0, data.len() as u64, 4, &mut stream)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_range_from_stream_buffer_sizes() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+
+        for buffer_size in [13, 512, 1, 0] {
+            tokio::fs::write(&path, b"").await.unwrap();
+            let fd = Arc::new(
+                OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&path)
+                    .unwrap(),
+            );
+
+            let data = b"hello, world!";
+            let mut stream = chunk_stream(data.to_vec(), 3);
+            let response =
+                write_range_from_stream(fd, 0, data.len() as u64, buffer_size, &mut stream)
+                    .await
+                    .unwrap();
             assert_eq!(response.hash, crc32fast::hash(data).to_string());
             assert_eq!(tokio::fs::read(&path).await.unwrap(), data);
         }
