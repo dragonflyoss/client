@@ -20,12 +20,12 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error as ClientError, Result as ClientResult,
 };
+use futures::StreamExt;
 use quinn::crypto::rustls::QuicClientConfig;
 use quinn::{AckFrequencyConfig, ClientConfig, Endpoint, RecvStream, SendStream, TransportConfig};
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::AsyncRead;
 use tokio::time;
 use tracing::{error, instrument, Span};
 use vortex_protocol::{
@@ -55,6 +55,20 @@ impl QUICClient {
         Self { config, addr }
     }
 
+    /// Converts the QUIC stream holding the piece content into a stream of
+    /// bytes chunks, handing over the chunks reassembled by quinn without
+    /// copying them.
+    fn content_stream(&self, reader: RecvStream) -> super::PieceContentStream {
+        futures::stream::unfold(reader, |mut reader| async move {
+            match reader.read_chunk(usize::MAX, true).await {
+                Ok(Some(chunk)) => Some((Ok(chunk.bytes), reader)),
+                Ok(None) => None,
+                Err(err) => Some((Err(std::io::Error::other(err)), reader)),
+            }
+        })
+        .boxed()
+    }
+
     /// Downloads a piece from the server using the vortex protocol.
     ///
     /// This is the main entry point for downloading a piece. It applies
@@ -64,7 +78,7 @@ impl QUICClient {
         &self,
         number: u32,
         task_id: &str,
-    ) -> ClientResult<(impl AsyncRead, u64, String)> {
+    ) -> ClientResult<(super::PieceContentStream, u64, String)> {
         Span::current().record("parent_addr", self.addr.as_str());
 
         time::timeout(
@@ -88,7 +102,7 @@ impl QUICClient {
         &self,
         number: u32,
         task_id: &str,
-    ) -> ClientResult<(impl AsyncRead, u64, String)> {
+    ) -> ClientResult<(super::PieceContentStream, u64, String)> {
         let request: Bytes = Vortex::DownloadPiece(
             Header::new_download_piece(),
             DownloadPiece::new(task_id.to_string(), number),
@@ -104,7 +118,11 @@ impl QUICClient {
                     .await?;
 
                 let metadata = piece_content.metadata();
-                Ok((reader, metadata.offset, metadata.digest))
+                Ok((
+                    self.content_stream(reader),
+                    metadata.offset,
+                    metadata.digest,
+                ))
             }
             Tag::Error => Err(self.read_error(&mut reader, header.length() as usize).await),
             _ => Err(ClientError::Unknown(format!(
@@ -122,7 +140,7 @@ impl QUICClient {
         &self,
         number: u32,
         task_id: &str,
-    ) -> ClientResult<(impl AsyncRead, u64, String)> {
+    ) -> ClientResult<(super::PieceContentStream, u64, String)> {
         time::timeout(
             self.config.download.piece_timeout,
             self.handle_download_persistent_piece(number, task_id),
@@ -142,7 +160,7 @@ impl QUICClient {
         &self,
         number: u32,
         task_id: &str,
-    ) -> ClientResult<(impl AsyncRead, u64, String)> {
+    ) -> ClientResult<(super::PieceContentStream, u64, String)> {
         let request: Bytes = Vortex::DownloadPersistentPiece(
             Header::new_download_persistent_piece(),
             DownloadPersistentPiece::new(task_id.to_string(), number),
@@ -161,7 +179,11 @@ impl QUICClient {
                     .await?;
 
                 let metadata = persistent_piece_content.metadata();
-                Ok((reader, metadata.offset, metadata.digest))
+                Ok((
+                    self.content_stream(reader),
+                    metadata.offset,
+                    metadata.digest,
+                ))
             }
             Tag::Error => Err(self.read_error(&mut reader, header.length() as usize).await),
             _ => Err(ClientError::Unknown(format!(
@@ -179,7 +201,7 @@ impl QUICClient {
         &self,
         number: u32,
         task_id: &str,
-    ) -> ClientResult<(impl AsyncRead, u64, String)> {
+    ) -> ClientResult<(super::PieceContentStream, u64, String)> {
         time::timeout(
             self.config.download.piece_timeout,
             self.handle_download_persistent_cache_piece(number, task_id),
@@ -199,7 +221,7 @@ impl QUICClient {
         &self,
         number: u32,
         task_id: &str,
-    ) -> ClientResult<(impl AsyncRead, u64, String)> {
+    ) -> ClientResult<(super::PieceContentStream, u64, String)> {
         let request: Bytes = Vortex::DownloadPersistentCachePiece(
             Header::new_download_persistent_cache_piece(),
             DownloadPersistentCachePiece::new(task_id.to_string(), number),
@@ -215,7 +237,11 @@ impl QUICClient {
                 .await?;
 
                 let metadata = persistent_cache_piece_content.metadata();
-                Ok((reader, metadata.offset, metadata.digest))
+                Ok((
+                    self.content_stream(reader),
+                    metadata.offset,
+                    metadata.digest,
+                ))
             }
             Tag::Error => Err(self.read_error(&mut reader, header.length() as usize).await),
             _ => Err(ClientError::Unknown(format!(
