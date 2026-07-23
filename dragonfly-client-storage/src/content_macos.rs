@@ -280,8 +280,6 @@ impl Content {
         let (target_offset, target_length) =
             super::content::calculate_piece_range(offset, length, range);
 
-        // Read the piece with positional reads on the cached file descriptor,
-        // avoiding reopening and seeking the file for every piece.
         let fd = self.fd_cache.open(&task_path).await.inspect_err(|err| {
             error!("open {:?} failed: {}", task_path, err);
         })?;
@@ -308,8 +306,6 @@ impl Content {
     where
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
-        // Write the piece with positional writes on the cached file descriptor,
-        // avoiding reopening and seeking the file for every piece.
         let task_path = self.get_task_path(task_id);
         let fd = self
             .fd_cache
@@ -485,8 +481,6 @@ impl Content {
         let (target_offset, target_length) =
             super::content::calculate_piece_range(offset, length, range);
 
-        // Read the piece with positional reads on the cached file descriptor,
-        // avoiding reopening and seeking the file for every piece.
         let fd = self.fd_cache.open(&task_path).await.inspect_err(|err| {
             error!("open {:?} failed: {}", task_path, err);
         })?;
@@ -510,8 +504,6 @@ impl Content {
         expected_length: u64,
         reader: &mut R,
     ) -> Result<super::io::WriteRangeResponse> {
-        // Write the piece with positional writes on the cached file descriptor,
-        // avoiding reopening and seeking the file for every piece.
         let task_path = self.get_persistent_task_path(task_id);
         let fd = self
             .fd_cache
@@ -548,8 +540,6 @@ impl Content {
     where
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
-        // Write the piece with positional writes on the cached file descriptor,
-        // avoiding reopening and seeking the file for every piece.
         let task_path = self.get_persistent_task_path(task_id);
         let fd = self
             .fd_cache
@@ -754,8 +744,6 @@ impl Content {
         let (target_offset, target_length) =
             super::content::calculate_piece_range(offset, length, range);
 
-        // Read the piece with positional reads on the cached file descriptor,
-        // avoiding reopening and seeking the file for every piece.
         let fd = self.fd_cache.open(&task_path).await.inspect_err(|err| {
             error!("open {:?} failed: {}", task_path, err);
         })?;
@@ -779,8 +767,6 @@ impl Content {
         expected_length: u64,
         reader: &mut R,
     ) -> Result<super::io::WriteRangeResponse> {
-        // Write the piece with positional writes on the cached file descriptor,
-        // avoiding reopening and seeking the file for every piece.
         let task_path = self.get_persistent_cache_task_path(task_id);
         let fd = self
             .fd_cache
@@ -818,8 +804,6 @@ impl Content {
     where
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
-        // Write the piece with positional writes on the cached file descriptor,
-        // avoiding reopening and seeking the file for every piece.
         let task_path = self.get_persistent_cache_task_path(task_id);
         let fd = self
             .fd_cache
