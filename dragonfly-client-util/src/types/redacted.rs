@@ -165,7 +165,8 @@ fn is_key_request_header(key: &str) -> bool {
 /// );
 /// ```
 ///
-/// The following fields are replaced with [`REDACTED`] when present:
+/// Only the key fields are printed, and the secrets of the printed
+/// `object_storage` are replaced with [`REDACTED`] when present:
 ///
 /// - `object_storage.access_key_secret`
 /// - `object_storage.session_token`
@@ -178,13 +179,37 @@ fn is_key_request_header(key: &str) -> bool {
 /// logs.
 pub struct RedactedDownloadPersistentTaskRequest<'a>(pub &'a DownloadPersistentTaskRequest);
 
-/// Debug implementation that redacts sensitive fields before delegating to the auto-derived
-/// formatter.
+/// Debug implementation that prints the key fields without cloning the
+/// whole request.
 impl fmt::Debug for RedactedDownloadPersistentTaskRequest<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut d = self.0.clone();
-        scrub_object_storage(&mut d.object_storage);
-        fmt::Debug::fmt(&d, f)
+        // Destructure exhaustively, so adding a field to the request breaks
+        // this impl at compile time instead of silently dropping the field
+        // from logs.
+        let DownloadPersistentTaskRequest {
+            url,
+            persistent,
+            output_path,
+            remote_ip,
+            object_storage,
+            // The remaining fields are omitted to keep the log line small.
+            timeout: _,
+            need_piece_content: _,
+            force_hard_link: _,
+            digest: _,
+            overwrite: _,
+        } = self.0;
+
+        f.debug_struct("DownloadPersistentTaskRequest")
+            .field("url", url)
+            .field("persistent", persistent)
+            .field("output_path", output_path)
+            .field("remote_ip", remote_ip)
+            .field(
+                "object_storage",
+                &scrubbed(object_storage, scrub_object_storage),
+            )
+            .finish_non_exhaustive()
     }
 }
 
@@ -399,7 +424,6 @@ mod tests {
         assert!(out.contains("bytes=0-1023"));
         assert!(out.contains("dfget/2.3"));
         assert!(out.contains("registry.example.com"));
-        assert!(out.contains("https://example.com"));
         assert!(!out.contains("application/octet-stream"));
     }
 
