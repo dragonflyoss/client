@@ -29,13 +29,6 @@ use std::task::{ready, Context, Poll};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, ReadBuf};
 use tokio::task::JoinHandle;
 
-/// The shared buffer pool instance for the piece write path ([`write_range`])
-/// and the piece read paths of [`RangeReader`], so the hot paths reuse a few
-/// large buffers instead of allocating a fresh one per chunk or per reader.
-/// The pool is sized to hold 64MiB of idle buffers, which is enough for 128 idle
-/// buffers with the default 512KiB buffer size.
-static BUFFER_POOL: BufferPool = BufferPool::new(64 * 1024 * 1024);
-
 /// The response of writing a range.
 pub struct WriteRangeResponse {
     /// The length of the written range.
@@ -73,7 +66,7 @@ pub struct RangeReader {
     capacity: usize,
 
     /// The reusable read buffer, allocated on the first buffered read and
-    /// returned to the shared buffer pool on drop.
+    /// returned to the buffer pool on drop.
     buffer: BytesMut,
 
     /// The consumed position of the buffer.
@@ -84,12 +77,21 @@ pub struct RangeReader {
 
     /// The state of the in-flight read.
     state: RangeReaderState,
+
+    /// The buffer pool the read buffers are checked out from.
+    buffer_pool: BufferPool,
 }
 
 /// Implements the range reader.
 impl RangeReader {
     /// Creates a new RangeReader reading `length` bytes starting at `offset`.
-    pub fn new(fd: Arc<File>, offset: u64, length: u64, buffer_size: usize) -> Self {
+    pub fn new(
+        fd: Arc<File>,
+        offset: u64,
+        length: u64,
+        buffer_size: usize,
+        buffer_pool: BufferPool,
+    ) -> Self {
         let capacity = min(max(buffer_size, 1) as u64, length) as usize;
         Self {
             fd,
@@ -100,6 +102,7 @@ impl RangeReader {
             pos: 0,
             filled: 0,
             state: RangeReaderState::Idle,
+            buffer_pool,
         }
     }
 
@@ -119,9 +122,7 @@ impl RangeReader {
     /// Reads the next chunk of the range with a positional read on the
     /// blocking thread pool, directly into the owned buffer it returns, so
     /// callers that send the chunk downstream get the bytes without copying
-    /// them out of a reusable buffer. The buffer is checked out from the
-    /// shared buffer pool and returned to it when the returned Bytes drops.
-    /// Returns an empty Bytes at the end of the range.
+    /// them out of a reusable buffer.
     pub async fn read_chunk(&mut self) -> Result<Bytes> {
         // Drain the data buffered by the buffered read interface first.
         if self.pos < self.filled {
@@ -135,7 +136,7 @@ impl RangeReader {
         }
 
         let len = min(self.capacity as u64, self.remaining) as usize;
-        let mut buffer = BUFFER_POOL.checkout_for_read(len);
+        let mut buffer = self.buffer_pool.checkout_for_read(len);
         let fd = self.fd.clone();
         let offset = self.offset;
         let (mut buffer, n) = tokio::task::spawn_blocking(move || {
@@ -149,19 +150,19 @@ impl RangeReader {
         self.remaining = if n == 0 { 0 } else { self.remaining - n as u64 };
 
         buffer.truncate(n);
-        Ok(BUFFER_POOL.freeze(buffer))
+        Ok(self.buffer_pool.freeze(buffer))
     }
 }
 
 /// Implements the drop of the range reader.
 impl Drop for RangeReader {
-    /// Returns the read buffer to the shared buffer pool. The buffer is empty
+    /// Returns the read buffer to the buffer pool. The buffer is empty
     /// when no buffered read happened or a read is still in flight, and is
     /// skipped in that case.
     fn drop(&mut self) {
         let buffer = std::mem::take(&mut self.buffer);
         if buffer.capacity() > 0 {
-            BUFFER_POOL.give_back(buffer);
+            self.buffer_pool.give_back(buffer);
         }
     }
 }
@@ -183,7 +184,7 @@ impl AsyncBufRead for RangeReader {
                     let len = min(this.capacity as u64, this.remaining) as usize;
                     let mut buffer = std::mem::take(&mut this.buffer);
                     if buffer.capacity() == 0 {
-                        buffer = BUFFER_POOL.checkout_for_read(len);
+                        buffer = this.buffer_pool.checkout_for_read(len);
                     } else {
                         buffer.truncate(len);
                     }
@@ -251,14 +252,15 @@ pub async fn write_range<R: AsyncRead + Unpin + ?Sized>(
     expected_length: u64,
     buffer_size: usize,
     reader: &mut R,
+    buffer_pool: &BufferPool,
 ) -> Result<WriteRangeResponse> {
     let buffer_size = max(buffer_size, 1);
     let mut reader = reader.take(expected_length);
 
     // The buffer being filled from the reader, swapped with the recycled
     // buffer of the completed write. Both staging buffers are checked out
-    // from the shared buffer pool and returned to it at the end.
-    let mut buffer = BUFFER_POOL.checkout(buffer_size);
+    // from the buffer pool and returned to it at the end.
+    let mut buffer = buffer_pool.checkout(buffer_size);
 
     // The in-flight write on the blocking thread pool, owning the other
     // buffer until it completes.
@@ -285,7 +287,7 @@ pub async fn write_range<R: AsyncRead + Unpin + ?Sized>(
         // Wait for the previous write to take back its buffer.
         let recycled = match in_flight.take() {
             Some(handle) => handle.await.map_err(io::Error::other)??,
-            None => BUFFER_POOL.checkout(buffer_size),
+            None => buffer_pool.checkout(buffer_size),
         };
 
         let filled = std::mem::replace(&mut buffer, recycled);
@@ -306,9 +308,9 @@ pub async fn write_range<R: AsyncRead + Unpin + ?Sized>(
     // Wait for the last write to complete and return the staging buffers to
     // the pool.
     if let Some(handle) = in_flight.take() {
-        BUFFER_POOL.give_back(handle.await.map_err(io::Error::other)??);
+        buffer_pool.give_back(handle.await.map_err(io::Error::other)??);
     }
-    BUFFER_POOL.give_back(buffer);
+    buffer_pool.give_back(buffer);
 
     if length != expected_length {
         return Err(Error::Unknown(format!(
@@ -492,6 +494,10 @@ mod tests {
         (0..length).map(|i| (i % 251) as u8).collect()
     }
 
+    fn buffer_pool() -> BufferPool {
+        BufferPool::new(64 * 1024 * 1024)
+    }
+
     #[tokio::test]
     async fn test_range_reader_poll_after_read_error() {
         let temp_dir = tempdir().unwrap();
@@ -505,7 +511,7 @@ mod tests {
                 .unwrap(),
         );
 
-        let mut reader = RangeReader::new(fd, 0, 13, 4);
+        let mut reader = RangeReader::new(fd, 0, 13, 4, buffer_pool());
         let mut buffer = Vec::new();
         assert!(reader.read_to_end(&mut buffer).await.is_err());
 
@@ -522,18 +528,28 @@ mod tests {
 
         let fd = Arc::new(File::open(&path).unwrap());
         let data = pattern(16 * 1024);
-        assert!(
-            write_range(fd.clone(), 0, data.len() as u64, 4, &mut data.as_slice())
-                .await
-                .is_err()
-        );
+        assert!(write_range(
+            fd.clone(),
+            0,
+            data.len() as u64,
+            4,
+            &mut data.as_slice(),
+            &buffer_pool()
+        )
+        .await
+        .is_err());
 
         let data = b"hello, world!";
-        assert!(
-            write_range(fd, 0, data.len() as u64, 512, &mut data.as_slice())
-                .await
-                .is_err()
-        );
+        assert!(write_range(
+            fd,
+            0,
+            data.len() as u64,
+            512,
+            &mut data.as_slice(),
+            &buffer_pool()
+        )
+        .await
+        .is_err());
     }
 
     #[tokio::test]
@@ -551,6 +567,7 @@ mod tests {
             data.len() as u64,
             4 * 1024,
             &mut data.as_slice(),
+            &buffer_pool(),
         )
         .await
         .unwrap();
@@ -560,6 +577,7 @@ mod tests {
             0,
             data.len() as u64,
             4 * 1024,
+            buffer_pool(),
         );
         let mut buffer = Vec::new();
         reader.read_to_end(&mut buffer).await.unwrap();
@@ -573,22 +591,22 @@ mod tests {
         tokio::fs::write(&path, b"hello, world!").await.unwrap();
         let fd = Arc::new(File::open(&path).unwrap());
 
-        let mut reader = RangeReader::new(fd.clone(), 0, 13, 512);
+        let mut reader = RangeReader::new(fd.clone(), 0, 13, 512, buffer_pool());
         let mut buffer = Vec::new();
         reader.read_to_end(&mut buffer).await.unwrap();
         assert_eq!(buffer, b"hello, world!");
 
-        let mut reader = RangeReader::new(fd.clone(), 7, 5, 2);
+        let mut reader = RangeReader::new(fd.clone(), 7, 5, 2, buffer_pool());
         let mut buffer = Vec::new();
         reader.read_to_end(&mut buffer).await.unwrap();
         assert_eq!(buffer, b"world");
 
-        let mut reader = RangeReader::new(fd.clone(), 7, 100, 512);
+        let mut reader = RangeReader::new(fd.clone(), 7, 100, 512, buffer_pool());
         let mut buffer = Vec::new();
         reader.read_to_end(&mut buffer).await.unwrap();
         assert_eq!(buffer, b"world!");
 
-        let mut reader = RangeReader::new(fd, 0, 0, 512);
+        let mut reader = RangeReader::new(fd, 0, 0, 512, buffer_pool());
         let mut buffer = Vec::new();
         reader.read_to_end(&mut buffer).await.unwrap();
         assert!(buffer.is_empty());
@@ -602,12 +620,13 @@ mod tests {
         tokio::fs::write(&path, &data).await.unwrap();
         let fd = Arc::new(File::open(&path).unwrap());
 
-        let mut reader = RangeReader::new(fd.clone(), 0, data.len() as u64, 4 * 1024);
+        let mut reader =
+            RangeReader::new(fd.clone(), 0, data.len() as u64, 4 * 1024, buffer_pool());
         let mut buffer = Vec::new();
         reader.read_to_end(&mut buffer).await.unwrap();
         assert_eq!(buffer, data);
 
-        let mut reader = RangeReader::new(fd, 12_345, 30_000, 4 * 1024);
+        let mut reader = RangeReader::new(fd, 12_345, 30_000, 4 * 1024, buffer_pool());
         let mut buffer = Vec::new();
         reader.read_to_end(&mut buffer).await.unwrap();
         assert_eq!(buffer, &data[12_345..42_345]);
@@ -621,14 +640,14 @@ mod tests {
         let fd = Arc::new(File::open(&path).unwrap());
 
         // A fresh reader returns the range unchanged.
-        let reader = RangeReader::new(fd.clone(), 2, 11, 5);
+        let reader = RangeReader::new(fd.clone(), 2, 11, 5, buffer_pool());
         let (parts_fd, offset, remaining) = reader.into_parts();
         assert!(Arc::ptr_eq(&parts_fd, &fd));
         assert_eq!(offset, 2);
         assert_eq!(remaining, 11);
 
         // A partially consumed reader accounts for the buffered data.
-        let mut reader = RangeReader::new(fd, 2, 11, 5);
+        let mut reader = RangeReader::new(fd, 2, 11, 5, buffer_pool());
         assert_eq!(reader.fill_buf().await.unwrap(), b"llo, ");
         reader.consume(2);
         let (_, offset, remaining) = reader.into_parts();
@@ -645,7 +664,8 @@ mod tests {
         let fd = Arc::new(File::open(&path).unwrap());
 
         // Read the full range in owned chunks.
-        let mut reader = RangeReader::new(fd.clone(), 0, data.len() as u64, 4 * 1024);
+        let mut reader =
+            RangeReader::new(fd.clone(), 0, data.len() as u64, 4 * 1024, buffer_pool());
         let mut buffer = Vec::new();
         loop {
             let chunk = reader.read_chunk().await.unwrap();
@@ -657,7 +677,8 @@ mod tests {
         assert_eq!(buffer, data);
 
         // Stop at the end of the file even if the range is longer.
-        let mut reader = RangeReader::new(fd.clone(), 60 * 1024, 100 * 1024, 4 * 1024);
+        let mut reader =
+            RangeReader::new(fd.clone(), 60 * 1024, 100 * 1024, 4 * 1024, buffer_pool());
         let mut buffer = Vec::new();
         loop {
             let chunk = reader.read_chunk().await.unwrap();
@@ -669,7 +690,7 @@ mod tests {
         assert_eq!(buffer, &data[60 * 1024..]);
 
         // A zero-length range returns an empty chunk.
-        let mut reader = RangeReader::new(fd, 0, 0, 4 * 1024);
+        let mut reader = RangeReader::new(fd, 0, 0, 4 * 1024, buffer_pool());
         assert!(reader.read_chunk().await.unwrap().is_empty());
     }
 
@@ -681,7 +702,7 @@ mod tests {
         let fd = Arc::new(File::open(&path).unwrap());
 
         // The data buffered by the buffered read interface is drained first.
-        let mut reader = RangeReader::new(fd, 0, 13, 5);
+        let mut reader = RangeReader::new(fd, 0, 13, 5, buffer_pool());
         assert_eq!(reader.fill_buf().await.unwrap(), b"hello");
         reader.consume(2);
         assert_eq!(&reader.read_chunk().await.unwrap()[..], b"llo");
@@ -704,7 +725,7 @@ mod tests {
                 .open(&path)
                 .unwrap(),
         );
-        let mut reader = RangeReader::new(fd, 0, 13, 4);
+        let mut reader = RangeReader::new(fd, 0, 13, 4, buffer_pool());
         assert!(reader.read_chunk().await.is_err());
     }
 
@@ -715,7 +736,7 @@ mod tests {
         tokio::fs::write(&path, b"hello, world!").await.unwrap();
         let fd = Arc::new(File::open(&path).unwrap());
 
-        let mut reader = RangeReader::new(fd, 0, 13, 5);
+        let mut reader = RangeReader::new(fd, 0, 13, 5, buffer_pool());
         assert_eq!(reader.fill_buf().await.unwrap(), b"hello");
 
         reader.consume(2);
@@ -739,7 +760,7 @@ mod tests {
         tokio::fs::write(&path, &data).await.unwrap();
         let fd = Arc::new(File::open(&path).unwrap());
 
-        let mut reader = RangeReader::new(fd, 1_000, 50_000, 8 * 1024);
+        let mut reader = RangeReader::new(fd, 1_000, 50_000, 8 * 1024, buffer_pool());
         let mut writer = Cursor::new(Vec::new());
         let copied = tokio::io::copy_buf(&mut reader, &mut writer).await.unwrap();
         assert_eq!(copied, 50_000);
@@ -759,7 +780,8 @@ mod tests {
             .map(|i| {
                 let fd = fd.clone();
                 tokio::spawn(async move {
-                    let mut reader = RangeReader::new(fd, i * range_length, range_length, 1024);
+                    let mut reader =
+                        RangeReader::new(fd, i * range_length, range_length, 1024, buffer_pool());
                     let mut buffer = Vec::new();
                     reader.read_to_end(&mut buffer).await.unwrap();
                     (i, buffer)
@@ -782,7 +804,7 @@ mod tests {
         let fd = Arc::new(File::open(&path).unwrap());
 
         for buffer_size in [13, 512, 1, 0] {
-            let mut reader = RangeReader::new(fd.clone(), 0, 13, buffer_size);
+            let mut reader = RangeReader::new(fd.clone(), 0, 13, buffer_size, buffer_pool());
             let mut buffer = Vec::new();
             reader.read_to_end(&mut buffer).await.unwrap();
             assert_eq!(buffer, b"hello, world!");
@@ -796,12 +818,12 @@ mod tests {
         tokio::fs::write(&path, b"hello, world!").await.unwrap();
         let fd = Arc::new(File::open(&path).unwrap());
 
-        let mut reader = RangeReader::new(fd.clone(), 13, 5, 512);
+        let mut reader = RangeReader::new(fd.clone(), 13, 5, 512, buffer_pool());
         let mut buffer = Vec::new();
         reader.read_to_end(&mut buffer).await.unwrap();
         assert!(buffer.is_empty());
 
-        let mut reader = RangeReader::new(fd, 100, 5, 512);
+        let mut reader = RangeReader::new(fd, 100, 5, 512, buffer_pool());
         let mut buffer = Vec::new();
         reader.read_to_end(&mut buffer).await.unwrap();
         assert!(buffer.is_empty());
@@ -814,7 +836,7 @@ mod tests {
         tokio::fs::write(&path, b"hello, world!").await.unwrap();
         let fd = Arc::new(File::open(&path).unwrap());
 
-        let mut reader = RangeReader::new(fd, 0, 13, 512);
+        let mut reader = RangeReader::new(fd, 0, 13, 512, buffer_pool());
         let mut buffer = Vec::new();
         let mut chunk = [0u8; 3];
         loop {
@@ -842,9 +864,16 @@ mod tests {
         );
 
         let data = b"hello, world!";
-        let response = write_range(fd, 0, data.len() as u64, 512, &mut data.as_slice())
-            .await
-            .unwrap();
+        let response = write_range(
+            fd,
+            0,
+            data.len() as u64,
+            512,
+            &mut data.as_slice(),
+            &buffer_pool(),
+        )
+        .await
+        .unwrap();
         assert_eq!(response.length, data.len() as u64);
         assert_eq!(response.hash, crc32fast::hash(data).to_string());
         assert_eq!(tokio::fs::read(&path).await.unwrap(), data);
@@ -864,9 +893,16 @@ mod tests {
         );
 
         let data = pattern(256 * 1024);
-        let response = write_range(fd, 0, data.len() as u64, 4 * 1024, &mut data.as_slice())
-            .await
-            .unwrap();
+        let response = write_range(
+            fd,
+            0,
+            data.len() as u64,
+            4 * 1024,
+            &mut data.as_slice(),
+            &buffer_pool(),
+        )
+        .await
+        .unwrap();
         assert_eq!(response.length, data.len() as u64);
         assert_eq!(response.hash, crc32fast::hash(&data).to_string());
         assert_eq!(tokio::fs::read(&path).await.unwrap(), data);
@@ -885,7 +921,7 @@ mod tests {
                 .unwrap(),
         );
 
-        write_range(fd, 7, 5, 2, &mut b"world".as_slice())
+        write_range(fd, 7, 5, 2, &mut b"world".as_slice(), &buffer_pool())
             .await
             .unwrap();
 
@@ -909,9 +945,11 @@ mod tests {
                 .open(&path)
                 .unwrap(),
         );
-        assert!(write_range(fd, 0, 2048, 512, &mut data.as_slice())
-            .await
-            .is_err());
+        assert!(
+            write_range(fd, 0, 2048, 512, &mut data.as_slice(), &buffer_pool())
+                .await
+                .is_err()
+        );
 
         let path = temp_dir.path().join("long");
         tokio::fs::write(&path, b"").await.unwrap();
@@ -922,7 +960,7 @@ mod tests {
                 .open(&path)
                 .unwrap(),
         );
-        let response = write_range(fd, 0, 512, 512, &mut data.as_slice())
+        let response = write_range(fd, 0, 512, 512, &mut data.as_slice(), &buffer_pool())
             .await
             .unwrap();
         assert_eq!(response.length, 512);
@@ -947,7 +985,9 @@ mod tests {
             Ok(Bytes::from_static(b"hello")),
             Err(io::Error::other("reader failed")),
         ]));
-        assert!(write_range(fd, 0, 10, 512, &mut reader).await.is_err());
+        assert!(write_range(fd, 0, 10, 512, &mut reader, &buffer_pool())
+            .await
+            .is_err());
     }
 
     #[tokio::test]
@@ -966,9 +1006,16 @@ mod tests {
             );
 
             let data = b"hello, world!";
-            let response = write_range(fd, 0, data.len() as u64, buffer_size, &mut data.as_slice())
-                .await
-                .unwrap();
+            let response = write_range(
+                fd,
+                0,
+                data.len() as u64,
+                buffer_size,
+                &mut data.as_slice(),
+                &buffer_pool(),
+            )
+            .await
+            .unwrap();
             assert_eq!(response.hash, crc32fast::hash(data).to_string());
             assert_eq!(tokio::fs::read(&path).await.unwrap(), data);
         }
@@ -988,7 +1035,7 @@ mod tests {
         );
 
         let data = b"hello, world!";
-        let response = write_range(fd, 0, 0, 512, &mut data.as_slice())
+        let response = write_range(fd, 0, 0, 512, &mut data.as_slice(), &buffer_pool())
             .await
             .unwrap();
         assert_eq!(response.length, 0);
@@ -1310,6 +1357,7 @@ mod tests {
                         piece.len() as u64,
                         1024,
                         &mut piece.as_slice(),
+                        &buffer_pool(),
                     )
                     .await
                     .unwrap();
