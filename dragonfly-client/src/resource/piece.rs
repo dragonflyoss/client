@@ -24,7 +24,7 @@ use dragonfly_client_metric::{
     collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
     collect_backend_request_started_metrics, collect_download_piece_traffic_metrics,
 };
-use dragonfly_client_storage::{content::RangeReader, metadata, Storage};
+use dragonfly_client_storage::{io::RangeReader, metadata, Storage};
 use dragonfly_client_util::net::format_socket_addr;
 use leaky_bucket::RateLimiter;
 use reqwest::header::HeaderMap;
