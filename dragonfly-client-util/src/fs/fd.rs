@@ -56,8 +56,12 @@ impl FDCache {
     /// once, the last inserted descriptor wins and the others are closed when
     /// their readers finish.
     pub async fn open(&self, path: &Path) -> Result<Arc<File>> {
-        if let Some(fd) = self.read_fds.lock()?.get(path) {
-            return Ok(fd.clone());
+        if let Some(fd) = self
+            .read_fds
+            .lock()
+            .map_err(|err| dragonfly_client_core::Error::MutexPoisoned(err.to_string()))?
+            .get(path)
+        {
         }
 
         let path = path.to_path_buf();
