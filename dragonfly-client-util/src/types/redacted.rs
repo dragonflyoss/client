@@ -16,7 +16,7 @@
 
 use dragonfly_api::common::v2::{Download, Hdfs, HuggingFace, ModelScope, ObjectStorage};
 use dragonfly_api::dfdaemon::v2::DownloadPersistentTaskRequest;
-use http::header::{AUTHORIZATION, COOKIE, PROXY_AUTHORIZATION, SET_COOKIE};
+use http::header::{HOST, RANGE, USER_AGENT};
 use std::collections::HashMap;
 use std::fmt;
 
@@ -33,7 +33,11 @@ const REDACTED: &str = "[REDACTED]";
 /// info!("download task started: {:?}", RedactedDownload(&download));
 /// ```
 ///
-/// The following fields are replaced with [`REDACTED`] when present:
+/// Only the key fields are printed, since it runs on the per-request log
+/// path. `request_header` prints only the key headers, bulky fields such
+/// as `certificate_chain` and `content_for_calculating_task_id` are omitted
+/// entirely, and the secrets of the printed backend configs are
+/// replaced with [`REDACTED`]:
 ///
 /// - `object_storage.access_key_secret`
 /// - `object_storage.session_token`
@@ -42,8 +46,6 @@ const REDACTED: &str = "[REDACTED]";
 /// - `hdfs.delegation_token`
 /// - `hugging_face.token`
 /// - `model_scope.token`
-/// - sensitive request headers such as `authorization`, `cookie`, and
-///   object-storage session-token headers
 ///
 /// Non-secret identifiers such as `object_storage.access_key_id` are left
 /// intact because an AKIA/ASIA-style ID on its own is not sufficient to
@@ -51,7 +53,7 @@ const REDACTED: &str = "[REDACTED]";
 /// logs.
 pub struct RedactedDownload<'a>(pub &'a Download);
 
-/// Debug implementation that redacts sensitive fields without cloning the
+/// Debug implementation that prints the key fields without cloning the
 /// whole download, since it runs on the per-request log path.
 impl fmt::Debug for RedactedDownload<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -59,82 +61,58 @@ impl fmt::Debug for RedactedDownload<'_> {
         // impl at compile time instead of silently dropping the field from logs.
         let Download {
             url,
-            digest,
             range,
-            r#type,
             tag,
             application,
-            priority,
-            filtered_query_params,
-            request_header,
             piece_length,
+            request_header,
             output_path,
-            timeout,
-            disable_back_to_source,
-            need_back_to_source,
-            certificate_chain,
             prefetch,
             object_storage,
             hdfs,
             is_prefetch,
-            need_piece_content,
-            force_hard_link,
-            content_for_calculating_task_id,
             remote_ip,
-            concurrent_piece_count,
-            overwrite,
-            actual_piece_length,
-            actual_content_length,
-            actual_piece_count,
-            enable_task_id_based_blob_digest,
             hugging_face,
             model_scope,
-            metadata_only,
+            digest: _,
+            r#type: _,
+            priority: _,
+            filtered_query_params: _,
+            timeout: _,
+            disable_back_to_source: _,
+            need_back_to_source: _,
+            certificate_chain: _,
+            need_piece_content: _,
+            force_hard_link: _,
+            content_for_calculating_task_id: _,
+            concurrent_piece_count: _,
+            overwrite: _,
+            actual_piece_length: _,
+            actual_content_length: _,
+            actual_piece_count: _,
+            enable_task_id_based_blob_digest: _,
+            metadata_only: _,
         } = self.0;
 
         f.debug_struct("Download")
             .field("url", url)
-            .field("digest", digest)
             .field("range", range)
-            .field("type", r#type)
             .field("tag", tag)
             .field("application", application)
-            .field("priority", priority)
-            .field("filtered_query_params", filtered_query_params)
-            .field("request_header", &RedactedHeaderMap(request_header))
             .field("piece_length", piece_length)
             .field("output_path", output_path)
-            .field("timeout", timeout)
-            .field("disable_back_to_source", disable_back_to_source)
-            .field("need_back_to_source", need_back_to_source)
-            .field("certificate_chain", certificate_chain)
             .field("prefetch", prefetch)
+            .field("is_prefetch", is_prefetch)
+            .field("remote_ip", remote_ip)
+            .field("request_header", &KeyRequestHeader(request_header))
             .field(
                 "object_storage",
                 &scrubbed(object_storage, scrub_object_storage),
             )
             .field("hdfs", &scrubbed(hdfs, scrub_hdfs))
-            .field("is_prefetch", is_prefetch)
-            .field("need_piece_content", need_piece_content)
-            .field("force_hard_link", force_hard_link)
-            .field(
-                "content_for_calculating_task_id",
-                content_for_calculating_task_id,
-            )
-            .field("remote_ip", remote_ip)
-            .field("concurrent_piece_count", concurrent_piece_count)
-            .field("overwrite", overwrite)
-            .field("actual_piece_length", actual_piece_length)
-            .field("actual_content_length", actual_content_length)
-            .field("actual_piece_count", actual_piece_count)
-            .field(
-                "enable_task_id_based_blob_digest",
-                enable_task_id_based_blob_digest,
-            )
             .field("hugging_face", &scrubbed(hugging_face, scrub_hugging_face))
             .field("model_scope", &scrubbed(model_scope, scrub_model_scope))
-            .field("metadata_only", metadata_only)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -146,23 +124,31 @@ fn scrubbed<T: Clone>(value: &Option<T>, scrub: fn(&mut Option<T>)) -> Option<T>
     value
 }
 
-/// Debug wrapper over the request header map that prints sensitive header
-/// values as [`REDACTED`] without cloning the map.
-struct RedactedHeaderMap<'a>(&'a HashMap<String, String>);
+/// Debug wrapper over the request header map that prints only the key
+/// headers, so the hot log line stays small and the sensitive headers never
+/// reach the logs.
+struct KeyRequestHeader<'a>(&'a HashMap<String, String>);
 
-/// Debug implementation that redacts sensitive header values.
-impl fmt::Debug for RedactedHeaderMap<'_> {
+/// Debug implementation that filters the headers by the key header names.
+impl fmt::Debug for KeyRequestHeader<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_map()
-            .entries(self.0.iter().map(|(key, value)| {
-                if is_sensitive_header(key) {
-                    (key, REDACTED)
-                } else {
-                    (key, value.as_str())
-                }
-            }))
+            .entries(self.0.iter().filter(|(key, _)| is_key_request_header(key)))
             .finish()
     }
+}
+
+/// Returns whether the header is worth printing on the per-request log path,
+/// matched case-insensitively without allocating.
+fn is_key_request_header(key: &str) -> bool {
+    [
+        RANGE.as_str(),
+        USER_AGENT.as_str(),
+        HOST.as_str(),
+        "x-request-id",
+    ]
+    .iter()
+    .any(|key_header| key.eq_ignore_ascii_case(key_header))
 }
 
 /// Debug-safe wrapper around [`DownloadPersistentTaskRequest`].
@@ -245,24 +231,6 @@ fn scrub_model_scope(ms: &mut Option<ModelScope>) {
             ms.token = Some(REDACTED.to_string());
         }
     }
-}
-
-/// Returns whether the header carries secret material and must be redacted,
-/// matched case-insensitively without allocating.
-fn is_sensitive_header(key: &str) -> bool {
-    [
-        AUTHORIZATION.as_str(),
-        PROXY_AUTHORIZATION.as_str(),
-        COOKIE.as_str(),
-        SET_COOKIE.as_str(),
-        "x-amz-security-token",
-        "x-oss-security-token",
-        "x-auth-token",
-        "x-api-key",
-        "x-goog-api-key",
-    ]
-    .iter()
-    .any(|sensitive| key.eq_ignore_ascii_case(sensitive))
 }
 
 #[cfg(test)]
@@ -367,45 +335,6 @@ mod tests {
     }
 
     #[test]
-    fn is_sensitive_header_matches_standard_auth_headers_case_insensitively() {
-        assert!(is_sensitive_header("Authorization"));
-        assert!(is_sensitive_header("PROXY-AUTHORIZATION"));
-        assert!(is_sensitive_header("cookie"));
-        assert!(is_sensitive_header("Set-Cookie"));
-    }
-
-    #[test]
-    fn is_sensitive_header_matches_object_storage_token_headers() {
-        assert!(is_sensitive_header("x-amz-security-token"));
-        assert!(is_sensitive_header("X-OSS-Security-Token"));
-        assert!(is_sensitive_header("X-Auth-Token"));
-        assert!(is_sensitive_header("x-api-key"));
-        assert!(is_sensitive_header("X-Goog-Api-Key"));
-    }
-
-    #[test]
-    fn is_sensitive_header_ignores_non_sensitive_headers() {
-        assert!(!is_sensitive_header("Content-Type"));
-        assert!(!is_sensitive_header("User-Agent"));
-        assert!(!is_sensitive_header("X-Request-Id"));
-        assert!(!is_sensitive_header("X-Custom-Author"));
-    }
-
-    #[test]
-    fn redacted_header_map_redacts_values_and_preserves_keys() {
-        let mut h = HashMap::new();
-        h.insert("Authorization".to_string(), "Bearer x".to_string());
-        h.insert("Content-Type".to_string(), "text/plain".to_string());
-        let out = format!("{:?}", RedactedHeaderMap(&h));
-
-        assert!(out.contains("Authorization"));
-        assert!(out.contains(REDACTED));
-        assert!(!out.contains("Bearer x"));
-        assert!(out.contains("Content-Type"));
-        assert!(out.contains("text/plain"));
-    }
-
-    #[test]
     fn redacted_download_debug_does_not_leak_secrets() {
         let mut header = HashMap::new();
         header.insert(
@@ -446,7 +375,32 @@ mod tests {
         }
         assert!(download.contains(REDACTED));
         assert!(download.contains("AKIAIOSFODNN7EXAMPLE"),);
-        assert!(download.contains("req-42"),);
+
+        // The key request headers are printed, the rest are omitted, even
+        // their names.
+        assert!(download.contains("req-42"));
+        assert!(!download.contains("Authorization"));
+    }
+
+    #[test]
+    fn redacted_download_debug_prints_only_key_request_headers() {
+        let mut header = HashMap::new();
+        header.insert("Range".to_string(), "bytes=0-1023".to_string());
+        header.insert("User-Agent".to_string(), "dfget/2.3".to_string());
+        header.insert("Host".to_string(), "registry.example.com".to_string());
+        header.insert("Accept".to_string(), "application/octet-stream".to_string());
+
+        let download = Download {
+            request_header: header,
+            ..Default::default()
+        };
+
+        let out = format!("{:?}", RedactedDownload(&download));
+        assert!(out.contains("bytes=0-1023"));
+        assert!(out.contains("dfget/2.3"));
+        assert!(out.contains("registry.example.com"));
+        assert!(out.contains("https://example.com"));
+        assert!(!out.contains("application/octet-stream"));
     }
 
     #[test]
