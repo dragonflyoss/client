@@ -19,9 +19,11 @@ use bytesize::ByteSize;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
+use dragonfly_client_util::buffer_pool::BufferPool;
 use dragonfly_client_util::fs::fallocate;
 use dragonfly_client_util::fs::fd::{FDCache, DEFAULT_FD_CACHE_CAPACITY};
 use futures::Stream;
+use std::cmp::max;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -40,6 +42,9 @@ pub struct Content {
 
     /// The cache of the opened file descriptors for reading pieces.
     fd_cache: FDCache,
+
+    /// The pool of the staging buffers for reading and writing pieces.
+    buffer_pool: BufferPool,
 }
 
 /// Implements the content storage.
@@ -63,6 +68,13 @@ impl Content {
             config,
             dir,
             fd_cache: FDCache::new(DEFAULT_FD_CACHE_CAPACITY),
+            buffer_pool: BufferPool::new(
+                super::content::MAX_BUFFER_POOL_IDLE_BUFFERS
+                    * max(
+                        config.storage.write_buffer_size,
+                        config.storage.read_buffer_size,
+                    ),
+            ),
         })
     }
 
@@ -279,6 +291,7 @@ impl Content {
             target_offset,
             target_length,
             self.config.storage.read_buffer_size,
+            self.buffer_pool.clone(),
         ))
     }
 
@@ -483,6 +496,7 @@ impl Content {
             target_offset,
             target_length,
             self.config.storage.read_buffer_size,
+            self.buffer_pool.clone(),
         ))
     }
 
@@ -513,6 +527,7 @@ impl Content {
             expected_length,
             self.config.storage.write_buffer_size,
             reader,
+            &self.buffer_pool,
         )
         .await
         .inspect_err(|err| {
@@ -750,6 +765,7 @@ impl Content {
             target_offset,
             target_length,
             self.config.storage.read_buffer_size,
+            self.buffer_pool.clone(),
         ))
     }
 
@@ -780,6 +796,7 @@ impl Content {
             expected_length,
             self.config.storage.write_buffer_size,
             reader,
+            &self.buffer_pool,
         )
         .await
         .inspect_err(|err| {
