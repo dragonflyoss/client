@@ -17,6 +17,8 @@
 use dragonfly_client_core::Result;
 use tokio::fs;
 
+pub mod fd;
+
 #[cfg(target_os = "linux")]
 use tracing::warn;
 

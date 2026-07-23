@@ -14,20 +14,20 @@
  * limitations under the License.
  */
 
-use crate::cache::lru_cache::LruCache;
 use bytes::{Bytes, BytesMut};
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
+use dragonfly_client_util::buffer_pool::BufferPool;
 use futures::{Stream, TryStreamExt};
 use std::cmp::{max, min};
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::future::Future;
 use std::io;
 use std::os::unix::fs::FileExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, ReadBuf};
 use tokio::task::JoinHandle;
@@ -50,8 +50,14 @@ pub const DEFAULT_PERSISTENT_TASK_DIR: &str = "persistent-tasks";
 /// The default directory for store persistent cache task.
 pub const DEFAULT_PERSISTENT_CACHE_TASK_DIR: &str = "persistent-cache-tasks";
 
-/// The default capacity of the file descriptor cache.
-pub const DEFAULT_FD_CACHE_CAPACITY: usize = 1024;
+/// The maximum total capacity in bytes of the idle buffers retained by the shared
+/// buffer pool: 64MiB, i.e. 128 idle buffers with the default 512KiB buffer size.
+const MAX_BUFFER_POOL_IDLE_BYTES: usize = 64 * 1024 * 1024;
+
+/// The shared buffer pool instance for the piece write path ([`write_range`])
+/// and the piece read path ([`RangeReader::read_chunk`]), so the hot paths
+/// reuse a few large buffers instead of allocating a fresh one per chunk.
+static BUFFER_POOL: BufferPool = BufferPool::new(MAX_BUFFER_POOL_IDLE_BYTES);
 
 /// The response of writing a piece.
 pub struct WritePieceResponse {
@@ -59,24 +65,6 @@ pub struct WritePieceResponse {
     pub length: u64,
 
     /// The hash of the piece.
-    pub hash: String,
-}
-
-/// The response of writing a persistent task.
-pub struct WritePersistentTaskResponse {
-    /// The length of the persistent task.
-    pub length: u64,
-
-    /// The hash of the persistent task.
-    pub hash: String,
-}
-
-/// The response of writing a persistent cache task.
-pub struct WritePersistentCacheTaskResponse {
-    /// The length of the persistent cache task.
-    pub length: u64,
-
-    /// The hash of the persistent cache task.
     pub hash: String,
 }
 
@@ -95,184 +83,6 @@ pub fn calculate_piece_range(offset: u64, length: u64, range: Option<Range>) -> 
         (target_offset, target_length)
     } else {
         (offset, length)
-    }
-}
-
-/// FDCache caches opened file descriptors by path with LRU eviction, so repeated
-/// piece reads and writes of the same task reuse one descriptor instead of
-/// reopening the file every time. The read-only and write-only descriptors are
-/// cached separately, so a write open failure surfaces at open time instead of
-/// falling back to a cached read-only descriptor. The cached descriptors are
-/// only used for positional reads and writes, which never move the file cursor,
-/// so one descriptor is safely shared by concurrent readers and writers.
-pub struct FDCache {
-    /// The opened file descriptors for reading by path.
-    read_fds: Mutex<LruCache<PathBuf, Arc<File>>>,
-
-    /// The opened file descriptors for writing by path.
-    write_fds: Mutex<LruCache<PathBuf, Arc<File>>>,
-}
-
-/// Implements the file descriptor cache.
-impl FDCache {
-    /// Creates a new FDCache with the given capacity.
-    pub fn new(capacity: usize) -> Self {
-        Self {
-            read_fds: Mutex::new(LruCache::new(capacity)),
-            write_fds: Mutex::new(LruCache::new(capacity)),
-        }
-    }
-
-    /// Returns the cached read-only file descriptor of the path, opening and
-    /// caching it if it is absent. Concurrent misses may open the file more than
-    /// once, the last inserted descriptor wins and the others are closed when
-    /// their readers finish.
-    pub async fn open(&self, path: &Path) -> Result<Arc<File>> {
-        if let Some(fd) = self.read_fds.lock()?.get(path) {
-            return Ok(fd.clone());
-        }
-
-        let path = path.to_path_buf();
-        let fd = Arc::new(
-            tokio::task::spawn_blocking({
-                let path = path.clone();
-                move || File::open(path)
-            })
-            .await
-            .map_err(io::Error::other)??,
-        );
-
-        self.read_fds.lock()?.put(path, fd.clone());
-        Ok(fd)
-    }
-
-    /// Returns the cached write-only file descriptor of the path, opening and
-    /// caching it if it is absent. The open error surfaces to the caller and
-    /// nothing is cached on failure, so a file that becomes writable later is
-    /// opened again on the next write.
-    pub async fn open_write(&self, path: &Path) -> Result<Arc<File>> {
-        if let Some(fd) = self.write_fds.lock()?.get(path) {
-            return Ok(fd.clone());
-        }
-
-        let path = path.to_path_buf();
-        let fd = Arc::new(
-            tokio::task::spawn_blocking({
-                let path = path.clone();
-                move || {
-                    OpenOptions::new()
-                        .truncate(false)
-                        .write(true)
-                        .open(path.as_path())
-                }
-            })
-            .await
-            .map_err(io::Error::other)??,
-        );
-
-        self.write_fds.lock()?.put(path, fd.clone());
-        Ok(fd)
-    }
-
-    /// Removes the cached file descriptors of the path. It needs to be called when
-    /// the content is deleted, so a recreated task will not read the stale file.
-    pub fn remove(&self, path: &Path) -> Result<()> {
-        self.read_fds.lock()?.pop(path);
-        self.write_fds.lock()?.pop(path);
-        Ok(())
-    }
-}
-
-/// The maximum total capacity in bytes of the idle buffers retained by the shared
-/// buffer pool: 64MiB, i.e. 128 idle buffers with the default 512KiB buffer size.
-const MAX_BUFFER_POOL_IDLE_BYTES: usize = 64 * 1024 * 1024;
-
-/// BufferPool is a bounded pool of staging buffers shared by the piece write path
-/// ([`write_range`]) and the piece read path ([`RangeReader::read_chunk`]), so the
-/// hot paths reuse a few large buffers instead of allocating (and zeroing, on the
-/// read side) a fresh one per chunk.
-///
-/// Invariant: every buffer created by the pool has its full capacity initialized
-/// (it is born with [`BytesMut::zeroed`]), and the write and read paths only
-/// overwrite the buffers in place and never grow them past their capacity, so the
-/// initialization holds across reuses. This is what makes the unchecked `set_len`
-/// in [`BufferPool::checkout_for_read`] sound.
-struct BufferPool {
-    /// The idle buffers and their total capacity in bytes.
-    idle: Mutex<(Vec<BytesMut>, usize)>,
-
-    /// The maximum total capacity in bytes of the idle buffers.
-    max_idle_bytes: usize,
-}
-
-/// The shared buffer pool instance.
-static BUFFER_POOL: BufferPool = BufferPool {
-    idle: Mutex::new((Vec::new(), 0)),
-    max_idle_bytes: MAX_BUFFER_POOL_IDLE_BYTES,
-};
-
-/// Implements the buffer pool.
-impl BufferPool {
-    /// Checks out an empty buffer with at least the given capacity, reusing an
-    /// idle buffer when one is available.
-    fn checkout(&self, capacity: usize) -> BytesMut {
-        let mut idle = self.idle.lock().unwrap();
-        while let Some(buffer) = idle.0.pop() {
-            idle.1 -= buffer.capacity();
-            if buffer.capacity() >= capacity {
-                return buffer;
-            }
-
-            // Drop the undersized buffer, so the pool converges on the largest
-            // buffer size in use.
-        }
-        drop(idle);
-
-        // Zero the new buffer to fully initialize its capacity, upholding the pool
-        // invariant. The cost is paid once per buffer creation instead of once per
-        // chunk.
-        let mut buffer = BytesMut::zeroed(capacity);
-        buffer.clear();
-        buffer
-    }
-
-    /// Checks out a buffer with `len` readable bytes for a positional read to
-    /// overwrite, without zeroing them.
-    fn checkout_for_read(&self, len: usize) -> BytesMut {
-        let mut buffer = self.checkout(len);
-        // SAFETY: the pool invariant guarantees the full capacity of the buffer is
-        // initialized, and `len` is not greater than the capacity.
-        unsafe { buffer.set_len(len) };
-        buffer
-    }
-
-    /// Returns a buffer to the pool, dropping it when the pool is full.
-    fn give_back(&self, mut buffer: BytesMut) {
-        buffer.clear();
-        let mut idle = self.idle.lock().unwrap();
-        if idle.1 + buffer.capacity() <= self.max_idle_bytes {
-            idle.1 += buffer.capacity();
-            idle.0.push(buffer);
-        }
-    }
-}
-
-/// PooledChunk owns a pooled buffer inside a [`Bytes`] handle created by
-/// [`Bytes::from_owner`], returning the buffer to the pool when the last
-/// reference to the chunk drops.
-struct PooledChunk(BytesMut);
-
-/// Implements the byte view of the pooled chunk.
-impl AsRef<[u8]> for PooledChunk {
-    fn as_ref(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-/// Implements the drop of the pooled chunk.
-impl Drop for PooledChunk {
-    fn drop(&mut self) {
-        BUFFER_POOL.give_back(std::mem::take(&mut self.0));
     }
 }
 
@@ -376,7 +186,7 @@ impl RangeReader {
         self.remaining = if n == 0 { 0 } else { self.remaining - n as u64 };
 
         buf.truncate(n);
-        Ok(Bytes::from_owner(PooledChunk(buf)))
+        Ok(BUFFER_POOL.freeze(buf))
     }
 }
 
@@ -693,70 +503,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dragonfly_client_util::fs::fd::{FDCache, DEFAULT_FD_CACHE_CAPACITY};
+    use std::fs::OpenOptions;
     use std::io::Cursor;
     use tempfile::tempdir;
     use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 
     fn pattern(length: usize) -> Vec<u8> {
         (0..length).map(|i| (i % 251) as u8).collect()
-    }
-
-    #[tokio::test]
-    async fn test_fd_cache() {
-        let temp_dir = tempdir().unwrap();
-        let path = temp_dir.path().join("task");
-        tokio::fs::write(&path, b"hello, world!").await.unwrap();
-
-        let cache = FDCache::new(DEFAULT_FD_CACHE_CAPACITY);
-        let first = cache.open(&path).await.unwrap();
-        let second = cache.open(&path).await.unwrap();
-        assert!(Arc::ptr_eq(&first, &second));
-
-        let first_write = cache.open_write(&path).await.unwrap();
-        let second_write = cache.open_write(&path).await.unwrap();
-        assert!(Arc::ptr_eq(&first_write, &second_write));
-        assert!(!Arc::ptr_eq(&first, &first_write));
-
-        let _ = cache.remove(&path);
-        let third = cache.open(&path).await.unwrap();
-        assert!(!Arc::ptr_eq(&first, &third));
-        let third_write = cache.open_write(&path).await.unwrap();
-        assert!(!Arc::ptr_eq(&first_write, &third_write));
-
-        let _ = cache.remove(&path);
-        tokio::fs::remove_file(&path).await.unwrap();
-        assert!(cache.open(&path).await.is_err());
-        assert!(cache.open_write(&path).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_fd_cache_open_write_read_only_file() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let temp_dir = tempdir().unwrap();
-        let path = temp_dir.path().join("task");
-        tokio::fs::write(&path, b"hello, world!").await.unwrap();
-
-        let mut permissions = tokio::fs::metadata(&path).await.unwrap().permissions();
-        permissions.set_readonly(true);
-        tokio::fs::set_permissions(&path, permissions)
-            .await
-            .unwrap();
-
-        let cache = FDCache::new(DEFAULT_FD_CACHE_CAPACITY);
-        let fd = cache.open(&path).await.unwrap();
-        let mut buffer = vec![0u8; 13];
-        fd.read_at(&mut buffer, 0).unwrap();
-        assert_eq!(buffer, b"hello, world!");
-        assert!(cache.open_write(&path).await.is_err());
-
-        tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
-            .await
-            .unwrap();
-
-        let fd = cache.open_write(&path).await.unwrap();
-        fd.write_all_at(b"HELLO", 0).unwrap();
-        assert_eq!(&tokio::fs::read(&path).await.unwrap()[..5], b"HELLO");
     }
 
     #[tokio::test]
@@ -1489,57 +1243,6 @@ mod tests {
         }
 
         assert_eq!(tokio::fs::read(&path).await.unwrap(), data);
-    }
-
-    #[test]
-    fn test_buffer_pool_reuse() {
-        let pool = BufferPool {
-            idle: Mutex::new((Vec::new(), 0)),
-            max_idle_bytes: 4096,
-        };
-
-        let buffer = pool.checkout(1024);
-        assert_eq!(buffer.capacity(), 1024);
-        assert!(buffer.is_empty());
-
-        let ptr = buffer.as_ptr();
-        pool.give_back(buffer);
-
-        // A smaller request reuses the idle buffer.
-        let buffer = pool.checkout(512);
-        assert_eq!(buffer.as_ptr(), ptr);
-        assert_eq!(buffer.capacity(), 1024);
-        pool.give_back(buffer);
-
-        // An undersized idle buffer is dropped and a new one is created.
-        let buffer = pool.checkout(2048);
-        assert_eq!(buffer.capacity(), 2048);
-        assert!(pool.idle.lock().unwrap().0.is_empty());
-        pool.give_back(buffer);
-
-        // Buffers beyond the idle capacity are dropped.
-        pool.give_back(BytesMut::zeroed(4096));
-        let idle = pool.idle.lock().unwrap();
-        assert_eq!(idle.0.len(), 1);
-        assert_eq!(idle.1, 2048);
-    }
-
-    #[test]
-    fn test_buffer_pool_checkout_for_read() {
-        let pool = BufferPool {
-            idle: Mutex::new((Vec::new(), 0)),
-            max_idle_bytes: 4096,
-        };
-
-        let mut buffer = pool.checkout_for_read(256);
-        assert_eq!(buffer.len(), 256);
-        buffer.fill(0xAB);
-        pool.give_back(buffer);
-
-        // The reused buffer keeps its full capacity initialized and readable.
-        let buffer = pool.checkout_for_read(128);
-        assert_eq!(buffer.len(), 128);
-        assert!(buffer.iter().all(|&b| b == 0xAB));
     }
 
     #[tokio::test]

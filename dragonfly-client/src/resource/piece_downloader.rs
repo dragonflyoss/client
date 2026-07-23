@@ -17,11 +17,12 @@
 use async_trait::async_trait;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
-use dragonfly_client_storage::{client::quic::QUICClient, client::tcp::TCPClient};
+use dragonfly_client_storage::{
+    client::quic::QUICClient, client::tcp::TCPClient, client::PieceContentStream,
+};
 use dragonfly_client_util::pool::{Builder as PoolBuilder, Entry, Factory, Pool};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncRead;
 use tracing::{error, instrument};
 
 /// The default capacity of the downloader to store the clients.
@@ -41,7 +42,7 @@ pub trait Downloader: Send + Sync {
         number: u32,
         host_id: &str,
         task_id: &str,
-    ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)>;
+    ) -> Result<(PieceContentStream, u64, String)>;
 
     /// Downloads a persistent piece from the other peer by different
     /// protocols.
@@ -51,7 +52,7 @@ pub trait Downloader: Send + Sync {
         number: u32,
         host_id: &str,
         task_id: &str,
-    ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)>;
+    ) -> Result<(PieceContentStream, u64, String)>;
 
     /// Downloads a persistent cache piece from the other peer by different
     /// protocols.
@@ -61,7 +62,7 @@ pub trait Downloader: Send + Sync {
         number: u32,
         host_id: &str,
         task_id: &str,
-    ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)>;
+    ) -> Result<(PieceContentStream, u64, String)>;
 }
 
 /// The factory for creating different downloaders by different protocols.
@@ -174,13 +175,13 @@ impl Downloader for QUICDownloader {
         number: u32,
         _host_id: &str,
         task_id: &str,
-    ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
+    ) -> Result<(PieceContentStream, u64, String)> {
         let key = self.get_entry_key(addr);
         let entry = self.get_client_entry(key.clone(), addr.to_string()).await?;
         let request_guard = entry.request_guard();
 
         match entry.client.download_piece(number, task_id).await {
-            Ok((reader, offset, digest)) => Ok((Box::new(reader), offset, digest)),
+            Ok((stream, offset, digest)) => Ok((stream, offset, digest)),
             Err(err) => {
                 // If the request fails, it will drop the request guard and remove the client
                 // entry to avoid using the invalid client.
@@ -200,7 +201,7 @@ impl Downloader for QUICDownloader {
         number: u32,
         _host_id: &str,
         task_id: &str,
-    ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
+    ) -> Result<(PieceContentStream, u64, String)> {
         let key = self.get_entry_key(addr);
         let entry = self.get_client_entry(key.clone(), addr.to_string()).await?;
         let request_guard = entry.request_guard();
@@ -210,7 +211,7 @@ impl Downloader for QUICDownloader {
             .download_persistent_piece(number, task_id)
             .await
         {
-            Ok((reader, offset, digest)) => Ok((Box::new(reader), offset, digest)),
+            Ok((stream, offset, digest)) => Ok((stream, offset, digest)),
             Err(err) => {
                 // If the request fails, it will drop the request guard and remove the client
                 // entry to avoid using the invalid client.
@@ -230,7 +231,7 @@ impl Downloader for QUICDownloader {
         number: u32,
         _host_id: &str,
         task_id: &str,
-    ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
+    ) -> Result<(PieceContentStream, u64, String)> {
         let key = self.get_entry_key(addr);
         let entry = self.get_client_entry(key.clone(), addr.to_string()).await?;
         let request_guard = entry.request_guard();
@@ -240,7 +241,7 @@ impl Downloader for QUICDownloader {
             .download_persistent_cache_piece(number, task_id)
             .await
         {
-            Ok((reader, offset, digest)) => Ok((Box::new(reader), offset, digest)),
+            Ok((stream, offset, digest)) => Ok((stream, offset, digest)),
             Err(err) => {
                 // If the request fails, it will drop the request guard and remove the client
                 // entry to avoid using the invalid client.
@@ -326,13 +327,13 @@ impl Downloader for TCPDownloader {
         number: u32,
         _host_id: &str,
         task_id: &str,
-    ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
+    ) -> Result<(PieceContentStream, u64, String)> {
         let key = self.get_entry_key(addr);
         let entry = self.get_client_entry(key.clone(), addr.to_string()).await?;
         let request_guard = entry.request_guard();
 
         match entry.client.download_piece(number, task_id).await {
-            Ok((reader, offset, digest)) => Ok((Box::new(reader), offset, digest)),
+            Ok((stream, offset, digest)) => Ok((stream, offset, digest)),
             Err(err) => {
                 // If the request fails, it will drop the request guard and remove the client
                 // entry to avoid using the invalid client.
@@ -352,7 +353,7 @@ impl Downloader for TCPDownloader {
         number: u32,
         _host_id: &str,
         task_id: &str,
-    ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
+    ) -> Result<(PieceContentStream, u64, String)> {
         let key = self.get_entry_key(addr);
         let entry = self.get_client_entry(key.clone(), addr.to_string()).await?;
         let request_guard = entry.request_guard();
@@ -362,7 +363,7 @@ impl Downloader for TCPDownloader {
             .download_persistent_piece(number, task_id)
             .await
         {
-            Ok((reader, offset, digest)) => Ok((Box::new(reader), offset, digest)),
+            Ok((stream, offset, digest)) => Ok((stream, offset, digest)),
             Err(err) => {
                 // If the request fails, it will drop the request guard and remove the client
                 // entry to avoid using the invalid client.
@@ -382,7 +383,7 @@ impl Downloader for TCPDownloader {
         number: u32,
         _host_id: &str,
         task_id: &str,
-    ) -> Result<(Box<dyn AsyncRead + Send + Unpin>, u64, String)> {
+    ) -> Result<(PieceContentStream, u64, String)> {
         let key = self.get_entry_key(addr);
         let entry = self.get_client_entry(key.clone(), addr.to_string()).await?;
         let request_guard = entry.request_guard();
@@ -392,7 +393,7 @@ impl Downloader for TCPDownloader {
             .download_persistent_cache_piece(number, task_id)
             .await
         {
-            Ok((reader, offset, digest)) => Ok((Box::new(reader), offset, digest)),
+            Ok((stream, offset, digest)) => Ok((stream, offset, digest)),
             Err(err) => {
                 // If the request fails, it will drop the request guard and remove the client
                 // entry to avoid using the invalid client.
