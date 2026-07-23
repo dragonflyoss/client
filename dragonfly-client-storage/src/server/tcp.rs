@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::content::RangeReader;
+use crate::io::RangeReader;
 use crate::Storage;
 use bytes::{Bytes, BytesMut};
 use dragonfly_api::common::v2::TrafficType;

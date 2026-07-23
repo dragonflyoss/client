@@ -46,6 +46,7 @@ mod content_macos;
 pub mod cache;
 pub mod client;
 pub mod content;
+pub mod io;
 pub mod metadata;
 pub mod server;
 pub mod storage_engine;
@@ -927,7 +928,7 @@ impl Storage {
         piece_id: &str,
         task_id: &str,
         range: Option<Range>,
-    ) -> Result<content::RangeReader> {
+    ) -> Result<io::RangeReader> {
         // Wait for the piece to be finished and get the piece metadata.
         let piece = self.wait_for_piece_finished(piece_id).await?;
 
@@ -1147,7 +1148,7 @@ impl Storage {
         piece_id: &str,
         task_id: &str,
         range: Option<Range>,
-    ) -> Result<content::RangeReader> {
+    ) -> Result<io::RangeReader> {
         // Wait for the persistent piece to be finished and get the piece metadata.
         let piece = self.wait_for_persistent_piece_finished(piece_id).await?;
 
@@ -1314,7 +1315,7 @@ impl Storage {
         piece_id: &str,
         task_id: &str,
         range: Option<Range>,
-    ) -> Result<content::RangeReader> {
+    ) -> Result<io::RangeReader> {
         // Wait for the persistent cache piece to be finished and get the piece.
         let piece = self
             .wait_for_persistent_cache_piece_finished(piece_id)
