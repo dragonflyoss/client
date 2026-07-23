@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
+use bytes::Bytes;
 use bytesize::ByteSize;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::fs::fallocate;
+use futures::Stream;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -277,6 +279,43 @@ impl Content {
             expected_length,
             self.config.storage.write_buffer_size,
             reader,
+        )
+        .await
+        .inspect_err(|err| {
+            error!("write {:?} failed: {}", task_path, err);
+        })
+    }
+
+    /// Writes the piece from the stream of bytes chunks to the content and
+    /// calculates the hash of the piece by crc32, without copying the chunks.
+    #[instrument(level = "debug", skip_all)]
+    pub async fn write_piece_from_stream<S>(
+        &self,
+        task_id: &str,
+        offset: u64,
+        expected_length: u64,
+        stream: &mut S,
+    ) -> Result<super::content::WritePieceResponse>
+    where
+        S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
+    {
+        // Write the piece with positional writes on the cached file descriptor,
+        // avoiding reopening and seeking the file for every piece.
+        let task_path = self.get_task_path(task_id);
+        let fd = self
+            .fd_cache
+            .open_write(&task_path)
+            .await
+            .inspect_err(|err| {
+                error!("open {:?} failed: {}", task_path, err);
+            })?;
+
+        super::content::write_range_from_stream(
+            fd,
+            offset,
+            expected_length,
+            self.config.storage.write_buffer_size,
+            stream,
         )
         .await
         .inspect_err(|err| {
