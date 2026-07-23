@@ -32,7 +32,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info, instrument, warn};
 use warp::{Filter, Rejection, Reply};
 
-/// The threshold of small (Level0 & Level1, under 1MiB) download task
+/// The threshold of small (Level0–Level2, under 4MiB) download task
 /// duration for recording slow download task.
 const DOWNLOAD_SMALL_TASK_DURATION_THRESHOLD: Duration = Duration::from_millis(500);
 
