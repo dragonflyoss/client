@@ -509,7 +509,7 @@ impl Task {
             interested_pieces
         };
 
-        // If the range length is less than or equal to the max piece
+        // If the range length is less than or equal to the min piece
         // length, download the pieces from the source directly.
         if !request.disable_back_to_source
             && (request
