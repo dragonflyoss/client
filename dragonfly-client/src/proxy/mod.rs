@@ -415,7 +415,8 @@ pub async fn http_handler(
                 request
             );
 
-            return proxy_via_dfdaemon(config, task, dynconfig, &rule, request, remote_ip).await;
+            return proxy_via_dfdaemon(config.clone(), task, dynconfig, rule, request, remote_ip)
+                .await;
         }
 
         debug!(
@@ -683,7 +684,8 @@ pub async fn upgraded_handler(
                 request,
             );
 
-            return proxy_via_dfdaemon(config, task, dynconfig, &rule, request, remote_ip).await;
+            return proxy_via_dfdaemon(config.clone(), task, dynconfig, rule, request, remote_ip)
+                .await;
         }
 
         debug!(
@@ -811,7 +813,7 @@ async fn proxy_via_dfdaemon(
 
     // Handle the download task started response.
     let Some(download_task_response::Response::DownloadTaskStartedResponse(
-        mut download_task_started_response,
+        download_task_started_response,
     )) = message.response
     else {
         error!("response is not started");
@@ -885,7 +887,7 @@ async fn proxy_via_dfdaemon(
     *response.headers_mut() = make_response_headers(
         message.task_id.as_str(),
         config.host.ip.unwrap(),
-        &mut download_task_started_response,
+        &download_task_started_response,
     )?;
     // Return 206 Partial Content for range requests to match the Content-Range header set by
     // make_response_headers. Returning 200 for a partial body breaks range-aware clients (e.g. the
@@ -1210,14 +1212,10 @@ fn make_download_task_request(
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
 ) -> ClientResult<DownloadTaskRequest> {
-    // Convert the Reqwest header to the Hyper header.
-    let mut header = request.headers().clone();
-
-    // Registry will return the 403 status code if the Host header is set.
-    header.remove(reqwest::header::HOST);
+    let header = request.headers();
 
     // Validate the request arguments.
-    let piece_length = header::get_piece_length(&header).map(|piece_length| piece_length.as_u64());
+    let piece_length = header::get_piece_length(header).map(|piece_length| piece_length.as_u64());
     if let Some(piece_length) = piece_length {
         if piece_length < MIN_PIECE_LENGTH {
             return Err(ClientError::ValidationError(format!(
@@ -1226,37 +1224,41 @@ fn make_download_task_request(
         }
     }
 
+    // Registry will return the 403 status code if the Host header is set.
+    let mut request_header = headermap_to_hashmap(header);
+    request_header.remove(reqwest::header::HOST.as_str());
+
     Ok(DownloadTaskRequest {
         download: Some(Download {
-            url: make_download_url(request.uri(), rule.use_tls, rule.redirect.clone())?,
+            url: make_download_url(request.uri(), rule.use_tls, rule.redirect.as_deref())?,
             digest: None,
             // Download range use header range in HTTP protocol.
             range: None,
             r#type: TaskType::Standard as i32,
-            tag: header::get_tag(&header),
-            application: header::get_application(&header),
-            priority: header::get_priority(&header),
+            tag: header::get_tag(header),
+            application: header::get_application(header),
+            priority: header::get_priority(header),
             filtered_query_params: header::get_filtered_query_params(
-                &header,
-                rule.filtered_query_params.clone(),
+                header,
+                &rule.filtered_query_params,
             ),
-            request_header: headermap_to_hashmap(&header),
+            request_header,
             piece_length,
             // Need the absolute path.
-            output_path: header::get_output_path(&header),
+            output_path: header::get_output_path(header),
             timeout: None,
             need_back_to_source: false,
             disable_back_to_source: config.proxy.disable_back_to_source,
             certificate_chain: Vec::new(),
-            prefetch: need_prefetch(config.clone(), &header),
+            prefetch: need_prefetch(&config, header),
             object_storage: None,
             hdfs: None,
             hugging_face: None,
             model_scope: None,
             is_prefetch: false,
             need_piece_content: false,
-            force_hard_link: header::get_force_hard_link(&header),
-            content_for_calculating_task_id: header::get_content_for_calculating_task_id(&header),
+            force_hard_link: header::get_force_hard_link(header),
+            content_for_calculating_task_id: header::get_content_for_calculating_task_id(header),
             remote_ip: Some(remote_ip.to_string()),
             concurrent_piece_count: Some(config.download.concurrent_piece_count),
             overwrite: false,
@@ -1264,7 +1266,7 @@ fn make_download_task_request(
             actual_content_length: None,
             actual_piece_count: None,
             enable_task_id_based_blob_digest: header::get_enable_task_id_based_blob_digest(
-                &header,
+                header,
                 config
                     .proxy
                     .registry_mirror
@@ -1277,7 +1279,7 @@ fn make_download_task_request(
 
 /// Returns whether the prefetch is needed by the configuration and the request
 /// header.
-fn need_prefetch(config: Arc<Config>, header: &http::HeaderMap) -> bool {
+fn need_prefetch(config: &Config, header: &http::HeaderMap) -> bool {
     // If the header not contains the range header, the request does not need prefetch.
     if !header.contains_key(reqwest::header::RANGE) {
         return false;
@@ -1297,7 +1299,7 @@ fn need_prefetch(config: Arc<Config>, header: &http::HeaderMap) -> bool {
 fn make_download_url(
     uri: &hyper::Uri,
     use_tls: bool,
-    redirect: Option<String>,
+    redirect: Option<&str>,
 ) -> ClientResult<String> {
     let mut parts = http::uri::Parts::from(uri.clone());
 
@@ -1321,58 +1323,65 @@ fn make_download_url(
 fn make_response_headers(
     task_id: &str,
     server_ip: std::net::IpAddr,
-    download_task_started_response: &mut DownloadTaskStartedResponse,
+    download_task_started_response: &DownloadTaskStartedResponse,
 ) -> ClientResult<hyper::header::HeaderMap> {
+    // Convert the response header first and insert the extra headers into it
+    // directly, instead of staging them in the hashmap and parsing them again.
+    let mut headers = hashmap_to_headermap(&download_task_started_response.response_header)?;
+
     // Insert the content range header to the response header.
     if let Some(range) = download_task_started_response.range.as_ref() {
-        download_task_started_response.response_header.insert(
-            reqwest::header::CONTENT_RANGE.to_string(),
-            format!(
+        headers.insert(
+            reqwest::header::CONTENT_RANGE,
+            hyper::header::HeaderValue::try_from(format!(
                 "bytes {}-{}/{}",
                 range.start,
                 range.start + range.length - 1,
                 download_task_started_response.content_length
-            ),
+            ))
+            .or_err(ErrorType::ParseError)?,
         );
 
-        download_task_started_response.response_header.insert(
-            reqwest::header::CONTENT_LENGTH.to_string(),
-            range.length.to_string(),
-        );
+        headers.insert(reqwest::header::CONTENT_LENGTH, range.length.into());
     };
 
     if download_task_started_response.is_finished {
-        download_task_started_response.response_header.insert(
-            header::DRAGONFLY_TASK_DOWNLOAD_FINISHED_HEADER.to_string(),
-            "true".to_string(),
+        headers.insert(
+            header::DRAGONFLY_TASK_DOWNLOAD_FINISHED_HEADER
+                .parse::<hyper::header::HeaderName>()
+                .or_err(ErrorType::ParseError)?,
+            hyper::header::HeaderValue::from_static("true"),
         );
     }
 
-    download_task_started_response.response_header.insert(
-        header::DRAGONFLY_TASK_ID_HEADER.to_string(),
-        task_id.to_string(),
+    headers.insert(
+        header::DRAGONFLY_TASK_ID_HEADER
+            .parse::<hyper::header::HeaderName>()
+            .or_err(ErrorType::ParseError)?,
+        hyper::header::HeaderValue::try_from(task_id).or_err(ErrorType::ParseError)?,
     );
 
-    download_task_started_response.response_header.insert(
-        header::DRAGONFLY_SERVER_IP_HEADER.to_string(),
-        server_ip.to_string(),
+    headers.insert(
+        header::DRAGONFLY_SERVER_IP_HEADER
+            .parse::<hyper::header::HeaderName>()
+            .or_err(ErrorType::ParseError)?,
+        hyper::header::HeaderValue::try_from(server_ip.to_string())
+            .or_err(ErrorType::ParseError)?,
     );
 
-    hashmap_to_headermap(&download_task_started_response.response_header)
+    Ok(headers)
 }
 
 /// Returns whether the dfdaemon should be used to download the task.
 /// If the dfdaemon should be used, return the matched rule.
-fn find_matching_rule(rules: Option<&[Rule]>, mut url: url::Url) -> Option<Rule> {
+fn find_matching_rule(rules: Option<&[Rule]>, mut url: url::Url) -> Option<&Rule> {
     // Remove query params and fragment.
     url.set_query(None);
     url.set_fragment(None);
 
-    // Find the matching rule by the url.
-    rules?
-        .iter()
-        .find(|rule| rule.regex.is_match(url.as_str()))
-        .cloned()
+    // Find the matching rule by the url, returning the borrowed rule instead
+    // of cloning it on the per-request path.
+    rules?.iter().find(|rule| rule.regex.is_match(url.as_str()))
 }
 
 /// Makes an error response with the given status and message.
