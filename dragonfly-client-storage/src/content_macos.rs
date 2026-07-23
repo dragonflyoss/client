@@ -261,7 +261,7 @@ impl Content {
         offset: u64,
         length: u64,
         range: Option<Range>,
-    ) -> Result<super::content::RangeReader> {
+    ) -> Result<super::io::RangeReader> {
         let task_path = self.get_task_path(task_id);
 
         // Calculate the target offset and length based on the range.
@@ -274,7 +274,7 @@ impl Content {
             error!("open {:?} failed: {}", task_path, err);
         })?;
 
-        Ok(super::content::RangeReader::new(
+        Ok(super::io::RangeReader::new(
             fd,
             target_offset,
             target_length,
@@ -291,7 +291,7 @@ impl Content {
         offset: u64,
         expected_length: u64,
         stream: &mut S,
-    ) -> Result<super::content::WritePieceResponse>
+    ) -> Result<super::io::WriteRangeResponse>
     where
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
@@ -306,7 +306,7 @@ impl Content {
                 error!("open {:?} failed: {}", task_path, err);
             })?;
 
-        super::content::write_range_from_stream(
+        super::io::write_range_from_stream(
             fd,
             offset,
             expected_length,
@@ -465,7 +465,7 @@ impl Content {
         offset: u64,
         length: u64,
         range: Option<Range>,
-    ) -> Result<super::content::RangeReader> {
+    ) -> Result<super::io::RangeReader> {
         let task_path = self.get_persistent_task_path(task_id);
 
         // Calculate the target offset and length based on the range.
@@ -478,7 +478,7 @@ impl Content {
             error!("open {:?} failed: {}", task_path, err);
         })?;
 
-        Ok(super::content::RangeReader::new(
+        Ok(super::io::RangeReader::new(
             fd,
             target_offset,
             target_length,
@@ -495,7 +495,7 @@ impl Content {
         offset: u64,
         expected_length: u64,
         reader: &mut R,
-    ) -> Result<super::content::WritePieceResponse> {
+    ) -> Result<super::io::WriteRangeResponse> {
         // Write the piece with positional writes on the cached file descriptor,
         // avoiding reopening and seeking the file for every piece.
         let task_path = self.get_persistent_task_path(task_id);
@@ -507,7 +507,7 @@ impl Content {
                 error!("open {:?} failed: {}", task_path, err);
             })?;
 
-        super::content::write_range(
+        super::io::write_range(
             fd,
             offset,
             expected_length,
@@ -529,7 +529,7 @@ impl Content {
         offset: u64,
         expected_length: u64,
         stream: &mut S,
-    ) -> Result<super::content::WritePieceResponse>
+    ) -> Result<super::io::WriteRangeResponse>
     where
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
@@ -544,7 +544,7 @@ impl Content {
                 error!("open {:?} failed: {}", task_path, err);
             })?;
 
-        super::content::write_range_from_stream(
+        super::io::write_range_from_stream(
             fd,
             offset,
             expected_length,
@@ -732,7 +732,7 @@ impl Content {
         offset: u64,
         length: u64,
         range: Option<Range>,
-    ) -> Result<super::content::RangeReader> {
+    ) -> Result<super::io::RangeReader> {
         let task_path = self.get_persistent_cache_task_path(task_id);
 
         // Calculate the target offset and length based on the range.
@@ -745,7 +745,7 @@ impl Content {
             error!("open {:?} failed: {}", task_path, err);
         })?;
 
-        Ok(super::content::RangeReader::new(
+        Ok(super::io::RangeReader::new(
             fd,
             target_offset,
             target_length,
@@ -762,7 +762,7 @@ impl Content {
         offset: u64,
         expected_length: u64,
         reader: &mut R,
-    ) -> Result<super::content::WritePieceResponse> {
+    ) -> Result<super::io::WriteRangeResponse> {
         // Write the piece with positional writes on the cached file descriptor,
         // avoiding reopening and seeking the file for every piece.
         let task_path = self.get_persistent_cache_task_path(task_id);
@@ -774,7 +774,7 @@ impl Content {
                 error!("open {:?} failed: {}", task_path, err);
             })?;
 
-        super::content::write_range(
+        super::io::write_range(
             fd,
             offset,
             expected_length,
@@ -797,7 +797,7 @@ impl Content {
         offset: u64,
         expected_length: u64,
         stream: &mut S,
-    ) -> Result<super::content::WritePieceResponse>
+    ) -> Result<super::io::WriteRangeResponse>
     where
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
@@ -812,7 +812,7 @@ impl Content {
                 error!("open {:?} failed: {}", task_path, err);
             })?;
 
-        super::content::write_range_from_stream(
+        super::io::write_range_from_stream(
             fd,
             offset,
             expected_length,
