@@ -1509,6 +1509,17 @@ impl<E: StorageEngineOwned> Metadata<E> {
         self.db.get(piece_id.as_bytes())
     }
 
+    /// Gets the metadata of the pieces by the piece ids, returning the pieces
+    /// in the order of the ids.
+    pub fn get_pieces_by_ids(&self, piece_ids: &[&str]) -> Result<Vec<Option<Piece>>> {
+        let keys: Vec<&[u8]> = piece_ids
+            .iter()
+            .map(|piece_id| piece_id.as_bytes())
+            .collect();
+
+        self.db.multi_get(&keys)
+    }
+
     /// Checks if the piece exists.
     #[instrument(level = "debug", skip_all)]
     pub fn is_piece_exists(&self, piece_id: &str) -> Result<bool> {

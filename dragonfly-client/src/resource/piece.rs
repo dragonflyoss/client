@@ -119,6 +119,12 @@ impl Piece {
         self.storage.get_piece(piece_id)
     }
 
+    /// Gets the metadata of the pieces by the piece ids from the local
+    /// storage, returning the pieces in the order of the ids.
+    pub fn get_by_ids(&self, piece_ids: &[&str]) -> Result<Vec<Option<metadata::Piece>>> {
+        self.storage.get_pieces_by_ids(piece_ids)
+    }
+
     /// Gets all pieces of a task from the local storage.
     pub fn get_all(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
         self.storage.get_pieces(task_id)

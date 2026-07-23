@@ -959,6 +959,11 @@ impl Storage {
         self.metadata.get_piece(piece_id)
     }
 
+    /// Returns the piece metadatas by the piece ids, in the order of the ids.
+    pub fn get_pieces_by_ids(&self, piece_ids: &[&str]) -> Result<Vec<Option<metadata::Piece>>> {
+        self.metadata.get_pieces_by_ids(piece_ids)
+    }
+
     /// Returns whether the piece exists.
     #[instrument(level = "debug", skip_all)]
     pub fn is_piece_exists(&self, piece_id: &str) -> Result<bool> {
