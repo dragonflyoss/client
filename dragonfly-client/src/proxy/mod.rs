@@ -600,7 +600,7 @@ async fn upgraded_tunnel(
 
 /// Handles the upgraded https request from the client.
 #[allow(clippy::too_many_arguments)]
-#[instrument(skip_all, fields(url, method))]
+#[instrument(skip_all, fields(url, method, remote_ip))]
 pub async fn upgraded_handler(
     config: Arc<Config>,
     task: Arc<Task>,
