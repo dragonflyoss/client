@@ -30,8 +30,8 @@ use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, ReadBuf};
 use tokio::task::JoinHandle;
 
 /// The shared buffer pool instance for the piece write path ([`write_range`])
-/// and the piece read path ([`RangeReader::read_chunk`]), so the hot paths
-/// reuse a few large buffers instead of allocating a fresh one per chunk.
+/// and the piece read paths of [`RangeReader`], so the hot paths reuse a few
+/// large buffers instead of allocating a fresh one per chunk or per reader.
 /// The pool is sized to hold 64MiB of idle buffers, which is enough for 128 idle
 /// buffers with the default 512KiB buffer size.
 static BUFFER_POOL: BufferPool = BufferPool::new(64 * 1024 * 1024);
@@ -52,7 +52,7 @@ enum RangeReaderState {
 
     /// A positional read is running on the blocking thread pool, owning the
     /// buffer until it completes.
-    Reading(JoinHandle<io::Result<(Vec<u8>, usize)>>),
+    Reading(JoinHandle<io::Result<(BytesMut, usize)>>),
 }
 
 /// RangeReader reads a fixed range of a file with positional reads on a shared
@@ -73,8 +73,8 @@ pub struct RangeReader {
     capacity: usize,
 
     /// The reusable read buffer, allocated on the first buffered read and
-    /// moved into the blocking task while reading.
-    buffer: Vec<u8>,
+    /// returned to the shared buffer pool on drop.
+    buffer: BytesMut,
 
     /// The consumed position of the buffer.
     pos: usize,
@@ -96,7 +96,7 @@ impl RangeReader {
             offset,
             remaining: length,
             capacity,
-            buffer: Vec::new(),
+            buffer: BytesMut::new(),
             pos: 0,
             filled: 0,
             state: RangeReaderState::Idle,
@@ -109,7 +109,11 @@ impl RangeReader {
     /// directly from the file descriptor.
     pub fn into_parts(self) -> (Arc<File>, u64, u64) {
         let buffered = (self.filled - self.pos) as u64;
-        (self.fd, self.offset - buffered, self.remaining + buffered)
+        (
+            self.fd.clone(),
+            self.offset - buffered,
+            self.remaining + buffered,
+        )
     }
 
     /// Reads the next chunk of the range with a positional read on the
@@ -149,6 +153,19 @@ impl RangeReader {
     }
 }
 
+/// Implements the drop of the range reader.
+impl Drop for RangeReader {
+    /// Returns the read buffer to the shared buffer pool. The buffer is empty
+    /// when no buffered read happened or a read is still in flight, and is
+    /// skipped in that case.
+    fn drop(&mut self) {
+        let buffer = std::mem::take(&mut self.buffer);
+        if buffer.capacity() > 0 {
+            BUFFER_POOL.give_back(buffer);
+        }
+    }
+}
+
 /// Implements the buffered read for the RangeReader.
 impl AsyncBufRead for RangeReader {
     /// Polls the buffer to fill it with more data, returning a slice of the filled
@@ -165,7 +182,12 @@ impl AsyncBufRead for RangeReader {
 
                     let len = min(this.capacity as u64, this.remaining) as usize;
                     let mut buffer = std::mem::take(&mut this.buffer);
-                    buffer.resize(len, 0);
+                    if buffer.capacity() == 0 {
+                        buffer = BUFFER_POOL.checkout_for_read(len);
+                    } else {
+                        buffer.truncate(len);
+                    }
+
                     let fd = this.fd.clone();
                     let offset = this.offset;
                     this.state =
