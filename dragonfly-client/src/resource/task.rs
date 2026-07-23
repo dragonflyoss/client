@@ -514,8 +514,8 @@ impl Task {
         if !request.disable_back_to_source
             && (request
                 .range
-                .is_some_and(|range| range.length <= super::piece::MAX_PIECE_LENGTH)
-                || content_length <= super::piece::MAX_PIECE_LENGTH)
+                .is_some_and(|range| range.length <= super::piece::MIN_PIECE_LENGTH)
+                || content_length <= super::piece::MIN_PIECE_LENGTH)
         {
             debug!(
                 "seed peer downloads the range task from source directly, skipping the scheduler"
