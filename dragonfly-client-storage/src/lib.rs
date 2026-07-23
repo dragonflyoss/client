@@ -831,7 +831,7 @@ impl Storage {
     /// Used for downloading piece from parent.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
-    pub async fn download_piece_from_parent_finished<R: AsyncRead + Unpin + ?Sized>(
+    pub async fn download_piece_from_parent_finished<S>(
         &self,
         piece_id: &str,
         task_id: &str,
@@ -839,11 +839,14 @@ impl Storage {
         length: u64,
         expected_digest: &str,
         parent_id: &str,
-        reader: &mut R,
+        stream: &mut S,
         timeout: Duration,
-    ) -> Result<metadata::Piece> {
+    ) -> Result<metadata::Piece>
+    where
+        S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
+    {
         let piece = tokio::select! {
-            piece = self.handle_downloaded_piece_from_parent_finished(piece_id, task_id, offset, length, expected_digest, parent_id, reader) => {
+            piece = self.handle_downloaded_piece_from_parent_finished(piece_id, task_id, offset, length, expected_digest, parent_id, stream) => {
                 piece
             }
             _ = sleep(timeout) => {
@@ -858,7 +861,7 @@ impl Storage {
     // handle_downloaded_piece_from_parent_finished handles the downloaded piece from parent.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
-    async fn handle_downloaded_piece_from_parent_finished<R: AsyncRead + Unpin + ?Sized>(
+    async fn handle_downloaded_piece_from_parent_finished<S>(
         &self,
         piece_id: &str,
         task_id: &str,
@@ -866,11 +869,14 @@ impl Storage {
         length: u64,
         expected_digest: &str,
         parent_id: &str,
-        reader: &mut R,
-    ) -> Result<metadata::Piece> {
+        stream: &mut S,
+    ) -> Result<metadata::Piece>
+    where
+        S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
+    {
         let response = self
             .content
-            .write_piece(task_id, offset, length, reader)
+            .write_piece_from_stream(task_id, offset, length, stream)
             .await?;
 
         let length = response.length;
@@ -1023,7 +1029,7 @@ impl Storage {
     /// Used for downloading persistent piece from parent.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
-    pub async fn download_persistent_piece_from_parent_finished<R: AsyncRead + Unpin + ?Sized>(
+    pub async fn download_persistent_piece_from_parent_finished<S>(
         &self,
         piece_id: &str,
         task_id: &str,
@@ -1031,11 +1037,14 @@ impl Storage {
         length: u64,
         expected_digest: &str,
         parent_id: &str,
-        reader: &mut R,
-    ) -> Result<metadata::Piece> {
+        stream: &mut S,
+    ) -> Result<metadata::Piece>
+    where
+        S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
+    {
         let response = self
             .content
-            .write_persistent_piece(task_id, offset, length, reader)
+            .write_persistent_piece_from_stream(task_id, offset, length, stream)
             .await?;
 
         let length = response.length;
@@ -1069,17 +1078,20 @@ impl Storage {
     /// Used for downloading piece from source.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
-    pub async fn download_persistent_piece_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
+    pub async fn download_persistent_piece_from_source_finished<S>(
         &self,
         piece_id: &str,
         task_id: &str,
         offset: u64,
         length: u64,
-        reader: &mut R,
+        stream: &mut S,
         timeout: Duration,
-    ) -> Result<metadata::Piece> {
+    ) -> Result<metadata::Piece>
+    where
+        S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
+    {
         let piece = tokio::select! {
-            piece = self.handle_persistent_downloaded_from_source_finished(piece_id, task_id, offset, length, reader) => {
+            piece = self.handle_persistent_downloaded_from_source_finished(piece_id, task_id, offset, length, stream) => {
                 piece
             }
             _ = sleep(timeout) => {
@@ -1093,17 +1105,20 @@ impl Storage {
 
     // handle_persistent_downloaded_from_source_finished handles the downloaded persistent piece from source.
     #[instrument(skip_all)]
-    async fn handle_persistent_downloaded_from_source_finished<R: AsyncRead + Unpin + ?Sized>(
+    async fn handle_persistent_downloaded_from_source_finished<S>(
         &self,
         piece_id: &str,
         task_id: &str,
         offset: u64,
         length: u64,
-        reader: &mut R,
-    ) -> Result<metadata::Piece> {
+        stream: &mut S,
+    ) -> Result<metadata::Piece>
+    where
+        S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
+    {
         let response = self
             .content
-            .write_persistent_piece(task_id, offset, length, reader)
+            .write_persistent_piece_from_stream(task_id, offset, length, stream)
             .await?;
 
         let digest = Digest::new(Algorithm::Crc32, response.hash);
@@ -1237,9 +1252,7 @@ impl Storage {
     /// Used for downloading persistent cache piece from parent.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
-    pub async fn download_persistent_cache_piece_from_parent_finished<
-        R: AsyncRead + Unpin + ?Sized,
-    >(
+    pub async fn download_persistent_cache_piece_from_parent_finished<S>(
         &self,
         piece_id: &str,
         task_id: &str,
@@ -1247,11 +1260,14 @@ impl Storage {
         length: u64,
         expected_digest: &str,
         parent_id: &str,
-        reader: &mut R,
-    ) -> Result<metadata::Piece> {
+        stream: &mut S,
+    ) -> Result<metadata::Piece>
+    where
+        S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
+    {
         let response = self
             .content
-            .write_persistent_cache_piece(task_id, offset, length, reader)
+            .write_persistent_cache_piece_from_stream(task_id, offset, length, stream)
             .await?;
 
         let length = response.length;
@@ -2136,14 +2152,14 @@ mod tests {
         });
 
         sleep(Duration::from_millis(100)).await;
-        let mut reader = CONTENT;
+        let mut stream = content_stream(CONTENT);
         storage
             .download_persistent_piece_from_source_finished(
                 piece_id.as_str(),
                 TASK_ID,
                 0,
                 CONTENT.len() as u64,
-                &mut reader,
+                &mut stream,
                 Duration::from_secs(5),
             )
             .await

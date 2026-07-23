@@ -17,7 +17,13 @@
 pub mod quic;
 pub mod tcp;
 
+use bytes::Bytes;
+use futures::stream::BoxStream;
 use std::time::Duration;
+
+/// The stream of bytes chunks of the piece content, consumed by the storage
+/// to write the piece without copying the chunks.
+pub type PieceContentStream = BoxStream<'static, std::io::Result<Bytes>>;
 
 /// The default size of the send buffer for network connections.
 const DEFAULT_SEND_BUFFER_SIZE: usize = 16 * 1024 * 1024;

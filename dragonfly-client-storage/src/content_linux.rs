@@ -20,6 +20,7 @@ use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::fs::fallocate;
+use dragonfly_client_util::fs::fd::{FDCache, DEFAULT_FD_CACHE_CAPACITY};
 use futures::Stream;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -38,7 +39,7 @@ pub struct Content {
     pub dir: PathBuf,
 
     /// The cache of the opened file descriptors for reading pieces.
-    fd_cache: super::content::FDCache,
+    fd_cache: FDCache,
 }
 
 /// Implements the content storage.
@@ -61,7 +62,7 @@ impl Content {
         Ok(Content {
             config,
             dir,
-            fd_cache: super::content::FDCache::new(super::content::DEFAULT_FD_CACHE_CAPACITY),
+            fd_cache: FDCache::new(DEFAULT_FD_CACHE_CAPACITY),
         })
     }
 
@@ -253,41 +254,8 @@ impl Content {
         ))
     }
 
-    /// Writes the piece to the content and calculates the hash of the piece by crc32.
-    #[instrument(level = "debug", skip_all)]
-    pub async fn write_piece<R: AsyncRead + Unpin + ?Sized>(
-        &self,
-        task_id: &str,
-        offset: u64,
-        expected_length: u64,
-        reader: &mut R,
-    ) -> Result<super::content::WritePieceResponse> {
-        // Write the piece with positional writes on the cached file descriptor,
-        // avoiding reopening and seeking the file for every piece.
-        let task_path = self.get_task_path(task_id);
-        let fd = self
-            .fd_cache
-            .open_write(&task_path)
-            .await
-            .inspect_err(|err| {
-                error!("open {:?} failed: {}", task_path, err);
-            })?;
-
-        super::content::write_range(
-            fd,
-            offset,
-            expected_length,
-            self.config.storage.write_buffer_size,
-            reader,
-        )
-        .await
-        .inspect_err(|err| {
-            error!("write {:?} failed: {}", task_path, err);
-        })
-    }
-
     /// Writes the piece from the stream of bytes chunks to the content and
-    /// calculates the hash of the piece by crc32, without copying the chunks.
+    /// calculates the hash of the piece by crc32.
     #[instrument(level = "debug", skip_all)]
     pub async fn write_piece_from_stream<S>(
         &self,
@@ -517,6 +485,43 @@ impl Content {
             expected_length,
             self.config.storage.write_buffer_size,
             reader,
+        )
+        .await
+        .inspect_err(|err| {
+            error!("write {:?} failed: {}", task_path, err);
+        })
+    }
+
+    /// Writes the persistent piece from the stream of bytes chunks to the
+    /// content and calculates the hash of the piece by crc32.
+    #[instrument(level = "debug", skip_all)]
+    pub async fn write_persistent_piece_from_stream<S>(
+        &self,
+        task_id: &str,
+        offset: u64,
+        expected_length: u64,
+        stream: &mut S,
+    ) -> Result<super::content::WritePieceResponse>
+    where
+        S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
+    {
+        // Write the piece with positional writes on the cached file descriptor,
+        // avoiding reopening and seeking the file for every piece.
+        let task_path = self.get_persistent_task_path(task_id);
+        let fd = self
+            .fd_cache
+            .open_write(&task_path)
+            .await
+            .inspect_err(|err| {
+                error!("open {:?} failed: {}", task_path, err);
+            })?;
+
+        super::content::write_range_from_stream(
+            fd,
+            offset,
+            expected_length,
+            self.config.storage.write_buffer_size,
+            stream,
         )
         .await
         .inspect_err(|err| {
@@ -754,6 +759,44 @@ impl Content {
         })
     }
 
+    /// Writes the persistent cache piece from the stream of bytes chunks to
+    /// the content and calculates the hash of the piece by crc32, without
+    /// copying the chunks.
+    #[instrument(level = "debug", skip_all)]
+    pub async fn write_persistent_cache_piece_from_stream<S>(
+        &self,
+        task_id: &str,
+        offset: u64,
+        expected_length: u64,
+        stream: &mut S,
+    ) -> Result<super::content::WritePieceResponse>
+    where
+        S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
+    {
+        // Write the piece with positional writes on the cached file descriptor,
+        // avoiding reopening and seeking the file for every piece.
+        let task_path = self.get_persistent_cache_task_path(task_id);
+        let fd = self
+            .fd_cache
+            .open_write(&task_path)
+            .await
+            .inspect_err(|err| {
+                error!("open {:?} failed: {}", task_path, err);
+            })?;
+
+        super::content::write_range_from_stream(
+            fd,
+            offset,
+            expected_length,
+            self.config.storage.write_buffer_size,
+            stream,
+        )
+        .await
+        .inspect_err(|err| {
+            error!("write {:?} failed: {}", task_path, err);
+        })
+    }
+
     /// Deletes the persistent cache task content.
     pub async fn delete_persistent_cache_task(&self, task_id: &str) -> Result<()> {
         info!("delete persistent cache task content: {}", task_id);
@@ -868,9 +911,9 @@ mod tests {
         content.create_task(task_id, 13).await.unwrap();
 
         let data = b"hello, world!";
-        let mut reader = Cursor::new(data);
+        let mut stream = futures::stream::iter([Ok(Bytes::from_static(data))]);
         content
-            .write_piece(task_id, 0, 13, &mut reader)
+            .write_piece_from_stream(task_id, 0, 13, &mut stream)
             .await
             .unwrap();
 
@@ -906,9 +949,9 @@ mod tests {
         content.create_task(task_id, 4).await.unwrap();
 
         let data = b"test";
-        let mut reader = Cursor::new(data);
+        let mut stream = futures::stream::iter([Ok(Bytes::from_static(data))]);
         let response = content
-            .write_piece(task_id, 0, 4, &mut reader)
+            .write_piece_from_stream(task_id, 0, 4, &mut stream)
             .await
             .unwrap();
         assert_eq!(response.length, 4);

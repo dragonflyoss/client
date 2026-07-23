@@ -379,7 +379,7 @@ impl Piece {
             .acquire(length as usize)
             .await;
 
-        let (mut reader, offset, digest) = match (
+        let (mut stream, offset, digest) = match (
             self.config.download.protocol.as_str(),
             parent.download_ip,
             parent.download_tcp_port,
@@ -436,7 +436,7 @@ impl Piece {
                 length,
                 digest.as_str(),
                 parent.id.as_str(),
-                &mut reader,
+                &mut stream,
                 self.config.storage.write_piece_timeout,
             )
             .await
@@ -724,7 +724,7 @@ impl Piece {
             };
         });
 
-        let (mut reader, offset, digest) = match (
+        let (mut stream, offset, digest) = match (
             self.config.download.protocol.as_str(),
             parent.download_ip,
             parent.download_tcp_port,
@@ -783,7 +783,7 @@ impl Piece {
                 length,
                 digest.as_str(),
                 parent.id.as_str(),
-                &mut reader,
+                &mut stream,
             )
             .await
         {
@@ -928,7 +928,10 @@ impl Piece {
             start_time.elapsed(),
         );
 
-        // Record the finish of downloading piece.
+        // Record the finish of downloading piece. Consumes the stream of
+        // bytes chunks underlying the reader, so the chunks are written to
+        // the storage without copying.
+        let mut stream = response.reader.into_inner();
         match self
             .storage
             .download_persistent_piece_from_source_finished(
@@ -936,7 +939,7 @@ impl Piece {
                 task_id,
                 offset,
                 length,
-                &mut response.reader,
+                &mut stream,
                 self.config.storage.write_piece_timeout,
             )
             .await
@@ -1065,7 +1068,7 @@ impl Piece {
             };
         });
 
-        let (mut reader, offset, digest) = match (
+        let (mut stream, offset, digest) = match (
             self.config.download.protocol.as_str(),
             parent.download_ip,
             parent.download_tcp_port,
@@ -1124,7 +1127,7 @@ impl Piece {
                 length,
                 digest.as_str(),
                 parent.id.as_str(),
-                &mut reader,
+                &mut stream,
             )
             .await
         {

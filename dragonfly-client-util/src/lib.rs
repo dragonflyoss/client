@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+pub mod buffer_pool;
 pub mod container;
 pub mod digest;
 pub mod fs;
