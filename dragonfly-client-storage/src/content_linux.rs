@@ -65,9 +65,6 @@ impl Content {
         fs::create_dir_all(&dir.join(super::content::DEFAULT_PERSISTENT_CACHE_TASK_DIR)).await?;
         info!("content initialized directory: {:?}", dir);
         Ok(Content {
-            config,
-            dir,
-            fd_cache: FDCache::new(DEFAULT_FD_CACHE_CAPACITY),
             buffer_pool: BufferPool::new(
                 super::content::MAX_BUFFER_POOL_IDLE_BUFFERS
                     * max(
@@ -75,6 +72,9 @@ impl Content {
                         config.storage.read_buffer_size,
                     ),
             ),
+            config,
+            dir,
+            fd_cache: FDCache::new(DEFAULT_FD_CACHE_CAPACITY),
         })
     }
 
