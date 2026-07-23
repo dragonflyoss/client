@@ -15,18 +15,27 @@
  */
 
 use bytes::{Bytes, BytesMut};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// BufferPool is a bounded pool of staging buffers shared by I/O hot paths,
 /// so they reuse a few large buffers instead of allocating (and zeroing, on
-/// the read side) a fresh one per chunk.
+/// the read side) a fresh one per chunk. It is a cheaply cloneable handle to
+/// one shared pool, so the buffers checked out of any clone return to the
+/// same pool.
 ///
 /// Invariant: every buffer created by the pool has its full capacity initialized
 /// (it is born with [`BytesMut::zeroed`]), and the callers only overwrite the
 /// buffers in place and never grow them past their capacity, so the
 /// initialization holds across reuses. This is what makes the unchecked
 /// `set_len` in [`BufferPool::checkout_for_read`] sound.
+#[derive(Clone)]
 pub struct BufferPool {
+    /// The state shared by the clones of the pool handle.
+    inner: Arc<Inner>,
+}
+
+/// Inner is the state shared by the clones of the pool handle.
+struct Inner {
     /// The idle buffers and their total capacity in bytes.
     idle: Mutex<(Vec<BytesMut>, usize)>,
 
@@ -38,17 +47,19 @@ pub struct BufferPool {
 impl BufferPool {
     /// Creates a new buffer pool retaining at most `max_idle_bytes` of idle
     /// buffer capacity.
-    pub const fn new(max_idle_bytes: usize) -> Self {
+    pub fn new(max_idle_bytes: usize) -> Self {
         Self {
-            idle: Mutex::new((Vec::new(), 0)),
-            max_idle_bytes,
+            inner: Arc::new(Inner {
+                idle: Mutex::new((Vec::new(), 0)),
+                max_idle_bytes,
+            }),
         }
     }
 
     /// Checks out an empty buffer with at least the given capacity, reusing an
     /// idle buffer when one is available.
     pub fn checkout(&self, capacity: usize) -> BytesMut {
-        let mut idle = self.idle.lock().unwrap();
+        let mut idle = self.inner.idle.lock().unwrap();
         while let Some(buffer) = idle.0.pop() {
             idle.1 -= buffer.capacity();
             if buffer.capacity() >= capacity {
@@ -81,8 +92,8 @@ impl BufferPool {
     /// Returns a buffer to the pool, dropping it when the pool is full.
     pub fn give_back(&self, mut buffer: BytesMut) {
         buffer.clear();
-        let mut idle = self.idle.lock().unwrap();
-        if idle.1 + buffer.capacity() <= self.max_idle_bytes {
+        let mut idle = self.inner.idle.lock().unwrap();
+        if idle.1 + buffer.capacity() <= self.inner.max_idle_bytes {
             idle.1 += buffer.capacity();
             idle.0.push(buffer);
         }
@@ -90,8 +101,11 @@ impl BufferPool {
 
     /// Freezes a checked-out buffer into a [`Bytes`] handle that returns the
     /// buffer to this pool when the last reference to it drops.
-    pub fn freeze(&'static self, buffer: BytesMut) -> Bytes {
-        Bytes::from_owner(PooledChunk { pool: self, buffer })
+    pub fn freeze(&self, buffer: BytesMut) -> Bytes {
+        Bytes::from_owner(PooledChunk {
+            pool: self.clone(),
+            buffer,
+        })
     }
 }
 
@@ -100,7 +114,7 @@ impl BufferPool {
 /// reference to the chunk drops.
 struct PooledChunk {
     /// The pool the buffer is returned to on drop.
-    pool: &'static BufferPool,
+    pool: BufferPool,
 
     /// The pooled buffer holding the chunk.
     buffer: BytesMut,
@@ -144,12 +158,12 @@ mod tests {
         // An undersized idle buffer is dropped and a new one is created.
         let buffer = pool.checkout(2048);
         assert_eq!(buffer.capacity(), 2048);
-        assert!(pool.idle.lock().unwrap().0.is_empty());
+        assert!(pool.inner.idle.lock().unwrap().0.is_empty());
         pool.give_back(buffer);
 
         // Buffers beyond the idle capacity are dropped.
         pool.give_back(BytesMut::zeroed(4096));
-        let idle = pool.idle.lock().unwrap();
+        let idle = pool.inner.idle.lock().unwrap();
         assert_eq!(idle.0.len(), 1);
         assert_eq!(idle.1, 2048);
     }
@@ -171,18 +185,18 @@ mod tests {
 
     #[test]
     fn test_buffer_pool_freeze() {
-        static POOL: BufferPool = BufferPool::new(4096);
+        let pool = BufferPool::new(4096);
 
-        let mut buffer = POOL.checkout(1024);
+        let mut buffer = pool.checkout(1024);
         buffer.extend_from_slice(b"hello, world!");
         let ptr = buffer.as_ptr();
 
-        let bytes = POOL.freeze(buffer);
+        let bytes = pool.freeze(buffer);
         assert_eq!(&bytes[..], b"hello, world!");
 
         // Dropping the last reference returns the buffer to the pool.
         drop(bytes);
-        let buffer = POOL.checkout(1024);
+        let buffer = pool.checkout(1024);
         assert_eq!(buffer.as_ptr(), ptr);
     }
 }

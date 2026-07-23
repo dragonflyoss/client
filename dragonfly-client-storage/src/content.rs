@@ -39,6 +39,10 @@ pub const DEFAULT_PERSISTENT_TASK_DIR: &str = "persistent-tasks";
 /// The default directory for store persistent cache task.
 pub const DEFAULT_PERSISTENT_CACHE_TASK_DIR: &str = "persistent-cache-tasks";
 
+/// The maximum number of idle buffers retained by the buffer pool of the
+/// content, multiplied by the largest configured buffer size to size the pool.
+pub const MAX_BUFFER_POOL_IDLE_BUFFERS: usize = 128;
+
 /// Creates a new Content instance to support linux and macos.
 pub async fn new_content(config: Arc<Config>, dir: &Path) -> Result<Content> {
     Content::new(config, dir).await
