@@ -38,13 +38,6 @@ use tracing_subscriber::{
 /// The timeout for the span exporter.
 const SPAN_EXPORTER_TIMEOUT: Duration = Duration::from_secs(10);
 
-fn rolling_condition(max_file_size: ByteSize) -> RollingConditionBasic {
-    match max_file_size.as_u64() {
-        0 => RollingConditionBasic::new().hourly(),
-        size => RollingConditionBasic::new().hourly().max_size(size),
-    }
-}
-
 /// Initializes the tracing system.
 #[allow(clippy::too_many_arguments)]
 pub fn init_tracing(
@@ -82,7 +75,7 @@ pub fn init_tracing(
     } else {
         let appender = BasicRollingFileAppender::new(
             log_dir.join(name).with_extension("log"),
-            rolling_condition(log_max_file_size),
+            RollingConditionBasic::new().max_size(log_max_file_size.as_u64()),
             log_max_files,
         )
         .expect("failed to create rolling file appender");
@@ -271,14 +264,16 @@ mod tests {
     fn zero_max_file_size_disables_size_based_rotation() {
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         let log_path = temp_dir.path().join("dfdaemon.log");
-        let mut appender =
-            BasicRollingFileAppender::new(&log_path, rolling_condition(ByteSize::default()), 6)
-                .expect("failed to create rolling file appender");
+        let mut appender = BasicRollingFileAppender::new(
+            &log_path,
+            RollingConditionBasic::new().max_size(ByteSize::gib(1).as_u64()),
+            6,
+        )
+        .expect("failed to create rolling file appender");
 
         appender.write_all(b"first").unwrap();
         appender.write_all(b"second").unwrap();
         appender.flush().unwrap();
-
         assert!(!log_path.with_extension("log.1").exists());
     }
 
@@ -286,14 +281,16 @@ mod tests {
     fn positive_max_file_size_enables_size_based_rotation() {
         let temp_dir = TempDir::new().expect("failed to create temp dir");
         let log_path = temp_dir.path().join("dfdaemon.log");
-        let mut appender =
-            BasicRollingFileAppender::new(&log_path, rolling_condition(ByteSize::b(4)), 6)
-                .expect("failed to create rolling file appender");
+        let mut appender = BasicRollingFileAppender::new(
+            &log_path,
+            RollingConditionBasic::new().max_size(ByteSize::b(4).as_u64()),
+            6,
+        )
+        .expect("failed to create rolling file appender");
 
         appender.write_all(b"1234").unwrap();
         appender.write_all(b"5").unwrap();
         appender.flush().unwrap();
-
         assert!(log_path.with_extension("log.1").exists());
     }
 

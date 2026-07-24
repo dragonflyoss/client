@@ -111,7 +111,7 @@ struct Args {
 
     #[arg(
         long,
-        default_value_t = ByteSize::default(),
+        default_value = "1GiB",
         env = "DFDAEMON_LOG_MAX_FILE_SIZE",
         help = "Specify the max size of each log file"
     )]
@@ -585,11 +585,10 @@ mod tests {
     #[test]
     fn logging_uses_cli_defaults_when_options_are_omitted() {
         let args = Args::try_parse_from(["dfdaemon"]).unwrap();
-
         assert_eq!(args.log_level, Level::INFO);
         assert_eq!(args.log_dir, dfdaemon::default_dfdaemon_log_dir());
         assert_eq!(args.log_max_files, 6);
-        assert_eq!(args.log_max_file_size, ByteSize::default());
+        assert_eq!(args.log_max_file_size, ByteSize::gib(1));
         assert!(!args.console);
     }
 
