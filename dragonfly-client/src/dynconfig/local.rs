@@ -485,8 +485,7 @@ scheduler:
         tokio::fs::write(
             &path,
             format!(
-                "scheduler:\n  addrs:\n    - '{}'\n    - '{}'\n    - '{}'\n",
-                health_addr_b, health_addr_a, health_addr_a
+                "scheduler:\n  addrs:\n    - '{health_addr_b}'\n    - '{health_addr_a}'\n    - '{health_addr_a}'\n"
             ),
         )
         .await
@@ -513,10 +512,7 @@ scheduler:
         let path = dir.path().join("dynconfig.yaml");
         tokio::fs::write(
             &path,
-            format!(
-                "scheduler:\n  addrs:\n    - '{}'\n    - '127.0.0.1:1'\n",
-                health_addr
-            ),
+            format!("scheduler:\n  addrs:\n    - '{health_addr}'\n    - '127.0.0.1:1'\n"),
         )
         .await
         .unwrap();
@@ -547,10 +543,7 @@ scheduler:
         let path = dir.path().join("dynconfig.yaml");
         tokio::fs::write(
             &path,
-            format!(
-                "scheduler:\n  addr: 'localhost:1'\n  addrs:\n    - '{}'\n",
-                health_addr
-            ),
+            format!("scheduler:\n  addr: 'localhost:1'\n  addrs:\n    - '{health_addr}'\n"),
         )
         .await
         .unwrap();
