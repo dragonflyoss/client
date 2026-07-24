@@ -74,11 +74,11 @@ pub struct Config {
     /// The scheduler configuration for scheduler discovery.
     pub scheduler: Scheduler,
 
-    /// Client-specific block list configuration.
+    /// Block list configuration for clients running as normal peers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_config: Option<SchedulerClusterClientConfig>,
 
-    /// Seed-client-specific block list configuration.
+    /// Block list configuration for clients running as seed peers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seed_client_config: Option<SchedulerClusterSeedClientConfig>,
 }
@@ -153,8 +153,16 @@ impl Local {
         // Discover the available schedulers from the static address list or by DNS.
         let available_schedulers = match config.scheduler.addrs.as_deref() {
             Some(addrs) if !addrs.is_empty() => Self::parse_schedulers(addrs)?,
-            _ => self.resolve_schedulers(&config.scheduler.addr).await?,
+            _ => {
+                if config.scheduler.addr.is_empty() {
+                    error!("scheduler addr is not specified in dynconfig");
+                    return Err(Error::InvalidParameter);
+                } else {
+                    self.resolve_schedulers(&config.scheduler.addr).await?
+                }
+            }
         };
+
         Ok(Data {
             schedulers: ListSchedulersResponse {
                 schedulers: available_schedulers.clone(),
@@ -171,11 +179,6 @@ impl Local {
     /// across refreshes.
     #[instrument(skip_all)]
     async fn resolve_schedulers(&self, addr: &str) -> Result<Vec<ManagerScheduler>> {
-        if addr.is_empty() {
-            error!("scheduler addr is not specified in dynconfig");
-            return Err(Error::InvalidParameter);
-        }
-
         let mut socket_addrs: Vec<SocketAddr> = lookup_host(addr)
             .await
             .inspect_err(|err| {
@@ -208,6 +211,7 @@ impl Local {
             let socket_addr = addr.parse::<SocketAddr>().inspect_err(|err| {
                 error!("parse scheduler address {} failed: {}", addr, err);
             })?;
+
             socket_addrs.push(socket_addr);
         }
 
