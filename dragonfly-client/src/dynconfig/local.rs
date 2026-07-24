@@ -45,8 +45,8 @@ pub struct SchedulerConfig {
 
     /// The static list of scheduler addresses with port (e.g.
     /// `192.168.1.10:8002`). When set, it takes precedence over `addr`.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub addrs: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub addrs: Option<Vec<String>>,
 }
 
 /// Implement Default for SchedulerConfig.
@@ -54,7 +54,7 @@ impl Default for SchedulerConfig {
     fn default() -> Self {
         SchedulerConfig {
             addr: default_local_dynconfig_scheduler_addr(),
-            addrs: Vec::new(),
+            addrs: None,
         }
     }
 }
@@ -151,10 +151,9 @@ impl Local {
         *self.refresh_interval.write().await = config.refresh_interval;
 
         // Discover the available schedulers from the static address list or by DNS.
-        let available_schedulers = if config.scheduler.addrs.is_empty() {
-            self.resolve_schedulers(&config.scheduler.addr).await?
-        } else {
-            Self::parse_schedulers(&config.scheduler.addrs)?
+        let available_schedulers = match config.scheduler.addrs.as_deref() {
+            Some(addrs) if !addrs.is_empty() => Self::parse_schedulers(addrs)?,
+            _ => self.resolve_schedulers(&config.scheduler.addr).await?,
         };
         Ok(Data {
             schedulers: ListSchedulersResponse {
@@ -301,7 +300,10 @@ scheduler:
 "#;
 
         let config: LocalConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(config.refresh_interval, default_local_dynconfig_refresh_interval());
+        assert_eq!(
+            config.refresh_interval,
+            default_local_dynconfig_refresh_interval()
+        );
         assert!(config.client_config.is_none());
         assert!(config.seed_client_config.is_none());
     }
@@ -342,8 +344,14 @@ scheduler:
 
         let content = tokio::fs::read_to_string(&path).await.unwrap();
         let config: LocalConfig = serde_yaml::from_str(&content).unwrap();
-        assert_eq!(config.scheduler.addr, default_local_dynconfig_scheduler_addr());
-        assert_eq!(config.refresh_interval, default_local_dynconfig_refresh_interval());
+        assert_eq!(
+            config.scheduler.addr,
+            default_local_dynconfig_scheduler_addr()
+        );
+        assert_eq!(
+            config.refresh_interval,
+            default_local_dynconfig_refresh_interval()
+        );
     }
 
     #[tokio::test]

@@ -87,7 +87,7 @@ struct Args {
         long = "dynconfig",
         default_value_os_t = dfdaemon::default_dfdaemon_dynconfig_path(),
         env = "DFDAEMON_DYNCONFIG",
-        help = "Specify the dynconfig file to use when the manager is not configured in config.yaml"
+        help = "Specify the dynconfig file to use when the manager address is not configured"
     )]
     dynconfig: PathBuf,
 
