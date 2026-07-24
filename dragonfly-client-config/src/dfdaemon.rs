@@ -1621,9 +1621,11 @@ pub struct Config {
     #[validate]
     pub upload: Upload,
 
-    /// The manager configuration for dfdaemon.
+    /// The manager configuration for dfdaemon. If not configured, the dynamic
+    /// configuration is loaded from the local dynconfig file instead of being
+    /// fetched from the manager.
     #[validate]
-    pub manager: Manager,
+    pub manager: Option<Manager>,
 
     /// The scheduler configuration for dfdaemon.
     #[validate]

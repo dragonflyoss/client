@@ -21,7 +21,7 @@ use dragonfly_client::dynconfig::Dynconfig;
 use dragonfly_client::gc::GC;
 use dragonfly_client::grpc::{
     dfdaemon_download::DfdaemonDownloadServer, dfdaemon_upload::DfdaemonUploadServer,
-    manager::ManagerClient, scheduler::SchedulerClient,
+    scheduler::SchedulerClient,
 };
 use dragonfly_client::health::Health;
 use dragonfly_client::proxy::Proxy;
@@ -192,14 +192,6 @@ async fn main() -> Result<(), anyhow::Error> {
     );
     let id_generator = Arc::new(id_generator);
 
-    // Initialize manager client.
-    let manager_client = ManagerClient::new(config.clone(), config.manager.addr.clone())
-        .await
-        .inspect_err(|err| {
-            error!("initialize manager client failed: {}", err);
-        })?;
-    let manager_client = Arc::new(manager_client);
-
     // Initialize channel for graceful shutdown.
     let shutdown = shutdown::Shutdown::default();
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::unbounded_channel();
@@ -207,7 +199,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize dynconfig server.
     let dynconfig = Dynconfig::new(
         config.clone(),
-        manager_client.clone(),
+        &args.config,
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     )

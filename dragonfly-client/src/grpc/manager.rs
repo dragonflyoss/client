@@ -52,10 +52,10 @@ impl ManagerClient {
             })?
             .to_string();
 
-        let client_tls_config = config
-            .manager
-            .load_client_tls_config(domain_name.as_str())
-            .await?;
+        let client_tls_config = match config.manager {
+            Some(ref manager) => manager.load_client_tls_config(domain_name.as_str()).await?,
+            None => None,
+        };
 
         let health_client = HealthClient::new(addr.as_str(), client_tls_config.clone()).await?;
         match health_client.check().await {
