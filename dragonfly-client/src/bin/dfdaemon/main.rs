@@ -15,6 +15,7 @@
  */
 
 use anyhow::Context;
+use bytesize::ByteSize;
 use clap::Parser;
 use dragonfly_client::announcer::SchedulerAnnouncer;
 use dragonfly_client::dynconfig::Dynconfig;
@@ -110,6 +111,14 @@ struct Args {
 
     #[arg(
         long,
+        default_value_t = ByteSize::default(),
+        env = "DFDAEMON_LOG_MAX_FILE_SIZE",
+        help = "Specify the max size of each log file"
+    )]
+    log_max_file_size: ByteSize,
+
+    #[arg(
+        long,
         default_value_t = false,
         env = "DFDAEMON_CONSOLE",
         help = "Specify whether to print logs to the console. If enabled, logs will not be written to the local log files"
@@ -167,6 +176,7 @@ async fn main() -> Result<(), anyhow::Error> {
         args.log_dir.clone(),
         args.log_level,
         args.log_max_files,
+        args.log_max_file_size,
         config.tracing.protocol.clone(),
         config.tracing.endpoint.clone(),
         config.tracing.path.clone(),
@@ -565,11 +575,23 @@ async fn main() -> Result<(), anyhow::Error> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use anyhow::Context;
     use dragonfly_client::health::Health;
     use dragonfly_client_util::shutdown;
     use std::net::{Ipv4Addr, TcpListener};
     use tokio::sync::mpsc;
+
+    #[test]
+    fn logging_uses_cli_defaults_when_options_are_omitted() {
+        let args = Args::try_parse_from(["dfdaemon"]).unwrap();
+
+        assert_eq!(args.log_level, Level::INFO);
+        assert_eq!(args.log_dir, dfdaemon::default_dfdaemon_log_dir());
+        assert_eq!(args.log_max_files, 6);
+        assert_eq!(args.log_max_file_size, ByteSize::default());
+        assert!(!args.console);
+    }
 
     #[tokio::test]
     async fn background_server_panic_propagates_with_context() {
