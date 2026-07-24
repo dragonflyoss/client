@@ -18,7 +18,7 @@ use crate::dynconfig::block_list::{DownloadBlockListCheckParams, UploadBlockList
 use crate::dynconfig::Dynconfig;
 use crate::resource::{persistent_cache_task, persistent_task, task};
 use dragonfly_api::common::v2::{
-    CacheTask, PersistentCacheTask, PersistentTask, Priority, Task, TaskType,
+    CacheTask, PersistentCacheTask, PersistentTask, Priority, Range, Task, TaskType,
 };
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_download_client::DfdaemonDownloadClient as DfdaemonDownloadGRPCClient,
@@ -64,7 +64,7 @@ use dragonfly_client_util::{
     digest::{is_blob_url, verify_file_digest, Digest},
     http::{
         hashmap_to_headermap, headermap_to_hashmap, parse_range_header,
-        signature_bound_range_from_hashmap,
+        signature_bound_range_cache_key_from_hashmap, signature_bound_range_from_hashmap,
     },
     id_generator::{PersistentCacheTaskIDParameter, PersistentTaskIDParameter, TaskIDParameter},
     ratelimiter::bbr::BBR,
@@ -350,6 +350,8 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         let signature_bound_range =
             signature_bound_range_from_hashmap(&download.request_header, &download.url)
                 .map(str::to_owned);
+        let signature_bound_cache_key =
+            signature_bound_range_cache_key_from_hashmap(&download.request_header, &download.url);
         if signature_bound_range.is_some() {
             download.prefetch = false;
             // Parse the authoritative signed header after stat determines the full
@@ -387,8 +389,8 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 error!("generate task id: {}", e);
                 Status::invalid_argument(e.to_string())
             })?;
-        let task_id = match signature_bound_range {
-            Some(range) => self.task.id_generator.range_task_id(&task_id, &range),
+        let task_id = match signature_bound_cache_key.as_deref() {
+            Some(cache_key) => self.task.id_generator.range_task_id(&task_id, cache_key),
             None => task_id,
         };
 
@@ -467,7 +469,17 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         // Download's range priority is higher than the request header's range.
         // If download protocol is http, use the range of the request header.
         // If download protocol is not http, use the range of the download.
-        if download.range.is_none() {
+        if let Some(range_header) = signature_bound_range.as_deref() {
+            let content_range = task::Task::signature_bound_content_range(&task, range_header)
+                .map_err(|err| {
+                    error!("validate signature-bound range failed: {}", err);
+                    Status::failed_precondition(err.to_string())
+                })?;
+            download.range = Some(Range {
+                start: 0,
+                length: content_range.range.length,
+            });
+        } else if download.range.is_none() {
             // Look up the range header directly instead of converting the whole
             // request header hashmap into a HeaderMap.
             let range_header = download
@@ -576,7 +588,13 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                             return;
                         }
 
-                        if download_clone.range.is_none() {
+                        if download_clone.range.is_none()
+                            || signature_bound_range_from_hashmap(
+                                &download_clone.request_header,
+                                &download_clone.url,
+                            )
+                            .is_some()
+                        {
                             if let Some(output_path) = &download_clone.output_path {
                                 if !download_clone.force_hard_link {
                                     let output_path = Path::new(output_path.as_str());

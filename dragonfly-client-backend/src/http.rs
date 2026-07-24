@@ -56,7 +56,10 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
-use dragonfly_client_util::{http::signature_bound_range, tls::NoVerifier};
+use dragonfly_client_util::{
+    http::{get_content_range, signature_bound_range},
+    tls::NoVerifier,
+};
 use futures::{StreamExt, TryStreamExt};
 use http::header::{
     HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_RANGE, LOCATION, RANGE, TRANSFER_ENCODING,
@@ -600,14 +603,15 @@ impl Backend for HTTP {
 
         let response_status_code = response.status();
         let mut response_header = response.headers().clone();
+        let content_range = if response_status_code == reqwest::StatusCode::PARTIAL_CONTENT {
+            get_content_range(&response_header).ok().flatten()
+        } else {
+            None
+        };
         let content_length = if response_status_code == reqwest::StatusCode::PARTIAL_CONTENT {
             // The total length of a ranged response is in the Content-Range header,
             // e.g. "bytes 0-0/1048576".
-            let content_length = response_header
-                .get(CONTENT_RANGE)
-                .and_then(|content_range| content_range.to_str().ok())
-                .and_then(|content_range| content_range.rsplit_once('/'))
-                .and_then(|(_, total)| total.parse::<u64>().ok());
+            let content_length = content_range.map(|range| range.complete_length);
 
             if content_length.is_none() {
                 error!(
@@ -631,12 +635,13 @@ impl Backend for HTTP {
                 }
             }
 
-            // Rewrite the 206-shaped headers to look like the full-object response, since
-            // the response header is persisted as the task response header and echoed to
-            // the clients.
-            response_header.remove(CONTENT_RANGE);
-            if let Some(content_length) = content_length {
-                response_header.insert(CONTENT_LENGTH, HeaderValue::from(content_length));
+            if !preserve_range {
+                // Rewrite the one-byte stat response to look like the full-object response,
+                // since these headers are persisted as task response headers.
+                response_header.remove(CONTENT_RANGE);
+                if let Some(content_length) = content_length {
+                    response_header.insert(CONTENT_LENGTH, HeaderValue::from(content_length));
+                }
             }
 
             content_length
@@ -657,7 +662,12 @@ impl Backend for HTTP {
         );
 
         Ok(StatResponse {
-            success: response_status_code.is_success(),
+            success: if preserve_range {
+                response_status_code == reqwest::StatusCode::PARTIAL_CONTENT
+                    && content_range.is_some()
+            } else {
+                response_status_code.is_success()
+            },
             content_length,
             http_header: Some(response_header),
             http_status_code: Some(response_status_code),
@@ -1166,6 +1176,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .respond_with(
                 ResponseTemplate::new(206)
                     .insert_header("Content-Range", "bytes 1048576-2097151/4194304")
+                    .insert_header("ETag", "\"version-1\"")
                     .set_body_bytes(vec![0u8; 1024]),
             )
             .expect(1)
@@ -1202,6 +1213,105 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
 
         assert!(resp.success);
         assert_eq!(resp.content_length, Some(4194304));
+        let response_header = resp.http_header.unwrap();
+        assert_eq!(
+            response_header.get("content-range").unwrap(),
+            "bytes 1048576-2097151/4194304"
+        );
+        assert_eq!(response_header.get("content-length").unwrap(), "1024");
+        assert_eq!(response_header.get("etag").unwrap(), "\"version-1\"");
+    }
+
+    #[tokio::test]
+    async fn should_reject_non_partial_signature_bound_stat_response() {
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/stat"))
+            .and(header("range", "bytes=1048576-2097151"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Content-Length", "4194304")
+                    .insert_header("ETag", "\"version-1\""),
+            )
+            .mount(&server)
+            .await;
+
+        let mut request_header = HeaderMap::new();
+        request_header.insert(
+            reqwest::header::RANGE,
+            HeaderValue::from_static("bytes=1048576-2097151"),
+        );
+        request_header.insert(
+            reqwest::header::AUTHORIZATION,
+            HeaderValue::from_static(
+                "AWS4-HMAC-SHA256 Credential=key/scope, SignedHeaders=host;range, Signature=abc",
+            ),
+        );
+
+        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
+            .unwrap()
+            .stat(StatRequest {
+                task_id: "test".to_string(),
+                url: format!("{}/stat", server.uri()),
+                http_header: Some(request_header),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!resp.success);
+        assert_eq!(resp.http_status_code, Some(StatusCode::OK));
+    }
+
+    #[tokio::test]
+    async fn should_reject_malformed_signature_bound_content_range() {
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/stat"))
+            .and(header("range", "bytes=1048576-2097151"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header("Content-Range", "bytes 1048576-2097151/*")
+                    .insert_header("ETag", "\"version-1\""),
+            )
+            .mount(&server)
+            .await;
+
+        let mut request_header = HeaderMap::new();
+        request_header.insert(
+            reqwest::header::RANGE,
+            HeaderValue::from_static("bytes=1048576-2097151"),
+        );
+        request_header.insert(
+            reqwest::header::AUTHORIZATION,
+            HeaderValue::from_static(
+                "AWS4-HMAC-SHA256 Credential=key/scope, SignedHeaders=host;range, Signature=abc",
+            ),
+        );
+
+        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
+            .unwrap()
+            .stat(StatRequest {
+                task_id: "test".to_string(),
+                url: format!("{}/stat", server.uri()),
+                http_header: Some(request_header),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!resp.success);
+        assert_eq!(resp.content_length, None);
     }
 
     #[tokio::test]

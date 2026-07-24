@@ -25,9 +25,12 @@ use dragonfly_client_metric::{
     collect_backend_request_started_metrics, collect_download_piece_traffic_metrics,
 };
 use dragonfly_client_storage::{io::RangeReader, metadata, Storage};
-use dragonfly_client_util::{http::signature_bound_range, net::format_socket_addr};
+use dragonfly_client_util::{
+    http::{get_content_range, signature_bound_range},
+    net::format_socket_addr,
+};
 use leaky_bucket::RateLimiter;
-use reqwest::header::HeaderMap;
+use reqwest::header::{HeaderMap, CONTENT_LENGTH, ETAG};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::str::FromStr;
@@ -472,6 +475,7 @@ impl Piece {
         offset: u64,
         length: u64,
         request_header: HeaderMap,
+        expected_response_header: Option<HeaderMap>,
         is_prefetch: bool,
         object_storage: Option<ObjectStorage>,
         hdfs: Option<Hdfs>,
@@ -540,7 +544,7 @@ impl Piece {
                 piece_id: piece_id.to_string(),
                 url: url.to_string(),
                 range,
-                http_header: Some(request_header),
+                http_header: Some(request_header.clone()),
                 timeout: self.config.download.piece_timeout,
                 client_cert: None,
                 object_storage,
@@ -585,6 +589,14 @@ impl Piece {
             })));
         }
 
+        Self::validate_signature_bound_response(
+            &request_header,
+            url,
+            expected_response_header.as_ref(),
+            response.http_status_code,
+            response.http_header.as_ref(),
+        )?;
+
         // Collect the backend request finished metrics.
         collect_backend_request_finished_metrics(
             backend.scheme().as_str(),
@@ -616,6 +628,76 @@ impl Piece {
                 Err(err)
             }
         }
+    }
+
+    fn validate_signature_bound_response(
+        request_header: &HeaderMap,
+        url: &str,
+        expected_header: Option<&HeaderMap>,
+        actual_status: Option<reqwest::StatusCode>,
+        actual_header: Option<&HeaderMap>,
+    ) -> Result<()> {
+        if signature_bound_range(request_header, url).is_none() {
+            return Ok(());
+        }
+
+        let invalid_response = |message: &str| {
+            Error::BackendError(Box::new(BackendError {
+                message: message.to_string(),
+                status_code: actual_status,
+                header: actual_header.cloned(),
+            }))
+        };
+        let expected_header = expected_header
+            .ok_or_else(|| invalid_response("missing signed-range stat response headers"))?;
+        let actual_header =
+            actual_header.ok_or_else(|| invalid_response("missing signed-range GET headers"))?;
+        if actual_status != Some(reqwest::StatusCode::PARTIAL_CONTENT) {
+            return Err(invalid_response(
+                "signed-range GET did not return 206 Partial Content",
+            ));
+        }
+
+        let expected_content_range = get_content_range(expected_header)
+            .ok()
+            .flatten()
+            .ok_or_else(|| invalid_response("invalid signed-range stat Content-Range"))?;
+        let actual_content_range = get_content_range(actual_header)
+            .ok()
+            .flatten()
+            .ok_or_else(|| invalid_response("invalid signed-range GET Content-Range"))?;
+        if actual_content_range != expected_content_range {
+            return Err(invalid_response(
+                "signed-range stat and GET Content-Range differ",
+            ));
+        }
+
+        let actual_content_length = actual_header
+            .get(CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok());
+        if actual_content_length != Some(expected_content_range.range.length) {
+            return Err(invalid_response(
+                "signed-range GET Content-Length does not match Content-Range",
+            ));
+        }
+
+        let expected_etag = expected_header
+            .get(ETAG)
+            .ok_or_else(|| invalid_response("missing signed-range stat ETag"))?;
+        if actual_header.get(ETAG) != Some(expected_etag) {
+            return Err(invalid_response("signed-range stat and GET ETag differ"));
+        }
+
+        if let Some(expected_version) = expected_header.get("x-amz-version-id") {
+            if actual_header.get("x-amz-version-id") != Some(expected_version) {
+                return Err(invalid_response(
+                    "signed-range stat and GET version ID differ",
+                ));
+            }
+        }
+
+        Ok(())
     }
 
     fn source_request_range(
@@ -1171,7 +1253,7 @@ impl Piece {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reqwest::header::{HeaderValue, AUTHORIZATION, RANGE};
+    use reqwest::header::{HeaderValue, AUTHORIZATION, CONTENT_LENGTH, CONTENT_RANGE, ETAG, RANGE};
     use tempfile::tempdir;
 
     #[tokio::test]
@@ -1298,5 +1380,98 @@ mod tests {
                 length: 1024,
             })
         );
+    }
+
+    #[test]
+    fn test_validate_signature_bound_response() {
+        let mut request_header = HeaderMap::new();
+        request_header.insert(RANGE, HeaderValue::from_static("bytes=100-199"));
+        request_header.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static(
+                "AWS4-HMAC-SHA256 Credential=key/scope, SignedHeaders=host;range, Signature=abc",
+            ),
+        );
+
+        let mut expected_header = HeaderMap::new();
+        expected_header.insert(
+            CONTENT_RANGE,
+            HeaderValue::from_static("bytes 100-199/1000"),
+        );
+        expected_header.insert(ETAG, HeaderValue::from_static("\"version-1\""));
+        expected_header.insert(
+            "x-amz-version-id",
+            HeaderValue::from_static("source-version-1"),
+        );
+
+        let mut actual_header = expected_header.clone();
+        actual_header.insert(CONTENT_LENGTH, HeaderValue::from_static("100"));
+        assert!(Piece::validate_signature_bound_response(
+            &request_header,
+            "https://example.com/object",
+            Some(&expected_header),
+            Some(reqwest::StatusCode::PARTIAL_CONTENT),
+            Some(&actual_header),
+        )
+        .is_ok());
+
+        assert!(Piece::validate_signature_bound_response(
+            &request_header,
+            "https://example.com/object",
+            Some(&expected_header),
+            Some(reqwest::StatusCode::OK),
+            Some(&actual_header),
+        )
+        .is_err());
+
+        let mut mismatched = actual_header.clone();
+        mismatched.insert(
+            CONTENT_RANGE,
+            HeaderValue::from_static("bytes 101-200/1000"),
+        );
+        assert!(Piece::validate_signature_bound_response(
+            &request_header,
+            "https://example.com/object",
+            Some(&expected_header),
+            Some(reqwest::StatusCode::PARTIAL_CONTENT),
+            Some(&mismatched),
+        )
+        .is_err());
+
+        let mut mismatched = actual_header.clone();
+        mismatched.insert(CONTENT_LENGTH, HeaderValue::from_static("99"));
+        assert!(Piece::validate_signature_bound_response(
+            &request_header,
+            "https://example.com/object",
+            Some(&expected_header),
+            Some(reqwest::StatusCode::PARTIAL_CONTENT),
+            Some(&mismatched),
+        )
+        .is_err());
+
+        let mut mismatched = actual_header.clone();
+        mismatched.insert(ETAG, HeaderValue::from_static("\"version-2\""));
+        assert!(Piece::validate_signature_bound_response(
+            &request_header,
+            "https://example.com/object",
+            Some(&expected_header),
+            Some(reqwest::StatusCode::PARTIAL_CONTENT),
+            Some(&mismatched),
+        )
+        .is_err());
+
+        let mut mismatched = actual_header;
+        mismatched.insert(
+            "x-amz-version-id",
+            HeaderValue::from_static("source-version-2"),
+        );
+        assert!(Piece::validate_signature_bound_response(
+            &request_header,
+            "https://example.com/object",
+            Some(&expected_header),
+            Some(reqwest::StatusCode::PARTIAL_CONTENT),
+            Some(&mismatched),
+        )
+        .is_err());
     }
 }
