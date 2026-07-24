@@ -218,7 +218,10 @@ impl Dynconfig {
                     "manager is not configured, load dynamic configuration from {}",
                     path.display()
                 );
-                Source::Local(Local::new(path))
+
+                let local = Local::new(path);
+                local.generate_default_if_absent().await?;
+                Source::Local(local)
             }
         };
 
