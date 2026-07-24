@@ -51,6 +51,13 @@ pub fn default_dfdaemon_config_path() -> PathBuf {
     crate::default_config_dir().join("dfdaemon.yaml")
 }
 
+/// Returns the default dynconfig path for dfdaemon, which is used when the
+/// manager is not configured.
+#[inline]
+pub fn default_dfdaemon_dynconfig_path() -> PathBuf {
+    crate::default_config_dir().join("dynconfig.yaml")
+}
+
 /// Returns the default log directory for dfdaemon.
 #[inline]
 pub fn default_dfdaemon_log_dir() -> PathBuf {
@@ -238,6 +245,18 @@ fn default_scheduler_schedule_timeout() -> Duration {
 #[inline]
 fn default_dynconfig_refresh_interval() -> Duration {
     Duration::from_secs(300)
+}
+
+/// Returns the default interval to refresh the local dynamic configuration.
+#[inline]
+pub fn default_local_dynconfig_refresh_interval() -> Duration {
+    Duration::from_secs(60)
+}
+
+/// Returns the default scheduler address for the local dynamic configuration.
+#[inline]
+pub fn default_local_dynconfig_scheduler_addr() -> String {
+    "dragonfly-scheduler:8002".to_string()
 }
 
 /// Returns the default port of the storage tcp server.
@@ -1621,9 +1640,11 @@ pub struct Config {
     #[validate]
     pub upload: Upload,
 
-    /// The manager configuration for dfdaemon.
+    /// The manager configuration for dfdaemon. If not configured, the dynamic
+    /// configuration is loaded from the local dynconfig file instead of being
+    /// fetched from the manager.
     #[validate]
-    pub manager: Manager,
+    pub manager: Option<Manager>,
 
     /// The scheduler configuration for dfdaemon.
     #[validate]
