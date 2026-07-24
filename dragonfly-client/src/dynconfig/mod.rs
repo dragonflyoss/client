@@ -24,7 +24,7 @@ use local::Local;
 use regex::Regex;
 use remote::Remote;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Mutex, RwLock};
@@ -134,7 +134,7 @@ pub struct SchedulerClusterConfigUploadBlockList {
 /// Dynamic configuration state of the dfdaemon.
 #[derive(Default)]
 pub struct Data {
-    /// All known schedulers returned by the source.
+    /// All known schedulers returned by the backend.
     pub schedulers: ListSchedulersResponse,
 
     /// Schedulers currently available for use.
@@ -150,10 +150,10 @@ pub struct Data {
     pub seed_client_config: Option<SchedulerClusterSeedClientConfig>,
 }
 
-/// Source of the dynamic configuration. When the manager is configured, the
+/// Backend of the dynamic configuration. When the manager is configured, the
 /// dynamic configuration is fetched from the manager, otherwise it is loaded
 /// from the local dynconfig file.
-enum Source {
+enum Backend {
     /// Fetches the dynamic configuration from the manager.
     Remote(Remote),
 
@@ -162,7 +162,7 @@ enum Source {
 }
 
 /// Manages dynamic configuration for the dfdaemon, periodically
-/// refreshing state from the configured source.
+/// refreshing state from the configured backend.
 pub struct Dynconfig {
     /// Current dynamic configuration, protected by a read-write lock.
     pub data: Arc<RwLock<Data>>,
@@ -173,8 +173,8 @@ pub struct Dynconfig {
     /// Static dfdaemon configuration.
     config: Arc<Config>,
 
-    /// Source of the dynamic configuration.
-    source: Source,
+    /// Backend of the dynamic configuration.
+    backend: Backend,
 
     /// Mutex guarding concurrent refresh operations.
     mutex: Mutex<()>,
@@ -191,14 +191,14 @@ impl Dynconfig {
     // Create a new Dynconfig instance.
     pub async fn new(
         config: Arc<Config>,
-        config_path: &Path,
+        dynconfig_path: PathBuf,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Result<Self> {
-        // Select the source of the dynamic configuration. If the manager is
+        // Select the backend of the dynamic configuration. If the manager is
         // configured, fetch it from the manager, otherwise load it from the
-        // local dynconfig file in the same directory as the config file.
-        let source = match config.manager {
+        // local dynconfig file.
+        let backend = match config.manager {
             Some(ref manager) => {
                 let manager_client = ManagerClient::new(config.clone(), manager.addr.clone())
                     .await
@@ -210,18 +210,17 @@ impl Dynconfig {
                     "refresh dynamic configuration from manager {}",
                     manager.addr
                 );
-                Source::Remote(Remote::new(config.clone(), Arc::new(manager_client)))
+                Backend::Remote(Remote::new(config.clone(), Arc::new(manager_client)))
             }
             None => {
-                let path = config_path.with_file_name(local::DEFAULT_DYNCONFIG_FILENAME);
                 info!(
                     "manager is not configured, load dynamic configuration from {}",
-                    path.display()
+                    dynconfig_path.display()
                 );
 
-                let local = Local::new(path);
-                local.generate_default_if_absent().await?;
-                Source::Local(local)
+                let local = Local::new(dynconfig_path);
+                local.generate_default().await?;
+                Backend::Local(local)
             }
         };
 
@@ -231,7 +230,7 @@ impl Dynconfig {
             block_list: Arc::new(BlockList::new(config.clone(), data.clone())),
             data,
             config,
-            source,
+            backend,
             mutex: Mutex::new(()),
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
@@ -248,7 +247,7 @@ impl Dynconfig {
         let mut shutdown = self.shutdown.clone();
 
         // Start the refresh loop. The refresh interval is re-evaluated on each
-        // iteration, since the local source can change it on refresh.
+        // iteration, since the local backend can change it on refresh.
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(self.refresh_interval().await) => {
@@ -275,9 +274,9 @@ impl Dynconfig {
             return Ok(());
         };
 
-        let new_data = match &self.source {
-            Source::Remote(remote) => remote.refresh().await?,
-            Source::Local(local) => local.refresh().await?,
+        let new_data = match &self.backend {
+            Backend::Remote(remote) => remote.refresh().await?,
+            Backend::Local(local) => local.refresh().await?,
         };
 
         let mut data = self.data.write().await;
@@ -287,9 +286,9 @@ impl Dynconfig {
 
     /// Returns the interval to refresh the dynamic configuration.
     async fn refresh_interval(&self) -> Duration {
-        match &self.source {
-            Source::Remote(_) => self.config.dynconfig.refresh_interval,
-            Source::Local(local) => local.refresh_interval().await,
+        match &self.backend {
+            Backend::Remote(_) => self.config.dynconfig.refresh_interval,
+            Backend::Local(local) => local.refresh_interval().await,
         }
     }
 }

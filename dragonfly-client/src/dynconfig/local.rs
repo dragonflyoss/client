@@ -29,21 +29,9 @@ use tokio::net::lookup_host;
 use tokio::sync::RwLock;
 use tracing::{error, info, instrument};
 
-/// The default filename of the local dynconfig file, which is located in the
-/// same directory as the dfdaemon configuration file.
-pub const DEFAULT_DYNCONFIG_FILENAME: &str = "dynconfig.yaml";
-
-/// Returns the default interval to refresh the local dynamic configuration.
-#[inline]
-fn default_refresh_interval() -> Duration {
-    Duration::from_secs(5)
-}
-
-/// Returns the default scheduler address for scheduler discovery.
-#[inline]
-fn default_scheduler_addr() -> String {
-    "dragonfly-scheduler:8002".to_string()
-}
+use dragonfly_client_config::dfdaemon::{
+    default_local_dynconfig_refresh_interval, default_local_dynconfig_scheduler_addr,
+};
 
 /// The scheduler configuration for the local dynamic configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,7 +40,7 @@ pub struct SchedulerConfig {
     /// The address of the scheduler headless service with port (e.g.
     /// `scheduler-headless.default.svc:8002`), resolved via DNS to the list
     /// of scheduler IPs.
-    #[serde(default = "default_scheduler_addr")]
+    #[serde(default = "default_local_dynconfig_scheduler_addr")]
     pub addr: String,
 
     /// The static list of scheduler addresses with port (e.g.
@@ -65,7 +53,7 @@ pub struct SchedulerConfig {
 impl Default for SchedulerConfig {
     fn default() -> Self {
         SchedulerConfig {
-            addr: default_scheduler_addr(),
+            addr: default_local_dynconfig_scheduler_addr(),
             addrs: Vec::new(),
         }
     }
@@ -77,7 +65,10 @@ impl Default for SchedulerConfig {
 #[serde(default, rename_all = "camelCase")]
 pub struct LocalConfig {
     /// The interval to refresh the local dynamic configuration.
-    #[serde(default = "default_refresh_interval", with = "humantime_serde")]
+    #[serde(
+        default = "default_local_dynconfig_refresh_interval",
+        with = "humantime_serde"
+    )]
     pub refresh_interval: Duration,
 
     /// The scheduler configuration for scheduler discovery.
@@ -96,7 +87,7 @@ pub struct LocalConfig {
 impl Default for LocalConfig {
     fn default() -> Self {
         LocalConfig {
-            refresh_interval: default_refresh_interval(),
+            refresh_interval: default_local_dynconfig_refresh_interval(),
             scheduler: SchedulerConfig::default(),
             client_config: None,
             seed_client_config: None,
@@ -104,7 +95,7 @@ impl Default for LocalConfig {
     }
 }
 
-/// Local source of the dynamic configuration, loading it from the local
+/// Local backend of the dynamic configuration, loading it from the local
 /// dynconfig file and discovering schedulers via DNS.
 pub struct Local {
     /// Path of the local dynconfig file.
@@ -117,11 +108,11 @@ pub struct Local {
 
 /// The implementation of Local.
 impl Local {
-    /// Creates a new local source.
+    /// Creates a new local backend.
     pub fn new(path: PathBuf) -> Self {
         Self {
             path,
-            refresh_interval: RwLock::new(default_refresh_interval()),
+            refresh_interval: RwLock::new(default_local_dynconfig_refresh_interval()),
         }
     }
 
@@ -132,7 +123,7 @@ impl Local {
 
     /// Generates the default dynconfig file if it does not exist.
     #[instrument(skip_all)]
-    pub async fn generate_default_if_absent(&self) -> Result<()> {
+    pub async fn generate_default(&self) -> Result<()> {
         if fs::try_exists(&self.path).await? {
             return Ok(());
         }
@@ -310,7 +301,7 @@ scheduler:
 "#;
 
         let config: LocalConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(config.refresh_interval, default_refresh_interval());
+        assert_eq!(config.refresh_interval, default_local_dynconfig_refresh_interval());
         assert!(config.client_config.is_none());
         assert!(config.seed_client_config.is_none());
     }
@@ -318,7 +309,7 @@ scheduler:
     #[tokio::test]
     async fn refresh_should_resolve_schedulers() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(DEFAULT_DYNCONFIG_FILENAME);
+        let path = dir.path().join("dynconfig.yaml");
         tokio::fs::write(
             &path,
             r#"
@@ -342,28 +333,28 @@ scheduler:
     }
 
     #[tokio::test]
-    async fn generate_default_if_absent_creates_default_config() {
+    async fn generate_default_should_create_file() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(DEFAULT_DYNCONFIG_FILENAME);
+        let path = dir.path().join("dynconfig.yaml");
 
         let local = Local::new(path.clone());
-        local.generate_default_if_absent().await.unwrap();
+        local.generate_default().await.unwrap();
 
         let content = tokio::fs::read_to_string(&path).await.unwrap();
         let config: LocalConfig = serde_yaml::from_str(&content).unwrap();
-        assert_eq!(config.scheduler.addr, default_scheduler_addr());
-        assert_eq!(config.refresh_interval, default_refresh_interval());
+        assert_eq!(config.scheduler.addr, default_local_dynconfig_scheduler_addr());
+        assert_eq!(config.refresh_interval, default_local_dynconfig_refresh_interval());
     }
 
     #[tokio::test]
-    async fn generate_default_if_absent_keeps_existing_config() {
+    async fn generate_default_should_keep_existing_file() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(DEFAULT_DYNCONFIG_FILENAME);
+        let path = dir.path().join("dynconfig.yaml");
         let existing = "scheduler:\n  addr: 'scheduler-headless.default.svc:8002'\n";
         tokio::fs::write(&path, existing).await.unwrap();
 
         let local = Local::new(path.clone());
-        local.generate_default_if_absent().await.unwrap();
+        local.generate_default().await.unwrap();
 
         let content = tokio::fs::read_to_string(&path).await.unwrap();
         assert_eq!(content, existing);
@@ -372,7 +363,7 @@ scheduler:
     #[tokio::test]
     async fn refresh_should_use_static_scheduler_addrs() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(DEFAULT_DYNCONFIG_FILENAME);
+        let path = dir.path().join("dynconfig.yaml");
         tokio::fs::write(
             &path,
             r#"
@@ -399,7 +390,7 @@ scheduler:
     #[tokio::test]
     async fn refresh_should_prefer_static_scheduler_addrs_over_addr() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(DEFAULT_DYNCONFIG_FILENAME);
+        let path = dir.path().join("dynconfig.yaml");
         tokio::fs::write(
             &path,
             r#"
@@ -422,7 +413,7 @@ scheduler:
     #[tokio::test]
     async fn refresh_should_fail_when_static_scheduler_addr_is_invalid() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(DEFAULT_DYNCONFIG_FILENAME);
+        let path = dir.path().join("dynconfig.yaml");
         tokio::fs::write(
             &path,
             r#"
@@ -441,14 +432,14 @@ scheduler:
     #[tokio::test]
     async fn refresh_should_fail_when_file_not_found() {
         let dir = tempfile::tempdir().unwrap();
-        let local = Local::new(dir.path().join(DEFAULT_DYNCONFIG_FILENAME));
+        let local = Local::new(dir.path().join("dynconfig.yaml"));
         assert!(local.refresh().await.is_err());
     }
 
     #[tokio::test]
     async fn refresh_should_fail_when_scheduler_addr_is_empty() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(DEFAULT_DYNCONFIG_FILENAME);
+        let path = dir.path().join("dynconfig.yaml");
         tokio::fs::write(&path, "scheduler:\n  addr: ''")
             .await
             .unwrap();

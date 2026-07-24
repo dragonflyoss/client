@@ -30,7 +30,7 @@ use tonic_health::pb::health_check_response::ServingStatus;
 use tracing::{error, instrument};
 use url::Url;
 
-/// Remote source of the dynamic configuration, fetching it from the manager.
+/// Remote backend of the dynamic configuration, fetching it from the manager.
 pub struct Remote {
     /// Static dfdaemon configuration.
     config: Arc<Config>,
@@ -41,7 +41,7 @@ pub struct Remote {
 
 /// The implementation of Remote.
 impl Remote {
-    /// Creates a new remote source.
+    /// Creates a new remote backend.
     pub fn new(config: Arc<Config>, manager_client: Arc<ManagerClient>) -> Self {
         Self {
             config,

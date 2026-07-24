@@ -84,6 +84,14 @@ struct Args {
     config: PathBuf,
 
     #[arg(
+        long = "dynconfig",
+        default_value_os_t = dfdaemon::default_dfdaemon_dynconfig_path(),
+        env = "DFDAEMON_DYNCONFIG",
+        help = "Specify the dynconfig file to use when the manager is not configured in config.yaml"
+    )]
+    dynconfig: PathBuf,
+
+    #[arg(
         short = 'l',
         long,
         default_value = "info",
@@ -199,7 +207,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize dynconfig server.
     let dynconfig = Dynconfig::new(
         config.clone(),
-        &args.config,
+        args.dynconfig,
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     )
