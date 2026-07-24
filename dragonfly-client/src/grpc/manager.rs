@@ -19,12 +19,11 @@ use dragonfly_api::manager::v2::{
     manager_client::ManagerClient as ManagerGRPCClient, DeleteSeedPeerRequest,
     ListSchedulersRequest, ListSchedulersResponse, SeedPeer, UpdateSeedPeerRequest,
 };
-use dragonfly_client_config::dfdaemon::Config;
+use dragonfly_client_config::dfdaemon::Manager;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
-use std::sync::Arc;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
 use tonic_health::pb::health_check_response::ServingStatus;
@@ -43,7 +42,7 @@ pub struct ManagerClient {
 /// Implements the grpc client of the manager.
 impl ManagerClient {
     /// Creates a new manager client.
-    pub async fn new(config: Arc<Config>, addr: String) -> Result<Self> {
+    pub async fn new(config: &Manager, addr: String) -> Result<Self> {
         let domain_name = Url::parse(addr.as_str())?
             .host_str()
             .ok_or(Error::InvalidParameter)
@@ -52,11 +51,7 @@ impl ManagerClient {
             })?
             .to_string();
 
-        let client_tls_config = match config.manager {
-            Some(ref manager) => manager.load_client_tls_config(domain_name.as_str()).await?,
-            None => None,
-        };
-
+        let client_tls_config = config.load_client_tls_config(domain_name.as_str()).await?;
         let health_client = HealthClient::new(addr.as_str(), client_tls_config.clone()).await?;
         match health_client.check().await {
             Ok(resp) => {
@@ -143,13 +138,12 @@ impl ManagerClient {
 #[cfg(test)]
 mod tests {
     use super::ManagerClient;
-    use dragonfly_client_config::dfdaemon::Config;
-    use std::sync::Arc;
+    use dragonfly_client_config::dfdaemon::Manager;
 
     #[tokio::test]
     async fn invalid_uri_should_fail() {
         let addr = "htt:/xxx".to_string();
-        let result = ManagerClient::new(Arc::new(Config::default()), addr).await;
+        let result = ManagerClient::new(&Manager::default(), addr).await;
         assert!(result.is_err());
         match result {
             Err(e) => assert_eq!(e.to_string(), "invalid parameter"),

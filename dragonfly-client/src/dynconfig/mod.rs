@@ -220,7 +220,7 @@ impl Dynconfig {
     async fn backend(config: Arc<Config>, dynconfig_path: PathBuf) -> Result<Backend> {
         match config.manager {
             Some(ref manager) => {
-                let manager_client = ManagerClient::new(config.clone(), manager.addr.clone())
+                let manager_client = ManagerClient::new(manager, manager.addr.clone())
                     .await
                     .inspect_err(|err| {
                         error!("initialize manager client failed: {}", err);
