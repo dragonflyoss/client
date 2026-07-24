@@ -17,11 +17,13 @@
 use bytes::{Bytes, BytesMut};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
+use futures::StreamExt;
 use socket2::{SockRef, TcpKeepalive};
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::time;
+use tokio_util::io::ReaderStream;
 use tracing::{debug, error, instrument, Span};
 use vortex_protocol::{
     tlv::{
@@ -50,16 +52,22 @@ impl TCPClient {
         Self { config, addr }
     }
 
+    /// Converts the reader holding the piece content into a stream of bytes
+    /// chunks, so the storage writes the chunks without copying them again.
+    fn content_stream(&self, reader: OwnedReadHalf) -> super::PieceContentStream {
+        ReaderStream::with_capacity(reader, self.config.storage.write_buffer_size).boxed()
+    }
+
     /// Downloads a piece from the server using the vortex protocol.
     ///
     /// This is the main entry point for downloading a piece. It applies
     /// a timeout based on the configuration and handles connection timeouts gracefully.
-    #[instrument(level = "debug", skip_all, fields(parent_addr))]
+    #[instrument(skip_all, fields(parent_addr))]
     pub async fn download_piece(
         &self,
         number: u32,
         task_id: &str,
-    ) -> ClientResult<(impl AsyncRead, u64, String)> {
+    ) -> ClientResult<(super::PieceContentStream, u64, String)> {
         Span::current().record("parent_addr", self.addr.as_str());
 
         time::timeout(
@@ -78,12 +86,12 @@ impl TCPClient {
     /// 2. Establishes TCP connection and sends the request.
     /// 3. Reads and validates the response header.
     /// 4. Processes the piece content based on the response type.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn handle_download_piece(
         &self,
         number: u32,
         task_id: &str,
-    ) -> ClientResult<(impl AsyncRead, u64, String)> {
+    ) -> ClientResult<(super::PieceContentStream, u64, String)> {
         let request: Bytes = Vortex::DownloadPiece(
             Header::new_download_piece(),
             DownloadPiece::new(task_id.to_string(), number),
@@ -100,7 +108,11 @@ impl TCPClient {
                 debug!("received piece content: {:?}", piece_content.metadata());
 
                 let metadata = piece_content.metadata();
-                Ok((reader, metadata.offset, metadata.digest))
+                Ok((
+                    self.content_stream(reader),
+                    metadata.offset,
+                    metadata.digest,
+                ))
             }
             Tag::Error => Err(self.read_error(&mut reader, header.length() as usize).await),
             _ => Err(ClientError::Unknown(format!(
@@ -113,12 +125,12 @@ impl TCPClient {
     /// Downloads a persistent piece from the server using the vortex protocol.
     ///
     /// Similar to `download_piece` but specifically for persistent piece.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn download_persistent_piece(
         &self,
         number: u32,
         task_id: &str,
-    ) -> ClientResult<(impl AsyncRead, u64, String)> {
+    ) -> ClientResult<(super::PieceContentStream, u64, String)> {
         time::timeout(
             self.config.download.piece_timeout,
             self.handle_download_persistent_piece(number, task_id),
@@ -133,12 +145,12 @@ impl TCPClient {
     ///
     /// Implements the same protocol flow as `handle_download_piece` but uses
     /// persistent specific request/response types.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn handle_download_persistent_piece(
         &self,
         number: u32,
         task_id: &str,
-    ) -> ClientResult<(impl AsyncRead, u64, String)> {
+    ) -> ClientResult<(super::PieceContentStream, u64, String)> {
         let request: Bytes = Vortex::DownloadPersistentPiece(
             Header::new_download_persistent_piece(),
             DownloadPersistentPiece::new(task_id.to_string(), number),
@@ -158,7 +170,11 @@ impl TCPClient {
                 );
 
                 let metadata = persistent_piece_content.metadata();
-                Ok((reader, metadata.offset, metadata.digest))
+                Ok((
+                    self.content_stream(reader),
+                    metadata.offset,
+                    metadata.digest,
+                ))
             }
             Tag::Error => Err(self.read_error(&mut reader, header.length() as usize).await),
             _ => Err(ClientError::Unknown(format!(
@@ -171,12 +187,12 @@ impl TCPClient {
     /// Downloads a persistent cache piece from the server using the vortex protocol.
     ///
     /// Similar to `download_piece` but specifically for persistent cache piece.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     pub async fn download_persistent_cache_piece(
         &self,
         number: u32,
         task_id: &str,
-    ) -> ClientResult<(impl AsyncRead, u64, String)> {
+    ) -> ClientResult<(super::PieceContentStream, u64, String)> {
         time::timeout(
             self.config.download.piece_timeout,
             self.handle_download_persistent_cache_piece(number, task_id),
@@ -191,12 +207,12 @@ impl TCPClient {
     ///
     /// Implements the same protocol flow as `handle_download_piece` but uses
     /// persistent cache specific request/response types.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn handle_download_persistent_cache_piece(
         &self,
         number: u32,
         task_id: &str,
-    ) -> ClientResult<(impl AsyncRead, u64, String)> {
+    ) -> ClientResult<(super::PieceContentStream, u64, String)> {
         let request: Bytes = Vortex::DownloadPersistentCachePiece(
             Header::new_download_persistent_cache_piece(),
             DownloadPersistentCachePiece::new(task_id.to_string(), number),
@@ -216,7 +232,11 @@ impl TCPClient {
                 );
 
                 let metadata = persistent_cache_piece_content.metadata();
-                Ok((reader, metadata.offset, metadata.digest))
+                Ok((
+                    self.content_stream(reader),
+                    metadata.offset,
+                    metadata.digest,
+                ))
             }
             Tag::Error => Err(self.read_error(&mut reader, header.length() as usize).await),
             _ => Err(ClientError::Unknown(format!(
@@ -231,7 +251,7 @@ impl TCPClient {
     /// This is a low-level utility function that handles the TCP connection
     /// lifecycle and request transmission. It ensures proper error handling
     /// and connection cleanup.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn connect_and_write_request(
         &self,
         request: Bytes,
@@ -285,7 +305,7 @@ impl TCPClient {
     /// The header contains metadata about the following message, including
     /// the message type (tag) and payload length. This is critical for
     /// proper protocol message framing.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn read_header(&self, reader: &mut OwnedReadHalf) -> ClientResult<Header> {
         let mut header_bytes = BytesMut::with_capacity(HEADER_SIZE);
         header_bytes.resize(HEADER_SIZE, 0);
@@ -304,7 +324,7 @@ impl TCPClient {
     /// This generic function handles the two-stage reading process for
     /// piece content: first reading the metadata length, then reading
     /// the actual metadata, and finally constructing the complete message.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn read_piece_content<T>(
         &self,
         reader: &mut OwnedReadHalf,
@@ -343,7 +363,7 @@ impl TCPClient {
     /// When the server responds with an error tag, this function reads
     /// the error payload and converts it into an appropriate client error.
     /// This provides structured error handling for protocol-level failures.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn read_error(&self, reader: &mut OwnedReadHalf, header_length: usize) -> ClientError {
         let mut error_bytes = BytesMut::with_capacity(header_length);
         error_bytes.resize(header_length, 0);

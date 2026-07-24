@@ -736,7 +736,6 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         if download.prefetch {
             match self.task.prefetch_task_started(task_id.as_str()).await {
                 Ok(_) => {
-                    info!("prefetch task started");
                     let socket_path = self.socket_path.clone();
                     let task_manager_clone = self.task.clone();
                     tokio::spawn(
@@ -769,7 +768,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                     );
                 }
                 // If the task is already prefetched, ignore the error.
-                Err(ClientError::InvalidState(_)) => info!("task is already prefetched"),
+                Err(ClientError::InvalidState(_)) => debug!("task is already prefetched"),
                 Err(err) => {
                     error!("prefetch task started: {}", err);
                 }

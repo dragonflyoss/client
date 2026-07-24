@@ -149,6 +149,18 @@ impl Operations for RocksdbStorageEngine {
         }
     }
 
+    /// Gets the objects by keys, returning the values in the order of the keys.
+    fn multi_get<O: DatabaseObject>(&self, keys: &[&[u8]]) -> Result<Vec<Option<O>>> {
+        let cf = cf_handle::<O>(self)?;
+        self.batched_multi_get_cf(cf, keys, false)
+            .into_iter()
+            .map(|value| match value.or_err(ErrorType::StorageError)? {
+                Some(value) => Ok(Some(O::deserialize_from(&value)?)),
+                None => Ok(None),
+            })
+            .collect()
+    }
+
     /// Checks if the object exists by key.
     fn exists<O: DatabaseObject>(&self, key: &[u8]) -> Result<bool> {
         let cf = cf_handle::<O>(self)?;
@@ -321,6 +333,33 @@ mod tests {
 
         engine.delete::<Object>(object.id.as_bytes()).unwrap();
         assert!(!engine.exists::<Object>(object.id.as_bytes()).unwrap());
+    }
+
+    #[test]
+    fn test_multi_get() {
+        let engine = create_test_engine();
+
+        let objects = vec![
+            Object {
+                id: "1".to_string(),
+                value: 1,
+            },
+            Object {
+                id: "2".to_string(),
+                value: 2,
+            },
+        ];
+        for object in &objects {
+            engine.put::<Object>(object.id.as_bytes(), object).unwrap();
+        }
+
+        let retrieved_objects = engine
+            .multi_get::<Object>(&[b"2".as_slice(), b"missing".as_slice(), b"1".as_slice()])
+            .unwrap();
+        assert_eq!(retrieved_objects[0].as_ref(), Some(&objects[1]));
+        assert!(retrieved_objects[1].is_none());
+        assert_eq!(retrieved_objects[2].as_ref(), Some(&objects[0]));
+        assert!(engine.multi_get::<Object>(&[]).unwrap().is_empty());
     }
 
     #[test]

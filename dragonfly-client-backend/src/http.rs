@@ -46,8 +46,8 @@
 //! configuration file or passed directly in the request headers.
 
 use crate::{
-    Backend, Body, ExistsRequest, GetRequest, GetResponse, PutRequest, PutResponse, StatRequest,
-    StatResponse, DEFAULT_USER_AGENT, KEEP_ALIVE_INTERVAL, POOL_MAX_IDLE_PER_HOST,
+    empty_body, Backend, Body, ExistsRequest, GetRequest, GetResponse, PutRequest, PutResponse,
+    StatRequest, StatResponse, DEFAULT_USER_AGENT, KEEP_ALIVE_INTERVAL, POOL_MAX_IDLE_PER_HOST,
 };
 use async_trait::async_trait;
 use dashmap::{mapref::entry::Entry, DashMap};
@@ -57,7 +57,7 @@ use dragonfly_client_core::{
     Error, Result,
 };
 use dragonfly_client_util::{http::signature_bound_range, tls::NoVerifier};
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use http::header::{
     HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_RANGE, LOCATION, RANGE, TRANSFER_ENCODING,
     USER_AGENT,
@@ -75,7 +75,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tokio_util::io::StreamReader;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, instrument};
 use url::Url;
 
 /// The HTTP scheme.
@@ -382,7 +382,7 @@ impl Backend for HTTP {
     }
 
     /// Stat the metadata from the backend.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn stat(&self, request: StatRequest) -> Result<StatResponse> {
         debug!(
             "stat request {} {}: {:?}",
@@ -667,7 +667,7 @@ impl Backend for HTTP {
     }
 
     /// Get the content from the backend.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn get(&self, request: GetRequest) -> Result<GetResponse<Body>> {
         debug!(
             "get request {} {} {}: {:?}",
@@ -720,7 +720,7 @@ impl Backend for HTTP {
                     success: false,
                     http_header: None,
                     http_status_code: None,
-                    reader: Box::new(tokio::io::empty()),
+                    reader: empty_body(),
                     error_message: Some(err.to_string()),
                 });
             }
@@ -767,7 +767,7 @@ impl Backend for HTTP {
                             success: false,
                             http_header: None,
                             http_status_code: None,
-                            reader: Box::new(tokio::io::empty()),
+                            reader: empty_body(),
                             error_message: Some(err.to_string()),
                         });
                     }
@@ -779,19 +779,22 @@ impl Backend for HTTP {
         let response_status_code = response.status();
 
         // Non-redirect response or redirect without Location header
-        let response_reader = Box::new(StreamReader::new(response.bytes_stream().map_err(
-            move |err| {
-                let mut chain = err.to_string();
-                let mut source = err.source();
-                while let Some(err) = source {
-                    chain.push_str(": ");
-                    chain.push_str(&err.to_string());
-                    source = err.source();
-                }
+        let response_reader = StreamReader::new(
+            response
+                .bytes_stream()
+                .map_err(move |err| {
+                    let mut chain = err.to_string();
+                    let mut source = err.source();
+                    while let Some(err) = source {
+                        chain.push_str(": ");
+                        chain.push_str(&err.to_string());
+                        source = err.source();
+                    }
 
-                IOError::other(chain)
-            },
-        )));
+                    IOError::other(chain)
+                })
+                .boxed(),
+        );
 
         debug!(
             "get response {} {}: {:?} {:?}",
@@ -814,7 +817,7 @@ impl Backend for HTTP {
     }
 
     /// Exists checks whether the file exists in the backend.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn exists(&self, request: ExistsRequest) -> Result<bool> {
         debug!(
             "exists request {} {}: {:?}",
@@ -854,7 +857,7 @@ impl Backend for HTTP {
             Ok(response) if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE => {
                 // For zero-byte files, some servers return 416 Range Not Satisfiable.
                 // Retry with a GET request without the Range header to retrieve headers.
-                info!(
+                debug!(
                     "exists request got 416 Range Not Satisfiable, retrying with HEAD {} {}",
                     request.task_id, request.url
                 );

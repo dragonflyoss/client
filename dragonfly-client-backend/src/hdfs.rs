@@ -42,6 +42,7 @@ use async_trait::async_trait;
 use dragonfly_api::common;
 use dragonfly_client_core::error::BackendError;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
+use futures::StreamExt;
 use opendal::{layers::TimeoutLayer, Operator};
 use percent_encoding::percent_decode_str;
 use std::time::Duration;
@@ -114,7 +115,7 @@ impl Backend for Hdfs {
     }
 
     /// Stat the metadata from the backend.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn stat(&self, request: StatRequest) -> ClientResult<StatResponse> {
         debug!(
             "stat request {} {}: {:?}",
@@ -197,7 +198,7 @@ impl Backend for Hdfs {
     }
 
     /// Get the content from the backend.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn get(&self, request: GetRequest) -> ClientResult<GetResponse<Body>> {
         debug!(
             "get request {} {}: {:?}",
@@ -263,19 +264,19 @@ impl Backend for Hdfs {
             success: true,
             http_header: None,
             http_status_code: Some(reqwest::StatusCode::OK),
-            reader: Box::new(StreamReader::new(stream)),
+            reader: StreamReader::new(stream.boxed()),
             error_message: None,
         })
     }
 
     /// Put the content to the backend.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn put(&self, _request: PutRequest) -> ClientResult<PutResponse> {
         unimplemented!()
     }
 
     /// Exists checks whether the file exists in the backend.
-    #[instrument(level = "debug", skip_all)]
+    #[instrument(skip_all)]
     async fn exists(&self, request: ExistsRequest) -> ClientResult<bool> {
         debug!(
             "exist request {} {}: {:?}",
