@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use bytesize::ByteSize;
 use dragonfly_client_config::dfdaemon::Host;
 use opentelemetry::{global, trace::TracerProvider, KeyValue};
 use opentelemetry_otlp::{WithExportConfig, WithTonicConfig};
@@ -44,6 +45,7 @@ pub fn init_tracing(
     log_dir: PathBuf,
     log_level: Level,
     log_max_files: usize,
+    log_max_file_size: ByteSize,
     otel_protocol: Option<String>,
     otel_endpoint: Option<String>,
     otel_path: Option<PathBuf>,
@@ -73,7 +75,7 @@ pub fn init_tracing(
     } else {
         let appender = BasicRollingFileAppender::new(
             log_dir.join(name).with_extension("log"),
-            RollingConditionBasic::new().hourly(),
+            RollingConditionBasic::new().max_size(log_max_file_size.as_u64()),
             log_max_files,
         )
         .expect("failed to create rolling file appender");
@@ -255,7 +257,42 @@ pub fn init_command_tracing(log_level: Level, console: bool) -> Vec<WorkerGuard>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use tempfile::TempDir;
+
+    #[test]
+    fn zero_max_file_size_disables_size_based_rotation() {
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let log_path = temp_dir.path().join("dfdaemon.log");
+        let mut appender = BasicRollingFileAppender::new(
+            &log_path,
+            RollingConditionBasic::new().max_size(ByteSize::gib(1).as_u64()),
+            6,
+        )
+        .expect("failed to create rolling file appender");
+
+        appender.write_all(b"first").unwrap();
+        appender.write_all(b"second").unwrap();
+        appender.flush().unwrap();
+        assert!(!log_path.with_extension("log.1").exists());
+    }
+
+    #[test]
+    fn positive_max_file_size_enables_size_based_rotation() {
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let log_path = temp_dir.path().join("dfdaemon.log");
+        let mut appender = BasicRollingFileAppender::new(
+            &log_path,
+            RollingConditionBasic::new().max_size(ByteSize::b(4).as_u64()),
+            6,
+        )
+        .expect("failed to create rolling file appender");
+
+        appender.write_all(b"1234").unwrap();
+        appender.write_all(b"5").unwrap();
+        appender.flush().unwrap();
+        assert!(log_path.with_extension("log.1").exists());
+    }
 
     #[test]
     fn test_init_tracing_comprehensive() {
@@ -268,6 +305,7 @@ mod tests {
             log_dir.clone(),
             Level::INFO,
             10,
+            ByteSize::default(),
             None,
             None,
             None,
