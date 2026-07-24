@@ -15,7 +15,7 @@
  */
 
 use super::{Data, SchedulerClusterClientConfig, SchedulerClusterSeedClientConfig};
-use dragonfly_api::manager::v2::{ListSchedulersResponse, Scheduler};
+use dragonfly_api::manager::v2::{ListSchedulersResponse, Scheduler as ManagerScheduler};
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
@@ -36,7 +36,7 @@ use dragonfly_client_config::dfdaemon::{
 /// The scheduler configuration for the local dynamic configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct SchedulerConfig {
+pub struct Scheduler {
     /// The address of the scheduler headless service with port (e.g.
     /// `scheduler-headless.default.svc:8002`), resolved via DNS to the list
     /// of scheduler IPs.
@@ -49,10 +49,10 @@ pub struct SchedulerConfig {
     pub addrs: Option<Vec<String>>,
 }
 
-/// Implement Default for SchedulerConfig.
-impl Default for SchedulerConfig {
+/// Implement Default for Scheduler.
+impl Default for Scheduler {
     fn default() -> Self {
-        SchedulerConfig {
+        Scheduler {
             addr: default_local_dynconfig_scheduler_addr(),
             addrs: None,
         }
@@ -63,7 +63,7 @@ impl Default for SchedulerConfig {
 /// file (typically mounted as a Kubernetes ConfigMap).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct LocalConfig {
+pub struct Config {
     /// The interval to refresh the local dynamic configuration.
     #[serde(
         default = "default_local_dynconfig_refresh_interval",
@@ -72,7 +72,7 @@ pub struct LocalConfig {
     pub refresh_interval: Duration,
 
     /// The scheduler configuration for scheduler discovery.
-    pub scheduler: SchedulerConfig,
+    pub scheduler: Scheduler,
 
     /// Client-specific block list configuration.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -83,12 +83,12 @@ pub struct LocalConfig {
     pub seed_client_config: Option<SchedulerClusterSeedClientConfig>,
 }
 
-/// Implement Default for LocalConfig.
-impl Default for LocalConfig {
+/// Implement Default for Config.
+impl Default for Config {
     fn default() -> Self {
-        LocalConfig {
+        Config {
             refresh_interval: default_local_dynconfig_refresh_interval(),
-            scheduler: SchedulerConfig::default(),
+            scheduler: Scheduler::default(),
             client_config: None,
             seed_client_config: None,
         }
@@ -128,7 +128,7 @@ impl Local {
             return Ok(());
         }
 
-        let config = LocalConfig::default();
+        let config = Config::default();
         let content = serde_yaml::to_string(&config).or_err(ErrorType::SerializeError)?;
         fs::write(&self.path, content).await.inspect_err(|err| {
             error!("write dynconfig {} failed: {}", self.path.display(), err);
@@ -145,7 +145,7 @@ impl Local {
         let content = fs::read_to_string(&self.path).await.inspect_err(|err| {
             error!("read dynconfig {} failed: {}", self.path.display(), err);
         })?;
-        let config: LocalConfig = serde_yaml::from_str(&content).or_err(ErrorType::ConfigError)?;
+        let config: Config = serde_yaml::from_str(&content).or_err(ErrorType::ConfigError)?;
 
         // Update the refresh interval from the file.
         *self.refresh_interval.write().await = config.refresh_interval;
@@ -170,7 +170,7 @@ impl Local {
     /// resolved addresses are sorted to keep the scheduler selection stable
     /// across refreshes.
     #[instrument(skip_all)]
-    async fn resolve_schedulers(&self, addr: &str) -> Result<Vec<Scheduler>> {
+    async fn resolve_schedulers(&self, addr: &str) -> Result<Vec<ManagerScheduler>> {
         if addr.is_empty() {
             error!("scheduler addr is not specified in dynconfig");
             return Err(Error::InvalidParameter);
@@ -190,7 +190,7 @@ impl Local {
         socket_addrs.dedup();
         Ok(socket_addrs
             .into_iter()
-            .map(|socket_addr| Scheduler {
+            .map(|socket_addr| ManagerScheduler {
                 ip: socket_addr.ip().to_string(),
                 port: socket_addr.port() as i32,
                 ..Default::default()
@@ -202,7 +202,7 @@ impl Local {
     /// schedulers. The addresses are sorted to keep the scheduler selection
     /// stable across refreshes.
     #[instrument(skip_all)]
-    fn parse_schedulers(addrs: &[String]) -> Result<Vec<Scheduler>> {
+    fn parse_schedulers(addrs: &[String]) -> Result<Vec<ManagerScheduler>> {
         let mut socket_addrs = Vec::with_capacity(addrs.len());
         for addr in addrs {
             let socket_addr = addr.parse::<SocketAddr>().inspect_err(|err| {
@@ -215,7 +215,7 @@ impl Local {
         socket_addrs.dedup();
         Ok(socket_addrs
             .into_iter()
-            .map(|socket_addr| Scheduler {
+            .map(|socket_addr| ManagerScheduler {
                 ip: socket_addr.ip().to_string(),
                 port: socket_addr.port() as i32,
                 ..Default::default()
@@ -272,7 +272,7 @@ seedClientConfig:
         priorities: []
 "#;
 
-        let config: LocalConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.refresh_interval, Duration::from_secs(10));
         assert_eq!(config.scheduler.addr, "scheduler-headless.default.svc:8002");
 
@@ -299,7 +299,7 @@ scheduler:
   addr: 'scheduler-headless.default.svc:8002'
 "#;
 
-        let config: LocalConfig = serde_yaml::from_str(yaml).unwrap();
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(
             config.refresh_interval,
             default_local_dynconfig_refresh_interval()
@@ -343,7 +343,7 @@ scheduler:
         local.generate_default().await.unwrap();
 
         let content = tokio::fs::read_to_string(&path).await.unwrap();
-        let config: LocalConfig = serde_yaml::from_str(&content).unwrap();
+        let config: Config = serde_yaml::from_str(&content).unwrap();
         assert_eq!(
             config.scheduler.addr,
             default_local_dynconfig_scheduler_addr()
