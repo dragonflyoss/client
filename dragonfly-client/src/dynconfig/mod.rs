@@ -14,33 +14,32 @@
  * limitations under the License.
  */
 
-use crate::grpc::health::HealthClient;
 use crate::grpc::manager::ManagerClient;
 use block_list::BlockList;
-use dragonfly_api::manager::v2::{
-    ListSchedulersRequest, ListSchedulersResponse, Scheduler, SourceType,
-};
-use dragonfly_client_config::{dfdaemon::Config, CARGO_PKG_VERSION, GIT_COMMIT_SHORT_HASH};
-use dragonfly_client_core::{Error, Result};
-use dragonfly_client_util::net::format_url;
+use dragonfly_api::manager::v2::{ListSchedulersResponse, Scheduler};
+use dragonfly_client_config::dfdaemon::Config;
+use dragonfly_client_core::Result;
 use dragonfly_client_util::shutdown;
+use local::Local;
 use regex::Regex;
+use remote::Remote;
 use serde::{Deserialize, Serialize};
-use std::net::IpAddr;
-use std::str::FromStr;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{mpsc, Mutex, RwLock};
-use tonic_health::pb::health_check_response::ServingStatus;
 use tracing::{debug, error, info, instrument};
-use url::Url;
 
 pub mod block_list;
+pub mod local;
+pub mod remote;
 
 /// Block list configuration for scheduler cluster clients.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SchedulerClusterClientConfig {
     /// Block list rules applied to client requests.
+    #[serde(alias = "blockList")]
     pub block_list: Option<SchedulerClusterConfigBlockList>,
 }
 
@@ -49,6 +48,7 @@ pub struct SchedulerClusterClientConfig {
 #[serde(default)]
 pub struct SchedulerClusterSeedClientConfig {
     /// Block list rules applied to seed client requests.
+    #[serde(alias = "blockList")]
     pub block_list: Option<SchedulerClusterConfigBlockList>,
 }
 
@@ -60,9 +60,11 @@ pub struct SchedulerClusterConfigBlockList {
     pub task: Option<SchedulerClusterConfigTaskBlockList>,
 
     /// Block list for persistent tasks.
+    #[serde(alias = "persistentTask")]
     pub persistent_task: Option<SchedulerClusterConfigPersistentTaskBlockList>,
 
     /// Block list for persistent cache tasks.
+    #[serde(alias = "persistentCacheTask")]
     pub persistent_cache_task: Option<SchedulerClusterConfigPersistentCacheTaskBlockList>,
 }
 
@@ -132,7 +134,7 @@ pub struct SchedulerClusterConfigUploadBlockList {
 /// Dynamic configuration state of the dfdaemon.
 #[derive(Default)]
 pub struct Data {
-    /// All known schedulers returned by the manager.
+    /// All known schedulers returned by the backend.
     pub schedulers: ListSchedulersResponse,
 
     /// Schedulers currently available for use.
@@ -148,8 +150,19 @@ pub struct Data {
     pub seed_client_config: Option<SchedulerClusterSeedClientConfig>,
 }
 
+/// Backend of the dynamic configuration. When the manager is configured, the
+/// dynamic configuration is fetched from the manager, otherwise it is loaded
+/// from the local dynconfig file.
+enum Backend {
+    /// Fetches the dynamic configuration from the manager.
+    Remote(Remote),
+
+    /// Loads the dynamic configuration from the local dynconfig file.
+    Local(Local),
+}
+
 /// Manages dynamic configuration for the dfdaemon, periodically
-/// refreshing state from the manager service.
+/// refreshing state from the configured backend.
 pub struct Dynconfig {
     /// Current dynamic configuration, protected by a read-write lock.
     pub data: Arc<RwLock<Data>>,
@@ -160,8 +173,8 @@ pub struct Dynconfig {
     /// Static dfdaemon configuration.
     config: Arc<Config>,
 
-    /// gRPC client used to communicate with the manager.
-    manager_client: Arc<ManagerClient>,
+    /// Backend of the dynamic configuration.
+    backend: Backend,
 
     /// Mutex guarding concurrent refresh operations.
     mutex: Mutex<()>,
@@ -175,10 +188,14 @@ pub struct Dynconfig {
 
 /// The implementation of Dynconfig.
 impl Dynconfig {
-    // Create a new Dynconfig instance.
+    /// Creates a new Dynconfig instance.
+    ///
+    /// The backend is selected based on the configuration: if the manager
+    /// address is configured, the dynamic configuration is fetched from the
+    /// manager; otherwise, it is loaded from the local dynconfig file.
     pub async fn new(
         config: Arc<Config>,
-        manager_client: Arc<ManagerClient>,
+        dynconfig_path: PathBuf,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Result<Self> {
@@ -187,8 +204,8 @@ impl Dynconfig {
         let dc = Dynconfig {
             block_list: Arc::new(BlockList::new(config.clone(), data.clone())),
             data,
-            config,
-            manager_client,
+            config: config.clone(),
+            backend: Self::backend(config, dynconfig_path.clone()).await?,
             mutex: Mutex::new(()),
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
@@ -199,13 +216,48 @@ impl Dynconfig {
         Ok(dc)
     }
 
+    /// Creates a new backend for the dynamic configuration based on the provided configuration.
+    async fn backend(config: Arc<Config>, dynconfig_path: PathBuf) -> Result<Backend> {
+        match config.manager {
+            Some(ref manager) => {
+                let manager_client = ManagerClient::new(manager, manager.addr.clone())
+                    .await
+                    .inspect_err(|err| {
+                        error!("initialize manager client failed: {}", err);
+                    })?;
+
+                info!(
+                    "refresh dynamic configuration from manager {}",
+                    manager.addr
+                );
+                Ok(Backend::Remote(Remote::new(
+                    config.clone(),
+                    Arc::new(manager_client),
+                )))
+            }
+            None => {
+                info!(
+                    "manager is not configured, load dynamic configuration from {}",
+                    dynconfig_path.display()
+                );
+
+                let local = Local::new(config.clone(), dynconfig_path);
+                local.generate_default().await?;
+                Ok(Backend::Local(local))
+            }
+        }
+    }
+
     /// Run starts the dynconfig server.
     pub async fn run(&self) {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
 
         // Start the refresh loop.
-        let mut interval = tokio::time::interval(self.config.dynconfig.refresh_interval);
+        let mut interval = tokio::time::interval(self.refresh_interval().await);
+
+        // Start the refresh loop. The refresh interval is re-evaluated on each
+        // iteration, since the local backend can change it on refresh.
         loop {
             tokio::select! {
                 _ = interval.tick() => {
@@ -232,139 +284,20 @@ impl Dynconfig {
             return Ok(());
         };
 
-        let schedulers = self.list_schedulers().await?;
-        let available_schedulers = self
-            .get_available_schedulers(&schedulers.schedulers)
-            .await?;
-
-        let Some(available_scheduler) = available_schedulers.first() else {
-            return Err(Error::AvailableSchedulersNotFound);
+        let data = match &self.backend {
+            Backend::Remote(remote) => remote.refresh().await?,
+            Backend::Local(local) => local.refresh().await?,
         };
 
-        let scheduler_cluster_id = available_scheduler.scheduler_cluster_id;
-        let Some(scheduler_cluster) = &available_scheduler.scheduler_cluster else {
-            return Err(Error::AvailableSchedulersNotFound);
-        };
-
-        // Deserialize the client configs from the scheduler cluster.
-        let client_config = match serde_json::from_slice::<SchedulerClusterClientConfig>(
-            &scheduler_cluster.client_config,
-        ) {
-            Ok(config) => Some(config),
-            Err(err) => {
-                error!("failed to deserialize client config: {}", err);
-                None
-            }
-        };
-
-        // Deserialize the seed client configs from the scheduler cluster.
-        let seed_client_config = match serde_json::from_slice::<SchedulerClusterSeedClientConfig>(
-            &scheduler_cluster.seed_client_config,
-        ) {
-            Ok(config) => Some(config),
-            Err(err) => {
-                error!("failed to deserialize seed client config: {}", err);
-                None
-            }
-        };
-
-        let mut data = self.data.write().await;
-        data.schedulers = schedulers;
-        data.available_schedulers = available_schedulers;
-        data.available_scheduler_cluster_id = Some(scheduler_cluster_id);
-        data.client_config = client_config;
-        data.seed_client_config = seed_client_config;
+        *self.data.write().await = data;
         Ok(())
     }
 
-    /// List schedulers from the manager service based on the source type (peer or seed peer).
-    #[instrument(skip_all)]
-    async fn list_schedulers(&self) -> Result<ListSchedulersResponse> {
-        // Get the source type.
-        let source_type = if self.config.seed_peer.enable {
-            SourceType::SeedPeerSource.into()
-        } else {
-            SourceType::PeerSource.into()
-        };
-
-        // Get the schedulers from the manager.
-        self.manager_client
-            .list_schedulers(ListSchedulersRequest {
-                source_type,
-                hostname: self.config.host.hostname.clone(),
-                ip: self.config.host.ip.unwrap().to_string(),
-                idc: self.config.host.idc.clone(),
-                location: self.config.host.location.clone(),
-                version: CARGO_PKG_VERSION.to_string(),
-                commit: GIT_COMMIT_SHORT_HASH.to_string(),
-                scheduler_cluster_id: self.config.host.scheduler_cluster_id.unwrap_or(0),
-            })
-            .await
-    }
-
-    /// Gets the available schedulers by checking the health of each scheduler and filtering out
-    /// the unhealthy ones. If scheduler_cluster_id is specified, only returns the schedulers of
-    /// the specified scheduler cluster.
-    #[instrument(skip_all)]
-    async fn get_available_schedulers(&self, schedulers: &[Scheduler]) -> Result<Vec<Scheduler>> {
-        let mut available_schedulers: Vec<Scheduler> = Vec::new();
-        let mut available_scheduler_cluster_id: Option<u64> = None;
-        for scheduler in schedulers {
-            // If scheduler_cluster_id is specified, only return the schedulers
-            // of the specified scheduler cluster.
-            if let Some(scheduler_cluster_id) = available_scheduler_cluster_id {
-                if scheduler.scheduler_cluster_id != scheduler_cluster_id {
-                    continue;
-                }
-            }
-
-            let addr = format_url(
-                "http",
-                IpAddr::from_str(&scheduler.ip)?,
-                scheduler.port as u16,
-            );
-            let domain_name = Url::parse(addr.as_str())?
-                .host_str()
-                .ok_or(Error::InvalidParameter)
-                .inspect_err(|_err| {
-                    error!("invalid address: {}", addr);
-                })?
-                .to_string();
-
-            // Check the health of the scheduler.
-            let health_client = match HealthClient::new(
-                &addr,
-                self.config
-                    .scheduler
-                    .load_client_tls_config(domain_name.as_str())
-                    .await?,
-            )
-            .await
-            {
-                Ok(client) => client,
-                Err(err) => {
-                    error!(
-                        "create health client for scheduler {}:{} failed: {}",
-                        scheduler.ip, scheduler.port, err
-                    );
-                    continue;
-                }
-            };
-
-            match health_client.check().await {
-                Ok(resp) => {
-                    if resp.status == ServingStatus::Serving as i32 {
-                        available_schedulers.push(scheduler.clone());
-                        available_scheduler_cluster_id = Some(scheduler.scheduler_cluster_id);
-                    }
-                }
-                Err(err) => {
-                    error!("check scheduler health failed: {}", err);
-                    continue;
-                }
-            }
+    /// Returns the interval to refresh the dynamic configuration.
+    async fn refresh_interval(&self) -> Duration {
+        match &self.backend {
+            Backend::Remote(_) => self.config.dynconfig.refresh_interval,
+            Backend::Local(local) => local.refresh_interval().await,
         }
-
-        Ok(available_schedulers)
     }
 }
