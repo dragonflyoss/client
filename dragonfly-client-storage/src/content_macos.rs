@@ -159,10 +159,6 @@ impl Content {
     #[instrument(level = "debug", skip_all)]
     pub async fn create_task(&self, task_id: &str, length: u64) -> Result<PathBuf> {
         let task_path = self.get_task_path(task_id);
-        if task_path.exists() {
-            return Ok(task_path);
-        }
-
         let task_dir = self
             .dir
             .join(super::content::DEFAULT_TASK_DIR)
@@ -171,17 +167,25 @@ impl Content {
             error!("create {:?} failed: {}", task_dir, err);
         })?;
 
-        let f = fs::File::create(task_dir.join(task_id))
+        let f = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&task_path)
             .await
-            .inspect_err(|err| {
-                error!("create {:?} failed: {}", task_dir, err);
-            })?;
+        {
+            Ok(f) => f,
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => return Ok(task_path),
+            Err(err) => {
+                error!("create {:?} failed: {}", task_path, err);
+                return Err(err.into());
+            }
+        };
 
         fallocate(&f, length).await.inspect_err(|err| {
             error!("fallocate {:?} failed: {}", task_dir, err);
         })?;
 
-        Ok(task_dir.join(task_id))
+        Ok(task_path)
     }
 
     /// Hard links the task content to the destination.
@@ -874,12 +878,14 @@ mod tests {
         let content = Content::new(config, temp_dir.path()).await.unwrap();
 
         let task_id = "60409bd0ec44160f44c53c39b3fe1c5fdfb23faded0228c68bee83bc15a200e3";
-        let task_path = content.create_task(task_id, 0).await.unwrap();
+        let task_path = content.create_task(task_id, 4).await.unwrap();
         assert!(task_path.exists());
         assert_eq!(task_path, temp_dir.path().join("content/tasks/604/60409bd0ec44160f44c53c39b3fe1c5fdfb23faded0228c68bee83bc15a200e3"));
 
-        let task_path_exists = content.create_task(task_id, 0).await.unwrap();
+        fs::write(&task_path, b"data").await.unwrap();
+        let task_path_exists = content.create_task(task_id, 64).await.unwrap();
         assert_eq!(task_path, task_path_exists);
+        assert_eq!(fs::read(&task_path).await.unwrap(), b"data");
     }
 
     #[tokio::test]

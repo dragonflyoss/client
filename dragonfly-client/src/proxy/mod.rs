@@ -18,7 +18,7 @@ use crate::dynconfig::Dynconfig;
 use crate::grpc::REQUEST_TIMEOUT;
 use crate::resource::{piece::MIN_PIECE_LENGTH, task::Task};
 use bytes::Bytes;
-use dragonfly_api::common::v2::{Download, TaskType};
+use dragonfly_api::common::v2::{Download, Range, TaskType};
 use dragonfly_api::dfdaemon::v2::{
     download_task_response, DownloadTaskRequest, DownloadTaskStartedResponse,
 };
@@ -31,7 +31,7 @@ use dragonfly_client_metric::{
     collect_proxy_request_via_dfdaemon_metrics,
 };
 use dragonfly_client_util::{
-    http::{hashmap_to_headermap, headermap_to_hashmap},
+    http::{get_content_range_from_hashmap, hashmap_to_headermap, headermap_to_hashmap},
     shutdown,
     tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
 };
@@ -897,6 +897,7 @@ async fn proxy_via_dfdaemon(
     } else {
         http::StatusCode::OK
     };
+    let storage_range = storage_range(&download_task_started_response);
 
     // Return the response if the client return the first piece.
     let mut initialized = false;
@@ -965,7 +966,7 @@ async fn proxy_via_dfdaemon(
                                             .as_str(),
                                         message.task_id.as_str(),
                                         piece_length,
-                                        download_task_started_response.range,
+                                        storage_range,
                                     )
                                     .await
                                 {
@@ -1329,18 +1330,30 @@ fn make_response_headers(
     // directly, instead of staging them in the hashmap and parsing them again.
     let mut headers = hashmap_to_headermap(&download_task_started_response.response_header)?;
 
-    // Insert the content range header to the response header.
+    // Insert the content range header to the response header. Compact signed-range
+    // tasks already carry the source object's Content-Range, including its complete
+    // length, so preserve that value instead of rebuilding it from compact length.
     if let Some(range) = download_task_started_response.range.as_ref() {
-        headers.insert(
-            reqwest::header::CONTENT_RANGE,
-            hyper::header::HeaderValue::try_from(format!(
-                "bytes {}-{}/{}",
-                range.start,
-                range.start + range.length - 1,
-                download_task_started_response.content_length
-            ))
-            .or_err(ErrorType::ParseError)?,
-        );
+        let has_compact_content_range =
+            get_content_range_from_hashmap(&download_task_started_response.response_header)
+                .ok()
+                .flatten()
+                .is_some_and(|content_range| {
+                    content_range.range == *range
+                        && download_task_started_response.content_length == range.length
+                });
+        if !has_compact_content_range {
+            headers.insert(
+                reqwest::header::CONTENT_RANGE,
+                hyper::header::HeaderValue::try_from(format!(
+                    "bytes {}-{}/{}",
+                    range.start,
+                    range.start + range.length - 1,
+                    download_task_started_response.content_length
+                ))
+                .or_err(ErrorType::ParseError)?,
+            );
+        }
 
         headers.insert(reqwest::header::CONTENT_LENGTH, range.length.into());
     };
@@ -1370,6 +1383,23 @@ fn make_response_headers(
     );
 
     Ok(headers)
+}
+
+/// Returns the range to apply while reading local task storage. Compact signed-range
+/// tasks store only the selected bytes at offset zero, even though the HTTP response
+/// range remains in source-object coordinates.
+fn storage_range(download_task_started_response: &DownloadTaskStartedResponse) -> Option<Range> {
+    let range = download_task_started_response.range?;
+    let is_compact =
+        get_content_range_from_hashmap(&download_task_started_response.response_header)
+            .ok()
+            .flatten()
+            .is_some_and(|content_range| {
+                content_range.range == range
+                    && download_task_started_response.content_length == range.length
+            });
+
+    (!is_compact).then_some(range)
 }
 
 /// Returns whether the dfdaemon should be used to download the task.
@@ -1412,4 +1442,62 @@ fn empty() -> BoxBody<Bytes, ClientError> {
     Empty::<Bytes>::new()
         .map_err(|never| match never {})
         .boxed()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compact_signed_range_response_uses_source_coordinates() {
+        let mut started = DownloadTaskStartedResponse {
+            content_length: 100,
+            range: Some(Range {
+                start: 100,
+                length: 100,
+            }),
+            ..Default::default()
+        };
+        started.response_header.insert(
+            "content-range".to_string(),
+            "bytes 100-199/1000".to_string(),
+        );
+
+        assert_eq!(storage_range(&started), None);
+        let headers = make_response_headers(
+            "task-id",
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            &started,
+        )
+        .unwrap();
+        assert_eq!(
+            headers.get(reqwest::header::CONTENT_RANGE).unwrap(),
+            "bytes 100-199/1000"
+        );
+        assert_eq!(headers.get(reqwest::header::CONTENT_LENGTH).unwrap(), "100");
+    }
+
+    #[test]
+    fn test_regular_range_response_uses_storage_range() {
+        let started = DownloadTaskStartedResponse {
+            content_length: 1000,
+            range: Some(Range {
+                start: 100,
+                length: 100,
+            }),
+            ..Default::default()
+        };
+
+        assert_eq!(storage_range(&started), started.range);
+        let headers = make_response_headers(
+            "task-id",
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            &started,
+        )
+        .unwrap();
+        assert_eq!(
+            headers.get(reqwest::header::CONTENT_RANGE).unwrap(),
+            "bytes 100-199/1000"
+        );
+    }
 }

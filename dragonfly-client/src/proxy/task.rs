@@ -18,7 +18,7 @@ use crate::dynconfig::block_list::DownloadBlockListCheckParams;
 use crate::dynconfig::Dynconfig;
 use crate::grpc::{DOWNLOAD_STREAM_BUFFER_SIZE, REQUEST_TIMEOUT};
 use crate::resource::task::Task;
-use dragonfly_api::common::v2::TaskType;
+use dragonfly_api::common::v2::{Range, TaskType};
 use dragonfly_api::dfdaemon::v2::{DownloadTaskRequest, DownloadTaskResponse};
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client_config::dfdaemon::Config;
@@ -30,7 +30,10 @@ use dragonfly_client_metric::{
 };
 use dragonfly_client_util::{
     digest::is_blob_url,
-    http::{headermap_to_hashmap, parse_range_header},
+    http::{
+        headermap_to_hashmap, parse_range_header, signature_bound_range_cache_key_from_hashmap,
+        signature_bound_range_from_hashmap,
+    },
     id_generator::TaskIDParameter,
     types::redacted::RedactedDownload,
 };
@@ -83,6 +86,20 @@ pub async fn download(
     // If concurrent_piece_count is not set in the request, use the default value in the config.
     download.concurrent_piece_count = Some(config.download.concurrent_piece_count);
 
+    // A signature-bound Range cannot be removed for a full-object prefetch or
+    // rewritten as a Dragonfly piece range without invalidating AWS SigV4.
+    let signature_bound_range =
+        signature_bound_range_from_hashmap(&download.request_header, &download.url)
+            .map(str::to_owned);
+    let signature_bound_cache_key =
+        signature_bound_range_cache_key_from_hashmap(&download.request_header, &download.url);
+    if signature_bound_range.is_some() {
+        download.prefetch = false;
+        // Parse the authoritative signed header after stat determines the full
+        // object length. Do not allow a separate protobuf range to diverge.
+        download.range = None;
+    }
+
     // Generate the task id.
     let task_id = task_manager
         .id_generator
@@ -111,6 +128,10 @@ pub async fn download(
         .inspect_err(|err| {
             error!("generate task id: {}", err);
         })?;
+    let task_id = match signature_bound_cache_key.as_deref() {
+        Some(cache_key) => task_manager.id_generator.range_task_id(&task_id, cache_key),
+        None => task_id,
+    };
 
     // Generate the host id.
     let host_id = task_manager.id_generator.host_id();
@@ -165,7 +186,13 @@ pub async fn download(
     // Download's range priority is higher than the request header's range.
     // If download protocol is http, use the range of the request header.
     // If download protocol is not http, use the range of the download.
-    if download.range.is_none() {
+    if let Some(range_header) = signature_bound_range.as_deref() {
+        let content_range = Task::signature_bound_content_range(&task, range_header)?;
+        download.range = Some(Range {
+            start: 0,
+            length: content_range.range.length,
+        });
+    } else if download.range.is_none() {
         // Look up the range header directly instead of converting the whole
         // request header hashmap into a HeaderMap.
         let range_header = download
