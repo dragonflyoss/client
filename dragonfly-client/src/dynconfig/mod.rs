@@ -188,17 +188,37 @@ pub struct Dynconfig {
 
 /// The implementation of Dynconfig.
 impl Dynconfig {
-    // Create a new Dynconfig instance.
+    /// Creates a new Dynconfig instance.
+    ///
+    /// The backend is selected based on the configuration: if the manager
+    /// address is configured, the dynamic configuration is fetched from the
+    /// manager; otherwise, it is loaded from the local dynconfig file.
     pub async fn new(
         config: Arc<Config>,
         dynconfig_path: PathBuf,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Result<Self> {
-        // Select the backend of the dynamic configuration. If the manager is
-        // configured, fetch it from the manager, otherwise load it from the
-        // local dynconfig file.
-        let backend = match config.manager {
+        // Create a new Dynconfig.
+        let data = Arc::new(RwLock::new(Data::default()));
+        let dc = Dynconfig {
+            block_list: Arc::new(BlockList::new(config.clone(), data.clone())),
+            data,
+            config: config.clone(),
+            backend: Self::backend(config, dynconfig_path.clone()).await?,
+            mutex: Mutex::new(()),
+            shutdown,
+            _shutdown_complete: shutdown_complete_tx,
+        };
+
+        // Initialize the dynamic configuration.
+        dc.refresh().await?;
+        Ok(dc)
+    }
+
+    /// Creates a new backend for the dynamic configuration based on the provided configuration.
+    async fn backend(config: Arc<Config>, dynconfig_path: PathBuf) -> Result<Backend> {
+        match config.manager {
             Some(ref manager) => {
                 let manager_client = ManagerClient::new(config.clone(), manager.addr.clone())
                     .await
@@ -210,7 +230,10 @@ impl Dynconfig {
                     "refresh dynamic configuration from manager {}",
                     manager.addr
                 );
-                Backend::Remote(Remote::new(config.clone(), Arc::new(manager_client)))
+                Ok(Backend::Remote(Remote::new(
+                    config.clone(),
+                    Arc::new(manager_client),
+                )))
             }
             None => {
                 info!(
@@ -218,27 +241,11 @@ impl Dynconfig {
                     dynconfig_path.display()
                 );
 
-                let local = Local::new(dynconfig_path);
+                let local = Local::new(config.clone(), dynconfig_path);
                 local.generate_default().await?;
-                Backend::Local(local)
+                Ok(Backend::Local(local))
             }
-        };
-
-        // Create a new Dynconfig.
-        let data = Arc::new(RwLock::new(Data::default()));
-        let dc = Dynconfig {
-            block_list: Arc::new(BlockList::new(config.clone(), data.clone())),
-            data,
-            config,
-            backend,
-            mutex: Mutex::new(()),
-            shutdown,
-            _shutdown_complete: shutdown_complete_tx,
-        };
-
-        // Initialize the dynamic configuration.
-        dc.refresh().await?;
-        Ok(dc)
+        }
     }
 
     /// Run starts the dynconfig server.
@@ -246,11 +253,14 @@ impl Dynconfig {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
 
+        // Start the refresh loop.
+        let mut interval = tokio::time::interval(self.refresh_interval().await);
+
         // Start the refresh loop. The refresh interval is re-evaluated on each
         // iteration, since the local backend can change it on refresh.
         loop {
             tokio::select! {
-                _ = tokio::time::sleep(self.refresh_interval().await) => {
+                _ = interval.tick() => {
                     match self.refresh().await {
                         Err(err) => error!("refresh dynconfig failed: {}", err),
                         Ok(_) => debug!("refresh dynconfig success"),
@@ -274,13 +284,12 @@ impl Dynconfig {
             return Ok(());
         };
 
-        let new_data = match &self.backend {
+        let data = match &self.backend {
             Backend::Remote(remote) => remote.refresh().await?,
             Backend::Local(local) => local.refresh().await?,
         };
 
-        let mut data = self.data.write().await;
-        *data = new_data;
+        *self.data.write().await = data;
         Ok(())
     }
 

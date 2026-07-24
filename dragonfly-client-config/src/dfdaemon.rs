@@ -250,7 +250,7 @@ fn default_dynconfig_refresh_interval() -> Duration {
 /// Returns the default interval to refresh the local dynamic configuration.
 #[inline]
 pub fn default_local_dynconfig_refresh_interval() -> Duration {
-    Duration::from_secs(5)
+    Duration::from_secs(60)
 }
 
 /// Returns the default scheduler address for the local dynamic configuration.
