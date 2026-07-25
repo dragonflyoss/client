@@ -43,6 +43,36 @@ pub const DEFAULT_PERSISTENT_CACHE_TASK_DIR: &str = "persistent-cache-tasks";
 /// content, multiplied by the largest configured buffer size to size the pool.
 pub const MAX_BUFFER_POOL_IDLE_BUFFERS: usize = 128;
 
+/// MappedPiece is a read-only memory map of finished piece bytes on disk. The RDMA upload path
+/// can copy from this mapping into registered send windows without an intermediate `AsyncRead`
+/// buffer. Dropping the value unmaps the pages after any in-flight transfer completes.
+pub struct MappedPiece {
+    /// mmap owns the mapped pages for the piece byte range.
+    mmap: memmap2::Mmap,
+}
+
+impl MappedPiece {
+    /// Creates a mapped piece over an already-validated memory map of the piece bytes.
+    pub(crate) fn new(mmap: memmap2::Mmap) -> Self {
+        Self { mmap }
+    }
+
+    /// Returns the mapped piece bytes.
+    pub fn as_slice(&self) -> &[u8] {
+        &self.mmap
+    }
+
+    /// Returns the mapped piece length in bytes.
+    pub fn len(&self) -> usize {
+        self.mmap.len()
+    }
+
+    /// Returns whether the mapped piece is empty.
+    pub fn is_empty(&self) -> bool {
+        self.mmap.is_empty()
+    }
+}
+
 /// Creates a new Content instance to support linux and macos.
 pub async fn new_content(config: Arc<Config>, dir: &Path) -> Result<Content> {
     Content::new(config, dir).await

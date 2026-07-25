@@ -40,7 +40,7 @@ use tonic::transport::{
     Certificate as TonicCertificate, ClientTlsConfig, Identity, ServerTlsConfig,
 };
 use tracing::{error, instrument};
-use validator::Validate;
+use validator::{Validate, ValidationError};
 
 /// The name of dfdaemon.
 pub const NAME: &str = "dfdaemon";
@@ -269,6 +269,55 @@ fn default_storage_server_tcp_port() -> u16 {
 #[inline]
 fn default_storage_server_quic_port() -> u16 {
     4006
+}
+
+/// default_storage_server_rdma_port is the default TCP rendezvous port of the RDMA storage
+/// server. Piece payloads do not travel over this port.
+#[inline]
+fn default_storage_server_rdma_port() -> u16 {
+    4007
+}
+
+/// default_storage_server_rdma_provider probes supported hardware providers in preference order.
+#[inline]
+fn default_storage_server_rdma_provider() -> RdmaProvider {
+    RdmaProvider::Auto
+}
+
+/// default_storage_server_rdma_max_registered_bytes bounds memory pinned for active and cached
+/// RDMA transfer buffers. The transport may use less when the platform's memlock limit is lower.
+#[inline]
+fn default_storage_server_rdma_max_registered_bytes() -> ByteSize {
+    ByteSize::mib(512)
+}
+
+/// default_storage_server_rdma_chunk_size is the preferred size of one tagged fabric message.
+/// The peers negotiate the lower configured value and provider maximum.
+#[inline]
+fn default_storage_server_rdma_chunk_size() -> ByteSize {
+    ByteSize::mib(4)
+}
+
+/// default_storage_server_rdma_max_inflight_chunks bounds posted send and receive operations for
+/// one piece. A bounded window avoids exhausting provider queues while retaining enough work to
+/// keep the fabric busy.
+#[inline]
+fn default_storage_server_rdma_max_inflight_chunks() -> u32 {
+    16
+}
+
+/// default_storage_server_rdma_max_concurrent_transfers bounds rendezvous tasks and storage
+/// readers independently of the registered-memory budget.
+#[inline]
+fn default_storage_server_rdma_max_concurrent_transfers() -> u32 {
+    64
+}
+
+/// default_storage_server_rdma_transfer_timeout is the maximum time an RDMA operation may remain
+/// in flight before it is cancelled and the caller falls back to TCP.
+#[inline]
+fn default_storage_server_rdma_transfer_timeout() -> Duration {
+    Duration::from_secs(10)
 }
 
 /// Returns the default keep of the task's metadata and content when the dfdaemon restarts.
@@ -950,6 +999,11 @@ pub struct StorageServer {
     /// The port to the quic server.
     #[serde(default = "default_storage_server_quic_port")]
     pub quic_port: u16,
+
+    /// RDMA piece-transfer server configuration. RDMA is disabled by default and always retains
+    /// TCP as a fallback transport.
+    #[validate]
+    pub rdma: RdmaServer,
 }
 
 /// Implement Default for StorageServer.
@@ -960,6 +1014,184 @@ impl Default for StorageServer {
             tcp_port: default_storage_server_tcp_port(),
             tcp_fastopen: false,
             quic_port: default_storage_server_quic_port(),
+            rdma: RdmaServer::default(),
+        }
+    }
+}
+
+/// RdmaProvider selects the libfabric provider used by the RDMA piece transport. EFA is not an
+/// ibverbs RC transport, so both AWS EFA and conventional RDMA are accessed through libfabric.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum RdmaProvider {
+    /// Auto probes EFA and verbs hardware providers in preference order. The concrete provider
+    /// selected at runtime is advertised to peers; `auto` is never a wire capability.
+    #[default]
+    Auto,
+
+    /// Efa selects Amazon's EFA provider and its reliable datagram endpoint.
+    Efa,
+
+    /// Verbs selects the libfabric verbs provider (normally with the RxM utility provider) for
+    /// RoCE or InfiniBand devices.
+    Verbs,
+}
+
+impl fmt::Display for RdmaProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Auto => write!(f, "auto"),
+            Self::Efa => write!(f, "efa"),
+            Self::Verbs => write!(f, "verbs"),
+        }
+    }
+}
+
+/// RdmaServer configures the optional Linux/libfabric bulk-piece transport. Settings other than
+/// `enable` are also used by an RDMA downloader; `enable` controls only whether this daemon serves
+/// pieces over RDMA. The TCP storage server remains required for discovery and per-piece fallback.
+#[derive(Debug, Clone, Validate, Deserialize)]
+#[validate(schema(function = "validate_rdma_server", skip_on_field_errors = true))]
+#[serde(default, rename_all = "camelCase")]
+pub struct RdmaServer {
+    /// Enable serving pieces over RDMA. Downloading is selected independently with
+    /// `download.protocol: rdma`.
+    pub enable: bool,
+
+    /// TCP port used for reliable rendezvous, capability exchange, metadata, and errors. Bulk
+    /// piece bytes move over libfabric rather than this socket.
+    #[serde(default = "default_storage_server_rdma_port")]
+    #[validate(range(min = 1))]
+    pub port: u16,
+
+    /// Libfabric provider selection. `auto` is resolved to a concrete provider before a peer
+    /// capability is advertised.
+    #[serde(default = "default_storage_server_rdma_provider")]
+    pub provider: RdmaProvider,
+
+    /// Permit libfabric software providers such as `tcp` when `provider` is `auto`. This is
+    /// intended for development and CI only; production defaults to hardware providers.
+    pub allow_software_provider: bool,
+
+    /// Optional libfabric domain/device name, for example `efa_0-rdm`.
+    pub device: Option<String>,
+
+    /// Operator-supplied reachability-domain label. Peers attempt RDMA only when both advertise
+    /// the same non-empty value. On EFA this should identify a VPC and Availability Zone, not a
+    /// placement group (which is a performance recommendation, not a reachability requirement).
+    #[validate(length(min = 1))]
+    pub fabric_tag: Option<String>,
+
+    /// Upper bound on bytes pinned or registered by active and idle pooled transfer buffers.
+    #[serde(
+        with = "bytesize_serde",
+        default = "default_storage_server_rdma_max_registered_bytes"
+    )]
+    pub max_registered_bytes: ByteSize,
+
+    /// Preferred size of one tagged fabric message. Larger values reduce posting and completion
+    /// overhead, while smaller values improve fairness between concurrent transfers.
+    #[serde(
+        with = "bytesize_serde",
+        default = "default_storage_server_rdma_chunk_size"
+    )]
+    pub chunk_size: ByteSize,
+
+    /// Maximum number of tagged chunks posted concurrently for one piece transfer. Peers
+    /// negotiate the lower value. Keeping this bounded prevents a large piece or small chunk size
+    /// from consuming the endpoint's entire transmit or receive queue.
+    #[serde(default = "default_storage_server_rdma_max_inflight_chunks")]
+    #[validate(range(min = 1, max = 4096))]
+    pub max_inflight_chunks: u32,
+
+    /// Maximum number of accepted RDMA rendezvous connections being served concurrently.
+    /// Excess connections are answered "busy" so their callers fall back to TCP for that piece
+    /// while still treating this parent as RDMA-capable.
+    #[serde(default = "default_storage_server_rdma_max_concurrent_transfers")]
+    #[validate(range(min = 1, max = 65535))]
+    pub max_concurrent_transfers: u32,
+
+    /// Maximum duration of one fabric operation before cancellation and TCP fallback.
+    #[serde(
+        default = "default_storage_server_rdma_transfer_timeout",
+        with = "humantime_serde"
+    )]
+    pub transfer_timeout: Duration,
+
+    /// When true, the RDMA server memory-maps finished on-disk piece content and fills the
+    /// registered send ring from that mapping instead of streaming through `AsyncRead`. This
+    /// removes the intermediate read-buffer copy on the upload path. Mapping or registration
+    /// failures fall back to the streaming reader. Cache-resident pieces always use the reader.
+    #[serde(default)]
+    pub mmap_content: bool,
+}
+
+/// RDMA_MIN_CHUNK_SIZE is the smallest tagged message the transport will use. Below this the
+/// per-operation posting and completion cost dominates the transfer, and a piece is split into
+/// enough chunks to exhaust the endpoint's queues.
+const RDMA_MIN_CHUNK_SIZE: ByteSize = ByteSize::kib(64);
+
+/// RDMA_MAX_CHUNK_SIZE bounds one tagged message. Providers cap the message size themselves and
+/// the transport clamps to that at runtime; this catches an unreasonable value at load time.
+const RDMA_MAX_CHUNK_SIZE: ByteSize = ByteSize::gib(1);
+
+/// RDMA_MIN_TRANSFER_TIMEOUT is the shortest fabric operation timeout that is not self-defeating.
+/// The timeout covers a whole window reaching the peer, so a value below this turns every large
+/// transfer into a cancellation and a TCP fallback.
+const RDMA_MIN_TRANSFER_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// RDMA_MAX_TRANSFER_TIMEOUT bounds how long a stuck transfer can pin registered memory before it
+/// is abandoned in favour of TCP.
+const RDMA_MAX_TRANSFER_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// validate_rdma_server rejects RDMA settings that are individually parseable but cannot work
+/// together. The important one is the last check: a registration budget smaller than a single
+/// transfer window admits no transfer at all, so every piece would pay a rendezvous round trip
+/// and a rejection before falling back to TCP.
+fn validate_rdma_server(rdma: &RdmaServer) -> std::result::Result<(), ValidationError> {
+    if rdma.chunk_size < RDMA_MIN_CHUNK_SIZE || rdma.chunk_size > RDMA_MAX_CHUNK_SIZE {
+        return Err(ValidationError::new(
+            "chunkSize must be between 64KiB and 1GiB",
+        ));
+    }
+
+    if rdma.transfer_timeout < RDMA_MIN_TRANSFER_TIMEOUT
+        || rdma.transfer_timeout > RDMA_MAX_TRANSFER_TIMEOUT
+    {
+        return Err(ValidationError::new(
+            "transferTimeout must be between 1s and 10m",
+        ));
+    }
+
+    let window = rdma
+        .chunk_size
+        .as_u64()
+        .saturating_mul(u64::from(rdma.max_inflight_chunks));
+    if rdma.max_registered_bytes.as_u64() < window {
+        return Err(ValidationError::new(
+            "maxRegisteredBytes must be at least chunkSize * maxInflightChunks",
+        ));
+    }
+
+    Ok(())
+}
+
+/// RdmaServer implements Default.
+impl Default for RdmaServer {
+    fn default() -> Self {
+        Self {
+            enable: false,
+            port: default_storage_server_rdma_port(),
+            provider: default_storage_server_rdma_provider(),
+            allow_software_provider: false,
+            device: None,
+            fabric_tag: None,
+            max_registered_bytes: default_storage_server_rdma_max_registered_bytes(),
+            chunk_size: default_storage_server_rdma_chunk_size(),
+            max_inflight_chunks: default_storage_server_rdma_max_inflight_chunks(),
+            max_concurrent_transfers: default_storage_server_rdma_max_concurrent_transfers(),
+            transfer_timeout: default_storage_server_rdma_transfer_timeout(),
+            mmap_content: false,
         }
     }
 }
@@ -2137,7 +2369,20 @@ key: /etc/ssl/private/client.pem
             "server": {
                 "ip": "128.0.0.1",
                 "tcpPort": 4005,
-                "quicPort": 4006
+                "quicPort": 4006,
+                "rdma": {
+                    "enable": true,
+                    "port": 4007,
+                    "provider": "efa",
+                    "allowSoftwareProvider": false,
+                    "device": "efa_0-rdm",
+                    "fabricTag": "vpc-123/use1-az1",
+                    "maxRegisteredBytes": "1GiB",
+                    "chunkSize": "16MiB",
+                    "maxInflightChunks": 8,
+                    "maxConcurrentTransfers": 32,
+                    "transferTimeout": "15s"
+                }
             },
             "dir": "/tmp/storage",
             "keep": true,
@@ -2154,12 +2399,129 @@ key: /etc/ssl/private/client.pem
         );
         assert_eq!(storage.server.tcp_port, 4005);
         assert_eq!(storage.server.quic_port, 4006);
+        assert!(storage.server.rdma.enable);
+        assert_eq!(storage.server.rdma.port, 4007);
+        assert_eq!(storage.server.rdma.provider, RdmaProvider::Efa);
+        assert!(!storage.server.rdma.allow_software_provider);
+        assert_eq!(storage.server.rdma.device.as_deref(), Some("efa_0-rdm"));
+        assert_eq!(
+            storage.server.rdma.fabric_tag.as_deref(),
+            Some("vpc-123/use1-az1")
+        );
+        assert_eq!(storage.server.rdma.max_registered_bytes, ByteSize::gib(1));
+        assert_eq!(storage.server.rdma.chunk_size, ByteSize::mib(16));
+        assert_eq!(storage.server.rdma.max_inflight_chunks, 8);
+        assert_eq!(storage.server.rdma.max_concurrent_transfers, 32);
+        assert_eq!(
+            storage.server.rdma.transfer_timeout,
+            Duration::from_secs(15)
+        );
         assert_eq!(storage.dir, PathBuf::from("/tmp/storage"));
         assert!(storage.keep);
         assert_eq!(storage.write_piece_timeout, Duration::from_secs(20));
         assert_eq!(storage.write_buffer_size, 8 * 1024 * 1024);
         assert_eq!(storage.read_buffer_size, 8 * 1024 * 1024);
         assert_eq!(storage.cache_capacity, ByteSize::mb(256));
+    }
+
+    #[test]
+    fn default_rdma_server_is_safe() {
+        let rdma = RdmaServer::default();
+        assert!(!rdma.enable);
+        assert_eq!(rdma.port, 4007);
+        assert_eq!(rdma.provider, RdmaProvider::Auto);
+        assert!(!rdma.allow_software_provider);
+        assert!(rdma.device.is_none());
+        assert!(rdma.fabric_tag.is_none());
+        assert_eq!(rdma.max_registered_bytes, ByteSize::mib(512));
+        assert_eq!(rdma.chunk_size, ByteSize::mib(4));
+        assert_eq!(rdma.max_inflight_chunks, 16);
+        assert_eq!(rdma.max_concurrent_transfers, 64);
+        assert_eq!(rdma.transfer_timeout, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn reject_empty_rdma_fabric_tag() {
+        let rdma = RdmaServer {
+            fabric_tag: Some(String::new()),
+            ..Default::default()
+        };
+        assert!(rdma.validate().is_err());
+    }
+
+    #[test]
+    fn reject_invalid_rdma_max_inflight_chunks() {
+        let rdma = RdmaServer {
+            max_inflight_chunks: 0,
+            ..Default::default()
+        };
+        assert!(rdma.validate().is_err());
+
+        let rdma = RdmaServer {
+            max_inflight_chunks: 4097,
+            ..Default::default()
+        };
+        assert!(rdma.validate().is_err());
+    }
+
+    #[test]
+    fn reject_invalid_rdma_max_concurrent_transfers() {
+        let rdma = RdmaServer {
+            max_concurrent_transfers: 0,
+            ..Default::default()
+        };
+        assert!(rdma.validate().is_err());
+
+        let rdma = RdmaServer {
+            max_concurrent_transfers: 65536,
+            ..Default::default()
+        };
+        assert!(rdma.validate().is_err());
+    }
+
+    #[test]
+    fn reject_invalid_rdma_chunk_size() {
+        for chunk_size in [ByteSize::b(0), ByteSize::kib(32), ByteSize::gib(2)] {
+            let rdma = RdmaServer {
+                chunk_size,
+                max_registered_bytes: ByteSize::gib(64),
+                ..Default::default()
+            };
+            assert!(rdma.validate().is_err(), "accepted chunk size {chunk_size}");
+        }
+    }
+
+    #[test]
+    fn reject_invalid_rdma_transfer_timeout() {
+        for transfer_timeout in [Duration::from_millis(0), Duration::from_secs(601)] {
+            let rdma = RdmaServer {
+                transfer_timeout,
+                ..Default::default()
+            };
+            assert!(
+                rdma.validate().is_err(),
+                "accepted transfer timeout {transfer_timeout:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn reject_rdma_registration_budget_below_one_window() {
+        // A budget this small rejects every transfer at admission, so RDMA would cost a round
+        // trip per piece and never carry one.
+        let rdma = RdmaServer {
+            chunk_size: ByteSize::mib(4),
+            max_inflight_chunks: 16,
+            max_registered_bytes: ByteSize::mib(32),
+            ..Default::default()
+        };
+        assert!(rdma.validate().is_err());
+
+        let rdma = RdmaServer {
+            max_registered_bytes: ByteSize::mib(64),
+            ..rdma
+        };
+        assert!(rdma.validate().is_ok());
     }
 
     #[test]

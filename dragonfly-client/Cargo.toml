@@ -30,6 +30,11 @@ path = "src/bin/dfstore/main.rs"
 name = "dfctl"
 path = "src/bin/dfctl/main.rs"
 
+[features]
+# rdma enables the libfabric piece transport (AWS EFA and RoCE/InfiniBand).
+# Requires libfabric headers and library at build time.
+rdma = ["dragonfly-client-storage/rdma"]
+
 [dependencies]
 dragonfly-client-core.workspace = true
 dragonfly-client-config.workspace = true

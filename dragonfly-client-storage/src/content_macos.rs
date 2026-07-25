@@ -293,6 +293,92 @@ impl Content {
         ))
     }
 
+    /// map_piece memory-maps the finished piece bytes on disk. The mapping covers exactly the
+    /// piece range so callers can copy into RDMA send windows without an intermediate reader.
+    #[instrument(skip_all)]
+    pub async fn map_piece(
+        &self,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+    ) -> Result<super::content::MappedPiece> {
+        self.map_path_range(self.get_task_path(task_id), offset, length)
+            .await
+    }
+
+    /// map_persistent_piece memory-maps finished persistent piece bytes on disk.
+    #[instrument(skip_all)]
+    pub async fn map_persistent_piece(
+        &self,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+    ) -> Result<super::content::MappedPiece> {
+        self.map_path_range(self.get_persistent_task_path(task_id), offset, length)
+            .await
+    }
+
+    /// map_persistent_cache_piece memory-maps finished persistent cache piece bytes on disk.
+    #[instrument(skip_all)]
+    pub async fn map_persistent_cache_piece(
+        &self,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+    ) -> Result<super::content::MappedPiece> {
+        self.map_path_range(self.get_persistent_cache_task_path(task_id), offset, length)
+            .await
+    }
+
+    /// map_path_range memory-maps `[offset, offset+length)` of a content file.
+    async fn map_path_range(
+        &self,
+        path: PathBuf,
+        offset: u64,
+        length: u64,
+    ) -> Result<super::content::MappedPiece> {
+        if length == 0 {
+            return Err(Error::InvalidParameter);
+        }
+        let mapped = tokio::task::spawn_blocking(move || -> Result<super::content::MappedPiece> {
+            let file = std::fs::File::open(&path).inspect_err(|err| {
+                error!("open {:?} failed: {}", path, err);
+            })?;
+            let metadata = file.metadata().inspect_err(|err| {
+                error!("stat {:?} failed: {}", path, err);
+            })?;
+            let end = offset.checked_add(length).ok_or(Error::InvalidParameter)?;
+            if end > metadata.len() {
+                return Err(Error::Unknown(format!(
+                    "piece range [{}, {}) exceeds content length {}",
+                    offset,
+                    end,
+                    metadata.len()
+                )));
+            }
+            // Safety: the file remains open while the mapping is constructed; MappedPiece owns
+            // the resulting pages for the piece lifetime.
+            let mmap = unsafe {
+                memmap2::MmapOptions::new()
+                    .offset(offset)
+                    .len(length as usize)
+                    .map(&file)
+            }
+            .inspect_err(|err| {
+                error!(
+                    "mmap {:?} offset {} length {} failed: {}",
+                    path, offset, length, err
+                );
+            })?;
+            mmap.advise(memmap2::Advice::Sequential).ok();
+            mmap.advise(memmap2::Advice::WillNeed).ok();
+            Ok(super::content::MappedPiece::new(mmap))
+        })
+        .await
+        .map_err(|err| Error::Unknown(format!("mmap piece task join failed: {err}")))??;
+        Ok(mapped)
+    }
+
     /// Writes the piece from the stream of bytes chunks to the content and
     /// calculates the hash of the piece by crc32.
     #[instrument(level = "debug", skip_all)]
