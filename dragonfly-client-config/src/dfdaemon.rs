@@ -2116,7 +2116,7 @@ key: /etc/ssl/private/client.pem
     #[test]
     fn default_dynconfig() {
         let default_dynconfig = Dynconfig::default();
-        assert_eq!(default_dynconfig.refresh_interval, Duration::from_secs(300));
+        assert_eq!(default_dynconfig.refresh_interval, Duration::from_secs(60));
     }
 
     #[test]
