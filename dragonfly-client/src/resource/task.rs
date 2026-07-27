@@ -517,9 +517,7 @@ impl Task {
                 .is_some_and(|range| range.length <= super::piece::MIN_PIECE_LENGTH)
                 || content_length <= super::piece::MIN_PIECE_LENGTH)
         {
-            debug!(
-                "seed peer downloads the range task from source directly, skipping the scheduler"
-            );
+            debug!("peer downloads the range task from source directly, skipping the scheduler");
 
             if let Err(err) = self
                 .download_partial_from_source(
