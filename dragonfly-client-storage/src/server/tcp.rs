@@ -15,6 +15,11 @@
  */
 
 use crate::io::RangeReader;
+#[cfg(feature = "rdma")]
+use crate::rdma::rendezvous::{
+    read_frame as read_rdma_frame, write_frame as write_rdma_frame, CapabilityRegistry,
+    Frame as RdmaFrame, RendezvousError as RdmaError, ERROR_CODE_INCOMPATIBLE, MAGIC as RDMA_MAGIC,
+};
 use crate::Storage;
 use bytes::{Bytes, BytesMut};
 use dragonfly_api::common::v2::TrafficType;
@@ -91,10 +96,20 @@ impl TCPServer {
                 id_generator,
                 storage,
                 upload_bandwidth_limiter,
+                #[cfg(feature = "rdma")]
+                rdma_capabilities: None,
             },
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
+    }
+
+    /// with_rdma_capabilities lets the advertised TCP piece port answer lightweight RDMA
+    /// discovery requests without changing the scheduler API.
+    #[cfg(feature = "rdma")]
+    pub fn with_rdma_capabilities(mut self, registry: CapabilityRegistry) -> Self {
+        self.handler.rdma_capabilities = Some(registry);
+        self
     }
 
     /// Starts the storage tcp server.
@@ -178,6 +193,11 @@ pub struct TCPServerHandler {
 
     /// The rate limiter of the upload speed in bytes per second.
     upload_bandwidth_limiter: Arc<RateLimiter>,
+
+    /// rdma_capabilities contains an advertisement only while the optional RDMA listener is
+    /// initialized and bound.
+    #[cfg(feature = "rdma")]
+    rdma_capabilities: Option<CapabilityRegistry>,
 }
 
 /// Implements the request handler.
@@ -190,6 +210,11 @@ impl TCPServerHandler {
     /// persistent cache piece downloads with proper request/response framing.
     #[instrument(skip_all, fields(host_id, remote_address, task_id, piece_id))]
     async fn handle(&self, stream: TcpStream, remote_address: String) -> ClientResult<()> {
+        #[cfg(feature = "rdma")]
+        if self.is_rdma_discovery(&stream).await? {
+            return self.handle_rdma_discovery(stream).await;
+        }
+
         let (mut reader, mut writer) = stream.into_split();
         let header = self.read_header(&mut reader).await?;
         match header.tag() {
@@ -442,6 +467,65 @@ impl TCPServerHandler {
                 "unsupported tag: {:?}",
                 header.tag()
             ))),
+        }
+    }
+
+    /// is_rdma_discovery peeks until the four-byte protocol discriminator is available.
+    #[cfg(feature = "rdma")]
+    async fn is_rdma_discovery(&self, stream: &TcpStream) -> ClientResult<bool> {
+        let mut prefix = [0u8; 4];
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let len = stream.peek(&mut prefix).await?;
+                if len == 0 {
+                    return Err(ClientError::Unknown(
+                        "connection closed before protocol header".to_string(),
+                    ));
+                }
+                if len == prefix.len() {
+                    return Ok(prefix == RDMA_MAGIC.to_be_bytes());
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        })
+        .await?
+    }
+
+    /// handle_rdma_discovery returns the live rendezvous capability, or an explicit
+    /// incompatibility response when RDMA is disabled or failed to initialize.
+    #[cfg(feature = "rdma")]
+    async fn handle_rdma_discovery(&self, stream: TcpStream) -> ClientResult<()> {
+        let (mut reader, mut writer) = stream.into_split();
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            read_rdma_frame(&mut reader),
+        )
+        .await??
+        {
+            RdmaFrame::Discover => {
+                let response = self
+                    .rdma_capabilities
+                    .as_ref()
+                    .and_then(CapabilityRegistry::get)
+                    .map(RdmaFrame::Capability)
+                    .unwrap_or_else(|| {
+                        RdmaFrame::Error(RdmaError {
+                            code: ERROR_CODE_INCOMPATIBLE,
+                            message: "rdma is not available on this peer".to_string(),
+                        })
+                    });
+                write_rdma_frame(&mut writer, &response).await
+            }
+            frame => {
+                write_rdma_frame(
+                    &mut writer,
+                    &RdmaFrame::Error(RdmaError {
+                        code: ERROR_CODE_INCOMPATIBLE,
+                        message: format!("unexpected discovery frame: {frame:?}"),
+                    }),
+                )
+                .await
+            }
         }
     }
 

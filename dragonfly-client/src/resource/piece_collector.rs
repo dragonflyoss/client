@@ -42,8 +42,9 @@ pub struct CollectedParent {
     /// The host of the parent.
     pub host: Option<Host>,
 
-    // IP is used to indicate the IP address of the peer. If protocol is rdma,
-    // the IP is used to exchange the queue pair endpoint of IBVerbs.
+    // IP is used to indicate the IP address of the peer. For protocol "rdma", this is the
+    // host dialed for TCP piece-port discovery and the RDMA rendezvous listener; fabric
+    // endpoints are opaque libfabric fi_getname blobs exchanged on that channel (not IBVerbs QPs).
     pub download_ip: Option<String>,
 
     // TCP port is used to indicate the tcp server port of the peer.

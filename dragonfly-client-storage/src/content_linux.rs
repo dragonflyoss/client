@@ -265,6 +265,94 @@ impl Content {
         ))
     }
 
+    /// map_piece memory-maps the finished piece bytes on disk. The mapping covers exactly the
+    /// piece range so callers can copy into RDMA send windows without an intermediate reader.
+    #[instrument(skip_all)]
+    pub async fn map_piece(
+        &self,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+    ) -> Result<super::content::MappedPiece> {
+        self.map_path_range(self.get_task_path(task_id), offset, length)
+            .await
+    }
+
+    /// map_persistent_piece memory-maps finished persistent piece bytes on disk.
+    #[instrument(skip_all)]
+    pub async fn map_persistent_piece(
+        &self,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+    ) -> Result<super::content::MappedPiece> {
+        self.map_path_range(self.get_persistent_task_path(task_id), offset, length)
+            .await
+    }
+
+    /// map_persistent_cache_piece memory-maps finished persistent cache piece bytes on disk.
+    #[instrument(skip_all)]
+    pub async fn map_persistent_cache_piece(
+        &self,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+    ) -> Result<super::content::MappedPiece> {
+        self.map_path_range(self.get_persistent_cache_task_path(task_id), offset, length)
+            .await
+    }
+
+    /// map_path_range memory-maps `[offset, offset+length)` of a content file.
+    async fn map_path_range(
+        &self,
+        path: PathBuf,
+        offset: u64,
+        length: u64,
+    ) -> Result<super::content::MappedPiece> {
+        if length == 0 {
+            return Err(Error::InvalidParameter);
+        }
+        let mapped = tokio::task::spawn_blocking(move || -> Result<super::content::MappedPiece> {
+            let file = std::fs::File::open(&path).inspect_err(|err| {
+                error!("open {:?} failed: {}", path, err);
+            })?;
+            let metadata = file.metadata().inspect_err(|err| {
+                error!("stat {:?} failed: {}", path, err);
+            })?;
+            let end = offset.checked_add(length).ok_or(Error::InvalidParameter)?;
+            if end > metadata.len() {
+                return Err(Error::Unknown(format!(
+                    "piece range [{}, {}) exceeds content length {}",
+                    offset,
+                    end,
+                    metadata.len()
+                )));
+            }
+            // Safety: the file remains open while the mapping is constructed; MappedPiece owns
+            // the resulting pages for the piece lifetime.
+            let mmap = unsafe {
+                memmap2::MmapOptions::new()
+                    .offset(offset)
+                    .len(length as usize)
+                    .map(&file)
+            }
+            .inspect_err(|err| {
+                error!(
+                    "mmap {:?} offset {} length {} failed: {}",
+                    path, offset, length, err
+                );
+            })?;
+            // Fault pages in so later window copies do not block the fabric send path on major
+            // page faults under memory pressure.
+            mmap.advise(memmap2::Advice::Sequential).ok();
+            mmap.advise(memmap2::Advice::WillNeed).ok();
+            Ok(super::content::MappedPiece::new(mmap))
+        })
+        .await
+        .map_err(|err| Error::Unknown(format!("mmap piece task join failed: {err}")))??;
+        Ok(mapped)
+    }
+
     /// Writes the piece from the stream of bytes chunks to the content and
     /// calculates the hash of the piece by crc32.
     #[instrument(level = "debug", skip_all)]
@@ -297,6 +385,103 @@ impl Content {
         .await
         .inspect_err(|err| {
             error!("write {:?} failed: {}", task_path, err);
+        })
+    }
+
+    /// write_piece_from_rdma_stream writes completed RDMA receive windows straight from registered
+    /// memory into the task file, hashing each window in place. Unlike
+    /// [`Self::write_piece_from_stream`] there is no staging buffer between the fabric and the
+    /// file.
+    #[cfg(feature = "rdma")]
+    #[instrument(skip_all)]
+    pub async fn write_piece_from_rdma_stream(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        offset: u64,
+        expected_length: u64,
+        reader: &mut crate::client::rdma::RDMAStreamReader,
+        window_timeout: std::time::Duration,
+    ) -> Result<super::io::WriteRangeResponse> {
+        use std::os::unix::fs::FileExt;
+        use tokio::time::timeout;
+
+        let task_path = self.get_task_path(task_id);
+
+        // The cached descriptor is a std::fs handle, so each window reaches the file in a single
+        // pwrite straight out of registered memory. Copying the window into a buffer first costs
+        // about a third of the achievable goodput on a memory filesystem.
+        let file = self
+            .fd_cache
+            .open_write(&task_path)
+            .await
+            .inspect_err(|err| {
+                error!("open {:?} failed: {}", task_path, err);
+            })?;
+
+        let mut hasher = crc32fast::Hasher::new();
+        let mut length = 0u64;
+        loop {
+            // Only the wait for the next window is bounded, and the caller must not wrap this loop
+            // in a cancelling timeout either. The digest and the pwrite below run on blocking
+            // threads that cannot be aborted, so abandoning them between spawn and join would
+            // leave a write outstanding while the caller falls back to TCP and rewrites the same
+            // range, and the late write would then contradict the digest recorded for the piece.
+            let window = match timeout(window_timeout, reader.next_window()).await {
+                Ok(window) => window?,
+                Err(_) => return Err(Error::DownloadPieceFinishedTimeout(piece_id.to_string())),
+            };
+            let Some(window) = window else {
+                break;
+            };
+
+            let window_length = window.bytes().len() as u64;
+
+            // Bound the write like write_range_from_stream does: a parent that streams more than
+            // the piece length must not overwrite the pieces that follow it in the task file.
+            if window_length > expected_length - length {
+                return Err(Error::Unknown(format!(
+                    "rdma stream exceeded expected length {expected_length}"
+                )));
+            }
+
+            // Digest and write both only read the window, so they run on separate blocking threads
+            // instead of in series, and the fabric receives the next window while they do.
+            let window = Arc::new(window);
+            let position = offset + length;
+            let digest = {
+                let window = window.clone();
+                tokio::task::spawn_blocking(move || {
+                    hasher.update(window.bytes());
+                    hasher
+                })
+            };
+            let write = {
+                let window = window.clone();
+                let file = file.clone();
+                tokio::task::spawn_blocking(move || file.write_all_at(window.bytes(), position))
+            };
+
+            let (digest, write) = tokio::join!(digest, write);
+            hasher = digest.map_err(|err| Error::Unknown(format!("digest panicked: {err}")))?;
+            write
+                .map_err(|err| Error::Unknown(format!("write piece panicked: {err}")))?
+                .inspect_err(|err| {
+                    error!("write {:?} failed: {}", task_path, err);
+                })?;
+
+            length += window_length;
+        }
+
+        if length != expected_length {
+            return Err(Error::Unknown(format!(
+                "expected length {expected_length} but got {length}"
+            )));
+        }
+
+        Ok(super::io::WriteRangeResponse {
+            length,
+            hash: hasher.finalize().to_string(),
         })
     }
 
@@ -1274,5 +1459,111 @@ mod tests {
 
         let has_space = content.has_enough_space(ByteSize::mib(9).as_u64()).unwrap();
         assert!(has_space);
+    }
+
+    /// TEST_WINDOW_TIMEOUT is generous because these windows are already queued; the tests are
+    /// about the length and digest checks, not about the wait.
+    #[cfg(feature = "rdma")]
+    const TEST_WINDOW_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+    /// rdma_stream_reader hands the content layer windows that are already "received".
+    #[cfg(feature = "rdma")]
+    async fn rdma_stream_reader(payloads: &[&[u8]]) -> crate::client::rdma::RDMAStreamReader {
+        let fabric = crate::rdma::fabric::Fabric::new(None, None, 1024 * 1024, true)
+            .expect("libfabric endpoint");
+
+        let mut windows = Vec::new();
+        for payload in payloads {
+            let mut window = fabric.acquire_buffer(payload.len()).await.unwrap();
+            // Safety: this lease has not been posted.
+            unsafe { window.as_mut_slice() }.copy_from_slice(payload);
+            windows.push(window);
+        }
+
+        crate::client::rdma::RDMAStreamReader::from_windows(windows)
+    }
+
+    #[cfg(feature = "rdma")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_write_piece_from_rdma_stream() {
+        let temp_dir = tempdir().unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "8ab7e2a2c1b7a5b19a4b3f7f2a9e6c1d3f5a7b9c1e3d5f7a9b1c3e5d7f9a1b3c";
+        content.create_task(task_id, 9).await.unwrap();
+
+        let mut reader = rdma_stream_reader(&[b"rdma", b"-win"]).await;
+        let response = content
+            .write_piece_from_rdma_stream("piece", task_id, 1, 8, &mut reader, TEST_WINDOW_TIMEOUT)
+            .await
+            .unwrap();
+
+        assert_eq!(response.length, 8);
+        assert_eq!(
+            response.hash,
+            crc32fast::hash(b"rdma-win").to_string(),
+            "hash must cover the windows in order"
+        );
+
+        // The stream started at offset 1, so byte 0 must be untouched.
+        let written = tokio::fs::read(content.get_task_path(task_id))
+            .await
+            .unwrap();
+        assert_eq!(&written[1..9], b"rdma-win");
+    }
+
+    /// A parent that streams more than the piece length must be rejected before it can overwrite
+    /// the pieces that follow it in the task file.
+    #[cfg(feature = "rdma")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_write_piece_from_rdma_stream_rejects_overlong_stream() {
+        let temp_dir = tempdir().unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "1cd7e2a2c1b7a5b19a4b3f7f2a9e6c1d3f5a7b9c1e3d5f7a9b1c3e5d7f9a1b3c";
+        content.create_task(task_id, 8).await.unwrap();
+
+        let mut reader = rdma_stream_reader(&[b"0123", b"4567"]).await;
+        let Err(err) = content
+            .write_piece_from_rdma_stream("piece", task_id, 0, 6, &mut reader, TEST_WINDOW_TIMEOUT)
+            .await
+        else {
+            panic!("stream longer than the piece must fail");
+        };
+        assert!(
+            err.to_string().contains("exceeded expected length"),
+            "unexpected error: {err}"
+        );
+
+        // Only the first window may have landed; the tail of the task file is still zeroed.
+        let written = tokio::fs::read(content.get_task_path(task_id))
+            .await
+            .unwrap();
+        assert_eq!(&written[4..], &[0u8; 4]);
+    }
+
+    #[cfg(feature = "rdma")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_write_piece_from_rdma_stream_rejects_short_stream() {
+        let temp_dir = tempdir().unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "2ed7e2a2c1b7a5b19a4b3f7f2a9e6c1d3f5a7b9c1e3d5f7a9b1c3e5d7f9a1b3c";
+        content.create_task(task_id, 8).await.unwrap();
+
+        let mut reader = rdma_stream_reader(&[b"0123"]).await;
+        let Err(err) = content
+            .write_piece_from_rdma_stream("piece", task_id, 0, 8, &mut reader, TEST_WINDOW_TIMEOUT)
+            .await
+        else {
+            panic!("stream shorter than the piece must fail");
+        };
+        assert!(
+            err.to_string().contains("expected length 8 but got 4"),
+            "unexpected error: {err}"
+        );
     }
 }
