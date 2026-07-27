@@ -111,6 +111,7 @@ pub async fn prefetch_task(
     let priority = download.priority;
 
     // Download task by dfdaemon download client.
+    info!("prefetch task started");
     let response = dfdaemon_download_client
         .download_task(request)
         .await

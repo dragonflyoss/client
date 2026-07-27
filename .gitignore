@@ -53,3 +53,7 @@ scripts/certs
 
 # Ignore .vscode folder
 .vscode
+
+# Cloud files
+.claude
+.claude-analysis

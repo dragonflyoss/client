@@ -628,9 +628,9 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "cgroups-rs"
-version = "0.5.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "efc46cf39fc5922b840030e0e5b378ce5caa9a824a675a95c6dec2c2c9ce9468"
+checksum = "25ae79ba89081d30804e3312bb1163ab82cc8dca0a1b16275e55fb19fce4e89b"
 dependencies = [
  "bit-vec",
  "libc",
@@ -1285,9 +1285,9 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-api"
-version = "2.2.31"
+version = "2.2.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf76fa86d7330ac30c27189315fe5f4692bfd80c68a7616100f994c6d2699651"
+checksum = "bc9ed8aad2f81594c5ee06929784b976c6346e0eb73a6fb53202c2f9e451ed9f"
 dependencies = [
  "prost 0.14.4",
  "prost-types",
@@ -1301,7 +1301,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "1.4.0"
+version = "1.4.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1359,6 +1359,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_regex",
+ "serde_yaml",
  "sysinfo",
  "tabled",
  "tempfile",
@@ -1385,9 +1386,10 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-backend"
-version = "1.4.0"
+version = "1.4.2"
 dependencies = [
  "async-trait",
+ "bytes",
  "dashmap",
  "dragonfly-api",
  "dragonfly-client-config",
@@ -1424,7 +1426,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-config"
-version = "1.4.0"
+version = "1.4.2"
 dependencies = [
  "bytesize",
  "bytesize-serde",
@@ -1455,7 +1457,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-core"
-version = "1.4.0"
+version = "1.4.2"
 dependencies = [
  "cgroups-rs",
  "headers 0.4.1",
@@ -1476,7 +1478,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-init"
-version = "1.4.0"
+version = "1.4.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1487,14 +1489,14 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
- "toml_edit 0.25.12+spec-1.1.0",
+ "toml_edit 0.25.13+spec-1.1.0",
  "tracing",
  "url",
 ]
 
 [[package]]
 name = "dragonfly-client-metric"
-version = "1.4.0"
+version = "1.4.2"
 dependencies = [
  "dragonfly-api",
  "dragonfly-client-config",
@@ -1509,7 +1511,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-request"
-version = "1.4.0"
+version = "1.4.2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1537,7 +1539,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-storage"
-version = "1.4.0"
+version = "1.4.2"
 dependencies = [
  "bincode",
  "bytes",
@@ -1545,22 +1547,25 @@ dependencies = [
  "chrono",
  "crc32fast",
  "criterion",
+ "dashmap",
  "dragonfly-api",
  "dragonfly-client-config",
  "dragonfly-client-core",
  "dragonfly-client-metric",
  "dragonfly-client-util",
  "fs2",
+ "futures",
  "leaky-bucket",
  "num_cpus",
  "prost-wkt-types",
  "quinn",
  "reqwest 0.12.28",
  "rocksdb",
+ "rustix 1.1.3",
  "rustls",
  "rustls-pki-types",
  "serde",
- "socket2 0.6.4",
+ "socket2 0.6.5",
  "tempfile",
  "tokio",
  "tokio-util",
@@ -1571,7 +1576,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-util"
-version = "1.4.0"
+version = "1.4.2"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2226,7 +2231,7 @@ dependencies = [
 
 [[package]]
 name = "hdfs"
-version = "1.4.0"
+version = "1.4.2"
 dependencies = [
  "async-trait",
  "dragonfly-client-backend",
@@ -2629,7 +2634,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.4",
+ "socket2 0.6.5",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -4711,7 +4716,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.6.4",
+ "socket2 0.6.5",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -4750,7 +4755,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.4",
+ "socket2 0.6.5",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -4890,9 +4895,9 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.13.0"
+version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a0e75113e14dc5acb068cd0786884f214f1312650a3d36d269f5c4f3cdee8a2"
+checksum = "f020237b6c8eed93db2e2cb53c00c60a8e1bc73da7d073199a1180401450218d"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -4902,9 +4907,9 @@ dependencies = [
 
 [[package]]
 name = "regex-automata"
-version = "0.4.13"
+version = "0.4.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5276caf25ac86c8d810222b3dbb938e512c55c6831a10f3e6ed1c93b84041f1c"
+checksum = "8fcfdb36bda0c880c5931cdc7a2bcdc8ba4556847b9d912bca70bc94708711ad"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -4951,7 +4956,7 @@ dependencies = [
 
 [[package]]
 name = "request"
-version = "1.4.0"
+version = "1.4.2"
 dependencies = [
  "anyhow",
  "dragonfly-client-request",
@@ -5698,9 +5703,9 @@ dependencies = [
 
 [[package]]
 name = "socket2"
-version = "0.6.4"
+version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
+checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
  "windows-sys 0.61.1",
@@ -5928,7 +5933,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0136791f7c95b1f6dd99f9cc786b91bb81c3800b639b3478e561ddb7be95e5f1"
 dependencies = [
  "fastrand",
- "getrandom 0.3.1",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.3",
  "windows-sys 0.61.1",
@@ -6121,7 +6126,7 @@ dependencies = [
  "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
- "socket2 0.6.4",
+ "socket2 0.6.5",
  "tokio-macros",
  "tracing",
  "windows-sys 0.61.1",
@@ -6231,9 +6236,9 @@ dependencies = [
 
 [[package]]
 name = "toml_edit"
-version = "0.25.12+spec-1.1.0"
+version = "0.25.13+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2153edc6955a6c354fad8f5efd38b6a8769bdccf9fe50f8e1329f81b0baa5d7"
+checksum = "6975367e4d2ef766d86af01ffad14b622fecc8d4357a998fbc4deb6e9bacaf9b"
 dependencies = [
  "indexmap",
  "toml_datetime 1.1.1+spec-1.1.0",
@@ -6253,9 +6258,9 @@ dependencies = [
 
 [[package]]
 name = "toml_writer"
-version = "1.1.1+spec-1.1.0"
+version = "1.1.2+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "756daf9b1013ebe47a8776667b466417e2d4c5679d441c26230efd9ef78692db"
+checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
 name = "tonic"
@@ -6276,7 +6281,7 @@ dependencies = [
  "hyper-util",
  "percent-encoding",
  "pin-project",
- "socket2 0.6.4",
+ "socket2 0.6.5",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
@@ -6676,9 +6681,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.23.5"
+version = "1.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea5fab0d6c3c01ae70085a09cb03d4c7a1d6314e2b3e075392783396d724ca0a"
+checksum = "bf3923a6f5c4c6382e0b653c4117f48d631ea17f38ed86e2a828e6f7412f5239"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",

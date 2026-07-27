@@ -52,6 +52,9 @@ pub trait Operations {
     /// Gets the object by key.
     fn get<O: DatabaseObject>(&self, key: &[u8]) -> Result<Option<O>>;
 
+    /// Gets the objects by keys, returning the values in the order of the keys.
+    fn multi_get<O: DatabaseObject>(&self, keys: &[&[u8]]) -> Result<Vec<Option<O>>>;
+
     /// Checks if the object exists by key.
     fn exists<O: DatabaseObject>(&self, key: &[u8]) -> Result<bool>;
 

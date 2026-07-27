@@ -15,12 +15,14 @@
  */
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use dragonfly_api::common::v2::{Hdfs, HuggingFace, ModelScope, ObjectStorage, Range};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
+use futures::stream::BoxStream;
 use libloading::Library;
 use reqwest::header::HeaderMap;
 use rustls_pki_types::CertificateDer;
@@ -30,6 +32,7 @@ use std::sync::Arc;
 use std::{collections::HashMap, pin::Pin, time::Duration};
 use std::{fmt::Debug, fs};
 use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio_util::io::StreamReader;
 use tracing::{error, info, warn};
 use url::Url;
 
@@ -64,8 +67,15 @@ const DEFAULT_USER_AGENT: &str = concat!("dragonfly", "/", env!("CARGO_PKG_VERSI
 /// The name of the package.
 pub const NAME: &str = "backend";
 
-/// The body of the response.
-pub type Body = Box<dyn AsyncRead + Send + Unpin>;
+/// The body of the response. It implements AsyncRead for sequential readers,
+/// and `into_inner` exposes the underlying stream of bytes chunks so writers
+/// can consume the chunks without copying.
+pub type Body = StreamReader<BoxStream<'static, std::io::Result<Bytes>>, Bytes>;
+
+/// empty_body returns an empty body of the response.
+pub fn empty_body() -> Body {
+    StreamReader::new(Box::pin(futures::stream::empty()))
+}
 
 /// The stat request for backend.
 pub struct StatRequest {

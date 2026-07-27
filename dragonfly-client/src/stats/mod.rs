@@ -153,7 +153,13 @@ impl Stats {
         info!("start heap profiling");
         #[cfg(target_os = "linux")]
         {
-            let mut prof_ctl = jemalloc_pprof::PROF_CTL.as_ref().unwrap().lock().await;
+            // PROF_CTL is None when jemalloc profiling is disabled
+            // (release builds set prof:false).
+            let Some(prof_ctl) = jemalloc_pprof::PROF_CTL.as_ref() else {
+                return Err(warp::reject::reject());
+            };
+
+            let mut prof_ctl = prof_ctl.lock().await;
             if !prof_ctl.activated() {
                 return Err(warp::reject::reject());
             }

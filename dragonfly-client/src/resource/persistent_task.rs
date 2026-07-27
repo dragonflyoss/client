@@ -141,7 +141,7 @@ impl PersistentTask {
     }
 
     /// Gets a persistent task from local.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get(&self, task_id: &str) -> ClientResult<Option<metadata::PersistentTask>> {
         self.storage.get_persistent_task(task_id)
     }
@@ -806,13 +806,13 @@ impl PersistentTask {
     }
 
     /// Updates the metadata of the persistent task when the task downloads finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_finished(&self, id: &str) -> ClientResult<metadata::PersistentTask> {
         self.storage.download_persistent_task_finished(id)
     }
 
     /// Updates the metadata of the persistent task when the task downloads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_failed(&self, id: &str) -> ClientResult<()> {
         let _ = self.storage.download_persistent_task_failed(id).await?;
         Ok(())
@@ -2383,7 +2383,7 @@ impl PersistentTask {
                 // If need_piece_content is true, read the piece content from the local.
                 if need_piece_content {
                     let mut reader = piece_manager
-                        .download_from_local_into_async_read(
+                        .download_from_local_into_range_reader(
                             piece_id.as_str(),
                             task_id.as_str(),
                             metadata.length,

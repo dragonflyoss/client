@@ -206,17 +206,17 @@ pub fn get_registry(header: &HeaderMap) -> Option<String> {
 /// generating task ID.
 pub fn get_filtered_query_params(
     header: &HeaderMap,
-    default_filtered_query_params: Vec<String>,
+    default_filtered_query_params: &[String],
 ) -> Vec<String> {
     match header.get(DRAGONFLY_FILTERED_QUERY_PARAMS_HEADER) {
         Some(filters) => match filters.to_str() {
             Ok(filters) => filters.split(',').map(|s| s.trim().to_string()).collect(),
             Err(err) => {
                 error!("get filters from header failed: {}", err);
-                default_filtered_query_params
+                default_filtered_query_params.to_vec()
             }
         },
-        None => default_filtered_query_params,
+        None => default_filtered_query_params.to_vec(),
     }
 }
 
@@ -387,13 +387,13 @@ mod tests {
             HeaderValue::from_static("param1,param2"),
         );
         assert_eq!(
-            get_filtered_query_params(&headers, vec!["default".to_string()]),
+            get_filtered_query_params(&headers, &["default".to_string()]),
             vec!["param1".to_string(), "param2".to_string()]
         );
 
         let empty_headers = HeaderMap::new();
         assert_eq!(
-            get_filtered_query_params(&empty_headers, vec!["default".to_string()]),
+            get_filtered_query_params(&empty_headers, &["default".to_string()]),
             vec!["default".to_string()]
         );
     }

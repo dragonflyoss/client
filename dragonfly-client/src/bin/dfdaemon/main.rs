@@ -15,13 +15,14 @@
  */
 
 use anyhow::Context;
+use bytesize::ByteSize;
 use clap::Parser;
 use dragonfly_client::announcer::SchedulerAnnouncer;
 use dragonfly_client::dynconfig::Dynconfig;
 use dragonfly_client::gc::GC;
 use dragonfly_client::grpc::{
     dfdaemon_download::DfdaemonDownloadServer, dfdaemon_upload::DfdaemonUploadServer,
-    manager::ManagerClient, scheduler::SchedulerClient,
+    scheduler::SchedulerClient,
 };
 use dragonfly_client::health::Health;
 use dragonfly_client::proxy::Proxy;
@@ -52,9 +53,15 @@ use tracing::{error, info, Level};
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+#[cfg(debug_assertions)]
 #[allow(non_upper_case_globals)]
 #[export_name = "malloc_conf"]
 pub static malloc_conf: &[u8] = b"prof:true,prof_active:true,lg_prof_sample:19\0";
+
+#[cfg(not(debug_assertions))]
+#[allow(non_upper_case_globals)]
+#[export_name = "malloc_conf"]
+pub static malloc_conf: &[u8] = b"prof:false\0";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -76,6 +83,14 @@ struct Args {
         help = "Specify config file to use")
     ]
     config: PathBuf,
+
+    #[arg(
+        long = "dynconfig",
+        default_value_os_t = dfdaemon::default_dfdaemon_dynconfig_path(),
+        env = "DFDAEMON_DYNCONFIG",
+        help = "Specify the dynconfig file to use when the manager address is not configured"
+    )]
+    dynconfig: PathBuf,
 
     #[arg(
         short = 'l',
@@ -104,9 +119,17 @@ struct Args {
 
     #[arg(
         long,
-        default_value_t = true,
+        default_value = "1GiB",
+        env = "DFDAEMON_LOG_MAX_FILE_SIZE",
+        help = "Specify the max size of each log file"
+    )]
+    log_max_file_size: ByteSize,
+
+    #[arg(
+        long,
+        default_value_t = false,
         env = "DFDAEMON_CONSOLE",
-        help = "Specify whether to print log"
+        help = "Specify whether to print logs to the console. If enabled, logs will not be written to the local log files"
     )]
     console: bool,
 
@@ -161,6 +184,7 @@ async fn main() -> Result<(), anyhow::Error> {
         args.log_dir.clone(),
         args.log_level,
         args.log_max_files,
+        args.log_max_file_size,
         config.tracing.protocol.clone(),
         config.tracing.endpoint.clone(),
         config.tracing.path.clone(),
@@ -186,14 +210,6 @@ async fn main() -> Result<(), anyhow::Error> {
     );
     let id_generator = Arc::new(id_generator);
 
-    // Initialize manager client.
-    let manager_client = ManagerClient::new(config.clone(), config.manager.addr.clone())
-        .await
-        .inspect_err(|err| {
-            error!("initialize manager client failed: {}", err);
-        })?;
-    let manager_client = Arc::new(manager_client);
-
     // Initialize channel for graceful shutdown.
     let shutdown = shutdown::Shutdown::default();
     let (shutdown_complete_tx, mut shutdown_complete_rx) = mpsc::unbounded_channel();
@@ -201,7 +217,7 @@ async fn main() -> Result<(), anyhow::Error> {
     // Initialize dynconfig server.
     let dynconfig = Dynconfig::new(
         config.clone(),
-        manager_client.clone(),
+        args.dynconfig,
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     )
@@ -559,11 +575,22 @@ async fn main() -> Result<(), anyhow::Error> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use anyhow::Context;
     use dragonfly_client::health::Health;
     use dragonfly_client_util::shutdown;
     use std::net::{Ipv4Addr, TcpListener};
     use tokio::sync::mpsc;
+
+    #[test]
+    fn logging_uses_cli_defaults_when_options_are_omitted() {
+        let args = Args::try_parse_from(["dfdaemon"]).unwrap();
+        assert_eq!(args.log_level, Level::INFO);
+        assert_eq!(args.log_dir, dfdaemon::default_dfdaemon_log_dir());
+        assert_eq!(args.log_max_files, 6);
+        assert_eq!(args.log_max_file_size, ByteSize::gib(1));
+        assert!(!args.console);
+    }
 
     #[tokio::test]
     async fn background_server_panic_propagates_with_context() {

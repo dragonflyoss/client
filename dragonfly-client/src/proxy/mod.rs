@@ -56,12 +56,11 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Barrier};
 use tokio_rustls::TlsAcceptor;
-use tokio_util::io::ReaderStream;
+use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, error, info, instrument, Instrument, Span};
 
 pub mod header;
@@ -251,7 +250,7 @@ impl Proxy {
 
 /// handler handles the request from the client.
 #[allow(clippy::too_many_arguments)]
-#[instrument(skip_all, fields(url, method, remote_ip))]
+#[instrument(level = "debug", skip_all, fields(url, method, remote_ip))]
 pub async fn handler(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -329,7 +328,7 @@ pub async fn handler(
 }
 
 /// Handles the http request for the registry mirror by client.
-#[instrument(skip_all)]
+#[instrument(level = "debug", skip_all)]
 pub async fn registry_mirror_http_handler(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -344,7 +343,7 @@ pub async fn registry_mirror_http_handler(
 
 /// Handles the https request for the registry mirror by client.
 #[allow(clippy::too_many_arguments)]
-#[instrument(skip_all)]
+#[instrument(level = "debug", skip_all)]
 pub async fn registry_mirror_https_handler(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -416,7 +415,8 @@ pub async fn http_handler(
                 request
             );
 
-            return proxy_via_dfdaemon(config, task, dynconfig, &rule, request, remote_ip).await;
+            return proxy_via_dfdaemon(config.clone(), task, dynconfig, rule, request, remote_ip)
+                .await;
         }
 
         debug!(
@@ -525,7 +525,7 @@ pub async fn https_handler(
 /// self-signed certificate. Otherwise, use the CA certificate to sign the
 /// self-signed certificate.
 #[allow(clippy::too_many_arguments)]
-#[instrument(skip_all)]
+#[instrument(level = "debug", skip_all)]
 async fn upgraded_tunnel(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -600,7 +600,7 @@ async fn upgraded_tunnel(
 
 /// Handles the upgraded https request from the client.
 #[allow(clippy::too_many_arguments)]
-#[instrument(skip_all, fields(url, method))]
+#[instrument(skip_all, fields(url, method, remote_ip))]
 pub async fn upgraded_handler(
     config: Arc<Config>,
     task: Arc<Task>,
@@ -615,6 +615,7 @@ pub async fn upgraded_handler(
     // Span record the url and method.
     Span::current().record("url", request.uri().to_string().as_str());
     Span::current().record("method", request.method().as_str());
+    Span::current().record("remote_ip", remote_ip.to_string().as_str());
 
     // HTTPS requests are tunneled over a single upgraded connection, so a
     // per-connection check is not enough. The rate limit must be enforced on
@@ -683,7 +684,8 @@ pub async fn upgraded_handler(
                 request,
             );
 
-            return proxy_via_dfdaemon(config, task, dynconfig, &rule, request, remote_ip).await;
+            return proxy_via_dfdaemon(config.clone(), task, dynconfig, rule, request, remote_ip)
+                .await;
         }
 
         debug!(
@@ -809,14 +811,9 @@ async fn proxy_via_dfdaemon(
         ));
     };
 
-    // Span record the host_id, task_id, and peer_id.
-    Span::current().record("host_id", message.host_id.as_str());
-    Span::current().record("task_id", message.task_id.as_str());
-    Span::current().record("peer_id", message.peer_id.as_str());
-
     // Handle the download task started response.
     let Some(download_task_response::Response::DownloadTaskStartedResponse(
-        mut download_task_started_response,
+        download_task_started_response,
     )) = message.response
     else {
         error!("response is not started");
@@ -838,7 +835,6 @@ async fn proxy_via_dfdaemon(
         let task_id = message.task_id.clone();
         match task.prefetch_task_started(task_id.as_str()).await {
             Ok(_) => {
-                info!("prefetch task started");
                 let config = config.clone();
                 let task_manager = task.clone();
                 let dynconfig = dynconfig.clone();
@@ -879,16 +875,11 @@ async fn proxy_via_dfdaemon(
     // Write the status code to the writer.
     let (sender, mut receiver) = mpsc::channel(4);
 
-    // Get the read buffer size from the config.
-    let read_buffer_size = config.proxy.read_buffer_size;
-
-    // Write the task data to the reader. The duplex pipe buffers the data
-    // itself, so no extra BufWriter is needed.
-    let (reader, mut writer) = tokio::io::duplex(read_buffer_size);
-    let reader_stream = ReaderStream::with_capacity(reader, read_buffer_size);
+    // Initialize the channel for sending the response body to the client.
+    let (body_tx, body_rx) = mpsc::channel::<ClientResult<Bytes>>(4);
 
     // Construct the response body.
-    let stream_body = StreamBody::new(reader_stream.map_ok(Frame::data).map_err(ClientError::from));
+    let stream_body = StreamBody::new(ReceiverStream::new(body_rx).map_ok(Frame::data));
     let boxed_body = stream_body.boxed();
 
     // Construct the response.
@@ -896,7 +887,7 @@ async fn proxy_via_dfdaemon(
     *response.headers_mut() = make_response_headers(
         message.task_id.as_str(),
         config.host.ip.unwrap(),
-        &mut download_task_started_response,
+        &download_task_started_response,
     )?;
     // Return 206 Partial Content for range requests to match the Content-Range header set by
     // make_response_headers. Returning 200 for a partial body breaks range-aware clients (e.g. the
@@ -910,12 +901,12 @@ async fn proxy_via_dfdaemon(
     // Return the response if the client return the first piece.
     let mut initialized = false;
 
-    // Write task data to pipe. If grpc received error message,
-    // shutdown the writer.
+    // Send the task data to the response body. If the stream received an error
+    // message, stop the body stream to close the connection.
     tokio::spawn(
         async move {
             // Initialize the hashmap of the finished piece lengths, keyed by
-            // piece number. Readers are opened lazily when a piece is written
+            // piece number. Readers are opened lazily when a piece is sent
             // in order, so out-of-order pieces do not hold buffers or file
             // descriptors while waiting.
             let mut finished_pieces = HashMap::new();
@@ -923,9 +914,6 @@ async fn proxy_via_dfdaemon(
             // Get the first piece number from the started response.
             let Some(first_piece) = download_task_started_response.pieces.first() else {
                 error!("response pieces is empty");
-                if let Err(err) = writer.shutdown().await {
-                    error!("writer shutdown error: {}", err);
-                }
 
                 // Send the none response to the client in case if it is empty file.
                 sender
@@ -937,9 +925,9 @@ async fn proxy_via_dfdaemon(
             };
             let mut need_piece_number = first_piece.number;
 
-            // Read piece data from stream and write to pipe. If the piece data is
-            // not in order, store it in the hashmap, and write it to the pipe
-            // when the previous piece data is written.
+            // Send the piece contents to the response body in order. If the
+            // piece contents are not in order, store them in the hashmap, and
+            // send them when the previous piece contents are sent.
             loop {
                 match out_stream.recv().await {
                     Some(Ok(message)) => {
@@ -961,21 +949,17 @@ async fn proxy_via_dfdaemon(
 
                             let Some(piece) = download_task_response.piece else {
                                 error!("response piece is empty");
-                                writer.shutdown().await.unwrap_or_else(|err| {
-                                    error!("writer shutdown error: {}", err);
-                                });
-
                                 return;
                             };
 
-                            // Write the piece data to the pipe in order.
+                            // Send the piece data to the response body in order.
                             finished_pieces.insert(piece.number, piece.length);
                             while let Some(piece_length) =
                                 finished_pieces.remove(&need_piece_number)
                             {
                                 let mut piece_range_reader = match task
                                     .piece
-                                    .download_from_local_into_async_read(
+                                    .download_from_local_into_range_reader(
                                         task.piece
                                             .id(message.task_id.as_str(), need_piece_number)
                                             .as_str(),
@@ -988,55 +972,41 @@ async fn proxy_via_dfdaemon(
                                     Ok(piece_range_reader) => piece_range_reader,
                                     Err(err) => {
                                         error!("download piece reader error: {}", err);
-                                        if let Err(err) = writer.shutdown().await {
-                                            error!("writer shutdown error: {}", err);
-                                        }
-
                                         return;
                                     }
                                 };
 
-                                debug!("copy piece {} to stream", need_piece_number);
-                                // copy_buf writes the piece reader's internal buffer to the
-                                // pipe directly, skipping tokio::io::copy's intermediate 8KiB
-                                // copy buffer.
-                                if let Err(err) =
-                                    tokio::io::copy_buf(&mut piece_range_reader, &mut writer).await
-                                {
-                                    error!("download piece reader error: {}", err);
-                                    if let Err(err) = writer.shutdown().await {
-                                        error!("writer shutdown error: {}", err);
+                                debug!("send piece {} to stream", need_piece_number);
+                                loop {
+                                    match piece_range_reader.read_chunk().await {
+                                        Ok(bytes) if bytes.is_empty() => break,
+                                        Ok(bytes) => {
+                                            if body_tx.send(Ok(bytes)).await.is_err() {
+                                                debug!("body stream is closed");
+                                                return;
+                                            }
+                                        }
+                                        Err(err) => {
+                                            error!("download piece reader error: {}", err);
+                                            return;
+                                        }
                                     }
-
-                                    return;
                                 }
 
                                 need_piece_number += 1;
                             }
                         } else {
                             error!("response unknown message");
-                            writer.shutdown().await.unwrap_or_else(|err| {
-                                error!("writer shutdown error: {}", err);
-                            });
-
                             return;
                         }
                     }
                     None => {
                         debug!("message is none");
-                        if let Err(err) = writer.flush().await {
-                            error!("writer flush error: {}", err);
-                        }
-
                         return;
                     }
                     Some(Err(err)) => {
                         if initialized {
                             error!("stream error: {}", err);
-                            if let Err(err) = writer.flush().await {
-                                error!("writer flush error: {}", err);
-                            }
-
                             return;
                         }
 
@@ -1097,7 +1067,7 @@ async fn proxy_via_dfdaemon(
 }
 
 /// Proxies the HTTP request directly to the remote server.
-#[instrument(skip_all)]
+#[instrument(level = "debug", skip_all)]
 async fn proxy_via_http(mut request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
     let Some(host) = request.uri().host() else {
         error!("CONNECT host is not socket addr: {:?}", request.uri());
@@ -1144,7 +1114,7 @@ async fn proxy_via_http(mut request: Request<hyper::body::Incoming>) -> ClientRe
 }
 
 /// Proxies the HTTPS request directly to the remote server.
-#[instrument(skip_all)]
+#[instrument(level = "debug", skip_all)]
 async fn proxy_via_https(
     mut request: Request<hyper::body::Incoming>,
     registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
@@ -1242,14 +1212,10 @@ fn make_download_task_request(
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
 ) -> ClientResult<DownloadTaskRequest> {
-    // Convert the Reqwest header to the Hyper header.
-    let mut header = request.headers().clone();
-
-    // Registry will return the 403 status code if the Host header is set.
-    header.remove(reqwest::header::HOST);
+    let header = request.headers();
 
     // Validate the request arguments.
-    let piece_length = header::get_piece_length(&header).map(|piece_length| piece_length.as_u64());
+    let piece_length = header::get_piece_length(header).map(|piece_length| piece_length.as_u64());
     if let Some(piece_length) = piece_length {
         if piece_length < MIN_PIECE_LENGTH {
             return Err(ClientError::ValidationError(format!(
@@ -1258,37 +1224,41 @@ fn make_download_task_request(
         }
     }
 
+    // Registry will return the 403 status code if the Host header is set.
+    let mut request_header = headermap_to_hashmap(header);
+    request_header.remove(reqwest::header::HOST.as_str());
+
     Ok(DownloadTaskRequest {
         download: Some(Download {
-            url: make_download_url(request.uri(), rule.use_tls, rule.redirect.clone())?,
+            url: make_download_url(request.uri(), rule.use_tls, rule.redirect.as_deref())?,
             digest: None,
             // Download range use header range in HTTP protocol.
             range: None,
             r#type: TaskType::Standard as i32,
-            tag: header::get_tag(&header),
-            application: header::get_application(&header),
-            priority: header::get_priority(&header),
+            tag: header::get_tag(header),
+            application: header::get_application(header),
+            priority: header::get_priority(header),
             filtered_query_params: header::get_filtered_query_params(
-                &header,
-                rule.filtered_query_params.clone(),
+                header,
+                &rule.filtered_query_params,
             ),
-            request_header: headermap_to_hashmap(&header),
+            request_header,
             piece_length,
             // Need the absolute path.
-            output_path: header::get_output_path(&header),
+            output_path: header::get_output_path(header),
             timeout: None,
             need_back_to_source: false,
             disable_back_to_source: config.proxy.disable_back_to_source,
             certificate_chain: Vec::new(),
-            prefetch: need_prefetch(config.clone(), &header),
+            prefetch: need_prefetch(&config, header),
             object_storage: None,
             hdfs: None,
             hugging_face: None,
             model_scope: None,
             is_prefetch: false,
             need_piece_content: false,
-            force_hard_link: header::get_force_hard_link(&header),
-            content_for_calculating_task_id: header::get_content_for_calculating_task_id(&header),
+            force_hard_link: header::get_force_hard_link(header),
+            content_for_calculating_task_id: header::get_content_for_calculating_task_id(header),
             remote_ip: Some(remote_ip.to_string()),
             concurrent_piece_count: Some(config.download.concurrent_piece_count),
             overwrite: false,
@@ -1296,19 +1266,20 @@ fn make_download_task_request(
             actual_content_length: None,
             actual_piece_count: None,
             enable_task_id_based_blob_digest: header::get_enable_task_id_based_blob_digest(
-                &header,
+                header,
                 config
                     .proxy
                     .registry_mirror
                     .enable_task_id_based_blob_digest,
             ),
+            metadata_only: false,
         }),
     })
 }
 
 /// Returns whether the prefetch is needed by the configuration and the request
 /// header.
-fn need_prefetch(config: Arc<Config>, header: &http::HeaderMap) -> bool {
+fn need_prefetch(config: &Config, header: &http::HeaderMap) -> bool {
     // If the header not contains the range header, the request does not need prefetch.
     if !header.contains_key(reqwest::header::RANGE) {
         return false;
@@ -1328,7 +1299,7 @@ fn need_prefetch(config: Arc<Config>, header: &http::HeaderMap) -> bool {
 fn make_download_url(
     uri: &hyper::Uri,
     use_tls: bool,
-    redirect: Option<String>,
+    redirect: Option<&str>,
 ) -> ClientResult<String> {
     let mut parts = http::uri::Parts::from(uri.clone());
 
@@ -1352,58 +1323,65 @@ fn make_download_url(
 fn make_response_headers(
     task_id: &str,
     server_ip: std::net::IpAddr,
-    download_task_started_response: &mut DownloadTaskStartedResponse,
+    download_task_started_response: &DownloadTaskStartedResponse,
 ) -> ClientResult<hyper::header::HeaderMap> {
+    // Convert the response header first and insert the extra headers into it
+    // directly, instead of staging them in the hashmap and parsing them again.
+    let mut headers = hashmap_to_headermap(&download_task_started_response.response_header)?;
+
     // Insert the content range header to the response header.
     if let Some(range) = download_task_started_response.range.as_ref() {
-        download_task_started_response.response_header.insert(
-            reqwest::header::CONTENT_RANGE.to_string(),
-            format!(
+        headers.insert(
+            reqwest::header::CONTENT_RANGE,
+            hyper::header::HeaderValue::try_from(format!(
                 "bytes {}-{}/{}",
                 range.start,
                 range.start + range.length - 1,
                 download_task_started_response.content_length
-            ),
+            ))
+            .or_err(ErrorType::ParseError)?,
         );
 
-        download_task_started_response.response_header.insert(
-            reqwest::header::CONTENT_LENGTH.to_string(),
-            range.length.to_string(),
-        );
+        headers.insert(reqwest::header::CONTENT_LENGTH, range.length.into());
     };
 
     if download_task_started_response.is_finished {
-        download_task_started_response.response_header.insert(
-            header::DRAGONFLY_TASK_DOWNLOAD_FINISHED_HEADER.to_string(),
-            "true".to_string(),
+        headers.insert(
+            header::DRAGONFLY_TASK_DOWNLOAD_FINISHED_HEADER
+                .parse::<hyper::header::HeaderName>()
+                .or_err(ErrorType::ParseError)?,
+            hyper::header::HeaderValue::from_static("true"),
         );
     }
 
-    download_task_started_response.response_header.insert(
-        header::DRAGONFLY_TASK_ID_HEADER.to_string(),
-        task_id.to_string(),
+    headers.insert(
+        header::DRAGONFLY_TASK_ID_HEADER
+            .parse::<hyper::header::HeaderName>()
+            .or_err(ErrorType::ParseError)?,
+        hyper::header::HeaderValue::try_from(task_id).or_err(ErrorType::ParseError)?,
     );
 
-    download_task_started_response.response_header.insert(
-        header::DRAGONFLY_SERVER_IP_HEADER.to_string(),
-        server_ip.to_string(),
+    headers.insert(
+        header::DRAGONFLY_SERVER_IP_HEADER
+            .parse::<hyper::header::HeaderName>()
+            .or_err(ErrorType::ParseError)?,
+        hyper::header::HeaderValue::try_from(server_ip.to_string())
+            .or_err(ErrorType::ParseError)?,
     );
 
-    hashmap_to_headermap(&download_task_started_response.response_header)
+    Ok(headers)
 }
 
 /// Returns whether the dfdaemon should be used to download the task.
 /// If the dfdaemon should be used, return the matched rule.
-fn find_matching_rule(rules: Option<&[Rule]>, mut url: url::Url) -> Option<Rule> {
+fn find_matching_rule(rules: Option<&[Rule]>, mut url: url::Url) -> Option<&Rule> {
     // Remove query params and fragment.
     url.set_query(None);
     url.set_fragment(None);
 
-    // Find the matching rule by the url.
-    rules?
-        .iter()
-        .find(|rule| rule.regex.is_match(url.as_str()))
-        .cloned()
+    // Find the matching rule by the url, returning the borrowed rule instead
+    // of cloning it on the per-request path.
+    rules?.iter().find(|rule| rule.regex.is_match(url.as_str()))
 }
 
 /// Makes an error response with the given status and message.

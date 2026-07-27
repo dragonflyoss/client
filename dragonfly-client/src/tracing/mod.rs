@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use bytesize::ByteSize;
 use dragonfly_client_config::dfdaemon::Host;
 use opentelemetry::{global, trace::TracerProvider, KeyValue};
 use opentelemetry_otlp::{WithExportConfig, WithTonicConfig};
@@ -44,6 +45,7 @@ pub fn init_tracing(
     log_dir: PathBuf,
     log_level: Level,
     log_max_files: usize,
+    log_max_file_size: ByteSize,
     otel_protocol: Option<String>,
     otel_endpoint: Option<String>,
     otel_path: Option<PathBuf>,
@@ -53,50 +55,35 @@ pub fn init_tracing(
     console: bool,
 ) -> Vec<WorkerGuard> {
     let mut guards = vec![];
-
-    // Setup stdout layer.
-    let (stdout_writer, stdout_guard) = tracing_appender::non_blocking(std::io::stdout());
-    guards.push(stdout_guard);
-
-    // Initialize stdout layer.
-    let stdout_filter = if console {
-        LevelFilter::DEBUG
-    } else {
-        LevelFilter::OFF
+    let base_layer = |writer: tracing_appender::non_blocking::NonBlocking| {
+        Layer::new()
+            .with_writer(writer)
+            .with_ansi(false)
+            .with_file(true)
+            .with_line_number(true)
+            .with_target(false)
+            .with_thread_names(false)
+            .with_thread_ids(false)
+            .with_timer(SystemTime)
     };
-    let stdout_logging_layer = Layer::new()
-        .with_writer(stdout_writer)
-        .with_ansi(false)
-        .with_file(true)
-        .with_line_number(true)
-        .with_target(false)
-        .with_thread_names(false)
-        .with_thread_ids(false)
-        .with_timer(SystemTime)
-        .with_filter(stdout_filter);
 
-    // Setup file layer.
-    fs::create_dir_all(log_dir.clone()).expect("failed to create log directory");
-    let rolling_appender = BasicRollingFileAppender::new(
-        log_dir.join(name).with_extension("log"),
-        RollingConditionBasic::new().hourly(),
-        log_max_files,
-    )
-    .expect("failed to create rolling file appender");
+    fs::create_dir_all(&log_dir).expect("failed to create log directory");
+    let logging_layer: Box<dyn tracing_subscriber::Layer<Registry> + Send + Sync> = if console {
+        let (writer, guard) = tracing_appender::non_blocking(std::io::stdout());
+        guards.push(guard);
+        base_layer(writer).compact().boxed()
+    } else {
+        let appender = BasicRollingFileAppender::new(
+            log_dir.join(name).with_extension("log"),
+            RollingConditionBasic::new().max_size(log_max_file_size.as_u64()),
+            log_max_files,
+        )
+        .expect("failed to create rolling file appender");
 
-    let (rolling_writer, rolling_writer_guard) = tracing_appender::non_blocking(rolling_appender);
-    guards.push(rolling_writer_guard);
-
-    let file_logging_layer = Layer::new()
-        .with_writer(rolling_writer)
-        .with_ansi(false)
-        .with_file(true)
-        .with_line_number(true)
-        .with_target(false)
-        .with_thread_names(false)
-        .with_thread_ids(false)
-        .with_timer(SystemTime)
-        .compact();
+        let (writer, guard) = tracing_appender::non_blocking(appender);
+        guards.push(guard);
+        base_layer(writer).compact().boxed()
+    };
 
     // Setup env filter for log level.
     let env_filter = EnvFilter::from_default_env().add_directive(log_level.into());
@@ -109,10 +96,9 @@ pub fn init_tracing(
     };
 
     let subscriber = Registry::default()
+        .with(logging_layer)
         .with(env_filter)
-        .with(console_subscriber_layer)
-        .with(file_logging_layer)
-        .with(stdout_logging_layer);
+        .with(console_subscriber_layer);
 
     // If OTLP protocol and endpoint are provided, set up OpenTelemetry tracing.
     if let (Some(protocol), Some(endpoint)) = (otel_protocol, otel_endpoint) {
@@ -231,7 +217,7 @@ pub fn init_command_tracing(log_level: Level, console: bool) -> Vec<WorkerGuard>
 
     // Initialize stdout layer.
     let stdout_filter = if console {
-        LevelFilter::DEBUG
+        LevelFilter::from_level(log_level)
     } else {
         LevelFilter::OFF
     };
@@ -271,7 +257,42 @@ pub fn init_command_tracing(log_level: Level, console: bool) -> Vec<WorkerGuard>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use tempfile::TempDir;
+
+    #[test]
+    fn zero_max_file_size_disables_size_based_rotation() {
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let log_path = temp_dir.path().join("dfdaemon.log");
+        let mut appender = BasicRollingFileAppender::new(
+            &log_path,
+            RollingConditionBasic::new().max_size(ByteSize::gib(1).as_u64()),
+            6,
+        )
+        .expect("failed to create rolling file appender");
+
+        appender.write_all(b"first").unwrap();
+        appender.write_all(b"second").unwrap();
+        appender.flush().unwrap();
+        assert!(!log_path.with_extension("log.1").exists());
+    }
+
+    #[test]
+    fn positive_max_file_size_enables_size_based_rotation() {
+        let temp_dir = TempDir::new().expect("failed to create temp dir");
+        let log_path = temp_dir.path().join("dfdaemon.log");
+        let mut appender = BasicRollingFileAppender::new(
+            &log_path,
+            RollingConditionBasic::new().max_size(ByteSize::b(4).as_u64()),
+            6,
+        )
+        .expect("failed to create rolling file appender");
+
+        appender.write_all(b"1234").unwrap();
+        appender.write_all(b"5").unwrap();
+        appender.flush().unwrap();
+        assert!(log_path.with_extension("log.1").exists());
+    }
 
     #[test]
     fn test_init_tracing_comprehensive() {
@@ -284,6 +305,7 @@ mod tests {
             log_dir.clone(),
             Level::INFO,
             10,
+            ByteSize::default(),
             None,
             None,
             None,
@@ -295,6 +317,6 @@ mod tests {
         assert!(log_dir.exists());
         assert!(log_dir.is_dir());
         assert!(!guards.is_empty());
-        assert_eq!(guards.len(), 2);
+        assert_eq!(guards.len(), 1);
     }
 }

@@ -123,11 +123,13 @@ pub struct ContainerdRegistry {
 
     /// The flag to skip verifying the server's certificate, refer to
     /// https://github.com/containerd/containerd/blob/main/docs/hosts.md#bypass-tls-verification-example.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub skip_verify: Option<bool>,
 
     /// The Certificate Authority Certification, which can be set to a path or an array of paths each pointing
     /// to a ca file for use in authenticating with the registry namespace, refer to
     /// https://github.com/containerd/containerd/blob/main/docs/hosts.md#ca-field.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ca: Option<Vec<String>>,
 }
 

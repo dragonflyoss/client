@@ -32,13 +32,13 @@ use tokio::sync::mpsc;
 use tracing::{error, info, instrument, warn};
 use warp::{Filter, Rejection, Reply};
 
-/// The threshold of download task level1 duration for
-/// recording slow download task.
-const DOWNLOAD_TASK_LEVEL1_DURATION_THRESHOLD: Duration = Duration::from_millis(500);
+/// The threshold of small (Level0–Level2, under 4MiB) download task
+/// duration for recording slow download task.
+const DOWNLOAD_SMALL_TASK_DURATION_THRESHOLD: Duration = Duration::from_millis(500);
 
-/// The threshold of upload task level1 duration for
-/// recording slow upload task.
-const UPLOAD_TASK_LEVEL1_DURATION_THRESHOLD: Duration = Duration::from_millis(500);
+/// The threshold of small (Level0 & Level1, under 1MiB) upload task
+/// duration for recording slow upload task.
+const UPLOAD_SMALL_TASK_DURATION_THRESHOLD: Duration = Duration::from_millis(500);
 
 lazy_static! {
     /// Used to register all metrics.
@@ -640,6 +640,7 @@ pub fn collect_upload_task_started_metrics(typ: i32, tag: &str, app: &str) {
 }
 
 /// Collects the upload task finished metrics.
+#[instrument(skip_all)]
 pub fn collect_upload_task_finished_metrics(
     typ: i32,
     tag: &str,
@@ -649,8 +650,12 @@ pub fn collect_upload_task_finished_metrics(
 ) {
     let task_size = TaskSize::calculate_size_level(content_length);
 
-    // Collect the slow upload Level1 task for analysis.
-    if task_size == TaskSize::Level1 && cost > UPLOAD_TASK_LEVEL1_DURATION_THRESHOLD {
+    // Collect the slow upload Level0, Level1 & Level2 task for analysis.
+    if matches!(
+        task_size,
+        TaskSize::Level0 | TaskSize::Level1 | TaskSize::Level2
+    ) && cost > UPLOAD_SMALL_TASK_DURATION_THRESHOLD
+    {
         warn!(
             "upload task, cost: {:?}, size: {} bytes",
             cost, content_length,
@@ -696,6 +701,7 @@ pub fn collect_download_task_started_metrics(typ: i32, tag: &str, app: &str, pri
 }
 
 /// Collects the download task finished metrics.
+#[instrument(skip_all)]
 pub fn collect_download_task_finished_metrics(
     typ: i32,
     tag: &str,
@@ -713,9 +719,13 @@ pub fn collect_download_task_finished_metrics(
     let task_size = TaskSize::calculate_size_level(size);
 
     // Nydus will request the small range of the file, so the download task duration
-    // should be short. Collect the slow download Level1 task for analysis.
-    if task_size == TaskSize::Level1 && cost > DOWNLOAD_TASK_LEVEL1_DURATION_THRESHOLD {
-        warn!("download task, cost: {:?}, size: {} bytes", cost, size,);
+    // should be short. Collect the slow download Level0 & Level1 task for analysis.
+    if matches!(
+        task_size,
+        TaskSize::Level0 | TaskSize::Level1 | TaskSize::Level2
+    ) && cost > DOWNLOAD_SMALL_TASK_DURATION_THRESHOLD
+    {
+        warn!("download task, cost: {:?}, size: {} bytes", cost, size);
     }
 
     let typ = typ.to_string();

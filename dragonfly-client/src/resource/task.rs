@@ -52,6 +52,7 @@ use dragonfly_client_util::{
     id_generator::IDGenerator,
     shutdown,
 };
+use futures::future::select_all;
 use leaky_bucket::RateLimiter;
 use reqwest::header::HeaderMap;
 use std::path::Path;
@@ -59,11 +60,11 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
 use tokio::sync::{
     mpsc::{self, Sender},
-    Mutex, Semaphore,
+    Mutex, Notify, Semaphore,
 };
 use tokio::task::JoinSet;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
@@ -71,6 +72,12 @@ use tonic::{Request, Status};
 use tracing::{debug, error, info, instrument, warn, Instrument};
 
 use super::*;
+
+/// DEFAULT_WAIT_FOR_IN_FLIGHT_PIECE_TIMEOUT is the maximum duration to wait for the
+/// interested pieces being downloaded by other concurrent downloads of the same task
+/// (e.g. the prefetch) to be written to the local storage, before falling back to
+/// downloading with the scheduler.
+const DEFAULT_WAIT_FOR_IN_FLIGHT_PIECE_TIMEOUT: Duration = Duration::from_millis(1000);
 
 /// Represents a task manager.
 pub struct Task {
@@ -136,7 +143,7 @@ impl Task {
     }
 
     /// Gets the metadata of the task.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get(&self, id: &str) -> ClientResult<Option<metadata::Task>> {
         self.storage.get_task(id)
     }
@@ -294,25 +301,25 @@ impl Task {
     }
 
     /// Updates the metadata of the task when the task downloads finished.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn download_finished(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.download_task_finished(id)
     }
 
     /// Updates the metadata of the task when the task downloads failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn download_failed(&self, id: &str) -> ClientResult<()> {
         self.storage.download_task_failed(id).await.map(|_| ())
     }
 
     /// Updates the metadata of the task when the task prefetch started.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn prefetch_task_started(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.prefetch_task_started(id).await
     }
 
     /// Updates the metadata of the task when the task prefetch failed.
-    #[instrument(skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub async fn prefetch_task_failed(&self, id: &str) -> ClientResult<metadata::Task> {
         self.storage.prefetch_task_failed(id).await
     }
@@ -455,9 +462,84 @@ impl Task {
             info!("all pieces are downloaded from local");
             return Ok(());
         };
-        debug!("download the pieces with scheduler");
+
+        // If the task is prefetched, the interested pieces are probably being downloaded
+        // by other concurrent downloads of the same task. Wait for the in-flight pieces
+        // to be written to the local storage before downloading with the scheduler, to
+        // avoid the scheduling stall when no candidate parent is available.
+        let interested_pieces = if !request.is_prefetch
+            && self
+                .storage
+                .get_task(task_id)
+                .ok()
+                .flatten()
+                .is_some_and(|task| task.is_prefetched())
+        {
+            let finished_pieces = self
+                .wait_for_in_flight_pieces(
+                    task,
+                    host_id,
+                    peer_id,
+                    request.need_piece_content,
+                    interested_pieces.clone(),
+                    download_progress_tx.clone(),
+                )
+                .await?;
+
+            // Remove the finished pieces from the pieces.
+            let interested_pieces = self
+                .piece
+                .remove_finished_from_interested(finished_pieces, interested_pieces);
+            info!(
+                "interested pieces after waiting for in-flight pieces: {:?}",
+                interested_pieces
+                    .iter()
+                    .map(|p| p.number)
+                    .collect::<Vec<u32>>()
+            );
+
+            // Check if all pieces are downloaded.
+            if interested_pieces.is_empty() {
+                info!("all pieces are downloaded from local");
+                return Ok(());
+            };
+
+            interested_pieces
+        } else {
+            interested_pieces
+        };
+
+        // If the range length is less than or equal to the min piece
+        // length, download the pieces from the source directly.
+        if !request.disable_back_to_source
+            && (request
+                .range
+                .is_some_and(|range| range.length <= super::piece::MIN_PIECE_LENGTH)
+                || content_length <= super::piece::MIN_PIECE_LENGTH)
+        {
+            debug!("peer downloads the range task from source directly, skipping the scheduler");
+
+            if let Err(err) = self
+                .download_partial_from_source(
+                    task,
+                    host_id,
+                    peer_id,
+                    interested_pieces.clone(),
+                    request.clone(),
+                    download_progress_tx.clone(),
+                )
+                .await
+            {
+                error!("download from source error: {:?}", err);
+                return Err(err);
+            }
+
+            info!("all pieces are downloaded from source");
+            return Ok(());
+        }
 
         // Download the pieces with scheduler.
+        debug!("download the pieces with scheduler");
         let finished_pieces = match self
             .download_partial_with_scheduler(
                 task,
@@ -545,6 +627,36 @@ impl Task {
 
         info!("all pieces are downloaded from source");
         Ok(())
+    }
+
+    /// Downloads a task and announces the peer to the scheduler, even if all pieces are
+    /// hit in the local cache.
+    #[instrument(skip_all)]
+    pub async fn download_with_scheduler(
+        &self,
+        task: &metadata::Task,
+        host_id: &str,
+        peer_id: &str,
+        request: Download,
+        download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
+    ) -> ClientResult<()> {
+        if task.is_finished() {
+            return self
+                .download_partial_with_scheduler_from_local(task, host_id, peer_id, request)
+                .await
+                .inspect_err(|err| {
+                    error!("announce peer with scheduler failed: {:?}", err);
+                });
+        }
+
+        self.download(
+            task,
+            host_id,
+            peer_id,
+            request.clone(),
+            download_progress_tx.clone(),
+        )
+        .await
     }
 
     /// Downloads a partial task with scheduler.
@@ -833,9 +945,9 @@ impl Task {
                         }
                     };
                 }
-                announce_peer_response::Response::NeedBackToSourceResponse(response) => {
+                announce_peer_response::Response::NeedBackToSourceResponse(_) => {
                     // If the task need back to source, download the pieces from the source.
-                    info!("need back to source response: {:?}", response);
+                    info!("need back to source response");
 
                     // Send the download peer back-to-source request.
                     match in_stream_tx
@@ -964,12 +1076,145 @@ impl Task {
                     in_stream_tx.closed().await;
                     return Ok(finished_pieces);
                 }
+                announce_peer_response::Response::MetadataOnlyResponse(_) => {
+                    // MetadataOnlyResponse is only sent when the register request has the
+                    // metadata_only flag, which is not set in this flow.
+                    error!("receive unexpected MetadataOnlyResponse");
+                    return Err(Error::UnexpectedResponse);
+                }
             }
         }
 
         // If the stream is finished abnormally, return an error.
         error!("stream is finished abnormally");
         Ok(finished_pieces)
+    }
+
+    /// Announces a task that hits the local cache completely with the scheduler. It only
+    /// reports the metadata of the peer to the scheduler by the register request with the
+    /// metadata_only flag and the download peer started/finished requests, no pieces need
+    /// to be downloaded.
+    #[instrument(skip_all)]
+    async fn download_partial_with_scheduler_from_local(
+        &self,
+        task: &metadata::Task,
+        host_id: &str,
+        peer_id: &str,
+        request: Download,
+    ) -> ClientResult<()> {
+        // Get the id of the task.
+        let task_id = task.id.as_str();
+
+        // Set the metadata_only flag, so the scheduler only needs the metadata report
+        // and does not schedule the peer for downloading pieces.
+        let request = Download {
+            metadata_only: true,
+            need_back_to_source: false,
+            ..request
+        };
+
+        // Initialize stream channel.
+        let (in_stream_tx, in_stream_rx) = mpsc::channel(4);
+
+        // Send the register peer request.
+        in_stream_tx
+            .send_timeout(
+                AnnouncePeerRequest {
+                    host_id: host_id.to_string(),
+                    task_id: task_id.to_string(),
+                    peer_id: peer_id.to_string(),
+                    request: Some(announce_peer_request::Request::RegisterPeerRequest(
+                        RegisterPeerRequest {
+                            download: Some(request),
+                        },
+                    )),
+                },
+                REQUEST_TIMEOUT,
+            )
+            .await
+            .inspect_err(|err| {
+                error!("send RegisterPeerRequest failed: {:?}", err);
+            })?;
+        debug!("sent RegisterPeerRequest");
+
+        // Initialize the stream.
+        let in_stream = ReceiverStream::new(in_stream_rx);
+        let request_stream = Request::new(in_stream);
+        let response = self
+            .scheduler_client
+            .announce_peer(task_id, peer_id, request_stream)
+            .await
+            .inspect_err(|err| {
+                error!("announce peer failed: {:?}", err);
+            })?;
+        debug!("announced peer has been connected");
+
+        let out_stream = response
+            .into_inner()
+            .timeout(self.config.scheduler.schedule_timeout);
+        tokio::pin!(out_stream);
+
+        // Receive the response of the register peer request, which should be the
+        // hit local cache response.
+        let message = out_stream
+            .try_next()
+            .await
+            .inspect_err(|err| {
+                error!("receive message from scheduler failed: {:?}", err);
+            })?
+            .ok_or_else(|| {
+                error!("stream is finished abnormally");
+                Error::Unknown("stream is finished abnormally".to_string())
+            })?;
+
+        let response = message?.response.ok_or(Error::UnexpectedResponse)?;
+        let announce_peer_response::Response::MetadataOnlyResponse(_) = response else {
+            error!("receive unexpected response: {:?}", response);
+            return Err(Error::UnexpectedResponse);
+        };
+        info!("hit local cache response");
+
+        // Send the download peer started request.
+        in_stream_tx
+            .send_timeout(
+                AnnouncePeerRequest {
+                    host_id: host_id.to_string(),
+                    task_id: task_id.to_string(),
+                    peer_id: peer_id.to_string(),
+                    request: Some(announce_peer_request::Request::DownloadPeerStartedRequest(
+                        DownloadPeerStartedRequest {},
+                    )),
+                },
+                REQUEST_TIMEOUT,
+            )
+            .await
+            .inspect_err(|err| {
+                error!("send DownloadPeerStartedRequest failed: {:?}", err);
+            })?;
+        debug!("sent DownloadPeerStartedRequest");
+
+        // Send the download peer finished request.
+        in_stream_tx
+            .send_timeout(
+                AnnouncePeerRequest {
+                    host_id: host_id.to_string(),
+                    task_id: task_id.to_string(),
+                    peer_id: peer_id.to_string(),
+                    request: Some(announce_peer_request::Request::DownloadPeerFinishedRequest(
+                        DownloadPeerFinishedRequest {},
+                    )),
+                },
+                REQUEST_TIMEOUT,
+            )
+            .await
+            .inspect_err(|err| {
+                error!("send DownloadPeerFinishedRequest failed: {:?}", err);
+            })?;
+        debug!("sent DownloadPeerFinishedRequest");
+
+        // Wait for the latest message to be sent.
+        in_stream_tx.closed().await;
+        Ok(())
     }
 
     /// Downloads a partial task with scheduler from a parent.
@@ -1112,7 +1357,7 @@ impl Task {
                 // If need_piece_content is true, read the piece content from the local.
                 if need_piece_content {
                     let mut reader = piece_manager
-                        .download_from_local_into_async_read(
+                        .download_from_local_into_range_reader(
                             piece_id.as_str(),
                             task_id.as_str(),
                             metadata.length,
@@ -1414,7 +1659,7 @@ impl Task {
                 // If need_piece_content is true, read the piece content from the local.
                 if need_piece_content {
                     let mut reader = piece_manager
-                        .download_from_local_into_async_read(
+                        .download_from_local_into_range_reader(
                             piece_id.as_str(),
                             task_id.as_str(),
                             metadata.length,
@@ -1671,19 +1916,29 @@ impl Task {
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
 
-        // Download the piece from the local.
-        for interested_piece in interested_pieces {
-            let piece_id = self.piece.id(task_id, interested_piece.number);
+        // Get the metadata of the interested pieces from the local storage in a batch.
+        let piece_ids: Vec<String> = interested_pieces
+            .iter()
+            .map(|interested_piece| self.piece.id(task_id, interested_piece.number))
+            .collect();
 
+        let pieces = self
+            .piece
+            .get_by_ids(&piece_ids.iter().map(String::as_str).collect::<Vec<_>>())
+            .unwrap_or_else(|err| {
+                error!("get pieces from local storage error: {:?}", err);
+                vec![None; piece_ids.len()]
+            });
+
+        // Download the piece from the local.
+        for ((piece_id, piece), interested_piece) in
+            piece_ids.iter().zip(pieces).zip(interested_pieces.iter())
+        {
             // Get the piece metadata from the local storage.
-            let piece = match self.piece.get(piece_id.as_str()) {
-                Ok(Some(piece)) => piece,
-                Ok(None) => {
+            let piece = match piece {
+                Some(piece) => piece,
+                None => {
                     debug!("piece {} not found in local storage", piece_id);
-                    continue;
-                }
-                Err(err) => {
-                    error!("get piece {} from local storage error: {:?}", piece_id, err);
                     continue;
                 }
             };
@@ -1714,7 +1969,7 @@ impl Task {
             if need_piece_content {
                 let mut reader = self
                     .piece
-                    .download_from_local_into_async_read(
+                    .download_from_local_into_range_reader(
                         piece_id.as_str(),
                         task_id,
                         piece.length,
@@ -1789,6 +2044,112 @@ impl Task {
         }
 
         Ok(finished_pieces)
+    }
+
+    /// Waits for the interested pieces being downloaded by other concurrent downloads
+    /// of the same task (e.g. the prefetch) to be written to the local storage, and
+    /// downloads the finished ones from the local storage. Stops when all interested
+    /// pieces are finished, none of the remaining pieces is in-flight, or the wait
+    /// timeout is exceeded.
+    #[instrument(skip_all)]
+    async fn wait_for_in_flight_pieces(
+        &self,
+        task: &metadata::Task,
+        host_id: &str,
+        peer_id: &str,
+        need_piece_content: bool,
+        interested_pieces: Vec<metadata::Piece>,
+        download_progress_tx: Sender<Result<DownloadTaskResponse, Status>>,
+    ) -> ClientResult<Vec<metadata::Piece>> {
+        // Get the id of the task.
+        let task_id = task.id.as_str();
+
+        // Initialize the finished pieces.
+        let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
+        let mut interested_pieces = interested_pieces;
+
+        // Total timeout for waiting for the in-flight pieces to be written to the
+        // local storage.
+        let wait_timeout = tokio::time::sleep(DEFAULT_WAIT_FOR_IN_FLIGHT_PIECE_TIMEOUT);
+        tokio::pin!(wait_timeout);
+
+        loop {
+            // Subscribe to the completion of the interested pieces before checking
+            // the local storage, so completions signaled during the check are not
+            // missed. The completion notifier is registered when the piece download
+            // starts and removed when it completes, so the pieces without a
+            // notifier are not in-flight and will not be written to the local
+            // storage soon.
+            let notifiers: Vec<(u32, Arc<Notify>)> = interested_pieces
+                .iter()
+                .filter_map(|interested_piece| {
+                    self.storage
+                        .in_flight_piece_notifier(
+                            self.piece.id(task_id, interested_piece.number).as_str(),
+                        )
+                        .map(|notifier| (interested_piece.number, notifier))
+                })
+                .collect();
+
+            let mut notifieds: Vec<(u32, _)> = notifiers
+                .iter()
+                .map(|(number, notifier)| {
+                    let mut notified = Box::pin(notifier.notified());
+                    notified.as_mut().enable();
+                    (*number, notified)
+                })
+                .collect();
+
+            // Download the pieces from the local.
+            let partial_finished_pieces = self
+                .download_partial_from_local(
+                    task,
+                    host_id,
+                    peer_id,
+                    need_piece_content,
+                    interested_pieces.clone(),
+                    download_progress_tx.clone(),
+                )
+                .await?;
+
+            // Remove the finished pieces from the pieces.
+            interested_pieces = self.piece.remove_finished_from_interested(
+                partial_finished_pieces.clone(),
+                interested_pieces,
+            );
+
+            // Merge the finished pieces.
+            finished_pieces = self
+                .piece
+                .merge_finished_pieces(finished_pieces, partial_finished_pieces);
+
+            // If all pieces are finished, return.
+            if interested_pieces.is_empty() {
+                debug!("wait in-flight pieces finished success");
+                return Ok(finished_pieces);
+            }
+
+            // Keep only the subscriptions of the remaining interested pieces.
+            notifieds.retain(|(number, _)| {
+                interested_pieces
+                    .iter()
+                    .any(|interested_piece| interested_piece.number == *number)
+            });
+
+            // Stop waiting if none of the remaining interested pieces is in-flight.
+            if notifieds.is_empty() {
+                return Ok(finished_pieces);
+            }
+
+            // Wait for any of the in-flight pieces to complete, then collect it
+            // from the local storage in the next iteration.
+            tokio::select! {
+                _ = select_all(notifieds.iter_mut().map(|(_, notified)| notified)) => {}
+                _ = &mut wait_timeout => {
+                    return Ok(finished_pieces);
+                }
+            }
+        }
     }
 
     /// Downloads a partial task from the source.
@@ -1874,7 +2235,7 @@ impl Task {
                 // If need_piece_content is true, read the piece content from the local.
                 if need_piece_content {
                     let mut reader = piece_manager
-                        .download_from_local_into_async_read(
+                        .download_from_local_into_range_reader(
                             piece_id.as_str(),
                             task_id.as_str(),
                             piece.length,
@@ -2146,46 +2507,34 @@ mod tests {
     use std::sync::Arc;
     use tempfile::tempdir;
 
-    // test_delete_task_not_found tests the Task.delete method when the task does not exist.
     #[tokio::test]
     async fn test_delete_task_not_found() {
-        // Create a temporary directory for testing.
         let temp_dir = tempdir().unwrap();
         let log_dir = temp_dir.path().join("log");
         std::fs::create_dir_all(&log_dir).unwrap();
 
-        // Create configuration.
         let config = Config::default();
         let config = Arc::new(config);
 
-        // Create storage.
         let storage = Storage::new(config.clone(), temp_dir.path(), log_dir)
             .await
             .unwrap();
         let storage = Arc::new(storage);
 
-        // Test Storage.get_task and Error::TaskNotFound.
         let task_id = "non-existent-task-id";
-
-        // Verify that non-existent tasks return None.
         let task = storage.get_task(task_id).unwrap();
         assert!(task.is_none(), "non-existent tasks should return None");
 
-        // Create a task and save it to storage.
         let task_id = "test-task-id";
         storage
             .download_task_started(task_id, 1024, 4096, None)
             .await
             .unwrap();
 
-        // Verify that the task exists.
         let task = storage.get_task(task_id).unwrap();
         assert!(task.is_some(), "task should exist");
 
-        // Delete the task from storage.
         storage.delete_task(task_id).await;
-
-        // Verify that the task has been deleted.
         let task = storage.get_task(task_id).unwrap();
         assert!(task.is_none(), "task should be deleted");
     }
