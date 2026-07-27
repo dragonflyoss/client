@@ -1327,7 +1327,6 @@ dependencies = [
  "http 1.4.2",
  "http-body-util",
  "humantime",
- "humantime-serde",
  "hyper 1.9.0",
  "hyper-rustls",
  "hyper-util",
