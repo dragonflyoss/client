@@ -26,7 +26,6 @@ use remote::Remote;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tracing::{debug, error, info, instrument};
 
@@ -150,9 +149,9 @@ pub struct Data {
     pub seed_client_config: Option<SchedulerClusterSeedClientConfig>,
 }
 
-/// Backend of the dynamic configuration. When the manager is configured, the
-/// dynamic configuration is fetched from the manager, otherwise it is loaded
-/// from the local dynconfig file.
+/// Backend of the dynamic configuration. When the manager address is
+/// configured, the dynamic configuration is fetched from the manager,
+/// otherwise it is loaded from the local dynconfig file.
 enum Backend {
     /// Fetches the dynamic configuration from the manager.
     Remote(Remote),
@@ -218,18 +217,15 @@ impl Dynconfig {
 
     /// Creates a new backend for the dynamic configuration based on the provided configuration.
     async fn backend(config: Arc<Config>, dynconfig_path: PathBuf) -> Result<Backend> {
-        match config.manager {
-            Some(ref manager) => {
-                let manager_client = ManagerClient::new(manager, manager.addr.clone())
+        match config.manager.addr {
+            Some(ref addr) => {
+                let manager_client = ManagerClient::new(&config.manager, addr.clone())
                     .await
                     .inspect_err(|err| {
                         error!("initialize manager client failed: {}", err);
                     })?;
 
-                info!(
-                    "refresh dynamic configuration from manager {}",
-                    manager.addr
-                );
+                info!("refresh dynamic configuration from manager {}", addr);
                 Ok(Backend::Remote(Remote::new(
                     config.clone(),
                     Arc::new(manager_client),
@@ -237,7 +233,7 @@ impl Dynconfig {
             }
             None => {
                 info!(
-                    "manager is not configured, load dynamic configuration from {}",
+                    "manager address is not configured, load dynamic configuration from {}",
                     dynconfig_path.display()
                 );
 
@@ -254,10 +250,7 @@ impl Dynconfig {
         let mut shutdown = self.shutdown.clone();
 
         // Start the refresh loop.
-        let mut interval = tokio::time::interval(self.refresh_interval().await);
-
-        // Start the refresh loop. The refresh interval is re-evaluated on each
-        // iteration, since the local backend can change it on refresh.
+        let mut interval = tokio::time::interval(self.config.dynconfig.refresh_interval);
         loop {
             tokio::select! {
                 _ = interval.tick() => {
@@ -291,13 +284,5 @@ impl Dynconfig {
 
         *self.data.write().await = data;
         Ok(())
-    }
-
-    /// Returns the interval to refresh the dynamic configuration.
-    async fn refresh_interval(&self) -> Duration {
-        match &self.backend {
-            Backend::Remote(_) => self.config.dynconfig.refresh_interval,
-            Backend::Local(local) => local.refresh_interval().await,
-        }
     }
 }
