@@ -52,7 +52,7 @@ pub fn default_dfdaemon_config_path() -> PathBuf {
 }
 
 /// Returns the default dynconfig path for dfdaemon, which is used when the
-/// manager is not configured.
+/// manager address is not configured.
 #[inline]
 pub fn default_dfdaemon_dynconfig_path() -> PathBuf {
     crate::default_config_dir().join("dynconfig.yaml")
@@ -244,12 +244,6 @@ fn default_scheduler_schedule_timeout() -> Duration {
 /// Returns the default interval to refresh dynamic configuration from manager.
 #[inline]
 fn default_dynconfig_refresh_interval() -> Duration {
-    Duration::from_secs(300)
-}
-
-/// Returns the default interval to refresh the local dynamic configuration.
-#[inline]
-pub fn default_local_dynconfig_refresh_interval() -> Duration {
     Duration::from_secs(60)
 }
 
@@ -709,8 +703,10 @@ impl Default for Upload {
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Manager {
-    /// The manager address.
-    pub addr: String,
+    /// The manager address. If not configured, the dynamic configuration is
+    /// loaded from the local dynconfig file instead of being fetched from the
+    /// manager.
+    pub addr: Option<String>,
 
     /// The root CA cert path with PEM format for the manager, and it is used
     /// for mutual TLS.
@@ -1640,11 +1636,9 @@ pub struct Config {
     #[validate]
     pub upload: Upload,
 
-    /// The manager configuration for dfdaemon. If not configured, the dynamic
-    /// configuration is loaded from the local dynconfig file instead of being
-    /// fetched from the manager.
+    /// The manager configuration for dfdaemon.
     #[validate]
-    pub manager: Option<Manager>,
+    pub manager: Manager,
 
     /// The scheduler configuration for dfdaemon.
     #[validate]
@@ -2005,7 +1999,7 @@ mod tests {
         fs::write(&key_path, "Client key content").await.unwrap();
 
         let manager = Manager {
-            addr: "http://example.com".to_string(),
+            addr: Some("http://example.com".to_string()),
             ca_cert: Some(ca_path),
             cert: Some(cert_path),
             key: Some(key_path),
@@ -2024,7 +2018,10 @@ addr: http://another-service:8080
 "#;
 
         let manager: Manager = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(manager.addr, "http://another-service:8080");
+        assert_eq!(
+            manager.addr,
+            Some("http://another-service:8080".to_string())
+        );
         assert!(manager.ca_cert.is_none());
         assert!(manager.cert.is_none());
         assert!(manager.key.is_none());
@@ -2040,7 +2037,10 @@ key: /etc/ssl/private/client.pem
 "#;
 
         let manager: Manager = serde_yaml::from_str(yaml).expect("Failed to deserialize");
-        assert_eq!(manager.addr, "http://manager-service:65003");
+        assert_eq!(
+            manager.addr,
+            Some("http://manager-service:65003".to_string())
+        );
         assert_eq!(
             manager.ca_cert,
             Some(PathBuf::from("/etc/ssl/certs/ca.crt"))

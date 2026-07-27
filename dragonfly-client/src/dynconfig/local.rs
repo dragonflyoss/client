@@ -27,17 +27,14 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::fs;
 use tokio::net::lookup_host;
-use tokio::sync::RwLock;
 use tonic_health::pb::health_check_response::ServingStatus;
 use tracing::{error, info, instrument};
 use url::Url;
 
 use dragonfly_client_config::dfdaemon::{
-    default_local_dynconfig_refresh_interval, default_local_dynconfig_scheduler_addr,
-    Config as DfdaemonConfig,
+    default_local_dynconfig_scheduler_addr, Config as DfdaemonConfig,
 };
 
 /// The scheduler configuration for the local dynamic configuration.
@@ -71,13 +68,6 @@ impl Default for Scheduler {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Config {
-    /// The interval to refresh the local dynamic configuration.
-    #[serde(
-        default = "default_local_dynconfig_refresh_interval",
-        with = "humantime_serde"
-    )]
-    pub refresh_interval: Duration,
-
     /// The scheduler configuration for scheduler discovery.
     pub scheduler: Scheduler,
 
@@ -94,7 +84,6 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Config {
-            refresh_interval: default_local_dynconfig_refresh_interval(),
             scheduler: Scheduler::default(),
             client_config: None,
             seed_client_config: None,
@@ -110,26 +99,13 @@ pub struct Local {
 
     /// Path of the local dynconfig file.
     path: PathBuf,
-
-    /// The interval to refresh the local dynamic configuration, updated from
-    /// the file on each refresh.
-    refresh_interval: RwLock<Duration>,
 }
 
 /// The implementation of Local.
 impl Local {
     /// Creates a new local backend.
     pub fn new(config: Arc<DfdaemonConfig>, path: PathBuf) -> Self {
-        Self {
-            config,
-            path,
-            refresh_interval: RwLock::new(default_local_dynconfig_refresh_interval()),
-        }
-    }
-
-    /// Returns the interval to refresh the local dynamic configuration.
-    pub async fn refresh_interval(&self) -> Duration {
-        *self.refresh_interval.read().await
+        Self { config, path }
     }
 
     /// Generates the default dynconfig file if it does not exist.
@@ -162,9 +138,6 @@ impl Local {
             error!("read dynconfig {} failed: {}", self.path.display(), err);
         })?;
         let config: Config = serde_yaml::from_str(&content).or_err(ErrorType::ConfigError)?;
-
-        // Update the refresh interval from the file.
-        *self.refresh_interval.write().await = config.refresh_interval;
 
         // Discover the schedulers from the static address list or by DNS.
         let schedulers = match config.scheduler.addrs.as_deref() {
@@ -339,7 +312,6 @@ mod tests {
     #[test]
     fn deserialize_local_config_correctly() {
         let yaml = r#"
-refreshInterval: 10s
 scheduler:
   addr: 'scheduler-headless.default.svc:8002'
 clientConfig:
@@ -381,7 +353,6 @@ seedClientConfig:
 "#;
 
         let config: Config = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(config.refresh_interval, Duration::from_secs(10));
         assert_eq!(config.scheduler.addr, "scheduler-headless.default.svc:8002");
 
         let block_list = config.client_config.unwrap().block_list.unwrap();
@@ -408,10 +379,6 @@ scheduler:
 "#;
 
         let config: Config = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(
-            config.refresh_interval,
-            default_local_dynconfig_refresh_interval()
-        );
         assert!(config.client_config.is_none());
         assert!(config.seed_client_config.is_none());
     }
@@ -423,10 +390,7 @@ scheduler:
         let path = dir.path().join("dynconfig.yaml");
         tokio::fs::write(
             &path,
-            format!(
-                "refreshInterval: 10s\nscheduler:\n  addr: 'localhost:{}'\n",
-                health_addr.port()
-            ),
+            format!("scheduler:\n  addr: 'localhost:{}'\n", health_addr.port()),
         )
         .await
         .unwrap();
@@ -439,7 +403,6 @@ scheduler:
             .iter()
             .all(|scheduler| scheduler.port == health_addr.port() as i32));
         assert!(data.available_scheduler_cluster_id.is_none());
-        assert_eq!(local.refresh_interval().await, Duration::from_secs(10));
     }
 
     #[tokio::test]
@@ -455,10 +418,6 @@ scheduler:
         assert_eq!(
             config.scheduler.addr,
             default_local_dynconfig_scheduler_addr()
-        );
-        assert_eq!(
-            config.refresh_interval,
-            default_local_dynconfig_refresh_interval()
         );
     }
 
