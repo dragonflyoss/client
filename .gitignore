@@ -57,3 +57,6 @@ scripts/certs
 # Cloud files
 .claude
 .claude-analysis
+
+# Graphify
+graphify-out
