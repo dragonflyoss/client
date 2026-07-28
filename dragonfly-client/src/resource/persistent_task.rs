@@ -2138,7 +2138,7 @@ impl PersistentTask {
                     })?;
                 } else {
                     download_progress_tx
-                    .send_timeout(
+                    .send(
                         Ok(DownloadPersistentTaskResponse {
                             host_id: host_id.to_string(),
                             task_id: task_id.clone(),
@@ -2151,7 +2151,6 @@ impl PersistentTask {
                                 ),
                             ),
                         }),
-                        REQUEST_TIMEOUT,
                     )
                     .await
                     .unwrap_or_else(|err| {
@@ -2433,7 +2432,7 @@ impl PersistentTask {
                     })?;
                 } else {
                     download_progress_tx
-                    .send_timeout(
+                    .send(
                         Ok(DownloadPersistentTaskResponse {
                             host_id: host_id.to_string(),
                             task_id: task_id.to_string(),
@@ -2446,7 +2445,6 @@ impl PersistentTask {
                                 ),
                             ),
                         }),
-                        REQUEST_TIMEOUT,
                     )
                     .await
                     .unwrap_or_else(|err| {
@@ -2726,7 +2724,7 @@ impl PersistentTask {
                 })?;
             } else {
                 download_progress_tx
-                .send_timeout(Ok(DownloadPersistentTaskResponse {
+                .send(Ok(DownloadPersistentTaskResponse {
                     host_id: host_id.to_string(),
                     task_id: task_id.to_string(),
                     peer_id: peer_id.to_string(),
@@ -2735,7 +2733,7 @@ impl PersistentTask {
                             dfdaemon::v2::DownloadPieceFinishedResponse { piece: Some(piece) },
                         ),
                     ),
-                }), REQUEST_TIMEOUT)
+                }))
                 .await
                 .unwrap_or_else(|err| {
                     error!(
@@ -2878,7 +2876,7 @@ impl PersistentTask {
                     })?;
                 } else {
                     download_progress_tx
-                    .send_timeout(
+                    .send(
                         Ok(DownloadPersistentTaskResponse {
                             host_id: host_id.to_string(),
                             task_id: task_id.to_string(),
@@ -2891,7 +2889,6 @@ impl PersistentTask {
                                 ),
                             ),
                         }),
-                        REQUEST_TIMEOUT,
                     )
                     .await
                     .unwrap_or_else(|err| {

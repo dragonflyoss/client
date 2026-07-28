@@ -1296,7 +1296,7 @@ impl PersistentCacheTask {
                     })?;
                 } else {
                     download_progress_tx
-                    .send_timeout(
+                    .send(
                         Ok(DownloadPersistentCacheTaskResponse {
                             host_id: host_id.to_string(),
                             task_id: task_id.clone(),
@@ -1309,7 +1309,6 @@ impl PersistentCacheTask {
                                 ),
                             ),
                         }),
-                        REQUEST_TIMEOUT,
                     )
                     .await
                     .unwrap_or_else(|err| {
@@ -1568,7 +1567,7 @@ impl PersistentCacheTask {
                 })?;
             } else {
                 download_progress_tx
-                .send_timeout(
+                .send(
                     Ok(DownloadPersistentCacheTaskResponse {
                         host_id: host_id.to_string(),
                         task_id: task_id.to_string(),
@@ -1581,7 +1580,6 @@ impl PersistentCacheTask {
                             ),
                         ),
                     }),
-                    REQUEST_TIMEOUT,
                 )
                 .await
                 .unwrap_or_else(|err| {
