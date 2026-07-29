@@ -81,8 +81,8 @@ impl CPU {
     /// Creates a new CPU instance.
     pub fn new() -> Self {
         Self {
-            physical_core_count: num_cpus::get_physical() as u32,
-            logical_core_count: num_cpus::get() as u32,
+            physical_core_count: System::physical_core_count().unwrap_or_default() as u32,
+            logical_core_count: std::thread::available_parallelism().map_or(1, |n| n.get()) as u32,
             mutex: Arc::new(Mutex::new(())),
         }
     }
