@@ -51,8 +51,6 @@ RUN case "${TARGETPLATFORM}" in \
   esac && \
   cargo build --release --verbose --bin dfget --bin dfdaemon --bin dfcache --bin dfstore --bin dfctl
 
-RUN cargo install tokio-console --version 0.1.13 --locked --root /usr/local
-
 FROM alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11 AS health
 
 ENV GRPC_HEALTH_PROBE_VERSION=v0.4.24
@@ -66,16 +64,10 @@ RUN if [ "$(uname -m)" = "ppc64le" ]; then \
     fi && \
     chmod +x /bin/grpc_health_probe
 
-FROM golang:1.25.5-alpine3.23@sha256:ac09a5f469f307e5da71e766b0bd59c9c49ea460a528cc3e6686513d64a6f1fb AS pprof
-
-RUN go install github.com/google/pprof@v0.0.0-20251114195745-4902fdda35c8
-RUN go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
-
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends iperf iotop sysstat \
-    bash-completion procps apache2-utils ca-certificates fio curl nvme-cli smartmontools dnsutils \
-    iputils-ping lsof strace dstat net-tools libbpf-tools \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl bash-completion \
+    dstat iperf fio dnsutils iputils-ping lsof strace net-tools \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/client/target/release/dfget /usr/local/bin/dfget
@@ -83,9 +75,6 @@ COPY --from=builder /app/client/target/release/dfdaemon /usr/local/bin/dfdaemon
 COPY --from=builder /app/client/target/release/dfcache /usr/local/bin/dfcache
 COPY --from=builder /app/client/target/release/dfstore /usr/local/bin/dfstore
 COPY --from=builder /app/client/target/release/dfctl /usr/local/bin/dfctl
-COPY --from=builder /usr/local/bin/tokio-console /usr/local/bin/
-COPY --from=pprof /go/bin/pprof /bin/pprof
-COPY --from=pprof /go/bin/grpcurl /bin/grpcurl
 COPY --from=health /bin/grpc_health_probe /bin/grpc_health_probe
 
 ENTRYPOINT ["/usr/local/bin/dfdaemon"]
