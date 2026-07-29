@@ -45,6 +45,11 @@ lazy_static! {
         Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(DEFAULT_CERTS_CACHE_CAPACITY).unwrap())));
 }
 
+/// Installs the aws-lc-rs crypto provider as the process-wide default for rustls.
+pub fn install_crypto_provider() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
+
 /// A verifier that does not verify the server certificate.
 /// It is used for testing and should not be used in production.
 #[derive(Debug)]

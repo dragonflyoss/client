@@ -1398,6 +1398,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_pool_get_or_create() {
+        dragonfly_client_util::tls::install_crypto_provider();
         let pool = PoolBuilder::new(HTTPClientFactory {})
             .capacity(10)
             .idle_timeout(Duration::from_secs(600))
@@ -1423,6 +1424,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_client_pool_cleanup() {
+        dragonfly_client_util::tls::install_crypto_provider();
         let pool = PoolBuilder::new(HTTPClientFactory {})
             .capacity(10)
             .idle_timeout(Duration::from_millis(10))
