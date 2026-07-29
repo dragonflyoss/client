@@ -67,7 +67,7 @@ RUN if [ "$(uname -m)" = "ppc64le" ]; then \
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl bash-completion \
-    dstat iperf fio dnsutils iputils-ping lsof strace net-tools \
+    dstat iperf fio dnsutils iputils-ping lsof strace net-tools procps \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/client/target/release/dfget /usr/local/bin/dfget
