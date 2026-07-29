@@ -22,7 +22,6 @@ hyper.workspace = true
 hyper-util.workspace = true
 opendal.workspace = true
 url.workspace = true
-headers.workspace = true
 vortex-protocol.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]

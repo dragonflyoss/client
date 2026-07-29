@@ -47,14 +47,13 @@ use hyper_util::{
     client::legacy::Client,
     rt::{tokio::TokioIo, TokioExecutor},
 };
-use lazy_static::lazy_static;
 use leaky_bucket::RateLimiter;
 use rcgen::Certificate;
 use rustls::{RootCertStore, ServerConfig};
 use rustls_pki_types::CertificateDer;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
@@ -67,10 +66,9 @@ pub mod header;
 pub mod query;
 pub mod task;
 
-lazy_static! {
-  /// Supported HTTP protocols, including HTTP/1.1 and HTTP/1.0.
-  static ref SUPPORTED_HTTP_PROTOCOLS: Vec<Vec<u8>> = vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()];
-}
+/// Supported HTTP protocols, including HTTP/1.1 and HTTP/1.0.
+static SUPPORTED_HTTP_PROTOCOLS: LazyLock<Vec<Vec<u8>>> =
+    LazyLock::new(|| vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()]);
 
 /// Response type for the proxy server.
 pub type Response = hyper::Response<BoxBody<Bytes, ClientError>>;

@@ -82,9 +82,10 @@ impl RocksdbStorageEngine {
         options.set_bottommost_compression_type(rocksdb::DBCompressionType::Lz4);
 
         // Improved parallelism.
-        options.increase_parallelism(num_cpus::get() as i32);
+        let parallelism = std::thread::available_parallelism().map_or(1, |n| n.get()) as i32;
+        options.increase_parallelism(parallelism);
         options.set_max_background_jobs(std::cmp::max(
-            num_cpus::get() as i32,
+            parallelism,
             Self::DEFAULT_MAX_BACKGROUND_JOBS,
         ));
 

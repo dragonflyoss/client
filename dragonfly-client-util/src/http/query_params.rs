@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-use lazy_static::lazy_static;
 use std::collections::HashSet;
+use std::sync::LazyLock;
 
 /// The default filtered query params with s3 protocol to generate the task id.
 const S3_FILTERED_QUERY_PARAMS: &[&str] = &[
@@ -67,30 +67,28 @@ const COS_FILTERED_QUERY_PARAMS: &[&str] = &[
 /// The filtered query params with containerd to generate the task id.
 const CONTAINERD_FILTERED_QUERY_PARAMS: &[&str] = &["ns"];
 
-lazy_static! {
-    /// The default filtered query params to generate the task id, deduplicated
-    /// across all protocols and built once.
-    static ref DEFAULT_PROXY_RULE_FILTERED_QUERY_PARAMS: Vec<String> = {
-        let mut visited = HashSet::new();
-        let mut params = Vec::new();
-        for query_param in [
-            S3_FILTERED_QUERY_PARAMS,
-            GCS_FILTERED_QUERY_PARAMS,
-            OSS_FILTERED_QUERY_PARAMS,
-            OBS_FILTERED_QUERY_PARAMS,
-            COS_FILTERED_QUERY_PARAMS,
-            CONTAINERD_FILTERED_QUERY_PARAMS,
-        ]
-        .concat()
-        {
-            if visited.insert(query_param) {
-                params.push(query_param.to_string());
-            }
+/// The default filtered query params to generate the task id, deduplicated
+/// across all protocols and built once.
+static DEFAULT_PROXY_RULE_FILTERED_QUERY_PARAMS: LazyLock<Vec<String>> = LazyLock::new(|| {
+    let mut visited = HashSet::new();
+    let mut params = Vec::new();
+    for query_param in [
+        S3_FILTERED_QUERY_PARAMS,
+        GCS_FILTERED_QUERY_PARAMS,
+        OSS_FILTERED_QUERY_PARAMS,
+        OBS_FILTERED_QUERY_PARAMS,
+        COS_FILTERED_QUERY_PARAMS,
+        CONTAINERD_FILTERED_QUERY_PARAMS,
+    ]
+    .concat()
+    {
+        if visited.insert(query_param) {
+            params.push(query_param.to_string());
         }
+    }
 
-        params
-    };
-}
+    params
+});
 
 /// The default filtered query params to generate the task id.
 #[inline]

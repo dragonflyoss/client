@@ -16,13 +16,12 @@
 
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
-use lazy_static::lazy_static;
 use lru::LruCache;
 use rcgen::{Certificate, CertificateParams, KeyPair};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::vec::Vec;
 use std::{fs, io};
 use tracing::instrument;
@@ -33,16 +32,27 @@ const DEFAULT_CERTS_CACHE_CAPACITY: usize = 1000;
 /// The type of the certificate and private key pair.
 type CertKeyPair = (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>);
 
-lazy_static! {
-    /// A map that stores the self-signed certificates to avoid
-    /// generating the same certificates multiple times.
-    static ref SELF_SIGNED_CERTS: Arc<Mutex<LruCache<String, CertKeyPair>>> =
-        Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(DEFAULT_CERTS_CACHE_CAPACITY).unwrap())));
+/// A map that stores the self-signed certificates to avoid
+/// generating the same certificates multiple times.
+static SELF_SIGNED_CERTS: LazyLock<Arc<Mutex<LruCache<String, CertKeyPair>>>> =
+    LazyLock::new(|| {
+        Arc::new(Mutex::new(LruCache::new(
+            NonZeroUsize::new(DEFAULT_CERTS_CACHE_CAPACITY).unwrap(),
+        )))
+    });
 
-    /// A map that stores the simple self-signed certificates to avoid
-    /// generating the same certificates multiple times.
-    static ref SIMPLE_SELF_SIGNED_CERTS: Arc<Mutex<LruCache<String, CertKeyPair>>> =
-        Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(DEFAULT_CERTS_CACHE_CAPACITY).unwrap())));
+/// A map that stores the simple self-signed certificates to avoid
+/// generating the same certificates multiple times.
+static SIMPLE_SELF_SIGNED_CERTS: LazyLock<Arc<Mutex<LruCache<String, CertKeyPair>>>> =
+    LazyLock::new(|| {
+        Arc::new(Mutex::new(LruCache::new(
+            NonZeroUsize::new(DEFAULT_CERTS_CACHE_CAPACITY).unwrap(),
+        )))
+    });
+
+/// Installs the aws-lc-rs crypto provider as the process-wide default for rustls.
+pub fn install_crypto_provider() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 }
 
 /// A verifier that does not verify the server certificate.
@@ -54,7 +64,9 @@ pub struct NoVerifier(Arc<rustls::crypto::CryptoProvider>);
 impl NoVerifier {
     /// Creates a new NoVerifier.
     pub fn new() -> Arc<Self> {
-        Arc::new(Self(Arc::new(rustls::crypto::ring::default_provider())))
+        Arc::new(Self(
+            Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
+        ))
     }
 }
 
