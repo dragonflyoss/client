@@ -17,4 +17,3 @@ crate-type = ["dylib"]
 dragonfly-client-core.workspace = true
 dragonfly-client-backend.workspace = true
 async-trait.workspace = true
-tonic.workspace = true

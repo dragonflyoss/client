@@ -15,22 +15,21 @@
  */
 
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
-use lazy_static::lazy_static;
 use regex::Regex;
 use sha2::Digest as Sha2Digest;
 use std::fmt;
 use std::io::{self, Read};
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::LazyLock;
 use tracing::instrument;
 
 /// The separator character for digest formatting.
 pub const SEPARATOR: &str = ":";
 
-lazy_static! {
-    /// Regex pattern for OCI blob URLs, e.g. http(s)://<registry>/v2/<repository>/blobs/<digest>.
-    static ref BLOB_URL_REGEX: Regex = Regex::new(r"^(.*)://(.*)/v2/(.*)/blobs/([^?]+)(?:\?.*)?$").unwrap();
-}
+/// Regex pattern for OCI blob URLs, e.g. http(s)://<registry>/v2/<repository>/blobs/<digest>.
+static BLOB_URL_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(.*)://(.*)/v2/(.*)/blobs/([^?]+)(?:\?.*)?$").unwrap());
 
 /// Checks if the URL is an OCI blob URL.
 pub fn is_blob_url(url: &str) -> bool {

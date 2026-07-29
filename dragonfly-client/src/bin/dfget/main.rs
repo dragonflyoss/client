@@ -431,6 +431,9 @@ const TRANSFER_WRITE_BUFFER_SIZE: usize = 8 * 1024 * 1024;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Install the default crypto provider for rustls.
+    dragonfly_client_util::tls::install_crypto_provider();
+
     // Parse command line arguments.
     let args = convert_args(Args::parse());
 
