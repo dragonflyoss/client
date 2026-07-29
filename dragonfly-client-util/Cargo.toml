@@ -30,7 +30,6 @@ uuid.workspace = true
 sysinfo.workspace = true
 hex.workspace = true
 crc32fast.workspace = true
-lazy_static.workspace = true
 bytesize.workspace = true
 lru.workspace = true
 tokio.workspace = true

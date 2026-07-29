@@ -71,7 +71,6 @@ hyper-util = { version = "0.1.20", features = [
   "server-auto",
   "tokio",
 ] }
-lazy_static = "1.5"
 leaky-bucket = "1.1.2"
 local-ip-address = "0.6.5"
 lru = "0.18.1"

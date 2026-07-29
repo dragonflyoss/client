@@ -25,7 +25,6 @@ use hyper::server::conn::http1::Builder as ServerBuilder;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use lazy_static::lazy_static;
 use prometheus::{
     exponential_buckets, gather, Encoder, HistogramOpts, HistogramVec, IntCounterVec, IntGaugeVec,
     Opts, Registry, TextEncoder,
@@ -33,7 +32,7 @@ use prometheus::{
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -47,291 +46,562 @@ const DOWNLOAD_SMALL_TASK_DURATION_THRESHOLD: Duration = Duration::from_millis(5
 /// duration for recording slow upload task.
 const UPLOAD_SMALL_TASK_DURATION_THRESHOLD: Duration = Duration::from_millis(500);
 
-lazy_static! {
-    /// Used to register all metrics.
-    pub static ref REGISTRY: Registry = Registry::new();
+/// Used to register all metrics.
+pub static REGISTRY: LazyLock<Registry> = LazyLock::new(Registry::new);
 
-    /// Used to record the version info of the service.
-    pub static ref VERSION_GAUGE: IntGaugeVec =
-        IntGaugeVec::new(
-            Opts::new("version", "Version info of the service.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["git_version", "git_commit", "platform", "build_time"]
-        ).expect("metric can be created");
+/// Used to record the version info of the service.
+pub static VERSION_GAUGE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
+    IntGaugeVec::new(
+        Opts::new("version", "Version info of the service.")
+            .namespace(dragonfly_client_config::SERVICE_NAME)
+            .subsystem(dragonfly_client_config::NAME),
+        &["git_version", "git_commit", "platform", "build_time"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of upload tasks.
-    pub static ref UPLOAD_TASK_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("upload_task_total", "Counter of the number of the upload task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type", "tag", "app"]
-        ).expect("metric can be created");
+/// Used to count the number of upload tasks.
+pub static UPLOAD_TASK_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "upload_task_total",
+            "Counter of the number of the upload task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type", "tag", "app"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of upload tasks.
-    pub static ref UPLOAD_TASK_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("upload_task_failure_total", "Counter of the number of failed of the upload task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type", "tag", "app"]
-        ).expect("metric can be created");
+/// Used to count the failed number of upload tasks.
+pub static UPLOAD_TASK_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "upload_task_failure_total",
+            "Counter of the number of failed of the upload task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type", "tag", "app"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to gauge the number of concurrent upload tasks.
-    pub static ref CONCURRENT_UPLOAD_TASK_GAUGE: IntGaugeVec =
-        IntGaugeVec::new(
-            Opts::new("concurrent_upload_task_total", "Gauge of the number of concurrent of the upload task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type", "tag", "app"]
-        ).expect("metric can be created");
+/// Used to gauge the number of concurrent upload tasks.
+pub static CONCURRENT_UPLOAD_TASK_GAUGE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
+    IntGaugeVec::new(
+        Opts::new(
+            "concurrent_upload_task_total",
+            "Gauge of the number of concurrent of the upload task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type", "tag", "app"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to record the upload task duration.
-    pub static ref UPLOAD_TASK_DURATION: HistogramVec =
-        HistogramVec::new(
-            HistogramOpts::new("upload_task_duration_milliseconds", "Histogram of the upload task duration.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME).buckets(exponential_buckets(1.0, 2.0, 24).unwrap()),
-            &["task_type", "task_size_level"]
-        ).expect("metric can be created");
+/// Used to record the upload task duration.
+pub static UPLOAD_TASK_DURATION: LazyLock<HistogramVec> = LazyLock::new(|| {
+    HistogramVec::new(
+        HistogramOpts::new(
+            "upload_task_duration_milliseconds",
+            "Histogram of the upload task duration.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME)
+        .buckets(exponential_buckets(1.0, 2.0, 24).unwrap()),
+        &["task_type", "task_size_level"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of download tasks.
-    pub static ref DOWNLOAD_TASK_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("download_task_total", "Counter of the number of the download task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type", "tag", "app", "priority"]
-        ).expect("metric can be created");
+/// Used to count the number of download tasks.
+pub static DOWNLOAD_TASK_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "download_task_total",
+            "Counter of the number of the download task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type", "tag", "app", "priority"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of download tasks.
-    pub static ref DOWNLOAD_TASK_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("download_task_failure_total", "Counter of the number of failed of the download task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type", "tag", "app", "priority"]
-        ).expect("metric can be created");
+/// Used to count the failed number of download tasks.
+pub static DOWNLOAD_TASK_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "download_task_failure_total",
+            "Counter of the number of failed of the download task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type", "tag", "app", "priority"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of prefetch tasks.
-    pub static ref PREFETCH_TASK_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("prefetch_task_total", "Counter of the number of the prefetch task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type", "tag", "app", "priority"]
-        ).expect("metric can be created");
+/// Used to count the number of prefetch tasks.
+pub static PREFETCH_TASK_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "prefetch_task_total",
+            "Counter of the number of the prefetch task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type", "tag", "app", "priority"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of prefetch tasks.
-    pub static ref PREFETCH_TASK_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("prefetch_task_failure_total", "Counter of the number of failed of the prefetch task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type", "tag", "app", "priority"]
-        ).expect("metric can be created");
+/// Used to count the failed number of prefetch tasks.
+pub static PREFETCH_TASK_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "prefetch_task_failure_total",
+            "Counter of the number of failed of the prefetch task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type", "tag", "app", "priority"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to gauge the number of concurrent download tasks.
-    pub static ref CONCURRENT_DOWNLOAD_TASK_GAUGE: IntGaugeVec =
-        IntGaugeVec::new(
-            Opts::new("concurrent_download_task_total", "Gauge of the number of concurrent of the download task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type", "tag", "app", "priority"]
-        ).expect("metric can be created");
+/// Used to gauge the number of concurrent download tasks.
+pub static CONCURRENT_DOWNLOAD_TASK_GAUGE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
+    IntGaugeVec::new(
+        Opts::new(
+            "concurrent_download_task_total",
+            "Gauge of the number of concurrent of the download task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type", "tag", "app", "priority"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to gauge the number of concurrent upload pieces.
-    pub static ref CONCURRENT_UPLOAD_PIECE_GAUGE: IntGaugeVec =
-        IntGaugeVec::new(
-            Opts::new("concurrent_upload_piece_total", "Gauge of the number of concurrent of the upload piece.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &[]
-        ).expect("metric can be created");
+/// Used to gauge the number of concurrent upload pieces.
+pub static CONCURRENT_UPLOAD_PIECE_GAUGE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
+    IntGaugeVec::new(
+        Opts::new(
+            "concurrent_upload_piece_total",
+            "Gauge of the number of concurrent of the upload piece.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &[],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the download traffic.
-    pub static ref DOWNLOAD_TRAFFIC: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("download_traffic", "Counter of the number of the download traffic.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the download traffic.
+pub static DOWNLOAD_TRAFFIC: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "download_traffic",
+            "Counter of the number of the download traffic.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the upload traffic.
-    pub static ref UPLOAD_TRAFFIC: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("upload_traffic", "Counter of the number of the upload traffic.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &[]
-        ).expect("metric can be created");
+/// Used to count the upload traffic.
+pub static UPLOAD_TRAFFIC: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "upload_traffic",
+            "Counter of the number of the upload traffic.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &[],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to record the download task duration.
-    pub static ref DOWNLOAD_TASK_DURATION: HistogramVec =
-        HistogramVec::new(
-            HistogramOpts::new("download_task_duration_milliseconds", "Histogram of the download task duration.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME).buckets(exponential_buckets(1.0, 2.0, 24).unwrap()),
-            &["task_type", "task_size_level"]
-        ).expect("metric can be created");
+/// Used to record the download task duration.
+pub static DOWNLOAD_TASK_DURATION: LazyLock<HistogramVec> = LazyLock::new(|| {
+    HistogramVec::new(
+        HistogramOpts::new(
+            "download_task_duration_milliseconds",
+            "Histogram of the download task duration.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME)
+        .buckets(exponential_buckets(1.0, 2.0, 24).unwrap()),
+        &["task_type", "task_size_level"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of backend requset.
-    pub static ref BACKEND_REQUEST_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("backend_request_total", "Counter of the number of the backend request.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["scheme", "method"]
-        ).expect("metric can be created");
+/// Used to count the number of backend requset.
+pub static BACKEND_REQUEST_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "backend_request_total",
+            "Counter of the number of the backend request.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["scheme", "method"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of backend request.
-    pub static ref BACKEND_REQUEST_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("backend_request_failure_total", "Counter of the number of failed of the backend request.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["scheme", "method"]
-        ).expect("metric can be created");
+/// Used to count the failed number of backend request.
+pub static BACKEND_REQUEST_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "backend_request_failure_total",
+            "Counter of the number of failed of the backend request.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["scheme", "method"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to record the backend request duration.
-    pub static ref BACKEND_REQUEST_DURATION: HistogramVec =
-        HistogramVec::new(
-            HistogramOpts::new("backend_request_duration_milliseconds", "Histogram of the backend request duration.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME).buckets(exponential_buckets(1.0, 2.0, 24).unwrap()),
-            &["scheme", "method"]
-        ).expect("metric can be created");
+/// Used to record the backend request duration.
+pub static BACKEND_REQUEST_DURATION: LazyLock<HistogramVec> = LazyLock::new(|| {
+    HistogramVec::new(
+        HistogramOpts::new(
+            "backend_request_duration_milliseconds",
+            "Histogram of the backend request duration.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME)
+        .buckets(exponential_buckets(1.0, 2.0, 24).unwrap()),
+        &["scheme", "method"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of proxy requset.
-    pub static ref PROXY_REQUEST_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("proxy_request_total", "Counter of the number of the proxy request.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &[]
-        ).expect("metric can be created");
+/// Used to count the number of proxy requset.
+pub static PROXY_REQUEST_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "proxy_request_total",
+            "Counter of the number of the proxy request.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &[],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of proxy request.
-    pub static ref PROXY_REQUEST_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("proxy_request_failure_total", "Counter of the number of failed of the proxy request.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &[]
-        ).expect("metric can be created");
+/// Used to count the failed number of proxy request.
+pub static PROXY_REQUEST_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "proxy_request_failure_total",
+            "Counter of the number of failed of the proxy request.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &[],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of proxy requset via dfdaemon.
-    pub static ref PROXY_REQUEST_VIA_DFDAEMON_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("proxy_request_via_dfdaemon_total", "Counter of the number of the proxy request via dfdaemon.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &[]
-        ).expect("metric can be created");
+/// Used to count the number of proxy requset via dfdaemon.
+pub static PROXY_REQUEST_VIA_DFDAEMON_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "proxy_request_via_dfdaemon_total",
+            "Counter of the number of the proxy request via dfdaemon.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &[],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of update tasks.
-    pub static ref UPDATE_TASK_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("update_task_total", "Counter of the number of the update task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the number of update tasks.
+pub static UPDATE_TASK_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "update_task_total",
+            "Counter of the number of the update task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of update tasks.
-    pub static ref UPDATE_TASK_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("update_task_failure_total", "Counter of the number of failed of the update task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the failed number of update tasks.
+pub static UPDATE_TASK_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "update_task_failure_total",
+            "Counter of the number of failed of the update task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of stat tasks.
-    pub static ref STAT_TASK_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("stat_task_total", "Counter of the number of the stat task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the number of stat tasks.
+pub static STAT_TASK_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new("stat_task_total", "Counter of the number of the stat task.")
+            .namespace(dragonfly_client_config::SERVICE_NAME)
+            .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of stat tasks.
-    pub static ref STAT_TASK_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("stat_task_failure_total", "Counter of the number of failed of the stat task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the failed number of stat tasks.
+pub static STAT_TASK_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "stat_task_failure_total",
+            "Counter of the number of failed of the stat task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of stat tasks.
-    pub static ref STAT_LOCAL_TASK_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("stat_local_task_total", "Counter of the number of the stat local task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the number of stat tasks.
+pub static STAT_LOCAL_TASK_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "stat_local_task_total",
+            "Counter of the number of the stat local task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of stat tasks.
-    pub static ref STAT_LOCAL_TASK_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("stat_local_task_failure_total", "Counter of the number of failed of the stat local task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the failed number of stat tasks.
+pub static STAT_LOCAL_TASK_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "stat_local_task_failure_total",
+            "Counter of the number of failed of the stat local task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of list tasks.
-    pub static ref LIST_LOCAL_TASKS_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("list_local_tasks_total", "Counter of the number of the list tasks.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the number of list tasks.
+pub static LIST_LOCAL_TASKS_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "list_local_tasks_total",
+            "Counter of the number of the list tasks.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of list tasks.
-    pub static ref LIST_LOCAL_TASKS_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("list_tasks_failure_total", "Counter of the number of failed of the list tasks.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the failed number of list tasks.
+pub static LIST_LOCAL_TASKS_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "list_tasks_failure_total",
+            "Counter of the number of failed of the list tasks.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of list task entries.
-    pub static ref LIST_TASK_ENTRIES_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("list_task_entries_total", "Counter of the number of the list task entries.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the number of list task entries.
+pub static LIST_TASK_ENTRIES_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "list_task_entries_total",
+            "Counter of the number of the list task entries.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of list task entries.
-    pub static ref LIST_TASK_ENTRIES_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("list_task_entries_failure_total", "Counter of the number of failed of the list task entries.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the failed number of list task entries.
+pub static LIST_TASK_ENTRIES_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "list_task_entries_failure_total",
+            "Counter of the number of failed of the list task entries.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-        /// Used to count the number of delete tasks.
-    pub static ref DELETE_TASK_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("delete_task_total", "Counter of the number of the delete task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the number of delete tasks.
+pub static DELETE_TASK_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "delete_task_total",
+            "Counter of the number of the delete task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of delete tasks.
-    pub static ref DELETE_TASK_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("delete_task_failure_total", "Counter of the number of failed of the delete task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the failed number of delete tasks.
+pub static DELETE_TASK_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "delete_task_failure_total",
+            "Counter of the number of failed of the delete task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-        /// Used to count the number of delete local tasks.
-    pub static ref DELETE_LOCAL_TASK_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("delete_local_task_total", "Counter of the number of the delete local task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the number of delete local tasks.
+pub static DELETE_LOCAL_TASK_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "delete_local_task_total",
+            "Counter of the number of the delete local task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of delete local tasks.
-    pub static ref DELETE_LOCAL_TASK_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("delete_local_task_failure_total", "Counter of the number of failed of the delete local task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the failed number of delete local tasks.
+pub static DELETE_LOCAL_TASK_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "delete_local_task_failure_total",
+            "Counter of the number of failed of the delete local task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of delete host.
-    pub static ref DELETE_HOST_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("delete_host_total", "Counter of the number of the delete host.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &[]
-        ).expect("metric can be created");
+/// Used to count the number of delete host.
+pub static DELETE_HOST_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "delete_host_total",
+            "Counter of the number of the delete host.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &[],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of delete host.
-    pub static ref DELETE_HOST_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("delete_host_failure_total", "Counter of the number of failed of the delete host.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &[]
-        ).expect("metric can be created");
+/// Used to count the failed number of delete host.
+pub static DELETE_HOST_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "delete_host_failure_total",
+            "Counter of the number of failed of the delete host.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &[],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count of the disk space.
-    pub static ref DISK_SPACE: IntGaugeVec =
-        IntGaugeVec::new(
-            Opts::new("disk_space_total", "Gauge of the disk space in bytes").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &[]
-        ).expect("metric can be created");
+/// Used to count of the disk space.
+pub static DISK_SPACE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
+    IntGaugeVec::new(
+        Opts::new("disk_space_total", "Gauge of the disk space in bytes")
+            .namespace(dragonfly_client_config::SERVICE_NAME)
+            .subsystem(dragonfly_client_config::NAME),
+        &[],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count of the disk usage space.
-    pub static ref DISK_USAGE_SPACE: IntGaugeVec =
-        IntGaugeVec::new(
-            Opts::new("disk_usage_space_total", "Gauge of the disk usage space in bytes").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &[]
-        ).expect("metric can be created");
+/// Used to count of the disk usage space.
+pub static DISK_USAGE_SPACE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
+    IntGaugeVec::new(
+        Opts::new(
+            "disk_usage_space_total",
+            "Gauge of the disk usage space in bytes",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &[],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count of the download task blocked.
-    pub static ref DOWNLOAD_TASK_BLOCKED_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("download_task_blocked_total", "Counter of the number of download task blocked.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count of the download task blocked.
+pub static DOWNLOAD_TASK_BLOCKED_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "download_task_blocked_total",
+            "Counter of the number of download task blocked.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-
-    /// Used to count of the upload task blocked.
-    pub static ref UPLOAD_TASK_BLOCKED_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("upload_task_blocked_total", "Counter of the number of upload task blocked.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
-}
+/// Used to count of the upload task blocked.
+pub static UPLOAD_TASK_BLOCKED_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "upload_task_blocked_total",
+            "Counter of the number of upload task blocked.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
 /// Registers all custom metrics.
 fn register_custom_metrics() {

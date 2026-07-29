@@ -68,7 +68,6 @@ percent-encoding.workspace = true
 tokio-rustls.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
-lazy_static.workspace = true
 futures.workspace = true
 sysinfo.workspace = true
 leaky-bucket.workspace = true
