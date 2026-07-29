@@ -20,7 +20,6 @@ serde_regex.workspace = true
 serde.workspace = true
 tracing.workspace = true
 validator.workspace = true
-humantime.workspace = true
 serde_yaml.workspace = true
 tokio.workspace = true
 tempfile.workspace = true

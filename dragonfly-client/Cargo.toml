@@ -50,7 +50,6 @@ serde.workspace = true
 chrono.workspace = true
 prost-wkt-types.workspace = true
 tokio.workspace = true
-tokio-util.workspace = true
 rustls.workspace = true
 rustls-pki-types.workspace = true
 warp.workspace = true
@@ -70,13 +69,10 @@ percent-encoding.workspace = true
 tokio-rustls.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
-fs2.workspace = true
 lazy_static.workspace = true
 futures.workspace = true
-local-ip-address.workspace = true
 sysinfo.workspace = true
 leaky-bucket.workspace = true
-vortex-protocol.workspace = true
 dashmap.workspace = true
 tonic-health.workspace = true
 hashring.workspace = true
@@ -94,7 +90,6 @@ opentelemetry_sdk = { version = "=0.31.0", default-features = false, features = 
 opentelemetry-semantic-conventions = { version = "=0.32.1", features = ["semconv_experimental"] }
 rolling-file = "0.2.0"
 pprof = { version = "0.15", features = ["flamegraph", "protobuf-codec"] }
-prometheus = { version = "0.13", features = ["process"] }
 tower = { version = "=0.5.3", features = ["limit", "load-shed", "buffer"] }
 indicatif = "0.18.4"
 http-body-util = "0.1.3"
