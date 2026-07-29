@@ -49,10 +49,10 @@ fastrand = "2.4.1"
 fs2 = "0.4.3"
 futures = "0.3.32"
 hashring = "0.3.6"
-headers = "0.4.1"
 hex = "0.4"
 hostname = "^0.4"
 http = "1"
+http-body-util = "0.1.3"
 http-range-header = "0.4.2"
 humantime = "2.3.0"
 humantime-serde = "1.1.1"
@@ -142,7 +142,6 @@ url = "2.5.4"
 uuid = { version = "1.20", features = ["v4"] }
 validator = { version = "0.16", features = ["derive"] }
 vortex-protocol = "0.1.5"
-warp = "0.3.5"
 
 # TODO(Gaius): Remove the git dependency after the next release of mocktail, refer to https://github.com/IBM/mocktail/issues/65.
 mocktail = { git = "https://github.com/IBM/mocktail", rev = "860e75e171a8eb818083813dbeed4401d1a40b3b", version = "0.3.0" }

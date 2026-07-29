@@ -15,9 +15,9 @@
  */
 
 use clap::{Arg, Command};
-use lazy_static::lazy_static;
 use std::env;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 pub mod dfcache;
 pub mod dfctl;
@@ -60,22 +60,16 @@ pub const GIT_COMMIT_DATE: &str = {
     }
 };
 
-lazy_static! {
-    /// The name of the instance, formatted as {POD_NAMESPACE}-{POD_NAME}.
-    pub static ref INSTANCE_NAME: String = {
-        if let (Some(pod_namespace), Some(pod_name)) = (
-            env::var("POD_NAMESPACE").ok(),
-            env::var("POD_NAME").ok()
-        ) {
-            format!("{pod_namespace}-{pod_name}")
-        } else {
-            hostname::get()
-                .unwrap()
-                .to_string_lossy()
-                .to_string()
-        }
-    };
-}
+/// The name of the instance, formatted as {POD_NAMESPACE}-{POD_NAME}.
+pub static INSTANCE_NAME: LazyLock<String> = LazyLock::new(|| {
+    if let (Some(pod_namespace), Some(pod_name)) =
+        (env::var("POD_NAMESPACE").ok(), env::var("POD_NAME").ok())
+    {
+        format!("{pod_namespace}-{pod_name}")
+    } else {
+        hostname::get().unwrap().to_string_lossy().to_string()
+    }
+});
 
 /// Returns the default root directory for client.
 pub fn default_root_dir() -> PathBuf {

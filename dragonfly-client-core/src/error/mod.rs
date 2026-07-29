@@ -206,10 +206,6 @@ pub enum DFError {
     #[error(transparent)]
     TokioTimeErrorElapsed(#[from] tokio::time::error::Elapsed),
 
-    /// The error for headers.
-    #[error(transparent)]
-    HeadersError(#[from] headers::Error),
-
     // InvalidHeaderName is the error for invalid header name.
     #[error(transparent)]
     HTTTHeaderInvalidHeaderName(#[from] http::header::InvalidHeaderName),

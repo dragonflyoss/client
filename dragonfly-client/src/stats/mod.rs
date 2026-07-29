@@ -14,15 +14,21 @@
  * limitations under the License.
  */
 
+use bytes::Bytes;
 use dragonfly_client_util::shutdown;
+use http_body_util::Full;
+use hyper::server::conn::http1::Builder as ServerBuilder;
+use hyper::service::service_fn;
+use hyper::{Method, Request, Response, StatusCode};
+use hyper_util::rt::TokioIo;
 use pprof::protos::Message;
 use pprof::ProfilerGuard;
-use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::time::Duration;
+use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tracing::{error, info, instrument};
-use warp::{Filter, Rejection, Reply};
 
 /// The default seconds to start profiling.
 const DEFAULT_PROFILER_SECONDS: u64 = 10;
@@ -31,8 +37,6 @@ const DEFAULT_PROFILER_SECONDS: u64 = 10;
 const DEFAULT_PROFILER_FREQUENCY: i32 = 1000;
 
 /// The query params to start profiling.
-#[derive(Deserialize, Serialize)]
-#[serde(default)]
 pub struct PProfProfileQueryParams {
     /// The seconds to start profiling.
     pub seconds: u64,
@@ -48,6 +52,23 @@ impl Default for PProfProfileQueryParams {
             seconds: DEFAULT_PROFILER_SECONDS,
             frequency: DEFAULT_PROFILER_FREQUENCY,
         }
+    }
+}
+
+/// Implements the query params.
+impl PProfProfileQueryParams {
+    /// Parses the query params from the query string.
+    fn from_query(query: &str) -> Self {
+        let mut params = Self::default();
+        for (key, value) in query.split('&').filter_map(|pair| pair.split_once('=')) {
+            match key {
+                "seconds" => params.seconds = value.parse().unwrap_or(params.seconds),
+                "frequency" => params.frequency = value.parse().unwrap_or(params.frequency),
+                _ => {}
+            }
+        }
+
+        params
     }
 }
 
@@ -84,39 +105,75 @@ impl Stats {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
 
-        // Create the pprof profile route.
-        let pprof_profile_route = warp::path!("debug" / "pprof" / "profile")
-            .and(warp::get())
-            .and(warp::query::<PProfProfileQueryParams>())
-            .and_then(Self::pprof_profile_handler);
-
-        // Create the pprof heap route.
-        let pprof_heap_route = warp::path!("debug" / "pprof" / "heap")
-            .and(warp::get())
-            .and_then(Self::pprof_heap_handler);
-
-        // Create the pprof routes.
-        let pprof_routes = pprof_profile_route.or(pprof_heap_route);
-
         // Start the stats server and wait for it to finish.
         info!("stats server listening on {}", self.addr);
-        tokio::select! {
-            _ = warp::serve(pprof_routes).run(self.addr) => {
-                // Stats server ended.
-                info!("stats server ended");
-            }
-            _ = shutdown.recv() => {
-                // Stats server shutting down with signals.
-                info!("stats server shutting down");
+        let listener = TcpListener::bind(self.addr).await.unwrap();
+        loop {
+            tokio::select! {
+                tcp_accepted = listener.accept() => {
+                    let (tcp, remote_address) = match tcp_accepted {
+                        Ok(tcp_accepted) => tcp_accepted,
+                        Err(err) => {
+                            error!("failed to accept connection: {}", err);
+                            continue;
+                        }
+                    };
+
+                    let io = TokioIo::new(tcp);
+                    tokio::spawn(async move {
+                        if let Err(err) = ServerBuilder::new()
+                            .serve_connection(io, service_fn(Self::handler))
+                            .await
+                        {
+                            error!("failed to serve connection from {}: {}", remote_address, err);
+                        }
+                    });
+                }
+                _ = shutdown.recv() => {
+                    // Stats server shutting down with signals.
+                    info!("stats server shutting down");
+                    return;
+                }
             }
         }
     }
 
     /// Handles the stats request.
     #[instrument(skip_all)]
-    async fn pprof_profile_handler(
-        query_params: PProfProfileQueryParams,
-    ) -> Result<impl Reply, Rejection> {
+    async fn handler<T>(request: Request<T>) -> Result<Response<Full<Bytes>>, Infallible> {
+        match (request.method(), request.uri().path()) {
+            (&Method::GET, "/debug/pprof/profile") => {
+                let query_params = request
+                    .uri()
+                    .query()
+                    .map(PProfProfileQueryParams::from_query)
+                    .unwrap_or_default();
+
+                match Self::pprof_profile_handler(query_params).await {
+                    Ok(body) => Ok(Response::new(Full::new(Bytes::from(body)))),
+                    Err(()) => Ok(Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(Full::default())
+                        .unwrap()),
+                }
+            }
+            (&Method::GET, "/debug/pprof/heap") => match Self::pprof_heap_handler().await {
+                Ok(body) => Ok(Response::new(Full::new(Bytes::from(body)))),
+                Err(()) => Ok(Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(Full::default())
+                    .unwrap()),
+            },
+            _ => Ok(Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Full::default())
+                .unwrap()),
+        }
+    }
+
+    /// Handles the pprof profile request.
+    #[instrument(skip_all)]
+    async fn pprof_profile_handler(query_params: PProfProfileQueryParams) -> Result<Vec<u8>, ()> {
         info!(
             "start profiling for {} seconds with {} frequency",
             query_params.seconds, query_params.frequency
@@ -124,24 +181,20 @@ impl Stats {
 
         let guard = ProfilerGuard::new(query_params.frequency).map_err(|err| {
             error!("failed to create profiler guard: {}", err);
-            warp::reject::reject()
         })?;
 
         tokio::time::sleep(Duration::from_secs(query_params.seconds)).await;
         let report = guard.report().build().map_err(|err| {
             error!("failed to build profiler report: {}", err);
-            warp::reject::reject()
         })?;
 
         let profile = report.pprof().map_err(|err| {
             error!("failed to get pprof profile: {}", err);
-            warp::reject::reject()
         })?;
 
         let mut body: Vec<u8> = Vec::new();
         profile.write_to_vec(&mut body).map_err(|err| {
             error!("failed to write pprof profile: {}", err);
-            warp::reject::reject()
         })?;
 
         Ok(body)
@@ -149,31 +202,30 @@ impl Stats {
 
     /// Handles the pprof heap request.
     #[instrument(skip_all)]
-    async fn pprof_heap_handler() -> Result<impl Reply, Rejection> {
+    async fn pprof_heap_handler() -> Result<Vec<u8>, ()> {
         info!("start heap profiling");
         #[cfg(target_os = "linux")]
         {
             // PROF_CTL is None when jemalloc profiling is disabled
             // (release builds set prof:false).
             let Some(prof_ctl) = jemalloc_pprof::PROF_CTL.as_ref() else {
-                return Err(warp::reject::reject());
+                return Err(());
             };
 
             let mut prof_ctl = prof_ctl.lock().await;
             if !prof_ctl.activated() {
-                return Err(warp::reject::reject());
+                return Err(());
             }
 
             let pprof = prof_ctl.dump_pprof().map_err(|err| {
                 error!("failed to dump pprof: {}", err);
-                warp::reject::reject()
             })?;
 
             Ok(pprof)
         }
 
         #[cfg(not(target_os = "linux"))]
-        Err::<warp::http::Error, Rejection>(warp::reject::reject())
+        Err(())
     }
 }
 
@@ -190,13 +242,18 @@ mod tests {
     }
 
     #[test]
-    fn test_pprof_profile_query_params_custom() {
-        let params = PProfProfileQueryParams {
-            seconds: 20,
-            frequency: 500,
-        };
-        assert_eq!(params.seconds, 20);
-        assert_eq!(params.frequency, 500);
+    fn test_pprof_profile_query_params_from_query() {
+        let params = PProfProfileQueryParams::from_query("seconds=25&frequency=1500");
+        assert_eq!(params.seconds, 25);
+        assert_eq!(params.frequency, 1500);
+
+        let params = PProfProfileQueryParams::from_query("seconds=25");
+        assert_eq!(params.seconds, 25);
+        assert_eq!(params.frequency, DEFAULT_PROFILER_FREQUENCY);
+
+        let params = PProfProfileQueryParams::from_query("seconds=invalid&unknown=1");
+        assert_eq!(params.seconds, DEFAULT_PROFILER_SECONDS);
+        assert_eq!(params.frequency, DEFAULT_PROFILER_FREQUENCY);
     }
 
     #[test]
@@ -234,29 +291,5 @@ mod tests {
     async fn test_pprof_heap_handler_non_linux() {
         let result = Stats::pprof_heap_handler().await;
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_pprof_profile_query_params_serde() {
-        let params = PProfProfileQueryParams {
-            seconds: 15,
-            frequency: 750,
-        };
-        let serialized = serde_json::to_string(&params).unwrap();
-        assert!(serialized.contains("15"));
-        assert!(serialized.contains("750"));
-
-        let json = r#"{"seconds":25,"frequency":1500}"#;
-        let deserialized: PProfProfileQueryParams = serde_json::from_str(json).unwrap();
-        assert_eq!(deserialized.seconds, 25);
-        assert_eq!(deserialized.frequency, 1500);
-    }
-
-    #[test]
-    fn test_pprof_profile_query_params_serde_with_default() {
-        let json = r#"{}"#;
-        let deserialized: PProfProfileQueryParams = serde_json::from_str(json).unwrap();
-        assert_eq!(deserialized.seconds, DEFAULT_PROFILER_SECONDS);
-        assert_eq!(deserialized.frequency, DEFAULT_PROFILER_FREQUENCY);
     }
 }

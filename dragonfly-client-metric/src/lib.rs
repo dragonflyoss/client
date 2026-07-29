@@ -14,23 +14,30 @@
  * limitations under the License.
  */
 
+use bytes::Bytes;
 use dragonfly_api::common::v2::{Range, TrafficType};
 use dragonfly_client_config::{
     dfdaemon::Config, BUILD_PLATFORM, CARGO_PKG_VERSION, GIT_COMMIT_DATE, GIT_COMMIT_SHORT_HASH,
 };
 use dragonfly_client_util::shutdown;
+use http_body_util::Full;
+use hyper::server::conn::http1::Builder as ServerBuilder;
+use hyper::service::service_fn;
+use hyper::{Method, Request, Response, StatusCode};
+use hyper_util::rt::TokioIo;
 use lazy_static::lazy_static;
 use prometheus::{
     exponential_buckets, gather, Encoder, HistogramOpts, HistogramVec, IntCounterVec, IntGaugeVec,
     Opts, Registry, TextEncoder,
 };
+use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tracing::{error, info, instrument, warn};
-use warp::{Filter, Rejection, Reply};
 
 /// The threshold of small (Level0–Level2, under 4MiB) download task
 /// duration for recording slow download task.
@@ -1030,36 +1037,70 @@ impl Metrics {
             self.config.metrics.server.port,
         );
 
-        // Get the metrics route.
-        let get_metrics_route = warp::path!("metrics")
-            .and(warp::get())
-            .and(warp::path::end())
-            .and_then(move || Self::get_metrics_handler(config.clone()));
-
-        // Delete the metrics route.
-        let delete_metrics_route = warp::path!("metrics")
-            .and(warp::delete())
-            .and(warp::path::end())
-            .and_then(Self::delete_metrics_handler);
-        let metrics_routes = get_metrics_route.or(delete_metrics_route);
-
         // Start the metrics server and wait for it to finish.
         info!("metrics server listening on {}", addr);
-        tokio::select! {
-            _ = warp::serve(metrics_routes).run(addr) => {
-                // Metrics server ended.
-                info!("metrics server ended");
+        let listener = TcpListener::bind(addr).await.unwrap();
+        loop {
+            tokio::select! {
+                tcp_accepted = listener.accept() => {
+                    let (tcp, remote_address) = match tcp_accepted {
+                        Ok(tcp_accepted) => tcp_accepted,
+                        Err(err) => {
+                            error!("failed to accept connection: {}", err);
+                            continue;
+                        }
+                    };
+
+                    let io = TokioIo::new(tcp);
+                    let config = config.clone();
+                    tokio::spawn(async move {
+                        if let Err(err) = ServerBuilder::new()
+                            .serve_connection(
+                                io,
+                                service_fn(move |request| Self::handler(config.clone(), request)),
+                            )
+                            .await
+                        {
+                            error!("failed to serve connection from {}: {}", remote_address, err);
+                        }
+                    });
+                }
+                _ = shutdown.recv() => {
+                    // Metrics server shutting down with signals.
+                    info!("metrics server shutting down");
+                    return;
+                }
             }
-            _ = shutdown.recv() => {
-                // Metrics server shutting down with signals.
-                info!("metrics server shutting down");
+        }
+    }
+
+    /// Handles the metrics request.
+    #[instrument(skip_all)]
+    async fn handler<T>(
+        config: Arc<Config>,
+        request: Request<T>,
+    ) -> Result<Response<Full<Bytes>>, Infallible> {
+        match (request.method(), request.uri().path()) {
+            (&Method::GET, "/metrics") => Ok(Response::builder()
+                .header(hyper::header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .body(Full::new(Bytes::from(
+                    Self::get_metrics_handler(config).await,
+                )))
+                .unwrap()),
+            (&Method::DELETE, "/metrics") => {
+                Self::delete_metrics_handler().await;
+                Ok(Response::new(Full::default()))
             }
+            _ => Ok(Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Full::default())
+                .unwrap()),
         }
     }
 
     /// Handles the metrics request of getting.
     #[instrument(skip_all)]
-    async fn get_metrics_handler(config: Arc<Config>) -> Result<impl Reply, Rejection> {
+    async fn get_metrics_handler(config: Arc<Config>) -> String {
         // Collect the disk space metrics.
         collect_disk_metrics(config.storage.dir.as_path());
 
@@ -1095,14 +1136,13 @@ impl Metrics {
         buf.clear();
 
         res.push_str(&res_custom);
-        Ok(res)
+        res
     }
 
     /// Handles the metrics request of deleting.
     #[instrument(skip_all)]
-    async fn delete_metrics_handler() -> Result<impl Reply, Rejection> {
+    async fn delete_metrics_handler() {
         reset_custom_metrics();
-        Ok(Vec::new())
     }
 }
 
