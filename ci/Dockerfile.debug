@@ -57,7 +57,7 @@ RUN cargo install tokio-console --version 0.1.13 --locked --root /usr/local
 
 FROM alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11 AS health
 
-ENV GRPC_HEALTH_PROBE_VERSION=v0.4.24
+ENV GRPC_HEALTH_PROBE_VERSION=v0.4.53
 
 RUN if [ "$(uname -m)" = "ppc64le" ]; then \
     wget -qO/bin/grpc_health_probe https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/${GRPC_HEALTH_PROBE_VERSION}/grpc_health_probe-linux-ppc64le; \
