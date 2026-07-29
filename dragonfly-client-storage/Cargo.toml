@@ -36,7 +36,13 @@ rustls.workspace = true
 num_cpus.workspace = true
 bincode = "1.3.3"
 walkdir = "2.5.0"
-quinn = "0.11.9"
+quinn = { version = "0.11.9", default-features = false, features = [
+  "bloom",
+  "log",
+  "platform-verifier",
+  "runtime-tokio",
+  "rustls-aws-lc-rs",
+] }
 socket2 = "0.6.3"
 rustix = { version = "1.1.3", features = ["fs"] }
 
