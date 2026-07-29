@@ -3,7 +3,7 @@ FROM rust:1.88.0 AS builder
 WORKDIR /app/client
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    cmake libclang-dev pkg-config protobuf-compiler git \
+    cmake libclang-dev pkg-config protobuf-compiler libprotobuf-dev git \
     && rm -rf /var/lib/apt/lists/*
 
 COPY .git ./.git
