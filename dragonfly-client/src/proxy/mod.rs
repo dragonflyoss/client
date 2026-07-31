@@ -909,8 +909,11 @@ async fn proxy_via_dfdaemon(
             // descriptors while waiting.
             let mut finished_pieces = HashMap::new();
 
-            // Get the first piece number from the started response.
-            let Some(first_piece) = download_task_started_response.pieces.first() else {
+            // Get the first and last piece numbers from the started response.
+            let (Some(first_piece), Some(last_piece)) = (
+                download_task_started_response.pieces.first(),
+                download_task_started_response.pieces.last(),
+            ) else {
                 error!("response pieces is empty");
 
                 // Send the none response to the client in case if it is empty file.
@@ -947,6 +950,11 @@ async fn proxy_via_dfdaemon(
 
                             let Some(piece) = download_task_response.piece else {
                                 error!("response piece is empty");
+                                body_tx
+                                    .send(Err(ClientError::UnexpectedResponse))
+                                    .await
+                                    .unwrap_or_default();
+
                                 return;
                             };
 
@@ -970,6 +978,7 @@ async fn proxy_via_dfdaemon(
                                     Ok(piece_range_reader) => piece_range_reader,
                                     Err(err) => {
                                         error!("download piece reader error: {}", err);
+                                        body_tx.send(Err(err)).await.unwrap_or_default();
                                         return;
                                     }
                                 };
@@ -986,6 +995,7 @@ async fn proxy_via_dfdaemon(
                                         }
                                         Err(err) => {
                                             error!("download piece reader error: {}", err);
+                                            body_tx.send(Err(err)).await.unwrap_or_default();
                                             return;
                                         }
                                     }
@@ -995,16 +1005,36 @@ async fn proxy_via_dfdaemon(
                             }
                         } else {
                             error!("response unknown message");
+                            body_tx
+                                .send(Err(ClientError::UnexpectedResponse))
+                                .await
+                                .unwrap_or_default();
+
                             return;
                         }
                     }
                     None => {
-                        debug!("message is none");
+                        // The stream is closed. If the response body is incomplete,
+                        // abort the connection with an error.
+                        if need_piece_number <= last_piece.number {
+                            error!(
+                                "stream ended at piece {}, last piece is {}",
+                                need_piece_number, last_piece.number
+                            );
+                            body_tx
+                                .send(Err(ClientError::Unknown(format!(
+                                    "response body is truncated at piece {need_piece_number}"
+                                ))))
+                                .await
+                                .unwrap_or_default();
+                        }
+
                         return;
                     }
                     Some(Err(err)) => {
                         if initialized {
                             error!("stream error: {}", err);
+                            body_tx.send(Err(err.into())).await.unwrap_or_default();
                             return;
                         }
 

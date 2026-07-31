@@ -538,6 +538,7 @@ impl ExportCommand {
 
         //  Download file.
         let mut downloaded = 0;
+        let mut content_length = None;
         let mut out_stream = response.into_inner();
         loop {
             match out_stream.message().await {
@@ -557,6 +558,7 @@ impl ExportCommand {
                                 };
                             }
 
+                            content_length = Some(response.content_length);
                             progress_bar.set_length(response.content_length);
                         }
                         Some(download_persistent_cache_task_response::Response::DownloadPieceFinishedResponse(
@@ -634,6 +636,20 @@ impl ExportCommand {
                     return Err(Error::TonicStatus(err));
                 }
             }
+        }
+
+        // Abort if the stream ended before all pieces were received.
+        if content_length != Some(downloaded) {
+            error!(
+                "download incomplete: received {} bytes, expected {} bytes",
+                downloaded,
+                content_length.unwrap_or_default()
+            );
+            fs::remove_file(&self.output).await.inspect_err(|err| {
+                error!("remove file {:?} failed: {}", self.output, err);
+            })?;
+
+            return Err(Error::Unknown("download incomplete".to_string()));
         }
 
         if let Some(f) = &mut f {
