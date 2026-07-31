@@ -455,10 +455,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             err: impl std::error::Error,
         ) {
             out_stream_tx
-                .send_timeout(
-                    Err(Status::internal(err.to_string())),
-                    super::REQUEST_TIMEOUT,
-                )
+                .send(Err(Status::internal(err.to_string())))
                 .await
                 .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
         }
@@ -469,7 +466,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             err: Status,
         ) {
             out_stream_tx
-                .send_timeout(Err(err), super::REQUEST_TIMEOUT)
+                .send(Err(err))
                 .await
                 .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
         }
@@ -1370,10 +1367,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             err: impl std::error::Error,
         ) {
             out_stream_tx
-                .send_timeout(
-                    Err(Status::internal(err.to_string())),
-                    super::REQUEST_TIMEOUT,
-                )
+                .send(Err(Status::internal(err.to_string())))
                 .await
                 .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
         }
@@ -1968,10 +1962,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             err: impl std::error::Error,
         ) {
             out_stream_tx
-                .send_timeout(
-                    Err(Status::internal(err.to_string())),
-                    super::REQUEST_TIMEOUT,
-                )
+                .send(Err(Status::internal(err.to_string())))
                 .await
                 .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
         }
