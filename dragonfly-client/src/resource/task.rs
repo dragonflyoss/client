@@ -178,13 +178,15 @@ impl Task {
         let (task, reused) = self.storage.prepare_download_task(id)?;
 
         if reused {
-            if let Some(piece_length) = task.piece_length() {
-                Self::validate_signature_bound_piece_content(
-                    signed_range.is_some(),
-                    request.need_piece_content,
-                    piece_length,
-                )?;
-            }
+            // Storage only marks fully initialized tasks as reusable. Keep this
+            // fail-closed so an invariant violation cannot skip the inline-content
+            // allocation guard for a signature-bound range.
+            let piece_length = task.piece_length().ok_or(Error::InvalidPieceLength)?;
+            Self::validate_signature_bound_piece_content(
+                signed_range.is_some(),
+                request.need_piece_content,
+                piece_length,
+            )?;
 
             // Attempt to create a hard link from the task file to the output path.
             //

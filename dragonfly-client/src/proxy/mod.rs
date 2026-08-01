@@ -1545,7 +1545,8 @@ fn make_error_response(
         );
     }
 
-    // Insert the error type header for client to identify where the error occurred.
+    // Identify where the response originated. Dragonfly clients use this for
+    // non-2xx classification, including final backend statuses such as 304.
     response.headers_mut().insert(
         header::DRAGONFLY_ERROR_TYPE_HEADER,
         error_type.as_str().parse().unwrap(),
@@ -1721,6 +1722,10 @@ mod tests {
             response.headers().get(http::header::RETRY_AFTER),
             Some(&http::HeaderValue::from_static("1"))
         );
+        assert_eq!(
+            response.headers().get(header::DRAGONFLY_ERROR_TYPE_HEADER),
+            Some(&http::HeaderValue::from_static("backend"))
+        );
     }
 
     #[test]
@@ -1754,6 +1759,10 @@ mod tests {
         assert_eq!(
             response.headers().get(http::header::ETAG).unwrap(),
             "\"version-1\""
+        );
+        assert_eq!(
+            response.headers().get(header::DRAGONFLY_ERROR_TYPE_HEADER),
+            Some(&http::HeaderValue::from_static("backend"))
         );
     }
 
