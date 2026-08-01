@@ -111,7 +111,9 @@ pub fn signature_bound_range_from_hashmap<'a>(
 /// every call, so such a key would never be reused and every request would store
 /// its own copy of the same bytes.
 const REPRESENTATION_HEADER_NAMES: &[&str] = &[
+    "accept",
     "accept-encoding",
+    "accept-language",
     "if-match",
     "if-modified-since",
     "if-none-match",
@@ -512,6 +514,37 @@ mod tests {
             "x-amz-server-side-encryption-customer-key".to_string(),
             "second-key".to_string(),
         );
+        assert_ne!(
+            first,
+            signature_bound_range_cache_key_from_hashmap(&header, "https://example.com/object")
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_signature_bound_range_cache_key_includes_standard_representation_headers() {
+        let mut header = HashMap::from([
+            ("range".to_string(), "bytes=100-199".to_string()),
+            (
+                "authorization".to_string(),
+                "AWS4-HMAC-SHA256 Credential=key/scope, SignedHeaders=accept;accept-language;host;range, Signature=abc".to_string(),
+            ),
+            ("accept".to_string(), "application/octet-stream".to_string()),
+            ("accept-language".to_string(), "en-US".to_string()),
+        ]);
+        let first =
+            signature_bound_range_cache_key_from_hashmap(&header, "https://example.com/object")
+                .unwrap();
+
+        header.insert("accept".to_string(), "application/json".to_string());
+        assert_ne!(
+            first,
+            signature_bound_range_cache_key_from_hashmap(&header, "https://example.com/object")
+                .unwrap()
+        );
+
+        header.insert("accept".to_string(), "application/octet-stream".to_string());
+        header.insert("accept-language".to_string(), "fr-FR".to_string());
         assert_ne!(
             first,
             signature_bound_range_cache_key_from_hashmap(&header, "https://example.com/object")

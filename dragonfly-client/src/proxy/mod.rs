@@ -402,6 +402,22 @@ pub async fn http_handler(
         }
     }
 
+    // If-Range can legitimately turn a ranged request into a full 200 response
+    // when its validator no longer matches. A compact signed-range task cannot
+    // represent that full response, so preserve HTTP semantics by bypassing P2P.
+    if request.method() == Method::GET
+        && should_proxy_signature_bound_if_range_directly(
+            request.headers(),
+            &request.uri().to_string(),
+        )
+    {
+        info!("proxy signed If-Range request directly to remote server");
+        if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
+            return proxy_via_https(request, registry_cert).await;
+        }
+        return proxy_via_http(request).await;
+    }
+
     // If find the matching rule, proxy the request via the dfdaemon.
     // Only GET requests are routed to P2P; other methods (HEAD/PUT/POST/DELETE)
     // fall through to direct proxy to avoid data loss.
@@ -669,6 +685,19 @@ pub async fn upgraded_handler(
             )
             .build()
             .or_err(ErrorType::ParseError)?;
+    }
+
+    // If-Range can legitimately turn a ranged request into a full 200 response
+    // when its validator no longer matches. A compact signed-range task cannot
+    // represent that full response, so preserve HTTP semantics by bypassing P2P.
+    if request.method() == Method::GET
+        && should_proxy_signature_bound_if_range_directly(
+            request.headers(),
+            &request.uri().to_string(),
+        )
+    {
+        info!("proxy signed If-Range request directly to remote server");
+        return proxy_via_https(request, registry_cert).await;
     }
 
     // If find the matching rule, proxy the request via the dfdaemon.
@@ -1345,15 +1374,22 @@ fn need_prefetch(config: &Config, header: &http::HeaderMap, url: &str) -> bool {
     config.proxy.prefetch
 }
 
+/// Returns whether a signed range must bypass compact P2P storage to preserve
+/// the full-response fallback defined by If-Range.
+fn should_proxy_signature_bound_if_range_directly(header: &http::HeaderMap, url: &str) -> bool {
+    header.contains_key(http::header::IF_RANGE) && signature_bound_range(header, url).is_some()
+}
+
 /// Returns the status code to report to the client for a backend failure.
 ///
-/// The origin's status is only reused when it is itself an error. A signature-bound
-/// range whose response fails validation can carry a success status, and replaying
-/// that verbatim tells the client the request succeeded while the body is empty.
+/// Preserve final origin statuses, including conditional and redirect responses.
+/// Successful statuses carried by a validation error are locally rejected and
+/// cannot be replayed with an empty body.
 fn backend_error_status(status_code: Option<http::StatusCode>) -> http::StatusCode {
     match status_code {
-        Some(status) if status.is_client_error() || status.is_server_error() => status,
-        _ => http::StatusCode::BAD_GATEWAY,
+        Some(status) if status.is_success() => http::StatusCode::BAD_GATEWAY,
+        Some(status) => status,
+        None => http::StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
@@ -1500,10 +1536,14 @@ fn make_error_response(
             response.headers_mut().insert(k, v.clone());
         }
     }
-    response.headers_mut().insert(
-        http::header::CONTENT_LENGTH,
-        http::HeaderValue::from_static("0"),
-    );
+    // A 304 never carries a response body, and Content-Length on a 304 would
+    // describe the selected representation rather than this empty response.
+    if status != http::StatusCode::NOT_MODIFIED {
+        response.headers_mut().insert(
+            http::header::CONTENT_LENGTH,
+            http::HeaderValue::from_static("0"),
+        );
+    }
 
     // Insert the error type header for client to identify where the error occurred.
     response.headers_mut().insert(
@@ -1589,8 +1629,8 @@ mod tests {
             http::StatusCode::BAD_GATEWAY
         );
 
-        // A rejected response that still carried a success or redirect status must
-        // not be replayed to the client as one.
+        // A rejected response that still carried a success status must not be
+        // replayed to the client as one.
         assert_eq!(
             backend_error_status(Some(http::StatusCode::OK)),
             http::StatusCode::BAD_GATEWAY
@@ -1601,9 +1641,50 @@ mod tests {
         );
         assert_eq!(
             backend_error_status(Some(http::StatusCode::FOUND)),
-            http::StatusCode::BAD_GATEWAY
+            http::StatusCode::FOUND
         );
-        assert_eq!(backend_error_status(None), http::StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            backend_error_status(Some(http::StatusCode::NOT_MODIFIED)),
+            http::StatusCode::NOT_MODIFIED
+        );
+        assert_eq!(
+            backend_error_status(None),
+            http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn test_signed_if_range_bypasses_compact_task() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::RANGE,
+            http::HeaderValue::from_static("bytes=100-199"),
+        );
+        headers.insert(
+            http::header::AUTHORIZATION,
+            http::HeaderValue::from_static(
+                "AWS4-HMAC-SHA256 Credential=key/scope, SignedHeaders=host;range, Signature=abc",
+            ),
+        );
+
+        assert!(!should_proxy_signature_bound_if_range_directly(
+            &headers,
+            "https://example.com/object",
+        ));
+        headers.insert(
+            http::header::IF_RANGE,
+            http::HeaderValue::from_static("\"version-1\""),
+        );
+        assert!(should_proxy_signature_bound_if_range_directly(
+            &headers,
+            "https://example.com/object",
+        ));
+
+        headers.remove(http::header::AUTHORIZATION);
+        assert!(!should_proxy_signature_bound_if_range_directly(
+            &headers,
+            "https://example.com/object",
+        ));
     }
 
     #[test]
@@ -1639,6 +1720,40 @@ mod tests {
         assert_eq!(
             response.headers().get(http::header::RETRY_AFTER),
             Some(&http::HeaderValue::from_static("1"))
+        );
+    }
+
+    #[test]
+    fn test_not_modified_error_response_has_no_body_framing() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::CONTENT_LENGTH,
+            http::HeaderValue::from_static("100"),
+        );
+        headers.insert(
+            http::header::TRANSFER_ENCODING,
+            http::HeaderValue::from_static("chunked"),
+        );
+        headers.insert(
+            http::header::ETAG,
+            http::HeaderValue::from_static("\"version-1\""),
+        );
+
+        let response = make_error_response(
+            header::ErrorType::Backend,
+            http::StatusCode::NOT_MODIFIED,
+            Some(headers),
+        );
+        assert_eq!(response.status(), http::StatusCode::NOT_MODIFIED);
+        assert!(!response
+            .headers()
+            .contains_key(http::header::CONTENT_LENGTH));
+        assert!(!response
+            .headers()
+            .contains_key(http::header::TRANSFER_ENCODING));
+        assert_eq!(
+            response.headers().get(http::header::ETAG).unwrap(),
+            "\"version-1\""
         );
     }
 

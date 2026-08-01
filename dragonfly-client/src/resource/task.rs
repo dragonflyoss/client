@@ -178,6 +178,14 @@ impl Task {
         let (task, reused) = self.storage.prepare_download_task(id)?;
 
         if reused {
+            if let Some(piece_length) = task.piece_length() {
+                Self::validate_signature_bound_piece_content(
+                    signed_range.is_some(),
+                    request.need_piece_content,
+                    piece_length,
+                )?;
+            }
+
             // Attempt to create a hard link from the task file to the output path.
             //
             // Behavior based on force_hard_link setting:
@@ -325,6 +333,12 @@ impl Task {
                 }
             };
 
+        Self::validate_signature_bound_piece_content(
+            preserve_range,
+            request.need_piece_content,
+            piece_length,
+        )?;
+
         // If the task is not finished, check if the storage has enough space to
         // store the task.
         if !task.is_finished() && !self.storage.has_enough_space(content_length)? {
@@ -360,6 +374,27 @@ impl Task {
         }
 
         task
+    }
+
+    /// Rejects embedding an oversized signature-bound piece in a download response.
+    ///
+    /// The proxy streams piece bytes from storage and does not request piece content,
+    /// so it can continue to use the larger signature-bound range limit. gRPC callers
+    /// that request piece content receive one protobuf message per piece, which would
+    /// otherwise require a contiguous allocation as large as the signed range.
+    fn validate_signature_bound_piece_content(
+        signature_bound: bool,
+        need_piece_content: bool,
+        piece_length: u64,
+    ) -> ClientResult<()> {
+        if signature_bound && need_piece_content && piece_length > piece::MAX_PIECE_LENGTH {
+            return Err(Error::Unsupported(format!(
+                "signature-bound piece of {piece_length} bytes exceeds the maximum inline piece content length of {} bytes",
+                piece::MAX_PIECE_LENGTH
+            )));
+        }
+
+        Ok(())
     }
 
     /// Resolves and validates a signed source range from compact task metadata.
@@ -2697,5 +2732,33 @@ mod tests {
                 .to_string(),
         );
         assert!(!Task::should_download_directly_from_source(&request, 1024));
+    }
+
+    #[test]
+    fn test_validate_signature_bound_piece_content() {
+        assert!(
+            Task::validate_signature_bound_piece_content(true, true, piece::MAX_PIECE_LENGTH,)
+                .is_ok()
+        );
+        assert!(matches!(
+            Task::validate_signature_bound_piece_content(true, true, piece::MAX_PIECE_LENGTH + 1,),
+            Err(Error::Unsupported(_))
+        ));
+
+        // Proxy streaming never embeds the complete piece in one message.
+        assert!(Task::validate_signature_bound_piece_content(
+            true,
+            false,
+            piece::MAX_PIECE_LENGTH + 1,
+        )
+        .is_ok());
+
+        // Keep the pre-existing explicit-piece behavior for unsigned downloads.
+        assert!(Task::validate_signature_bound_piece_content(
+            false,
+            true,
+            piece::MAX_PIECE_LENGTH + 1,
+        )
+        .is_ok());
     }
 }

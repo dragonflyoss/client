@@ -653,7 +653,10 @@ impl Piece {
         let invalid_response = |message: &str| {
             Error::BackendError(Box::new(BackendError {
                 message: message.to_string(),
-                status_code: actual_status,
+                // This is a locally synthesized validation failure, not the
+                // origin's response status. Never expose an empty successful
+                // response when the bytes were rejected before caching.
+                status_code: Some(reqwest::StatusCode::BAD_GATEWAY),
                 header: actual_header.cloned(),
             }))
         };
@@ -1424,14 +1427,20 @@ mod tests {
         )
         .is_ok());
 
-        assert!(Piece::validate_signature_bound_response(
+        let err = Piece::validate_signature_bound_response(
             &request_header,
             "https://example.com/object",
             Some(&expected_header),
             Some(reqwest::StatusCode::OK),
             Some(&actual_header),
         )
-        .is_err());
+        .unwrap_err();
+        match err {
+            Error::BackendError(err) => {
+                assert_eq!(err.status_code, Some(reqwest::StatusCode::BAD_GATEWAY));
+            }
+            err => panic!("expected backend error, got {err:?}"),
+        }
 
         let mut mismatched = actual_header.clone();
         mismatched.insert(
