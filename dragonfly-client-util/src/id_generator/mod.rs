@@ -189,6 +189,22 @@ impl IDGenerator {
         }
     }
 
+    /// Derives a task id for a signature-bound HTTP range from the normal task
+    /// id. This keeps all of the normal task identity inputs while preventing
+    /// differently signed ranges from sharing partial content.
+    #[inline]
+    pub fn range_task_id(&self, task_id: &str, range: &str) -> String {
+        let mut hasher = Sha256::new();
+        // The compact layout is part of the namespace. Earlier unpublished
+        // iterations stored source-coordinate sparse files under a range-derived
+        // ID; those artifacts must never be reused as compact range tasks.
+        hasher.update(b"dragonfly:signature-bound-range:compact:v2\0");
+        hasher.update(task_id.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(range.as_bytes());
+        hex::encode(hasher.finalize())
+    }
+
     /// Generates the persistent task id.
     #[inline]
     pub fn persistent_task_id(&self, parameter: PersistentTaskIDParameter) -> Result<String> {
@@ -413,6 +429,22 @@ mod tests {
             let task_id = generator.task_id(parameter).unwrap();
             assert_eq!(task_id, expected_id);
         }
+    }
+
+    #[test]
+    fn should_generate_range_task_id() {
+        let generator = IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false);
+
+        let first = generator.range_task_id("base-task-id", "bytes=0-99");
+        assert_eq!(first, generator.range_task_id("base-task-id", "bytes=0-99"));
+        assert_ne!(
+            first,
+            generator.range_task_id("base-task-id", "bytes=100-199")
+        );
+        assert_ne!(
+            first,
+            generator.range_task_id("other-task-id", "bytes=0-99")
+        );
     }
 
     #[test]

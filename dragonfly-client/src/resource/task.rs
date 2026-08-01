@@ -48,7 +48,11 @@ use dragonfly_client_metric::{
 };
 use dragonfly_client_storage::{metadata, Storage};
 use dragonfly_client_util::{
-    http::{hashmap_to_headermap, headermap_to_hashmap},
+    http::{
+        get_content_range, get_content_range_from_hashmap, hashmap_to_headermap,
+        headermap_to_hashmap, is_single_byte_range, parse_range_header, signature_bound_range,
+        signature_bound_range_from_hashmap, ContentRange,
+    },
     id_generator::IDGenerator,
     shutdown,
 };
@@ -155,7 +159,24 @@ impl Task {
         id: &str,
         request: Download,
     ) -> ClientResult<metadata::Task> {
+        let signed_range =
+            signature_bound_range_from_hashmap(&request.request_header, &request.url)
+                .map(str::to_owned);
+
+        // A task holds one contiguous range and there is no way to emit a
+        // multipart/byteranges body, so a signature-bound multi-range has no
+        // representation here. Reject it before stat forwards the signed header
+        // unchanged; leave existing unsigned-range behavior alone.
+        if let Some(range_header) = signed_range.as_deref() {
+            if !is_single_byte_range(range_header) {
+                return Err(Error::Unsupported(format!(
+                    "multi-range request {range_header}"
+                )));
+            }
+        }
+
         let (task, reused) = self.storage.prepare_download_task(id)?;
+
         if reused {
             // Attempt to create a hard link from the task file to the output path.
             //
@@ -187,10 +208,14 @@ impl Task {
                 error!("convert header: {}", err);
             })?;
 
+        let preserve_range = signed_range.is_some();
+
         // Remove the range header to prevent the server from
         // returning a 206 partial content and returning
         // a 200 full content.
-        request_header.remove(reqwest::header::RANGE);
+        if !preserve_range {
+            request_header.remove(reqwest::header::RANGE);
+        }
 
         // Head the url to get the content length.
         let backend = self.backend_factory.build(request.url.as_str())?;
@@ -246,22 +271,59 @@ impl Task {
             start_time.elapsed(),
         );
 
-        let content_length = match response.content_length {
+        let source_content_length = match response.content_length {
             Some(content_length) => content_length,
             None => return Err(Error::InvalidContentLength),
         };
 
-        let piece_length = match request.piece_length {
-            Some(piece_length) => self
-                .piece
-                .calculate_piece_length(piece::PieceLengthStrategy::FixedPieceLength(piece_length)),
-            None => {
-                self.piece
-                    .calculate_piece_length(piece::PieceLengthStrategy::OptimizeByFileLength(
-                        content_length,
-                    ))
+        let content_length = if let Some(signed_range) = signed_range.as_deref() {
+            let response_header = response
+                .http_header
+                .as_ref()
+                .ok_or(Error::InvalidParameter)?;
+            let content_range =
+                get_content_range(response_header)?.ok_or(Error::InvalidParameter)?;
+            let requested_range = parse_range_header(signed_range, content_range.complete_length)?;
+
+            if content_range.complete_length != source_content_length
+                || content_range.range != requested_range
+                || response_header.get(reqwest::header::ETAG).is_none()
+            {
+                return Err(Error::InvalidParameter);
             }
+
+            // The origin has to receive the signed Range verbatim, so the range cannot
+            // be split across pieces and becomes a single piece below. Bound it here,
+            // because the piece is the unit of peer-to-peer transfer and of the
+            // in-memory copy taken when a caller asks for piece content.
+            if content_range.range.length > piece::MAX_SIGNATURE_BOUND_RANGE_LENGTH {
+                return Err(Error::Unsupported(format!(
+                    "signature-bound range of {} bytes exceeds the maximum of {} bytes",
+                    content_range.range.length,
+                    piece::MAX_SIGNATURE_BOUND_RANGE_LENGTH
+                )));
+            }
+
+            content_range.range.length
+        } else {
+            source_content_length
         };
+
+        let piece_length =
+            if preserve_range {
+                // The origin must receive the signature-bound Range exactly once. Keep it
+                // as one compact local piece whose offset starts at zero.
+                content_length
+            } else {
+                match request.piece_length {
+                    Some(piece_length) => self.piece.calculate_piece_length(
+                        piece::PieceLengthStrategy::FixedPieceLength(piece_length),
+                    ),
+                    None => self.piece.calculate_piece_length(
+                        piece::PieceLengthStrategy::OptimizeByFileLength(content_length),
+                    ),
+                }
+            };
 
         // If the task is not finished, check if the storage has enough space to
         // store the task.
@@ -298,6 +360,29 @@ impl Task {
         }
 
         task
+    }
+
+    /// Resolves and validates a signed source range from compact task metadata.
+    pub(crate) fn signature_bound_content_range(
+        task: &metadata::Task,
+        range_header: &str,
+    ) -> ClientResult<ContentRange> {
+        let content_range = get_content_range_from_hashmap(&task.response_header)?
+            .ok_or(Error::InvalidParameter)?;
+        let requested_range = parse_range_header(range_header, content_range.complete_length)?;
+
+        if requested_range != content_range.range
+            || task.content_length() != Some(content_range.range.length)
+            || task.piece_length() != Some(content_range.range.length)
+            || !task
+                .response_header
+                .keys()
+                .any(|name| name.eq_ignore_ascii_case(reqwest::header::ETAG.as_str()))
+        {
+            return Err(Error::InvalidParameter);
+        }
+
+        Ok(content_range)
     }
 
     /// Updates the metadata of the task when the task downloads finished.
@@ -399,6 +484,12 @@ impl Task {
             });
         }
 
+        let response_range =
+            match signature_bound_range_from_hashmap(&request.request_header, &request.url) {
+                Some(range) => Some(Self::signature_bound_content_range(task, range)?.range),
+                None => request.range,
+            };
+
         // Send the download task started request.
         download_progress_tx
             .send_timeout(
@@ -410,7 +501,7 @@ impl Task {
                         download_task_response::Response::DownloadTaskStartedResponse(
                             dfdaemon::v2::DownloadTaskStartedResponse {
                                 content_length,
-                                range: request.range,
+                                range: response_range,
                                 response_header: task.response_header.clone(),
                                 pieces,
                                 is_finished: task.is_finished(),
@@ -512,10 +603,7 @@ impl Task {
         // If the range length is less than or equal to the min piece
         // length, download the pieces from the source directly.
         if !request.disable_back_to_source
-            && (request
-                .range
-                .is_some_and(|range| range.length <= super::piece::MIN_PIECE_LENGTH)
-                || content_length <= super::piece::MIN_PIECE_LENGTH)
+            && Self::should_download_directly_from_source(&request, content_length)
         {
             debug!("peer downloads the range task from source directly, skipping the scheduler");
 
@@ -1591,6 +1679,12 @@ impl Task {
         let request_header: HeaderMap = (&request.request_header)
             .try_into()
             .or_err(ErrorType::ParseError)?;
+        let expected_response_header =
+            if signature_bound_range(&request_header, &request.url).is_some() {
+                Some(hashmap_to_headermap(&task.response_header)?)
+            } else {
+                None
+            };
 
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
@@ -1610,6 +1704,7 @@ impl Task {
                 offset: u64,
                 length: u64,
                 request_header: HeaderMap,
+                expected_response_header: Option<HeaderMap>,
                 is_prefetch: bool,
                 need_piece_content: bool,
                 piece_manager: Arc<piece::Piece>,
@@ -1632,6 +1727,7 @@ impl Task {
                         offset,
                         length,
                         request_header,
+                        expected_response_header,
                         is_prefetch,
                         object_storage,
                         hdfs,
@@ -1755,6 +1851,7 @@ impl Task {
             let peer_id = peer_id.to_string();
             let url = request.url.clone();
             let request_header = request_header.clone();
+            let expected_response_header = expected_response_header.clone();
             let piece_manager = self.piece.clone();
             let download_progress_tx = download_progress_tx.clone();
             let in_stream_tx = in_stream_tx.clone();
@@ -1775,6 +1872,7 @@ impl Task {
                         interested_piece.offset,
                         interested_piece.length,
                         request_header,
+                        expected_response_header,
                         request.is_prefetch,
                         request.need_piece_content,
                         piece_manager,
@@ -2160,6 +2258,12 @@ impl Task {
         let request_header: HeaderMap = (&request.request_header)
             .try_into()
             .or_err(ErrorType::ParseError)?;
+        let expected_response_header =
+            if signature_bound_range(&request_header, &request.url).is_some() {
+                Some(hashmap_to_headermap(&task.response_header)?)
+            } else {
+                None
+            };
 
         // Initialize the finished pieces.
         let mut finished_pieces: Vec<metadata::Piece> = Vec::new();
@@ -2179,6 +2283,7 @@ impl Task {
                 offset: u64,
                 length: u64,
                 request_header: HeaderMap,
+                expected_response_header: Option<HeaderMap>,
                 is_prefetch: bool,
                 need_piece_content: bool,
                 piece_manager: Arc<piece::Piece>,
@@ -2200,6 +2305,7 @@ impl Task {
                         offset,
                         length,
                         request_header,
+                        expected_response_header,
                         is_prefetch,
                         object_storage,
                         hdfs,
@@ -2302,6 +2408,7 @@ impl Task {
             let peer_id = peer_id.to_string();
             let url = request.url.clone();
             let request_header = request_header.clone();
+            let expected_response_header = expected_response_header.clone();
             let piece_manager = self.piece.clone();
             let download_progress_tx = download_progress_tx.clone();
             let object_storage = request.object_storage.clone();
@@ -2321,6 +2428,7 @@ impl Task {
                         interested_piece.offset,
                         interested_piece.length,
                         request_header,
+                        expected_response_header,
                         request.is_prefetch,
                         request.need_piece_content,
                         piece_manager,
@@ -2367,6 +2475,19 @@ impl Task {
         }
 
         return Ok(finished_pieces);
+    }
+
+    fn should_download_directly_from_source(request: &Download, content_length: u64) -> bool {
+        if signature_bound_range_from_hashmap(&request.request_header, &request.url).is_some() {
+            // Even small signed ranges need to enter the scheduler so another peer can
+            // serve the compact cached piece.
+            return false;
+        }
+
+        request
+            .range
+            .is_some_and(|range| range.length <= super::piece::MIN_PIECE_LENGTH)
+            || content_length <= super::piece::MIN_PIECE_LENGTH
     }
 
     /// Returns the task metadata from scheduler.
@@ -2490,6 +2611,7 @@ impl Task {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dragonfly_api::common::v2::Range;
     use std::sync::Arc;
     use tempfile::tempdir;
 
@@ -2523,5 +2645,57 @@ mod tests {
         storage.delete_task(task_id).await;
         let task = storage.get_task(task_id).unwrap();
         assert!(task.is_none(), "task should be deleted");
+    }
+
+    #[test]
+    fn test_signature_bound_content_range() {
+        let mut task = metadata::Task {
+            piece_length: Some(5),
+            content_length: Some(5),
+            ..Default::default()
+        };
+        task.response_header
+            .insert("content-range".to_string(), "bytes 5-9/100".to_string());
+        task.response_header
+            .insert("etag".to_string(), "\"version-1\"".to_string());
+
+        let content_range = Task::signature_bound_content_range(&task, "bytes=5-9").unwrap();
+        assert_eq!(
+            content_range,
+            ContentRange {
+                range: Range {
+                    start: 5,
+                    length: 5
+                },
+                complete_length: 100
+            }
+        );
+
+        assert!(Task::signature_bound_content_range(&task, "bytes=6-9").is_err());
+        task.content_length = Some(100);
+        assert!(Task::signature_bound_content_range(&task, "bytes=5-9").is_err());
+    }
+
+    #[test]
+    fn test_signature_bound_small_range_uses_scheduler() {
+        let mut request = Download {
+            url: "https://example.com/object".to_string(),
+            range: Some(Range {
+                start: 0,
+                length: 1024,
+            }),
+            ..Default::default()
+        };
+        assert!(Task::should_download_directly_from_source(&request, 1024));
+
+        request
+            .request_header
+            .insert("range".to_string(), "bytes=0-1023".to_string());
+        request.request_header.insert(
+            "authorization".to_string(),
+            "AWS4-HMAC-SHA256 Credential=key/scope, SignedHeaders=host;range, Signature=abc"
+                .to_string(),
+        );
+        assert!(!Task::should_download_directly_from_source(&request, 1024));
     }
 }
