@@ -69,7 +69,7 @@ jobs:
           tool: cargo-deb@2.10.0
 
       - name: Install cargo-generate-rpm
-        uses: taiki-e/install-action@daa3c1f1f9a9d46f686d9fc2f65773d0c293688b
+        uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf
         with:
           tool: cargo-generate-rpm@0.16.0
 
