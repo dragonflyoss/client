@@ -18,7 +18,7 @@ use crate::dynconfig::Dynconfig;
 use crate::grpc::REQUEST_TIMEOUT;
 use crate::resource::{piece::MIN_PIECE_LENGTH, task::Task};
 use bytes::Bytes;
-use dragonfly_api::common::v2::{Download, TaskType};
+use dragonfly_api::common::v2::{Download, Range, TaskType};
 use dragonfly_api::dfdaemon::v2::{
     download_task_response, DownloadTaskRequest, DownloadTaskStartedResponse,
 };
@@ -31,7 +31,10 @@ use dragonfly_client_metric::{
     collect_proxy_request_via_dfdaemon_metrics,
 };
 use dragonfly_client_util::{
-    http::{hashmap_to_headermap, headermap_to_hashmap},
+    http::{
+        get_content_range_from_hashmap, hashmap_to_headermap, headermap_to_hashmap,
+        signature_bound_range,
+    },
     shutdown,
     tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
 };
@@ -455,6 +458,22 @@ pub async fn http_handler(
         }
     }
 
+    // If-Range can legitimately turn a ranged request into a full 200 response
+    // when its validator no longer matches. A compact signed-range task cannot
+    // represent that full response, so preserve HTTP semantics by bypassing P2P.
+    if request.method() == Method::GET
+        && should_proxy_signature_bound_if_range_directly(
+            request.headers(),
+            &request.uri().to_string(),
+        )
+    {
+        info!("proxy signed If-Range request directly to remote server");
+        if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
+            return proxy_via_https(request, registry_cert).await;
+        }
+        return proxy_via_http(request).await;
+    }
+
     // If find the matching rule, proxy the request via the dfdaemon.
     // Only GET requests are routed to P2P; other methods (HEAD/PUT/POST/DELETE)
     // fall through to direct proxy to avoid data loss.
@@ -729,6 +748,19 @@ pub async fn upgraded_handler(
             .or_err(ErrorType::ParseError)?;
     }
 
+    // If-Range can legitimately turn a ranged request into a full 200 response
+    // when its validator no longer matches. A compact signed-range task cannot
+    // represent that full response, so preserve HTTP semantics by bypassing P2P.
+    if request.method() == Method::GET
+        && should_proxy_signature_bound_if_range_directly(
+            request.headers(),
+            &request.uri().to_string(),
+        )
+    {
+        info!("proxy signed If-Range request directly to remote server");
+        return proxy_via_https(request, registry_cert).await;
+    }
+
     // If find the matching rule, proxy the request via the dfdaemon.
     // Only GET requests are routed to P2P; other methods (HEAD/PUT/POST/DELETE)
     // fall through to direct proxy to avoid data loss.
@@ -845,9 +877,16 @@ async fn proxy_via_dfdaemon(
             error!("download task failed: {:?}", err);
             return Ok(make_error_response(
                 header::ErrorType::Backend,
-                err.status_code
-                    .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
+                backend_error_status(err.status_code),
                 err.header.clone(),
+            ));
+        }
+        Err(err @ ClientError::Unsupported(_)) => {
+            error!("download task rejected: {}", err);
+            return Ok(make_error_response(
+                header::ErrorType::Dfdaemon,
+                http::StatusCode::NOT_IMPLEMENTED,
+                None,
             ));
         }
         Err(err) => {
@@ -956,6 +995,7 @@ async fn proxy_via_dfdaemon(
     } else {
         http::StatusCode::OK
     };
+    let storage_range = storage_range(&download_task_started_response);
 
     // Return the response if the client return the first piece.
     let mut initialized = false;
@@ -1032,7 +1072,7 @@ async fn proxy_via_dfdaemon(
                                             .as_str(),
                                         message.task_id.as_str(),
                                         piece_length,
-                                        download_task_started_response.range,
+                                        storage_range,
                                     )
                                     .await
                                 {
@@ -1106,10 +1146,12 @@ async fn proxy_via_dfdaemon(
                                     .send_timeout(
                                         Some(make_error_response(
                                             header::ErrorType::Backend,
-                                            http::StatusCode::from_u16(
-                                                backend.status_code.unwrap_or_default() as u16,
-                                            )
-                                            .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
+                                            backend_error_status(backend.status_code.and_then(
+                                                |status_code| {
+                                                    http::StatusCode::from_u16(status_code as u16)
+                                                        .ok()
+                                                },
+                                            )),
                                             Some(
                                                 hashmap_to_headermap(&backend.header)
                                                     .unwrap_or_default(),
@@ -1284,9 +1326,11 @@ fn make_download_task_request(
     let mut request_header = headermap_to_hashmap(header);
     request_header.remove(reqwest::header::HOST.as_str());
 
+    let url = make_download_url(request.uri(), rule.use_tls, rule.redirect.as_deref())?;
+
     Ok(DownloadTaskRequest {
         download: Some(Download {
-            url: make_download_url(request.uri(), rule.use_tls, rule.redirect.as_deref())?,
+            url: url.clone(),
             digest: None,
             // Download range use header range in HTTP protocol.
             range: None,
@@ -1306,7 +1350,7 @@ fn make_download_task_request(
             need_back_to_source: false,
             disable_back_to_source: config.proxy.disable_back_to_source,
             certificate_chain: Vec::new(),
-            prefetch: need_prefetch(&config, header),
+            prefetch: need_prefetch(&config, header, &url),
             object_storage: None,
             hdfs: None,
             hugging_face: None,
@@ -1335,9 +1379,16 @@ fn make_download_task_request(
 
 /// Returns whether the prefetch is needed by the configuration and the request
 /// header.
-fn need_prefetch(config: &Config, header: &http::HeaderMap) -> bool {
+fn need_prefetch(config: &Config, header: &http::HeaderMap, url: &str) -> bool {
     // If the header not contains the range header, the request does not need prefetch.
     if !header.contains_key(reqwest::header::RANGE) {
+        return false;
+    }
+
+    // Prefetching drops the Range header to fetch the whole object, which the origin
+    // rejects when the signature covers Range. Nothing can prefetch this request, so
+    // this outranks the X-Dragonfly-Prefetch header below.
+    if signature_bound_range(header, url).is_some() {
         return false;
     }
 
@@ -1349,6 +1400,25 @@ fn need_prefetch(config: &Config, header: &http::HeaderMap) -> bool {
 
     // Return the prefetch value from the configuration.
     config.proxy.prefetch
+}
+
+/// Returns whether a signed range must bypass compact P2P storage to preserve
+/// the full-response fallback defined by If-Range.
+fn should_proxy_signature_bound_if_range_directly(header: &http::HeaderMap, url: &str) -> bool {
+    header.contains_key(http::header::IF_RANGE) && signature_bound_range(header, url).is_some()
+}
+
+/// Returns the status code to report to the client for a backend failure.
+///
+/// Preserve final origin statuses, including conditional and redirect responses.
+/// Successful statuses carried by a validation error are locally rejected and
+/// cannot be replayed with an empty body.
+fn backend_error_status(status_code: Option<http::StatusCode>) -> http::StatusCode {
+    match status_code {
+        Some(status) if status.is_success() => http::StatusCode::BAD_GATEWAY,
+        Some(status) => status,
+        None => http::StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
 
 /// Makes a download url by the given uri.
@@ -1385,18 +1455,30 @@ fn make_response_headers(
     // directly, instead of staging them in the hashmap and parsing them again.
     let mut headers = hashmap_to_headermap(&download_task_started_response.response_header)?;
 
-    // Insert the content range header to the response header.
+    // Insert the content range header to the response header. Compact signed-range
+    // tasks already carry the source object's Content-Range, including its complete
+    // length, so preserve that value instead of rebuilding it from compact length.
     if let Some(range) = download_task_started_response.range.as_ref() {
-        headers.insert(
-            reqwest::header::CONTENT_RANGE,
-            hyper::header::HeaderValue::try_from(format!(
-                "bytes {}-{}/{}",
-                range.start,
-                range.start + range.length - 1,
-                download_task_started_response.content_length
-            ))
-            .or_err(ErrorType::ParseError)?,
-        );
+        let has_compact_content_range =
+            get_content_range_from_hashmap(&download_task_started_response.response_header)
+                .ok()
+                .flatten()
+                .is_some_and(|content_range| {
+                    content_range.range == *range
+                        && download_task_started_response.content_length == range.length
+                });
+        if !has_compact_content_range {
+            headers.insert(
+                reqwest::header::CONTENT_RANGE,
+                hyper::header::HeaderValue::try_from(format!(
+                    "bytes {}-{}/{}",
+                    range.start,
+                    range.start + range.length - 1,
+                    download_task_started_response.content_length
+                ))
+                .or_err(ErrorType::ParseError)?,
+            );
+        }
 
         headers.insert(reqwest::header::CONTENT_LENGTH, range.length.into());
     };
@@ -1428,6 +1510,23 @@ fn make_response_headers(
     Ok(headers)
 }
 
+/// Returns the range to apply while reading local task storage. Compact signed-range
+/// tasks store only the selected bytes at offset zero, even though the HTTP response
+/// range remains in source-object coordinates.
+fn storage_range(download_task_started_response: &DownloadTaskStartedResponse) -> Option<Range> {
+    let range = download_task_started_response.range?;
+    let is_compact =
+        get_content_range_from_hashmap(&download_task_started_response.response_header)
+            .ok()
+            .flatten()
+            .is_some_and(|content_range| {
+                content_range.range == range
+                    && download_task_started_response.content_length == range.length
+            });
+
+    (!is_compact).then_some(range)
+}
+
 /// Returns whether the dfdaemon should be used to download the task.
 /// If the dfdaemon should be used, return the matched rule.
 fn find_matching_rule(rules: Option<&[Rule]>, mut url: url::Url) -> Option<&Rule> {
@@ -1448,13 +1547,34 @@ fn make_error_response(
 ) -> Response {
     let mut response = Response::new(empty());
     *response.status_mut() = status;
-    if let Some(header) = header {
+    if let Some(mut header) = header {
+        // The proxy does not forward the backend error body. Do not retain
+        // representation or framing headers that describe that discarded body;
+        // in particular, signed-range validation can turn a 206 into an empty 502.
+        for name in [
+            http::header::CONTENT_ENCODING,
+            http::header::CONTENT_LENGTH,
+            http::header::CONTENT_RANGE,
+            http::header::TRAILER,
+            http::header::TRANSFER_ENCODING,
+        ] {
+            header.remove(name);
+        }
         for (k, v) in header.iter() {
             response.headers_mut().insert(k, v.clone());
         }
     }
+    // A 304 never carries a response body, and Content-Length on a 304 would
+    // describe the selected representation rather than this empty response.
+    if status != http::StatusCode::NOT_MODIFIED {
+        response.headers_mut().insert(
+            http::header::CONTENT_LENGTH,
+            http::HeaderValue::from_static("0"),
+        );
+    }
 
-    // Insert the error type header for client to identify where the error occurred.
+    // Identify where the response originated. Dragonfly clients use this for
+    // non-2xx classification, including final backend statuses such as 304.
     response.headers_mut().insert(
         header::DRAGONFLY_ERROR_TYPE_HEADER,
         error_type.as_str().parse().unwrap(),
@@ -1468,4 +1588,243 @@ fn empty() -> BoxBody<Bytes, ClientError> {
     Empty::<Bytes>::new()
         .map_err(|never| match never {})
         .boxed()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compact_signed_range_response_uses_source_coordinates() {
+        let mut started = DownloadTaskStartedResponse {
+            content_length: 100,
+            range: Some(Range {
+                start: 100,
+                length: 100,
+            }),
+            ..Default::default()
+        };
+        started.response_header.insert(
+            "content-range".to_string(),
+            "bytes 100-199/1000".to_string(),
+        );
+
+        assert_eq!(storage_range(&started), None);
+        let headers = make_response_headers(
+            "task-id",
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            &started,
+        )
+        .unwrap();
+        assert_eq!(
+            headers.get(reqwest::header::CONTENT_RANGE).unwrap(),
+            "bytes 100-199/1000"
+        );
+        assert_eq!(headers.get(reqwest::header::CONTENT_LENGTH).unwrap(), "100");
+    }
+
+    #[test]
+    fn test_regular_range_response_uses_storage_range() {
+        let started = DownloadTaskStartedResponse {
+            content_length: 1000,
+            range: Some(Range {
+                start: 100,
+                length: 100,
+            }),
+            ..Default::default()
+        };
+
+        assert_eq!(storage_range(&started), started.range);
+        let headers = make_response_headers(
+            "task-id",
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            &started,
+        )
+        .unwrap();
+        assert_eq!(
+            headers.get(reqwest::header::CONTENT_RANGE).unwrap(),
+            "bytes 100-199/1000"
+        );
+    }
+
+    #[test]
+    fn test_backend_error_status() {
+        assert_eq!(
+            backend_error_status(Some(http::StatusCode::FORBIDDEN)),
+            http::StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            backend_error_status(Some(http::StatusCode::BAD_GATEWAY)),
+            http::StatusCode::BAD_GATEWAY
+        );
+
+        // A rejected response that still carried a success status must not be
+        // replayed to the client as one.
+        assert_eq!(
+            backend_error_status(Some(http::StatusCode::OK)),
+            http::StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            backend_error_status(Some(http::StatusCode::PARTIAL_CONTENT)),
+            http::StatusCode::BAD_GATEWAY
+        );
+        assert_eq!(
+            backend_error_status(Some(http::StatusCode::FOUND)),
+            http::StatusCode::FOUND
+        );
+        assert_eq!(
+            backend_error_status(Some(http::StatusCode::NOT_MODIFIED)),
+            http::StatusCode::NOT_MODIFIED
+        );
+        assert_eq!(
+            backend_error_status(None),
+            http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn test_signed_if_range_bypasses_compact_task() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::RANGE,
+            http::HeaderValue::from_static("bytes=100-199"),
+        );
+        headers.insert(
+            http::header::AUTHORIZATION,
+            http::HeaderValue::from_static(
+                "AWS4-HMAC-SHA256 Credential=key/scope, SignedHeaders=host;range, Signature=abc",
+            ),
+        );
+
+        assert!(!should_proxy_signature_bound_if_range_directly(
+            &headers,
+            "https://example.com/object",
+        ));
+        headers.insert(
+            http::header::IF_RANGE,
+            http::HeaderValue::from_static("\"version-1\""),
+        );
+        assert!(should_proxy_signature_bound_if_range_directly(
+            &headers,
+            "https://example.com/object",
+        ));
+
+        headers.remove(http::header::AUTHORIZATION);
+        assert!(!should_proxy_signature_bound_if_range_directly(
+            &headers,
+            "https://example.com/object",
+        ));
+    }
+
+    #[test]
+    fn test_error_response_headers_match_empty_body() {
+        let mut headers = http::HeaderMap::new();
+        for (name, value) in [
+            (http::header::CONTENT_LENGTH, "100"),
+            (http::header::CONTENT_RANGE, "bytes 0-99/1000"),
+            (http::header::TRANSFER_ENCODING, "chunked"),
+            (http::header::CONTENT_ENCODING, "gzip"),
+            (http::header::RETRY_AFTER, "1"),
+        ] {
+            headers.insert(name, http::HeaderValue::from_static(value));
+        }
+
+        let response = make_error_response(
+            header::ErrorType::Backend,
+            http::StatusCode::BAD_GATEWAY,
+            Some(headers),
+        );
+
+        assert_eq!(
+            response.headers().get(http::header::CONTENT_LENGTH),
+            Some(&http::HeaderValue::from_static("0"))
+        );
+        for name in [
+            http::header::CONTENT_RANGE,
+            http::header::TRANSFER_ENCODING,
+            http::header::CONTENT_ENCODING,
+        ] {
+            assert!(!response.headers().contains_key(name));
+        }
+        assert_eq!(
+            response.headers().get(http::header::RETRY_AFTER),
+            Some(&http::HeaderValue::from_static("1"))
+        );
+        assert_eq!(
+            response.headers().get(header::DRAGONFLY_ERROR_TYPE_HEADER),
+            Some(&http::HeaderValue::from_static("backend"))
+        );
+    }
+
+    #[test]
+    fn test_not_modified_error_response_has_no_body_framing() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::CONTENT_LENGTH,
+            http::HeaderValue::from_static("100"),
+        );
+        headers.insert(
+            http::header::TRANSFER_ENCODING,
+            http::HeaderValue::from_static("chunked"),
+        );
+        headers.insert(
+            http::header::ETAG,
+            http::HeaderValue::from_static("\"version-1\""),
+        );
+
+        let response = make_error_response(
+            header::ErrorType::Backend,
+            http::StatusCode::NOT_MODIFIED,
+            Some(headers),
+        );
+        assert_eq!(response.status(), http::StatusCode::NOT_MODIFIED);
+        assert!(!response
+            .headers()
+            .contains_key(http::header::CONTENT_LENGTH));
+        assert!(!response
+            .headers()
+            .contains_key(http::header::TRANSFER_ENCODING));
+        assert_eq!(
+            response.headers().get(http::header::ETAG).unwrap(),
+            "\"version-1\""
+        );
+        assert_eq!(
+            response.headers().get(header::DRAGONFLY_ERROR_TYPE_HEADER),
+            Some(&http::HeaderValue::from_static("backend"))
+        );
+    }
+
+    #[test]
+    fn test_need_prefetch_skips_signature_bound_range() {
+        let config = Arc::new(Config {
+            proxy: dragonfly_client_config::dfdaemon::Proxy {
+                prefetch: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let url = "https://example.com/object";
+
+        let mut header = http::HeaderMap::new();
+        header.insert(
+            reqwest::header::RANGE,
+            http::HeaderValue::from_static("bytes=100-199"),
+        );
+        assert!(need_prefetch(&config, &header, url));
+
+        header.insert(
+            reqwest::header::AUTHORIZATION,
+            http::HeaderValue::from_static(
+                "AWS4-HMAC-SHA256 Credential=key/scope, SignedHeaders=host;range;x-amz-date, Signature=abc",
+            ),
+        );
+        assert!(!need_prefetch(&config, &header, url));
+
+        // Even an explicit opt-in cannot prefetch a range the signature covers.
+        header.insert(
+            header::DRAGONFLY_PREFETCH_HEADER,
+            http::HeaderValue::from_static("true"),
+        );
+        assert!(!need_prefetch(&config, &header, url));
+    }
 }
