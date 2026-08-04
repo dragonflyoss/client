@@ -227,7 +227,7 @@ impl Local {
 
     /// Resolves the scheduler address to the list of schedulers via DNS. The
     /// resolved addresses are sorted to keep the scheduler selection stable
-    /// across refreshes.
+    /// across refreshes, and IPv4 addresses are preferred on dual-stack hosts.
     #[instrument(skip_all)]
     async fn resolve_schedulers(&self, addr: &str) -> Result<Vec<ManagerScheduler>> {
         let mut socket_addrs: Vec<SocketAddr> = lookup_host(addr)
@@ -238,6 +238,11 @@ impl Local {
             .collect();
         if socket_addrs.is_empty() {
             return Err(Error::AvailableSchedulersNotFound);
+        }
+
+        // Prefer IPv4 when the address resolves to both families.
+        if socket_addrs.iter().any(|socket_addr| socket_addr.is_ipv4()) {
+            socket_addrs.retain(|socket_addr| socket_addr.is_ipv4());
         }
 
         socket_addrs.sort();
@@ -403,6 +408,18 @@ scheduler:
             .iter()
             .all(|scheduler| scheduler.port == health_addr.port() as i32));
         assert!(data.available_scheduler_cluster_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn resolve_schedulers_should_prefer_ipv4() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = new_local(dir.path().join("dynconfig.yaml"));
+
+        let schedulers = local.resolve_schedulers("localhost:8002").await.unwrap();
+        assert!(!schedulers.is_empty());
+        assert!(schedulers
+            .iter()
+            .all(|scheduler| IpAddr::from_str(&scheduler.ip).unwrap().is_ipv4()));
     }
 
     #[tokio::test]

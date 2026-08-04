@@ -1408,21 +1408,18 @@ impl Task {
                         })?;
                 } else {
                     download_progress_tx
-                        .send_timeout(
-                            Ok(DownloadTaskResponse {
-                                host_id: host_id.to_string(),
-                                task_id: task_id.to_string(),
-                                peer_id: peer_id.to_string(),
-                                response: Some(
-                                    download_task_response::Response::DownloadPieceFinishedResponse(
-                                        dfdaemon::v2::DownloadPieceFinishedResponse {
-                                            piece: Some(piece.clone()),
-                                        },
-                                    ),
+                        .send(Ok(DownloadTaskResponse {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.to_string(),
+                            peer_id: peer_id.to_string(),
+                            response: Some(
+                                download_task_response::Response::DownloadPieceFinishedResponse(
+                                    dfdaemon::v2::DownloadPieceFinishedResponse {
+                                        piece: Some(piece.clone()),
+                                    },
                                 ),
-                            }),
-                            REQUEST_TIMEOUT,
-                        )
+                            ),
+                        }))
                         .await
                         .unwrap_or_else(|err| {
                             error!(
@@ -1707,21 +1704,18 @@ impl Task {
                         })?;
                 } else {
                     download_progress_tx
-                        .send_timeout(
-                            Ok(DownloadTaskResponse {
-                                host_id: host_id.to_string(),
-                                task_id: task_id.to_string(),
-                                peer_id: peer_id.to_string(),
-                                response: Some(
-                                    download_task_response::Response::DownloadPieceFinishedResponse(
-                                        dfdaemon::v2::DownloadPieceFinishedResponse {
-                                            piece: Some(piece.clone()),
-                                        },
-                                    ),
+                        .send(Ok(DownloadTaskResponse {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.to_string(),
+                            peer_id: peer_id.to_string(),
+                            response: Some(
+                                download_task_response::Response::DownloadPieceFinishedResponse(
+                                    dfdaemon::v2::DownloadPieceFinishedResponse {
+                                        piece: Some(piece.clone()),
+                                    },
                                 ),
-                            }),
-                            REQUEST_TIMEOUT,
-                        )
+                            ),
+                        }))
                         .await
                         .unwrap_or_else(|err| {
                             error!(
@@ -2015,21 +2009,16 @@ impl Task {
                     })?;
             } else {
                 download_progress_tx
-                    .send_timeout(
-                        Ok(DownloadTaskResponse {
-                            host_id: host_id.to_string(),
-                            task_id: task_id.to_string(),
-                            peer_id: peer_id.to_string(),
-                            response: Some(
-                                download_task_response::Response::DownloadPieceFinishedResponse(
-                                    dfdaemon::v2::DownloadPieceFinishedResponse {
-                                        piece: Some(piece),
-                                    },
-                                ),
+                    .send(Ok(DownloadTaskResponse {
+                        host_id: host_id.to_string(),
+                        task_id: task_id.to_string(),
+                        peer_id: peer_id.to_string(),
+                        response: Some(
+                            download_task_response::Response::DownloadPieceFinishedResponse(
+                                dfdaemon::v2::DownloadPieceFinishedResponse { piece: Some(piece) },
                             ),
-                        }),
-                        REQUEST_TIMEOUT,
-                    )
+                        ),
+                    }))
                     .await
                     .unwrap_or_else(|err| {
                         error!(
@@ -2283,21 +2272,18 @@ impl Task {
                         })?;
                 } else {
                     download_progress_tx
-                        .send_timeout(
-                            Ok(DownloadTaskResponse {
-                                host_id: host_id.to_string(),
-                                task_id: task_id.to_string(),
-                                peer_id: peer_id.to_string(),
-                                response: Some(
-                                    download_task_response::Response::DownloadPieceFinishedResponse(
-                                        dfdaemon::v2::DownloadPieceFinishedResponse {
-                                            piece: Some(piece),
-                                        },
-                                    ),
+                        .send(Ok(DownloadTaskResponse {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.to_string(),
+                            peer_id: peer_id.to_string(),
+                            response: Some(
+                                download_task_response::Response::DownloadPieceFinishedResponse(
+                                    dfdaemon::v2::DownloadPieceFinishedResponse {
+                                        piece: Some(piece),
+                                    },
                                 ),
-                            }),
-                            REQUEST_TIMEOUT,
-                        )
+                            ),
+                        }))
                         .await
                         .unwrap_or_else(|err| {
                             error!(

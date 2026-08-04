@@ -431,6 +431,9 @@ const TRANSFER_WRITE_BUFFER_SIZE: usize = 8 * 1024 * 1024;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Install the default crypto provider for rustls.
+    dragonfly_client_util::tls::install_crypto_provider();
+
     // Parse command line arguments.
     let args = convert_args(Args::parse());
 
@@ -1159,6 +1162,8 @@ async fn download(
 
     // Download file.
     let mut downloaded = 0;
+    let mut initialized = false;
+    let mut remaining_pieces = HashSet::new();
     let mut out_stream = response.into_inner();
     loop {
         match out_stream.message().await {
@@ -1179,6 +1184,9 @@ async fn download(
                             }
                         }
 
+                        initialized = true;
+                        remaining_pieces =
+                            response.pieces.iter().map(|piece| piece.number).collect();
                         progress_bar.set_length(response.content_length);
                     }
                     Some(download_task_response::Response::DownloadPieceFinishedResponse(
@@ -1235,6 +1243,7 @@ async fn download(
                             debug!("copy piece {} to {:?} success", piece.number, args.output);
                         }
 
+                        remaining_pieces.remove(&piece.number);
                         downloaded += piece.length;
                         let position = min(
                             downloaded + piece.length,
@@ -1262,6 +1271,19 @@ async fn download(
                 return Err(Error::TonicStatus(err));
             }
         }
+    }
+
+    // Abort if the stream ended before all pieces were received.
+    if !initialized || !remaining_pieces.is_empty() {
+        error!(
+            "download incomplete: {} pieces not received",
+            remaining_pieces.len()
+        );
+        fs::remove_file(&args.output).await.inspect_err(|err| {
+            error!("remove file {:?} failed: {}", args.output, err);
+        })?;
+
+        return Err(Error::Unknown("download incomplete".to_string()));
     }
 
     if let Some(f) = &mut f {

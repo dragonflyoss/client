@@ -38,26 +38,22 @@ use dragonfly_client_util::{
 use futures::TryStreamExt;
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, StreamBody};
 use hyper::body::Frame;
-use hyper::client::conn::http1::Builder as ClientBuilder;
 use hyper::server::conn::http1::Builder as ServerBuilder;
 use hyper::service::service_fn;
 use hyper::upgrade::Upgraded;
 use hyper::{Method, Request};
 use hyper_util::{
-    client::legacy::Client,
+    client::legacy::{connect::HttpConnector, Client},
     rt::{tokio::TokioIo, TokioExecutor},
 };
-use lazy_static::lazy_static;
 use leaky_bucket::RateLimiter;
 use rcgen::Certificate;
 use rustls::{RootCertStore, ServerConfig};
-use rustls_pki_types::CertificateDer;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tokio::net::TcpListener;
-use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Barrier};
 use tokio_rustls::TlsAcceptor;
 use tokio_stream::wrappers::ReceiverStream;
@@ -67,10 +63,9 @@ pub mod header;
 pub mod query;
 pub mod task;
 
-lazy_static! {
-  /// Supported HTTP protocols, including HTTP/1.1 and HTTP/1.0.
-  static ref SUPPORTED_HTTP_PROTOCOLS: Vec<Vec<u8>> = vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()];
-}
+/// Supported HTTP protocols, including HTTP/1.1 and HTTP/1.0.
+static SUPPORTED_HTTP_PROTOCOLS: LazyLock<Vec<Vec<u8>>> =
+    LazyLock::new(|| vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()]);
 
 /// Response type for the proxy server.
 pub type Response = hyper::Response<BoxBody<Bytes, ClientError>>;
@@ -86,8 +81,11 @@ pub struct Proxy {
     /// Address of the proxy server.
     addr: SocketAddr,
 
-    /// Certificate of the client for the registry.
-    registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
+    /// HTTP client for proxying requests directly to remote servers.
+    http_client: Client<HttpConnector, hyper::body::Incoming>,
+
+    /// HTTPS client for proxying requests directly to remote servers.
+    https_client: Client<hyper_rustls::HttpsConnector<HttpConnector>, hyper::body::Incoming>,
 
     /// CA certificate of the proxy server to sign the self-signed certificate.
     server_ca_cert: Arc<Option<Certificate>>,
@@ -115,11 +113,50 @@ impl Proxy {
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
+        // Load and generate the registry certificates from the PEM format file.
+        let registry_cert = match config.proxy.registry_mirror.load_cert_der() {
+            Ok(registry_cert) => {
+                info!("load registry cert success");
+                registry_cert
+            }
+            Err(err) => {
+                error!("load registry cert failed: {}", err);
+                None
+            }
+        };
+
+        let client_config_builder = match registry_cert {
+            Some(registry_cert) => {
+                let mut root_cert_store = RootCertStore::empty();
+                root_cert_store.add_parsable_certificates(registry_cert);
+
+                // TLS client config using the custom CA store for lookups.
+                rustls::ClientConfig::builder()
+                    .with_root_certificates(root_cert_store)
+                    .with_no_client_auth()
+            }
+            // Default TLS client config with native roots.
+            None => rustls::ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(NoVerifier::new())
+                .with_no_client_auth(),
+        };
+
         let mut proxy = Self {
             config: config.clone(),
             task: task.clone(),
             addr: SocketAddr::new(config.proxy.server.ip.unwrap(), config.proxy.server.port),
-            registry_cert: Arc::new(None),
+            http_client: Client::builder(TokioExecutor::new())
+                .http1_preserve_header_case(true)
+                .http1_title_case_headers(true)
+                .build_http(),
+            https_client: Client::builder(TokioExecutor::new()).build(
+                hyper_rustls::HttpsConnectorBuilder::new()
+                    .with_tls_config(client_config_builder)
+                    .https_or_http()
+                    .enable_http1()
+                    .build(),
+            ),
             server_ca_cert: Arc::new(None),
             request_rate_limiter: Arc::new(
                 RateLimiter::builder()
@@ -133,18 +170,6 @@ impl Proxy {
             dynconfig,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
-        };
-
-        // Load and generate the registry certificates from the PEM format file.
-        proxy.registry_cert = match config.proxy.registry_mirror.load_cert_der() {
-            Ok(registry_cert) => {
-                info!("load registry cert success");
-                Arc::new(registry_cert)
-            }
-            Err(err) => {
-                error!("load registry cert failed: {}", err);
-                Arc::new(None)
-            }
         };
 
         // Generate the CA certificate and key from the PEM format files.
@@ -185,7 +210,9 @@ impl Proxy {
         struct Context {
             config: Arc<Config>,
             task: Arc<Task>,
-            registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
+            http_client: Client<HttpConnector, hyper::body::Incoming>,
+            https_client:
+                Client<hyper_rustls::HttpsConnector<HttpConnector>, hyper::body::Incoming>,
             server_ca_cert: Arc<Option<Certificate>>,
             request_rate_limiter: Arc<RateLimiter>,
             dynconfig: Arc<Dynconfig>,
@@ -194,7 +221,8 @@ impl Proxy {
         let context = Context {
             config: self.config.clone(),
             task: self.task.clone(),
-            registry_cert: self.registry_cert.clone(),
+            http_client: self.http_client.clone(),
+            https_client: self.https_client.clone(),
             server_ca_cert: self.server_ca_cert.clone(),
             request_rate_limiter: self.request_rate_limiter.clone(),
             dynconfig: self.dynconfig.clone(),
@@ -226,7 +254,7 @@ impl Proxy {
                                 service_fn(move |request|{
                                     let context = context.clone();
                                     async move {
-                                        handler(context.config, context.task, request, context.registry_cert, context.server_ca_cert, context.request_rate_limiter, context.dynconfig, remote_address.ip()).await
+                                        handler(context.config, context.task, request, context.http_client, context.https_client, context.server_ca_cert, context.request_rate_limiter, context.dynconfig, remote_address.ip()).await
                                     }
                                 } ),
                                 )
@@ -255,7 +283,8 @@ pub async fn handler(
     config: Arc<Config>,
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
-    registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
+    http_client: Client<HttpConnector, hyper::body::Incoming>,
+    https_client: Client<hyper_rustls::HttpsConnector<HttpConnector>, hyper::body::Incoming>,
     server_ca_cert: Arc<Option<Certificate>>,
     request_rate_limiter: Arc<RateLimiter>,
     dynconfig: Arc<Dynconfig>,
@@ -290,7 +319,8 @@ pub async fn handler(
                 task,
                 request,
                 remote_ip,
-                registry_cert,
+                http_client,
+                https_client,
                 server_ca_cert,
                 request_rate_limiter,
                 dynconfig,
@@ -303,7 +333,8 @@ pub async fn handler(
             task,
             request,
             remote_ip,
-            registry_cert,
+            http_client,
+            https_client,
             dynconfig,
         )
         .await;
@@ -316,7 +347,8 @@ pub async fn handler(
             task,
             request,
             remote_ip,
-            registry_cert,
+            http_client,
+            https_client,
             server_ca_cert,
             request_rate_limiter,
             dynconfig,
@@ -324,7 +356,16 @@ pub async fn handler(
         .await;
     }
 
-    http_handler(config, task, request, remote_ip, registry_cert, dynconfig).await
+    http_handler(
+        config,
+        task,
+        request,
+        remote_ip,
+        http_client,
+        https_client,
+        dynconfig,
+    )
+    .await
 }
 
 /// Handles the http request for the registry mirror by client.
@@ -334,11 +375,21 @@ pub async fn registry_mirror_http_handler(
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
+    http_client: Client<HttpConnector, hyper::body::Incoming>,
+    https_client: Client<hyper_rustls::HttpsConnector<HttpConnector>, hyper::body::Incoming>,
     dynconfig: Arc<Dynconfig>,
 ) -> ClientResult<Response> {
     let request = make_registry_mirror_request(config.clone(), request)?;
-    return http_handler(config, task, request, remote_ip, registry_cert, dynconfig).await;
+    return http_handler(
+        config,
+        task,
+        request,
+        remote_ip,
+        http_client,
+        https_client,
+        dynconfig,
+    )
+    .await;
 }
 
 /// Handles the https request for the registry mirror by client.
@@ -349,7 +400,8 @@ pub async fn registry_mirror_https_handler(
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
+    http_client: Client<HttpConnector, hyper::body::Incoming>,
+    https_client: Client<hyper_rustls::HttpsConnector<HttpConnector>, hyper::body::Incoming>,
     server_ca_cert: Arc<Option<Certificate>>,
     request_rate_limiter: Arc<RateLimiter>,
     dynconfig: Arc<Dynconfig>,
@@ -360,7 +412,8 @@ pub async fn registry_mirror_https_handler(
         task,
         request,
         remote_ip,
-        registry_cert,
+        http_client,
+        https_client,
         server_ca_cert,
         request_rate_limiter,
         dynconfig,
@@ -375,7 +428,8 @@ pub async fn http_handler(
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
+    http_client: Client<HttpConnector, hyper::body::Incoming>,
+    https_client: Client<hyper_rustls::HttpsConnector<HttpConnector>, hyper::body::Incoming>,
     dynconfig: Arc<Dynconfig>,
 ) -> ClientResult<Response> {
     // Authenticate the request with the basic auth.
@@ -457,7 +511,7 @@ pub async fn http_handler(
             request
         );
 
-        return proxy_via_https(request, registry_cert).await;
+        return proxy_via_https(request, https_client).await;
     }
 
     info!(
@@ -465,7 +519,7 @@ pub async fn http_handler(
         request
     );
 
-    return proxy_via_http(request).await;
+    return proxy_via_http(request, http_client).await;
 }
 
 /// Handles the https request by client.
@@ -476,7 +530,8 @@ pub async fn https_handler(
     task: Arc<Task>,
     request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
+    http_client: Client<HttpConnector, hyper::body::Incoming>,
+    https_client: Client<hyper_rustls::HttpsConnector<HttpConnector>, hyper::body::Incoming>,
     server_ca_cert: Arc<Option<Certificate>>,
     request_rate_limiter: Arc<RateLimiter>,
     dynconfig: Arc<Dynconfig>,
@@ -497,7 +552,8 @@ pub async fn https_handler(
                         host,
                         port,
                         remote_ip,
-                        registry_cert,
+                        http_client,
+                        https_client,
                         server_ca_cert,
                         request_rate_limiter,
                         dynconfig,
@@ -533,7 +589,8 @@ async fn upgraded_tunnel(
     host: String,
     port: u16,
     remote_ip: std::net::IpAddr,
-    registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
+    http_client: Client<HttpConnector, hyper::body::Incoming>,
+    https_client: Client<hyper_rustls::HttpsConnector<HttpConnector>, hyper::body::Incoming>,
     server_ca_cert: Arc<Option<Certificate>>,
     request_rate_limiter: Arc<RateLimiter>,
     dynconfig: Arc<Dynconfig>,
@@ -583,7 +640,8 @@ async fn upgraded_tunnel(
                     port,
                     request,
                     remote_ip,
-                    registry_cert.clone(),
+                    http_client.clone(),
+                    https_client.clone(),
                     request_rate_limiter.clone(),
                     dynconfig.clone(),
                 )
@@ -608,7 +666,8 @@ pub async fn upgraded_handler(
     port: u16,
     mut request: Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
-    registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
+    http_client: Client<HttpConnector, hyper::body::Incoming>,
+    https_client: Client<hyper_rustls::HttpsConnector<HttpConnector>, hyper::body::Incoming>,
     request_rate_limiter: Arc<RateLimiter>,
     dynconfig: Arc<Dynconfig>,
 ) -> ClientResult<Response> {
@@ -726,7 +785,7 @@ pub async fn upgraded_handler(
             request,
         );
 
-        return proxy_via_https(request, registry_cert).await;
+        return proxy_via_https(request, https_client).await;
     }
 
     info!(
@@ -734,7 +793,7 @@ pub async fn upgraded_handler(
         request,
     );
 
-    return proxy_via_http(request).await;
+    return proxy_via_http(request, http_client).await;
 }
 
 /// Proxies the request via the dfdaemon.
@@ -911,8 +970,11 @@ async fn proxy_via_dfdaemon(
             // descriptors while waiting.
             let mut finished_pieces = HashMap::new();
 
-            // Get the first piece number from the started response.
-            let Some(first_piece) = download_task_started_response.pieces.first() else {
+            // Get the first and last piece numbers from the started response.
+            let (Some(first_piece), Some(last_piece)) = (
+                download_task_started_response.pieces.first(),
+                download_task_started_response.pieces.last(),
+            ) else {
                 error!("response pieces is empty");
 
                 // Send the none response to the client in case if it is empty file.
@@ -949,6 +1011,11 @@ async fn proxy_via_dfdaemon(
 
                             let Some(piece) = download_task_response.piece else {
                                 error!("response piece is empty");
+                                body_tx
+                                    .send(Err(ClientError::UnexpectedResponse))
+                                    .await
+                                    .unwrap_or_default();
+
                                 return;
                             };
 
@@ -972,6 +1039,7 @@ async fn proxy_via_dfdaemon(
                                     Ok(piece_range_reader) => piece_range_reader,
                                     Err(err) => {
                                         error!("download piece reader error: {}", err);
+                                        body_tx.send(Err(err)).await.unwrap_or_default();
                                         return;
                                     }
                                 };
@@ -988,6 +1056,7 @@ async fn proxy_via_dfdaemon(
                                         }
                                         Err(err) => {
                                             error!("download piece reader error: {}", err);
+                                            body_tx.send(Err(err)).await.unwrap_or_default();
                                             return;
                                         }
                                     }
@@ -997,16 +1066,36 @@ async fn proxy_via_dfdaemon(
                             }
                         } else {
                             error!("response unknown message");
+                            body_tx
+                                .send(Err(ClientError::UnexpectedResponse))
+                                .await
+                                .unwrap_or_default();
+
                             return;
                         }
                     }
                     None => {
-                        debug!("message is none");
+                        // The stream is closed. If the response body is incomplete,
+                        // abort the connection with an error.
+                        if need_piece_number <= last_piece.number {
+                            error!(
+                                "stream ended at piece {}, last piece is {}",
+                                need_piece_number, last_piece.number
+                            );
+                            body_tx
+                                .send(Err(ClientError::Unknown(format!(
+                                    "response body is truncated at piece {need_piece_number}"
+                                ))))
+                                .await
+                                .unwrap_or_default();
+                        }
+
                         return;
                     }
                     Some(Err(err)) => {
                         if initialized {
                             error!("stream error: {}", err);
+                            body_tx.send(Err(err.into())).await.unwrap_or_default();
                             return;
                         }
 
@@ -1068,30 +1157,18 @@ async fn proxy_via_dfdaemon(
 
 /// Proxies the HTTP request directly to the remote server.
 #[instrument(level = "debug", skip_all)]
-async fn proxy_via_http(mut request: Request<hyper::body::Incoming>) -> ClientResult<Response> {
-    let Some(host) = request.uri().host() else {
+async fn proxy_via_http(
+    mut request: Request<hyper::body::Incoming>,
+    http_client: Client<HttpConnector, hyper::body::Incoming>,
+) -> ClientResult<Response> {
+    if request.uri().host().is_none() {
         error!("CONNECT host is not socket addr: {:?}", request.uri());
         return Ok(make_error_response(
             header::ErrorType::Proxy,
             http::StatusCode::BAD_REQUEST,
             None,
         ));
-    };
-    let port = request.uri().port_u16().unwrap_or(80);
-
-    let stream = TcpStream::connect((host, port)).await?;
-    let io = TokioIo::new(stream);
-    let (mut client, conn) = ClientBuilder::new()
-        .preserve_header_case(true)
-        .title_case_headers(true)
-        .handshake(io)
-        .await?;
-
-    tokio::task::spawn(async move {
-        if let Err(err) = conn.await {
-            error!("connection failed: {:?}", err);
-        }
-    });
+    }
 
     // Override Host header with the URI authority to handle containerd's
     // behavior with non-default ports, which otherwise causes request
@@ -1109,7 +1186,10 @@ async fn proxy_via_http(mut request: Request<hyper::body::Incoming>) -> ClientRe
     .or_err(ErrorType::ParseError)?;
     request.headers_mut().insert(hyper::header::HOST, host);
 
-    let response = client.send_request(request).await?;
+    let response = http_client.request(request).await.inspect_err(|err| {
+        error!("request failed: {:?}", err);
+    })?;
+
     Ok(response.map(|b| b.map_err(ClientError::from).boxed()))
 }
 
@@ -1117,32 +1197,8 @@ async fn proxy_via_http(mut request: Request<hyper::body::Incoming>) -> ClientRe
 #[instrument(level = "debug", skip_all)]
 async fn proxy_via_https(
     mut request: Request<hyper::body::Incoming>,
-    registry_cert: Arc<Option<Vec<CertificateDer<'static>>>>,
+    https_client: Client<hyper_rustls::HttpsConnector<HttpConnector>, hyper::body::Incoming>,
 ) -> ClientResult<Response> {
-    let client_config_builder = match registry_cert.as_ref() {
-        Some(registry_cert) => {
-            let mut root_cert_store = RootCertStore::empty();
-            root_cert_store.add_parsable_certificates(registry_cert.to_owned());
-
-            // TLS client config using the custom CA store for lookups.
-            rustls::ClientConfig::builder()
-                .with_root_certificates(root_cert_store)
-                .with_no_client_auth()
-        }
-        // Default TLS client config with native roots.
-        None => rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(NoVerifier::new())
-            .with_no_client_auth(),
-    };
-
-    let https = hyper_rustls::HttpsConnectorBuilder::new()
-        .with_tls_config(client_config_builder)
-        .https_or_http()
-        .enable_http1()
-        .build();
-    let client = Client::builder(TokioExecutor::new()).build(https);
-
     // Override Host header with the URI authority to handle containerd's
     // behavior with non-443 HTTPS ports, which otherwise causes request
     // failures. The default port (443) is stripped, since clients sign
@@ -1159,7 +1215,7 @@ async fn proxy_via_https(
     .or_err(ErrorType::ParseError)?;
     request.headers_mut().insert(hyper::header::HOST, host);
 
-    let response = client.request(request).await.inspect_err(|err| {
+    let response = https_client.request(request).await.inspect_err(|err| {
         error!("request failed: {:?}", err);
     })?;
 

@@ -14,11 +14,18 @@
  * limitations under the License.
  */
 
+use bytes::Bytes;
 use dragonfly_client_util::shutdown;
+use http_body_util::Full;
+use hyper::server::conn::http1::Builder as ServerBuilder;
+use hyper::service::service_fn;
+use hyper::{Method, Request, Response, StatusCode};
+use hyper_util::rt::TokioIo;
+use std::convert::Infallible;
 use std::net::SocketAddr;
+use tokio::net::TcpListener;
 use tokio::sync::mpsc;
-use tracing::{info, instrument};
-use warp::{Filter, Rejection, Reply};
+use tracing::{error, info, instrument};
 
 /// Health check server.
 #[derive(Debug)]
@@ -53,30 +60,49 @@ impl Health {
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
 
-        // Create the health route.
-        let health_route = warp::path!("healthy")
-            .and(warp::get())
-            .and(warp::path::end())
-            .and_then(Self::health_handler);
-
         // Start the health server and wait for it to finish.
         info!("health server listening on {}", self.addr);
-        tokio::select! {
-            _ = warp::serve(health_route).run(self.addr) => {
-                // Health server ended.
-                info!("health server ended");
-            }
-            _ = shutdown.recv() => {
-                // Health server shutting down with signals.
-                info!("health server shutting down");
+        let listener = TcpListener::bind(self.addr).await.unwrap();
+        loop {
+            tokio::select! {
+                tcp_accepted = listener.accept() => {
+                    let (tcp, remote_address) = match tcp_accepted {
+                        Ok(tcp_accepted) => tcp_accepted,
+                        Err(err) => {
+                            error!("failed to accept connection: {}", err);
+                            continue;
+                        }
+                    };
+
+                    let io = TokioIo::new(tcp);
+                    tokio::spawn(async move {
+                        if let Err(err) = ServerBuilder::new()
+                            .serve_connection(io, service_fn(Self::handler))
+                            .await
+                        {
+                            error!("failed to serve connection from {}: {}", remote_address, err);
+                        }
+                    });
+                }
+                _ = shutdown.recv() => {
+                    // Health server shutting down with signals.
+                    info!("health server shutting down");
+                    return;
+                }
             }
         }
     }
 
     /// Handles the health check request.
     #[instrument(skip_all)]
-    async fn health_handler() -> Result<impl Reply, Rejection> {
-        Ok(warp::reply())
+    async fn handler<T>(request: Request<T>) -> Result<Response<Full<Bytes>>, Infallible> {
+        match (request.method(), request.uri().path()) {
+            (&Method::GET, "/healthy") => Ok(Response::new(Full::default())),
+            _ => Ok(Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Full::default())
+                .unwrap()),
+        }
     }
 }
 
@@ -96,8 +122,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_health_handler() {
-        let result = Health::health_handler().await;
-        assert!(result.is_ok());
+    async fn test_handler() {
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("/healthy")
+            .body(())
+            .unwrap();
+        let response = Health::handler(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri("/unknown")
+            .body(())
+            .unwrap();
+        let response = Health::handler(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

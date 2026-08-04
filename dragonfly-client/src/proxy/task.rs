@@ -16,7 +16,7 @@
 
 use crate::dynconfig::block_list::DownloadBlockListCheckParams;
 use crate::dynconfig::Dynconfig;
-use crate::grpc::{DOWNLOAD_STREAM_BUFFER_SIZE, REQUEST_TIMEOUT};
+use crate::grpc::DOWNLOAD_STREAM_BUFFER_SIZE;
 use crate::resource::task::Task;
 use dragonfly_api::common::v2::TaskType;
 use dragonfly_api::dfdaemon::v2::{DownloadTaskRequest, DownloadTaskResponse};
@@ -214,7 +214,7 @@ pub async fn download(
         err: impl std::error::Error,
     ) {
         out_stream_tx
-            .send_timeout(Err(Status::internal(err.to_string())), REQUEST_TIMEOUT)
+            .send(Err(Status::internal(err.to_string())))
             .await
             .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
     }
@@ -225,7 +225,7 @@ pub async fn download(
         err: Status,
     ) {
         out_stream_tx
-            .send_timeout(Err(err), REQUEST_TIMEOUT)
+            .send(Err(err))
             .await
             .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
     }

@@ -405,7 +405,7 @@ impl NoVerifier {
     /// Creates a new NoVerifier instance.
     pub fn new() -> Arc<Self> {
         Arc::new(Self(Arc::new(
-            quinn::rustls::crypto::ring::default_provider(),
+            quinn::rustls::crypto::aws_lc_rs::default_provider(),
         )))
     }
 }

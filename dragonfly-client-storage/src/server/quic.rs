@@ -228,7 +228,7 @@ impl QUICServerHandler {
 
                 // Collect upload piece started metrics.
                 collect_upload_piece_started_metrics();
-                info!("start upload piece content");
+                debug!("start upload piece content");
 
                 match self.handle_piece(piece_id.as_str(), task_id).await {
                     Ok((piece_content, mut content_reader)) => {
@@ -314,7 +314,7 @@ impl QUICServerHandler {
 
                 // Collect upload piece started metrics.
                 collect_upload_piece_started_metrics();
-                info!("start upload persistent piece content");
+                debug!("start upload persistent piece content");
 
                 match self
                     .handle_persistent_piece(piece_id.as_str(), task_id)
@@ -406,7 +406,7 @@ impl QUICServerHandler {
 
                 // Collect upload piece started metrics.
                 collect_upload_piece_started_metrics();
-                info!("start upload persistent cache piece content");
+                debug!("start upload persistent cache piece content");
 
                 match self
                     .handle_persistent_cache_piece(piece_id.as_str(), task_id)
