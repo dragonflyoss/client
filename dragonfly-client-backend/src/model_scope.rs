@@ -612,9 +612,6 @@ impl Backend for ModelScope {
 
         let response_header = response.headers().clone();
         let response_status_code = response.status();
-
-        // Reject the response if it does not satisfy the requested range, since
-        // consuming a mismatched body corrupts the stored piece.
         if let Err(err) =
             validate_ranged_response(request.range, response_status_code, &response_header)
         {
