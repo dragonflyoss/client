@@ -481,8 +481,8 @@ impl TCPServerHandler {
             .acquire(piece.length as usize)
             .await;
 
-        // Upload the piece content.
-        let reader = self
+        // Upload the piece content with the piece metadata.
+        let (piece, reader) = self
             .storage
             .upload_piece(piece_id, task_id, None)
             .await
@@ -545,8 +545,8 @@ impl TCPServerHandler {
             .acquire(piece.length as usize)
             .await;
 
-        // Upload the piece content.
-        let reader = self
+        // Upload the piece content with the piece metadata.
+        let (piece, reader) = self
             .storage
             .upload_persistent_piece(piece_id, task_id, None)
             .await
@@ -609,8 +609,8 @@ impl TCPServerHandler {
             .acquire(piece.length as usize)
             .await;
 
-        // Upload the piece content.
-        let reader = self
+        // Upload the piece content with the piece metadata.
+        let (piece, reader) = self
             .storage
             .upload_persistent_cache_piece(piece_id, task_id, None)
             .await

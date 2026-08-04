@@ -59,6 +59,9 @@ pub struct CollectedPiece {
     /// The piece number.
     pub number: u32,
 
+    /// The piece offset.
+    pub offset: u64,
+
     /// The piece length.
     pub length: u64,
 
@@ -104,6 +107,7 @@ impl PieceCollector {
                 interested_piece.number,
                 CollectedPiece {
                     number: interested_piece.number,
+                    offset: interested_piece.offset,
                     length: interested_piece.length,
                     ..Default::default()
                 },
@@ -398,6 +402,7 @@ impl PersistentPieceCollector {
                 interested_piece.number,
                 CollectedPiece {
                     number: interested_piece.number,
+                    offset: interested_piece.offset,
                     length: interested_piece.length,
                     ..Default::default()
                 },
@@ -700,6 +705,7 @@ impl PersistentCachePieceCollector {
                 interested_piece.number,
                 CollectedPiece {
                     number: interested_piece.number,
+                    offset: interested_piece.offset,
                     length: interested_piece.length,
                     ..Default::default()
                 },

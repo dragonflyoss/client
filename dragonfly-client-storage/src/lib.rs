@@ -730,6 +730,8 @@ impl Storage {
         &self,
         piece_id: &str,
         number: u32,
+        offset: u64,
+        length: u64,
     ) -> Result<metadata::Piece> {
         loop {
             // Wait for the piece to be finished.
@@ -751,7 +753,7 @@ impl Storage {
                             _ => {
                                 return self
                                     .metadata
-                                    .download_piece_started(piece_id, number)
+                                    .download_piece_started(piece_id, number, offset, length)
                                     .inspect_err(|_| {
                                         self.piece_notifier.remove_and_notify(piece_id)
                                     })
@@ -920,22 +922,22 @@ impl Storage {
         self.piece_notifier.get(piece_id)
     }
 
-    /// Updates the metadata of the piece and
-    /// returns the data of the piece.
+    /// Updates the metadata of the piece and returns the finished piece
+    /// metadata with the data of the piece.
     #[instrument(skip_all)]
     pub async fn upload_piece(
         &self,
         piece_id: &str,
         task_id: &str,
         range: Option<Range>,
-    ) -> Result<io::RangeReader> {
+    ) -> Result<(metadata::Piece, io::RangeReader)> {
         // Wait for the piece to be finished and get the piece metadata.
         let piece = self.wait_for_piece_finished(piece_id).await?;
 
         // Start uploading the task.
         self.metadata.upload_task_started(task_id);
 
-        // Return the content of the piece.
+        // Return the piece metadata and the content of the piece.
         match self
             .content
             .read_piece(task_id, piece.offset, piece.length, range)
@@ -944,7 +946,7 @@ impl Storage {
             Ok(reader) => {
                 // Finish uploading the task.
                 self.metadata.upload_task_finished(task_id);
-                Ok(reader)
+                Ok((piece, reader))
             }
             Err(err) => {
                 // Failed uploading the task.
@@ -989,6 +991,8 @@ impl Storage {
         &self,
         piece_id: &str,
         number: u32,
+        offset: u64,
+        length: u64,
     ) -> Result<metadata::Piece> {
         loop {
             // Wait for the piece to be finished.
@@ -1010,7 +1014,7 @@ impl Storage {
                             _ => {
                                 return self
                                     .metadata
-                                    .download_piece_started(piece_id, number)
+                                    .download_piece_started(piece_id, number, offset, length)
                                     .inspect_err(|_| {
                                         self.piece_notifier.remove_and_notify(piece_id)
                                     })
@@ -1145,22 +1149,22 @@ impl Storage {
         result
     }
 
-    /// Updates the metadata of the piece and_then
-    /// returns the data of the piece.
+    /// Updates the metadata of the persistent piece and returns the finished
+    /// piece metadata with the data of the piece.
     #[instrument(skip_all)]
     pub async fn upload_persistent_piece(
         &self,
         piece_id: &str,
         task_id: &str,
         range: Option<Range>,
-    ) -> Result<io::RangeReader> {
+    ) -> Result<(metadata::Piece, io::RangeReader)> {
         // Wait for the persistent piece to be finished and get the piece metadata.
         let piece = self.wait_for_persistent_piece_finished(piece_id).await?;
 
         // Start uploading the persistent task.
         self.metadata.upload_persistent_task_started(task_id);
 
-        // Return the content of the persistent piece.
+        // Return the piece metadata and the content of the persistent piece.
         match self
             .content
             .read_persistent_piece(task_id, piece.offset, piece.length, range)
@@ -1169,7 +1173,7 @@ impl Storage {
             Ok(reader) => {
                 // Finish uploading the persistent task.
                 self.metadata.upload_persistent_task_finished(task_id);
-                Ok(reader)
+                Ok((piece, reader))
             }
             Err(err) => {
                 // Failed uploading the persistent task.
@@ -1209,6 +1213,8 @@ impl Storage {
         &self,
         piece_id: &str,
         number: u32,
+        offset: u64,
+        length: u64,
     ) -> Result<metadata::Piece> {
         loop {
             // Wait for the piece to be finished.
@@ -1233,7 +1239,7 @@ impl Storage {
                             _ => {
                                 return self
                                     .metadata
-                                    .download_piece_started(piece_id, number)
+                                    .download_piece_started(piece_id, number, offset, length)
                                     .inspect_err(|_| {
                                         self.piece_notifier.remove_and_notify(piece_id)
                                     })
@@ -1312,15 +1318,15 @@ impl Storage {
         result
     }
 
-    /// Updates the metadata of the piece and_then
-    /// returns the data of the piece.
+    /// Updates the metadata of the persistent cache piece and returns the finished
+    /// piece metadata with the data of the piece.
     #[instrument(skip_all)]
     pub async fn upload_persistent_cache_piece(
         &self,
         piece_id: &str,
         task_id: &str,
         range: Option<Range>,
-    ) -> Result<io::RangeReader> {
+    ) -> Result<(metadata::Piece, io::RangeReader)> {
         // Wait for the persistent cache piece to be finished and get the piece.
         let piece = self
             .wait_for_persistent_cache_piece_finished(piece_id)
@@ -1329,7 +1335,7 @@ impl Storage {
         // Start uploading the persistent cache task.
         self.metadata.upload_persistent_cache_task_started(task_id);
 
-        // Return the content of the persistent cache piece.
+        // Return the piece metadata and the content of the persistent cache piece.
         match self
             .content
             .read_persistent_cache_piece(task_id, piece.offset, piece.length, range)
@@ -1338,7 +1344,7 @@ impl Storage {
             Ok(reader) => {
                 // Finish uploading the persistent cache task.
                 self.metadata.upload_persistent_cache_task_finished(task_id);
-                Ok(reader)
+                Ok((piece, reader))
             }
             Err(err) => {
                 // Failed uploading the persistent cache task.
@@ -1615,6 +1621,8 @@ impl Storage {
         &self,
         piece_id: &str,
         number: u32,
+        offset: u64,
+        length: u64,
     ) -> Result<metadata::Piece> {
         loop {
             // Wait for the piece to be finished.
@@ -1636,7 +1644,7 @@ impl Storage {
                             _ => {
                                 return self
                                     .metadata
-                                    .download_piece_started(piece_id, number)
+                                    .download_piece_started(piece_id, number, offset, length)
                                     .inspect_err(|_| {
                                         self.piece_notifier.remove_and_notify(piece_id)
                                     })
@@ -1970,7 +1978,7 @@ mod tests {
 
         let piece_id = storage.piece_id(TASK_ID, 0);
         let piece = storage
-            .download_piece_started(piece_id.as_str(), 0)
+            .download_piece_started(piece_id.as_str(), 0, 0, CONTENT.len() as u64)
             .await
             .unwrap();
         assert!(!piece.is_finished());
@@ -2032,7 +2040,7 @@ mod tests {
 
         let piece_id = storage.piece_id(TASK_ID, 0);
         storage
-            .download_piece_started(piece_id.as_str(), 0)
+            .download_piece_started(piece_id.as_str(), 0, 0, 1024)
             .await
             .unwrap();
 
@@ -2084,7 +2092,7 @@ mod tests {
             let piece_id = piece_id.clone();
             claimers.spawn(async move {
                 let piece = storage
-                    .download_piece_started(piece_id.as_str(), 0)
+                    .download_piece_started(piece_id.as_str(), 0, 0, CONTENT.len() as u64)
                     .await
                     .unwrap();
                 if piece.is_finished() {
@@ -2138,7 +2146,7 @@ mod tests {
 
         let piece_id = storage.persistent_piece_id(TASK_ID, 0);
         let piece = storage
-            .download_persistent_piece_started(piece_id.as_str(), 0)
+            .download_persistent_piece_started(piece_id.as_str(), 0, 0, CONTENT.len() as u64)
             .await
             .unwrap();
         assert!(!piece.is_finished());
@@ -2151,7 +2159,12 @@ mod tests {
         let waiter = tokio::spawn(async move {
             let started_at = std::time::Instant::now();
             let piece = storage_clone
-                .download_persistent_piece_started(piece_id_clone.as_str(), 0)
+                .download_persistent_piece_started(
+                    piece_id_clone.as_str(),
+                    0,
+                    0,
+                    CONTENT.len() as u64,
+                )
                 .await
                 .unwrap();
             (started_at.elapsed(), piece)
@@ -2202,7 +2215,7 @@ mod tests {
         let piece_id = storage.piece_id(TASK_ID, 0);
         storage
             .metadata
-            .download_piece_started(piece_id.as_str(), 0)
+            .download_piece_started(piece_id.as_str(), 0, 0, 1024)
             .unwrap();
         assert!(storage
             .in_flight_piece_notifier(piece_id.as_str())
@@ -2239,7 +2252,7 @@ mod tests {
         // The winner downloads and finishes the piece.
         let piece_id = storage.piece_id(TASK_ID, 0);
         storage
-            .download_piece_started(piece_id.as_str(), 0)
+            .download_piece_started(piece_id.as_str(), 0, 0, CONTENT.len() as u64)
             .await
             .unwrap();
         let mut stream = content_stream(CONTENT);

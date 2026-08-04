@@ -2026,6 +2026,7 @@ impl PersistentTask {
                 host_id: String,
                 peer_id: String,
                 number: u32,
+                offset: u64,
                 length: u64,
                 need_piece_content: bool,
                 parents: Vec<piece_collector::CollectedParent>,
@@ -2052,6 +2053,7 @@ impl PersistentTask {
                         host_id.as_str(),
                         task_id.as_str(),
                         number,
+                        offset,
                         length,
                         parent.clone(),
                     )
@@ -2220,6 +2222,7 @@ impl PersistentTask {
                         host_id,
                         peer_id,
                         collect_piece.number,
+                        collect_piece.offset,
                         collect_piece.length,
                         need_piece_content,
                         collect_piece.parents,
