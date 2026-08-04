@@ -1435,10 +1435,18 @@ impl<E: StorageEngineOwned> Metadata<E> {
 
     /// Updates the metadata of the piece when the piece downloads started.
     #[instrument(level = "debug", skip_all)]
-    pub fn download_piece_started(&self, piece_id: &str, number: u32) -> Result<Piece> {
+    pub fn download_piece_started(
+        &self,
+        piece_id: &str,
+        number: u32,
+        offset: u64,
+        length: u64,
+    ) -> Result<Piece> {
         // Construct the piece metadata.
         let piece = Piece {
             number,
+            offset,
+            length,
             updated_at: Utc::now().naive_utc(),
             created_at: Utc::now().naive_utc(),
             ..Default::default()
@@ -1766,10 +1774,12 @@ mod tests {
         let piece_id = metadata.piece_id(task_id, 1);
 
         metadata
-            .download_piece_started(piece_id.as_str(), 1)
+            .download_piece_started(piece_id.as_str(), 1, 1024, 1024)
             .unwrap();
         let piece = metadata.get_piece(piece_id.as_str()).unwrap().unwrap();
         assert_eq!(piece.number, 1);
+        assert_eq!(piece.offset, 1024);
+        assert_eq!(piece.length, 1024);
 
         metadata
             .download_piece_finished(piece_id.as_str(), 0, 1024, "digest1", None)
@@ -1779,20 +1789,20 @@ mod tests {
         assert_eq!(piece.digest, "digest1");
 
         metadata
-            .download_piece_started(metadata.piece_id(task_id, 2).as_str(), 2)
+            .download_piece_started(metadata.piece_id(task_id, 2).as_str(), 2, 2048, 1024)
             .unwrap();
         metadata
-            .download_piece_started(metadata.piece_id(task_id, 3).as_str(), 3)
+            .download_piece_started(metadata.piece_id(task_id, 3).as_str(), 3, 3072, 1024)
             .unwrap();
         let pieces = metadata.get_pieces(task_id).unwrap();
         assert_eq!(pieces.len(), 3);
 
         let piece_id = metadata.piece_id(task_id, 2);
         metadata
-            .download_piece_started(piece_id.as_str(), 2)
+            .download_piece_started(piece_id.as_str(), 2, 2048, 1024)
             .unwrap();
         metadata
-            .download_piece_started(metadata.piece_id(task_id, 3).as_str(), 3)
+            .download_piece_started(metadata.piece_id(task_id, 3).as_str(), 3, 3072, 1024)
             .unwrap();
         metadata.download_piece_failed(piece_id.as_str()).unwrap();
         let piece = metadata.get_piece(piece_id.as_str()).unwrap();
@@ -1812,7 +1822,7 @@ mod tests {
         let piece_id = metadata.piece_id(task_id, 1);
 
         metadata
-            .download_piece_started(piece_id.as_str(), 1)
+            .download_piece_started(piece_id.as_str(), 1, 1024, 1024)
             .unwrap();
         metadata
             .download_piece_finished(piece_id.as_str(), 0, 1024, "digest1", None)

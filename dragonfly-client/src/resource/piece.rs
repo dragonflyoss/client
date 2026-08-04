@@ -327,7 +327,8 @@ impl Piece {
         Span::current().record("piece_length", length);
 
         // Upload the piece content.
-        self.storage.upload_piece(piece_id, task_id, range).await
+        let (_, reader) = self.storage.upload_piece(piece_id, task_id, range).await?;
+        Ok(reader)
     }
 
     /// Downloads a single piece from local cache. Fake the download piece
@@ -346,6 +347,7 @@ impl Piece {
         host_id: &str,
         task_id: &str,
         number: u32,
+        offset: u64,
         length: u64,
         parent: piece_collector::CollectedParent,
         is_prefetch: bool,
@@ -357,7 +359,7 @@ impl Piece {
         // Record the start of downloading piece.
         let piece = self
             .storage
-            .download_piece_started(piece_id, number)
+            .download_piece_started(piece_id, number, offset, length)
             .await?;
 
         // If the piece is downloaded by the other thread,
@@ -485,7 +487,7 @@ impl Piece {
         // Record the start of downloading piece.
         let piece = self
             .storage
-            .download_piece_started(piece_id, number)
+            .download_piece_started(piece_id, number, offset, length)
             .await?;
 
         // If the piece is downloaded by the other thread,
@@ -674,9 +676,11 @@ impl Piece {
         Span::current().record("piece_length", length);
 
         // Upload the piece content.
-        self.storage
+        let (_, reader) = self
+            .storage
             .upload_persistent_piece(piece_id, task_id, range)
-            .await
+            .await?;
+        Ok(reader)
     }
 
     /// Downloads a persistent piece from local cache. Fake the download
@@ -695,6 +699,7 @@ impl Piece {
         host_id: &str,
         task_id: &str,
         number: u32,
+        offset: u64,
         length: u64,
         parent: piece_collector::CollectedParent,
     ) -> Result<metadata::Piece> {
@@ -710,7 +715,7 @@ impl Piece {
         // Record the start of downloading piece.
         let piece = self
             .storage
-            .download_persistent_piece_started(piece_id, number)
+            .download_persistent_piece_started(piece_id, number, offset, length)
             .await?;
 
         // If the piece is downloaded by the other thread,
@@ -830,7 +835,7 @@ impl Piece {
         // Record the start of downloading piece.
         let piece = self
             .storage
-            .download_persistent_piece_started(piece_id, number)
+            .download_persistent_piece_started(piece_id, number, offset, length)
             .await?;
 
         // If the piece is downloaded by the other thread,
@@ -1018,9 +1023,11 @@ impl Piece {
         Span::current().record("piece_length", length);
 
         // Upload the piece content.
-        self.storage
+        let (_, reader) = self
+            .storage
             .upload_persistent_cache_piece(piece_id, task_id, range)
-            .await
+            .await?;
+        Ok(reader)
     }
 
     /// Downloads a persistent cache piece from local cache. Fake the download
@@ -1039,6 +1046,7 @@ impl Piece {
         host_id: &str,
         task_id: &str,
         number: u32,
+        offset: u64,
         length: u64,
         parent: piece_collector::CollectedParent,
     ) -> Result<metadata::Piece> {
@@ -1054,7 +1062,7 @@ impl Piece {
         // Record the start of downloading piece.
         let piece = self
             .storage
-            .download_persistent_cache_piece_started(piece_id, number)
+            .download_persistent_cache_piece_started(piece_id, number, offset, length)
             .await?;
 
         // If the piece is downloaded by the other thread,
