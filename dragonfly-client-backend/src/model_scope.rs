@@ -44,12 +44,10 @@ use dragonfly_client_core::{
     error::{BackendError, ErrorType, OrErr},
     Error, Result,
 };
-use dragonfly_client_util::tls::NoVerifier;
+use dragonfly_client_util::{http::validate_ranged_response, tls::NoVerifier};
 use futures::{StreamExt, TryStreamExt};
-use reqwest::header::{
-    HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_LENGTH, CONTENT_RANGE, RANGE, USER_AGENT,
-};
-use reqwest::{Client, StatusCode};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_LENGTH, RANGE, USER_AGENT};
+use reqwest::Client;
 use serde::Deserialize;
 use std::error::Error as _;
 use std::io::Error as IOError;
@@ -326,105 +324,6 @@ impl ModelScope {
         }
 
         Ok(request_header)
-    }
-
-    /// Validates that a ranged response matches the requested byte interval.
-    fn validate_range_response(
-        range: Range,
-        status_code: StatusCode,
-        response_header: &HeaderMap,
-    ) -> Result<()> {
-        let expected_end = range.start.checked_add(range.length - 1).ok_or_else(|| {
-            Error::BackendError(Box::new(BackendError {
-                status_code: Some(status_code),
-                header: Some(response_header.clone()),
-                message: "range overflow while validating Content-Range".to_string(),
-            }))
-        })?;
-
-        if status_code != StatusCode::PARTIAL_CONTENT {
-            return Err(Error::BackendError(Box::new(BackendError {
-                status_code: Some(status_code),
-                header: Some(response_header.clone()),
-                message: format!(
-                    "expected 206 Partial Content for range bytes={}-{}, got {}",
-                    range.start, expected_end, status_code
-                ),
-            })));
-        }
-
-        let content_range = response_header
-            .get(CONTENT_RANGE)
-            .ok_or_else(|| {
-                Error::BackendError(Box::new(BackendError {
-                    status_code: Some(status_code),
-                    header: Some(response_header.clone()),
-                    message: format!(
-                        "missing Content-Range header for range bytes={}-{}",
-                        range.start, expected_end
-                    ),
-                }))
-            })?
-            .to_str()
-            .map_err(|err| {
-                Error::BackendError(Box::new(BackendError {
-                    status_code: Some(status_code),
-                    header: Some(response_header.clone()),
-                    message: format!("invalid Content-Range header: {err}"),
-                }))
-            })?;
-
-        let Some(content_range) = content_range.strip_prefix("bytes ") else {
-            return Err(Error::BackendError(Box::new(BackendError {
-                status_code: Some(status_code),
-                header: Some(response_header.clone()),
-                message: format!("invalid Content-Range header format: {content_range}"),
-            })));
-        };
-
-        let Some((range_part, _)) = content_range.split_once('/') else {
-            return Err(Error::BackendError(Box::new(BackendError {
-                status_code: Some(status_code),
-                header: Some(response_header.clone()),
-                message: format!("invalid Content-Range header format: {content_range}"),
-            })));
-        };
-
-        let Some((start, end)) = range_part.split_once('-') else {
-            return Err(Error::BackendError(Box::new(BackendError {
-                status_code: Some(status_code),
-                header: Some(response_header.clone()),
-                message: format!("invalid Content-Range header format: {content_range}"),
-            })));
-        };
-
-        let actual_start = start.parse::<u64>().map_err(|err| {
-            Error::BackendError(Box::new(BackendError {
-                status_code: Some(status_code),
-                header: Some(response_header.clone()),
-                message: format!("invalid Content-Range start: {err}"),
-            }))
-        })?;
-        let actual_end = end.parse::<u64>().map_err(|err| {
-            Error::BackendError(Box::new(BackendError {
-                status_code: Some(status_code),
-                header: Some(response_header.clone()),
-                message: format!("invalid Content-Range end: {err}"),
-            }))
-        })?;
-
-        if actual_start != range.start || actual_end != expected_end {
-            return Err(Error::BackendError(Box::new(BackendError {
-                status_code: Some(status_code),
-                header: Some(response_header.clone()),
-                message: format!(
-                    "unexpected Content-Range header: expected bytes {}-{}/..., got bytes {}-{}/...",
-                    range.start, expected_end, actual_start, actual_end
-                ),
-            })));
-        }
-
-        Ok(())
     }
 }
 
@@ -713,6 +612,26 @@ impl Backend for ModelScope {
 
         let response_header = response.headers().clone();
         let response_status_code = response.status();
+
+        // Reject the response if it does not satisfy the requested range, since
+        // consuming a mismatched body corrupts the stored piece.
+        if let Err(err) =
+            validate_ranged_response(request.range, response_status_code, &response_header)
+        {
+            error!(
+                "get request failed {} {} {}: {}",
+                request.task_id, request.piece_id, download_url, err
+            );
+
+            return Ok(GetResponse {
+                success: false,
+                http_header: Some(response_header),
+                http_status_code: Some(response_status_code),
+                reader: empty_body(),
+                error_message: Some(err.to_string()),
+            });
+        }
+
         let response_reader = StreamReader::new(
             response
                 .bytes_stream()
@@ -735,27 +654,12 @@ impl Backend for ModelScope {
             request.task_id, request.piece_id, response_status_code, response_header,
         );
 
-        let range_validation_error = request.range.and_then(|range| {
-            Self::validate_range_response(range, response_status_code, &response_header)
-                .err()
-                .map(|err| {
-                    let message = err.to_string();
-                    error!(
-                        "get request failed {} {} {}: {}",
-                        request.task_id, request.piece_id, download_url, message
-                    );
-                    message
-                })
-        });
-
         Ok(GetResponse {
-            success: response_status_code.is_success() && range_validation_error.is_none(),
+            success: response_status_code.is_success(),
             http_header: Some(response_header),
             http_status_code: Some(response_status_code),
             reader: response_reader,
-            error_message: Some(
-                range_validation_error.unwrap_or_else(|| response_status_code.to_string()),
-            ),
+            error_message: Some(response_status_code.to_string()),
         })
     }
 

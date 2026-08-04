@@ -16,10 +16,11 @@
 
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_core::{
-    error::{ErrorType, OrErr},
+    error::{BackendError, ErrorType, OrErr},
     Error, Result,
 };
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_RANGE};
+use reqwest::StatusCode;
 use std::collections::HashMap;
 
 pub mod basic_auth;
@@ -97,6 +98,74 @@ pub fn parse_range_header(range_header_value: &str, content_length: u64) -> Resu
     Ok(Range { start, length })
 }
 
+/// Validates that a ranged response satisfies the requested range, since the server may
+/// ignore the Range header or transfer a range different from the requested one, which is
+/// described by the Content-Range header, refer to RFC 9110 Section 15.3.7.
+pub fn validate_ranged_response(
+    range: Option<Range>,
+    status_code: StatusCode,
+    header: &HeaderMap,
+) -> Result<()> {
+    // Non-success responses are handled as failures by the caller.
+    let Some(range) = range else {
+        return Ok(());
+    };
+
+    if !status_code.is_success() {
+        return Ok(());
+    }
+
+    let err = |message: String| {
+        Error::BackendError(Box::new(BackendError {
+            message,
+            status_code: Some(status_code),
+            header: Some(header.clone()),
+        }))
+    };
+
+    // A server without range support replies 200 OK with the full body, which is usable
+    // only when the range starts at 0, since the caller caps the consumed bytes at the
+    // requested length.
+    let end = range.start + range.length - 1;
+    if status_code != StatusCode::PARTIAL_CONTENT {
+        if range.start == 0 {
+            return Ok(());
+        }
+
+        return Err(err(format!(
+            "expected 206 Partial Content for range bytes={}-{}, got {}",
+            range.start, end, status_code
+        )));
+    }
+
+    let content_range = header
+        .get(CONTENT_RANGE)
+        .and_then(|content_range| content_range.to_str().ok())
+        .ok_or_else(|| {
+            err(format!(
+                "missing Content-Range for range bytes={}-{}",
+                range.start, end
+            ))
+        })?;
+
+    // The Content-Range is formatted as "bytes <start>-<end>/<total>".
+    let transferred = content_range
+        .strip_prefix("bytes ")
+        .and_then(|content_range| content_range.split_once('/'))
+        .and_then(|(transferred, _)| transferred.split_once('-'))
+        .and_then(|(start, end)| Some((start.parse::<u64>().ok()?, end.parse::<u64>().ok()?)))
+        .ok_or_else(|| err(format!("invalid Content-Range {content_range}")))?;
+
+    if transferred != (range.start, end) {
+        return Err(err(format!(
+            "Content-Range {} mismatches requested range bytes={}-{}",
+            content_range, range.start, end
+        )));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,5 +236,56 @@ mod tests {
         let range = parse_range_header("bytes=0-100", 200).unwrap();
         assert_eq!(range.start, 0);
         assert_eq!(range.length, 101);
+    }
+
+    #[test]
+    fn test_validate_ranged_response() {
+        let range = Some(Range {
+            start: 10,
+            length: 20,
+        });
+
+        // No range requested.
+        assert!(validate_ranged_response(None, StatusCode::OK, &HeaderMap::new()).is_ok());
+
+        // Non-success responses are handled as failures by the caller.
+        assert!(validate_ranged_response(range, StatusCode::NOT_FOUND, &HeaderMap::new()).is_ok());
+
+        // 200 OK is usable only when the range starts at 0.
+        assert!(validate_ranged_response(
+            Some(Range {
+                start: 0,
+                length: 20
+            }),
+            StatusCode::OK,
+            &HeaderMap::new()
+        )
+        .is_ok());
+        assert!(validate_ranged_response(range, StatusCode::OK, &HeaderMap::new()).is_err());
+
+        // 206 with the Content-Range matching the requested range.
+        let mut header = HeaderMap::new();
+        header.insert(CONTENT_RANGE, HeaderValue::from_static("bytes 10-29/100"));
+        assert!(validate_ranged_response(range, StatusCode::PARTIAL_CONTENT, &header).is_ok());
+
+        // 206 without the Content-Range.
+        assert!(
+            validate_ranged_response(range, StatusCode::PARTIAL_CONTENT, &HeaderMap::new())
+                .is_err()
+        );
+
+        // 206 with an invalid Content-Range.
+        for content_range in ["bytes */100", "bytes 10-/100", "10-29/100", "bytes 10-29"] {
+            let mut header = HeaderMap::new();
+            header.insert(CONTENT_RANGE, HeaderValue::from_str(content_range).unwrap());
+            assert!(validate_ranged_response(range, StatusCode::PARTIAL_CONTENT, &header).is_err());
+        }
+
+        // 206 with a mismatched Content-Range.
+        for content_range in ["bytes 0-29/100", "bytes 10-30/100", "bytes 0-99/100"] {
+            let mut header = HeaderMap::new();
+            header.insert(CONTENT_RANGE, HeaderValue::from_str(content_range).unwrap());
+            assert!(validate_ranged_response(range, StatusCode::PARTIAL_CONTENT, &header).is_err());
+        }
     }
 }
