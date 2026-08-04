@@ -44,7 +44,7 @@ use dragonfly_client_core::{
     error::{BackendError, ErrorType, OrErr},
     Error, Result,
 };
-use dragonfly_client_util::tls::NoVerifier;
+use dragonfly_client_util::{http::validate_ranged_response, tls::NoVerifier};
 use futures::{StreamExt, TryStreamExt};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_LENGTH, RANGE, USER_AGENT};
 use reqwest::Client;
@@ -639,6 +639,23 @@ impl Backend for HuggingFace {
 
         let response_header = response.headers().clone();
         let response_status_code = response.status();
+        if let Err(err) =
+            validate_ranged_response(request.range, response_status_code, &response_header)
+        {
+            error!(
+                "get request failed {} {} {}: {}",
+                request.task_id, request.piece_id, download_url, err
+            );
+
+            return Ok(GetResponse {
+                success: false,
+                http_header: Some(response_header),
+                http_status_code: Some(response_status_code),
+                reader: empty_body(),
+                error_message: Some(err.to_string()),
+            });
+        }
+
         let response_reader = StreamReader::new(
             response
                 .bytes_stream()
