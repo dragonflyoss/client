@@ -56,7 +56,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
-use dragonfly_client_util::tls::NoVerifier;
+use dragonfly_client_util::{http::validate_ranged_response, tls::NoVerifier};
 use futures::{StreamExt, TryStreamExt};
 use http::header::{
     HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_RANGE, LOCATION, RANGE, TRANSFER_ENCODING,
@@ -765,6 +765,22 @@ impl Backend for HTTP {
 
         let response_header = response.headers().clone();
         let response_status_code = response.status();
+        if let Err(err) =
+            validate_ranged_response(request.range, response_status_code, &response_header)
+        {
+            error!(
+                "get request failed {} {} {}: {}",
+                request.task_id, request.piece_id, request_url, err
+            );
+
+            return Ok(GetResponse {
+                success: false,
+                http_header: Some(response_header),
+                http_status_code: Some(response_status_code),
+                reader: empty_body(),
+                error_message: Some(err.to_string()),
+            });
+        }
 
         // Non-redirect response or redirect without Location header
         let response_reader = StreamReader::new(
@@ -1244,6 +1260,128 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
 
         assert_eq!(resp.http_status_code, Some(StatusCode::OK));
         assert_eq!(resp.text().await.unwrap(), "OK");
+    }
+
+    #[tokio::test]
+    async fn should_get_response_with_partial_content() {
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/get"))
+            .and(header("range", "bytes=10-29"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header("Content-Range", "bytes 10-29/100")
+                    .set_body_string("partial content"),
+            )
+            .mount(&server)
+            .await;
+
+        let mut resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
+            .unwrap()
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "test".to_string(),
+                url: format!("{}/get", server.uri()),
+                range: Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                http_header: Some(HeaderMap::new()),
+                timeout: std::time::Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(resp.success);
+        assert_eq!(resp.http_status_code, Some(StatusCode::PARTIAL_CONTENT));
+        assert_eq!(resp.text().await.unwrap(), "partial content");
+    }
+
+    #[tokio::test]
+    async fn should_return_error_response_when_range_ignored() {
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/get"))
+            .and(header("range", "bytes=10-29"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("full body content"))
+            .mount(&server)
+            .await;
+
+        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
+            .unwrap()
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "test".to_string(),
+                url: format!("{}/get", server.uri()),
+                range: Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                http_header: Some(HeaderMap::new()),
+                timeout: std::time::Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!resp.success);
+        assert_eq!(resp.http_status_code, Some(StatusCode::OK));
+        assert!(resp
+            .error_message
+            .unwrap()
+            .contains("expected 206 Partial Content"));
+    }
+
+    #[tokio::test]
+    async fn should_return_error_response_when_content_range_mismatched() {
+        let server = wiremock::MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/get"))
+            .and(header("range", "bytes=10-29"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header("Content-Range", "bytes 0-19/100")
+                    .set_body_string("partial content"),
+            )
+            .mount(&server)
+            .await;
+
+        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
+            .unwrap()
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "test".to_string(),
+                url: format!("{}/get", server.uri()),
+                range: Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                http_header: Some(HeaderMap::new()),
+                timeout: std::time::Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!resp.success);
+        assert_eq!(resp.http_status_code, Some(StatusCode::PARTIAL_CONTENT));
+        assert!(resp
+            .error_message
+            .unwrap()
+            .contains("mismatches requested range"));
     }
 
     #[tokio::test]

@@ -44,7 +44,7 @@ use dragonfly_client_core::{
     error::{BackendError, ErrorType, OrErr},
     Error, Result,
 };
-use dragonfly_client_util::tls::NoVerifier;
+use dragonfly_client_util::{http::validate_ranged_response, tls::NoVerifier};
 use futures::{StreamExt, TryStreamExt};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_LENGTH, RANGE, USER_AGENT};
 use reqwest::Client;
@@ -612,6 +612,23 @@ impl Backend for ModelScope {
 
         let response_header = response.headers().clone();
         let response_status_code = response.status();
+        if let Err(err) =
+            validate_ranged_response(request.range, response_status_code, &response_header)
+        {
+            error!(
+                "get request failed {} {} {}: {}",
+                request.task_id, request.piece_id, download_url, err
+            );
+
+            return Ok(GetResponse {
+                success: false,
+                http_header: Some(response_header),
+                http_status_code: Some(response_status_code),
+                reader: empty_body(),
+                error_message: Some(err.to_string()),
+            });
+        }
+
         let response_reader = StreamReader::new(
             response
                 .bytes_stream()
@@ -1034,7 +1051,11 @@ mod tests {
                 "/models/deepseek-ai/DeepSeek-R1/resolve/master/config.json",
             ))
             .and(header("range", "bytes=10-29"))
-            .respond_with(ResponseTemplate::new(206).set_body_string("partial content"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header("content-range", "bytes 10-29/30")
+                    .set_body_string("partial content"),
+            )
             .mount(&server)
             .await;
 
@@ -1069,5 +1090,50 @@ mod tests {
             Some(reqwest::StatusCode::PARTIAL_CONTENT)
         );
         assert_eq!(response.text().await.unwrap(), "partial content");
+    }
+
+    #[tokio::test]
+    async fn test_get_rejects_full_body_for_range_request() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(
+                "/models/deepseek-ai/DeepSeek-R1/resolve/master/config.json",
+            ))
+            .and(header("range", "bytes=10-29"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("full body content"))
+            .mount(&server)
+            .await;
+
+        let backend = ModelScope::new(Arc::new(Config::default())).unwrap();
+        let response = backend
+            .get(GetRequest {
+                task_id: "task".to_string(),
+                piece_id: "piece".to_string(),
+                url: "modelscope://deepseek-ai/DeepSeek-R1/config.json".to_string(),
+                range: Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                http_header: None,
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: Some(ModelScopeOptions {
+                    revision: "master".to_string(),
+                    token: None,
+                    base_url: Some(server.uri()),
+                }),
+            })
+            .await
+            .unwrap();
+
+        assert!(!response.success);
+        assert_eq!(response.http_status_code, Some(reqwest::StatusCode::OK));
+        assert!(response
+            .error_message
+            .unwrap()
+            .contains("expected 206 Partial Content"));
     }
 }
