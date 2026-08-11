@@ -22,7 +22,7 @@ pub mod fd;
 #[cfg(target_os = "linux")]
 use tracing::warn;
 
-/// fallocate allocates the space for the file and fills it with zero, only on Linux.
+/// Fallocate allocates the space for the file and fills it with zero, only on Linux.
 #[allow(unused_variables)]
 pub async fn fallocate(f: &fs::File, length: u64) -> Result<()> {
     // No allocation needed for zero length. Avoids potential fallocate errors.
@@ -67,4 +67,98 @@ pub async fn fallocate(f: &fs::File, length: u64) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Fadvise dontneed advises the kernel to drop the cached pages of the whole
+/// file, only on Linux.
+#[allow(unused_variables)]
+pub async fn fadvise_dontneed(f: &fs::File) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        use dragonfly_client_core::Error;
+        use rustix::fs::{fadvise, Advice};
+        use std::os::unix::io::AsFd;
+        use tokio::io;
+
+        let f = f.try_clone().await?;
+        tokio::task::spawn_blocking(move || {
+            fadvise(f.as_fd(), 0, None, Advice::DontNeed)
+                .map_err(|err| Error::IO(io::Error::from_raw_os_error(err.raw_os_error())))
+        })
+        .await
+        .map_err(io::Error::other)??;
+    }
+
+    Ok(())
+}
+
+/// Sync file range initiates asynchronous writeback of the file range without
+/// waiting for it to complete, only on Linux.
+#[allow(unused_variables)]
+pub async fn sync_file_range(f: &std::fs::File, offset: u64, length: u64) -> Result<()> {
+    // No writeback needed for zero length. Avoids flushing from the offset
+    // to the end of file, which is the syscall behavior for zero.
+    if length == 0 {
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use dragonfly_client_core::Error;
+        use std::os::unix::io::AsRawFd;
+        use tokio::io;
+
+        let f = f.try_clone()?;
+        tokio::task::spawn_blocking(move || {
+            match unsafe {
+                libc::sync_file_range(
+                    f.as_raw_fd(),
+                    offset as libc::off64_t,
+                    length as libc::off64_t,
+                    libc::SYNC_FILE_RANGE_WRITE,
+                )
+            } {
+                0 => Ok(()),
+                _ => Err(Error::IO(io::Error::last_os_error())),
+            }
+        })
+        .await
+        .map_err(io::Error::other)??;
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_fadvise_dontneed() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        std::fs::write(&path, b"hello, world!").unwrap();
+
+        let f = fs::File::open(&path).await.unwrap();
+        fadvise_dontneed(&f).await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"hello, world!");
+    }
+
+    #[tokio::test]
+    async fn test_sync_file_range() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        std::fs::write(&path, b"hello, world!").unwrap();
+
+        let f = std::fs::OpenOptions::new()
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        sync_file_range(&f, 0, 13).await.unwrap();
+        sync_file_range(&f, 7, 5).await.unwrap();
+        sync_file_range(&f, 0, 0).await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"hello, world!");
+    }
 }
