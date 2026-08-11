@@ -109,6 +109,36 @@ pub fn fadvise_sequential(f: &std::fs::File) -> Result<()> {
     Ok(())
 }
 
+/// Fadvise willneed initiates nonblocking readahead of the file range,
+/// bypassing the sequential detection of the kernel, only on Linux.
+#[allow(unused_variables)]
+pub async fn fadvise_willneed(f: &std::fs::File, offset: u64, length: u64) -> Result<()> {
+    // No readahead needed for zero length. Avoids reading ahead from the
+    // offset to the end of file, which is the syscall behavior for zero.
+    if length == 0 {
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use dragonfly_client_core::Error;
+        use rustix::fs::{fadvise, Advice};
+        use std::num::NonZeroU64;
+        use std::os::unix::io::AsFd;
+        use tokio::io;
+
+        let f = f.try_clone()?;
+        tokio::task::spawn_blocking(move || {
+            fadvise(f.as_fd(), offset, NonZeroU64::new(length), Advice::WillNeed)
+                .map_err(|err| Error::IO(io::Error::from_raw_os_error(err.raw_os_error())))
+        })
+        .await
+        .map_err(io::Error::other)??;
+    }
+
+    Ok(())
+}
+
 /// Sync file range initiates asynchronous writeback of the file range without
 /// waiting for it to complete, only on Linux.
 #[allow(unused_variables)]
@@ -170,6 +200,19 @@ mod tests {
 
         let f = std::fs::File::open(&path).unwrap();
         fadvise_sequential(&f).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"hello, world!");
+    }
+
+    #[tokio::test]
+    async fn test_fadvise_willneed() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        std::fs::write(&path, b"hello, world!").unwrap();
+
+        let f = std::fs::File::open(&path).unwrap();
+        fadvise_willneed(&f, 0, 13).await.unwrap();
+        fadvise_willneed(&f, 7, 5).await.unwrap();
+        fadvise_willneed(&f, 0, 0).await.unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"hello, world!");
     }
 

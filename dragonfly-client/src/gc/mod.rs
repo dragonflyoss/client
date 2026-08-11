@@ -156,7 +156,7 @@ impl GC {
         for task in self.storage.get_tasks()? {
             // The drop is idempotent, so the task heated by new uploads is
             // dropped again after it cools down.
-            if task.need_drop_page_cache() {
+            if task.need_drop_page_cache(self.config.gc.policy.page_cache_idle_timeout) {
                 self.storage
                     .fadvise_dontneed_task(&task.id)
                     .await
@@ -290,7 +290,7 @@ impl GC {
         for task in self.storage.get_persistent_tasks()? {
             // Unlike the evictions, the persistent task is not skipped, since
             // dropping the page cache does not delete the content.
-            if task.need_drop_page_cache() {
+            if task.need_drop_page_cache(self.config.gc.policy.page_cache_idle_timeout) {
                 self.storage
                     .fadvise_dontneed_persistent_task(&task.id)
                     .await
@@ -364,7 +364,7 @@ impl GC {
         for task in self.storage.get_persistent_cache_tasks()? {
             // Unlike the evictions, the persistent task is not skipped, since
             // dropping the page cache does not delete the content.
-            if task.need_drop_page_cache() {
+            if task.need_drop_page_cache(self.config.gc.policy.page_cache_idle_timeout) {
                 self.storage
                     .fadvise_dontneed_persistent_cache_task(&task.id)
                     .await

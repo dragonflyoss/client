@@ -21,7 +21,7 @@ use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::buffer_pool::BufferPool;
 use dragonfly_client_util::fs::fd::{FDCache, DEFAULT_FD_CACHE_CAPACITY};
-use dragonfly_client_util::fs::{fadvise_dontneed, fallocate};
+use dragonfly_client_util::fs::{fadvise_dontneed, fadvise_willneed, fallocate, sync_file_range};
 use futures::Stream;
 use std::cmp::max;
 use std::os::unix::fs::MetadataExt;
@@ -215,7 +215,16 @@ impl Content {
     /// Copies the task content to the destination.
     #[instrument(level = "debug", skip_all)]
     pub async fn copy_task(&self, task_id: &str, to: &Path) -> Result<()> {
-        fs::copy(self.get_task_path(task_id), to).await?;
+        let length = fs::copy(self.get_task_path(task_id), to).await?;
+
+        // Kick off writeback of the copied content, so dirty pages do not
+        // accumulate until the kernel writeback thresholds kick in.
+        if let Ok(f) = fs::File::open(to).await {
+            sync_file_range(&f.into_std().await, 0, length)
+                .await
+                .unwrap_or_else(|err| warn!("sync_file_range failed: {}", err));
+        }
+
         info!("copy to {:?} success", to);
         Ok(())
     }
@@ -262,6 +271,12 @@ impl Content {
         let fd = self.fd_cache.open(&task_path).await.inspect_err(|err| {
             error!("open {:?} failed: {}", task_path, err);
         })?;
+
+        // Queue readahead of the range explicitly, since interleaved uploads
+        // on the shared descriptor break the sequential detection.
+        fadvise_willneed(&fd, target_offset, target_length)
+            .await
+            .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
 
         Ok(super::io::RangeReader::new(
             fd,
@@ -440,7 +455,16 @@ impl Content {
     /// Copies the persistent task content to the destination.
     #[instrument(level = "debug", skip_all)]
     pub async fn copy_persistent_task(&self, task_id: &str, to: &Path) -> Result<()> {
-        fs::copy(self.get_persistent_task_path(task_id), to).await?;
+        let length = fs::copy(self.get_persistent_task_path(task_id), to).await?;
+
+        // Kick off writeback of the copied content, so dirty pages do not
+        // accumulate until the kernel writeback thresholds kick in.
+        if let Ok(f) = fs::File::open(to).await {
+            sync_file_range(&f.into_std().await, 0, length)
+                .await
+                .unwrap_or_else(|err| warn!("sync_file_range failed: {}", err));
+        }
+
         info!("copy to {:?} success", to);
         Ok(())
     }
@@ -463,6 +487,12 @@ impl Content {
         let fd = self.fd_cache.open(&task_path).await.inspect_err(|err| {
             error!("open {:?} failed: {}", task_path, err);
         })?;
+
+        // Queue readahead of the range explicitly, since interleaved uploads
+        // on the shared descriptor break the sequential detection.
+        fadvise_willneed(&fd, target_offset, target_length)
+            .await
+            .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
 
         Ok(super::io::RangeReader::new(
             fd,
@@ -710,7 +740,16 @@ impl Content {
     /// Copies the persistent cache task content to the destination.
     #[instrument(level = "debug", skip_all)]
     pub async fn copy_persistent_cache_task(&self, task_id: &str, to: &Path) -> Result<()> {
-        fs::copy(self.get_persistent_cache_task_path(task_id), to).await?;
+        let length = fs::copy(self.get_persistent_cache_task_path(task_id), to).await?;
+
+        // Kick off writeback of the copied content, so dirty pages do not
+        // accumulate until the kernel writeback thresholds kick in.
+        if let Ok(f) = fs::File::open(to).await {
+            sync_file_range(&f.into_std().await, 0, length)
+                .await
+                .unwrap_or_else(|err| warn!("sync_file_range failed: {}", err));
+        }
+
         info!("copy to {:?} success", to);
         Ok(())
     }
@@ -733,6 +772,12 @@ impl Content {
         let fd = self.fd_cache.open(&task_path).await.inspect_err(|err| {
             error!("open {:?} failed: {}", task_path, err);
         })?;
+
+        // Queue readahead of the range explicitly, since interleaved uploads
+        // on the shared descriptor break the sequential detection.
+        fadvise_willneed(&fd, target_offset, target_length)
+            .await
+            .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
 
         Ok(super::io::RangeReader::new(
             fd,

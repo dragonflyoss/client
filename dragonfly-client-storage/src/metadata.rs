@@ -34,11 +34,6 @@ use crate::storage_engine::{rocksdb::RocksdbStorageEngine, DatabaseObject, Stora
 /// timeout will be garbage collected by disk usage.
 pub const DEFAULT_DOWNLOAD_TASK_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// The default timeout for the finished task to be considered cold, which covers
-/// the propagation window of the task and the reads of the hard linked
-/// destination. The page cache of the cold task is dropped.
-pub const DEFAULT_PAGE_CACHE_IDLE_TIMEOUT: Duration = Duration::from_secs(40 * 60);
-
 /// The metadata of the task.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Task {
@@ -103,10 +98,10 @@ impl Task {
     /// Returns whether the page cache of the task needs to be dropped:
     /// downloads finished, not uploading and no download or upload activity
     /// within the idle timeout.
-    pub fn need_drop_page_cache(&self) -> bool {
+    pub fn need_drop_page_cache(&self, idle_timeout: Duration) -> bool {
         self.is_finished()
             && !self.is_uploading()
-            && self.updated_at + DEFAULT_PAGE_CACHE_IDLE_TIMEOUT < Utc::now().naive_utc()
+            && self.updated_at + idle_timeout < Utc::now().naive_utc()
     }
 
     /// Returns whether the task needs to be evicted: the download is
@@ -224,10 +219,10 @@ impl PersistentTask {
     /// Returns whether the page cache of the persistent task needs to be
     /// dropped: downloads finished, not uploading and no download or upload
     /// activity within the idle timeout.
-    pub fn need_drop_page_cache(&self) -> bool {
+    pub fn need_drop_page_cache(&self, idle_timeout: Duration) -> bool {
         self.is_finished()
             && !self.is_uploading()
-            && self.updated_at + DEFAULT_PAGE_CACHE_IDLE_TIMEOUT < Utc::now().naive_utc()
+            && self.updated_at + idle_timeout < Utc::now().naive_utc()
     }
 
     /// Returns whether the persistent task needs to be evicted: not
@@ -342,10 +337,10 @@ impl PersistentCacheTask {
     /// Returns whether the page cache of the persistent cache task needs to
     /// be dropped: downloads finished, not uploading and no download or
     /// upload activity within the idle timeout.
-    pub fn need_drop_page_cache(&self) -> bool {
+    pub fn need_drop_page_cache(&self, idle_timeout: Duration) -> bool {
         self.is_finished()
             && !self.is_uploading()
-            && self.updated_at + DEFAULT_PAGE_CACHE_IDLE_TIMEOUT < Utc::now().naive_utc()
+            && self.updated_at + idle_timeout < Utc::now().naive_utc()
     }
 
     /// Returns whether the persistent cache task needs to be evicted: not
@@ -1701,18 +1696,18 @@ mod tests {
             finished_at: Some(Utc::now().naive_utc()),
             ..Default::default()
         };
-        assert!(task.need_drop_page_cache());
+        assert!(task.need_drop_page_cache(Duration::from_secs(2_400)));
 
         task.uploading_count = 1;
-        assert!(!task.need_drop_page_cache());
+        assert!(!task.need_drop_page_cache(Duration::from_secs(2_400)));
 
         task.uploading_count = 0;
         task.updated_at = Utc::now().naive_utc();
-        assert!(!task.need_drop_page_cache());
+        assert!(!task.need_drop_page_cache(Duration::from_secs(2_400)));
 
         task.updated_at = NaiveDateTime::default();
         task.finished_at = None;
-        assert!(!task.need_drop_page_cache());
+        assert!(!task.need_drop_page_cache(Duration::from_secs(2_400)));
     }
 
     #[test]
