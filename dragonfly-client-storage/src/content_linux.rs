@@ -18,6 +18,7 @@ use bytes::Bytes;
 use bytesize::ByteSize;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
+use dragonfly_client_config::MIN_PIECE_LENGTH;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::buffer_pool::BufferPool;
 use dragonfly_client_util::fs::fd::{FDCache, DEFAULT_FD_CACHE_CAPACITY};
@@ -273,10 +274,13 @@ impl Content {
         })?;
 
         // Queue readahead of the range explicitly, since interleaved uploads
-        // on the shared descriptor break the sequential detection.
-        fadvise_willneed(&fd, target_offset, target_length)
-            .await
-            .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
+        // on the shared descriptor break the sequential detection. Skip the
+        // small ranges, which the kernel readahead covers quickly.
+        if target_length >= MIN_PIECE_LENGTH {
+            fadvise_willneed(&fd, target_offset, target_length)
+                .await
+                .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
+        }
 
         Ok(super::io::RangeReader::new(
             fd,
@@ -489,10 +493,13 @@ impl Content {
         })?;
 
         // Queue readahead of the range explicitly, since interleaved uploads
-        // on the shared descriptor break the sequential detection.
-        fadvise_willneed(&fd, target_offset, target_length)
-            .await
-            .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
+        // on the shared descriptor break the sequential detection. Skip the
+        // small ranges, which the kernel readahead covers quickly.
+        if target_length >= MIN_PIECE_LENGTH {
+            fadvise_willneed(&fd, target_offset, target_length)
+                .await
+                .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
+        }
 
         Ok(super::io::RangeReader::new(
             fd,
@@ -774,10 +781,13 @@ impl Content {
         })?;
 
         // Queue readahead of the range explicitly, since interleaved uploads
-        // on the shared descriptor break the sequential detection.
-        fadvise_willneed(&fd, target_offset, target_length)
-            .await
-            .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
+        // on the shared descriptor break the sequential detection. Skip the
+        // small ranges, which the kernel readahead covers quickly.
+        if target_length >= MIN_PIECE_LENGTH {
+            fadvise_willneed(&fd, target_offset, target_length)
+                .await
+                .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
+        }
 
         Ok(super::io::RangeReader::new(
             fd,
