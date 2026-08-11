@@ -18,10 +18,11 @@ use bytes::Bytes;
 use bytesize::ByteSize;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
+use dragonfly_client_config::MIN_PIECE_LENGTH;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::buffer_pool::BufferPool;
-use dragonfly_client_util::fs::fallocate;
 use dragonfly_client_util::fs::fd::{FDCache, DEFAULT_FD_CACHE_CAPACITY};
+use dragonfly_client_util::fs::{fadvise_dontneed, fadvise_willneed, fallocate, sync_file_range};
 use futures::Stream;
 use std::cmp::max;
 use std::os::unix::fs::MetadataExt;
@@ -215,7 +216,16 @@ impl Content {
     /// Copies the task content to the destination.
     #[instrument(level = "debug", skip_all)]
     pub async fn copy_task(&self, task_id: &str, to: &Path) -> Result<()> {
-        fs::copy(self.get_task_path(task_id), to).await?;
+        let length = fs::copy(self.get_task_path(task_id), to).await?;
+
+        // Kick off writeback of the copied content, so dirty pages do not
+        // accumulate until the kernel writeback thresholds kick in.
+        if let Ok(f) = fs::File::open(to).await {
+            sync_file_range(&f.into_std().await, 0, length)
+                .await
+                .unwrap_or_else(|err| warn!("sync_file_range failed: {}", err));
+        }
+
         info!("copy to {:?} success", to);
         Ok(())
     }
@@ -237,6 +247,13 @@ impl Content {
         Ok(())
     }
 
+    /// Drops the cached pages of the task content.
+    #[instrument(level = "debug", skip_all)]
+    pub async fn fadvise_dontneed_task(&self, task_id: &str) -> Result<()> {
+        let f = fs::File::open(self.get_task_path(task_id)).await?;
+        fadvise_dontneed(&f).await
+    }
+
     /// Reads the piece from the content.
     #[instrument(level = "debug", skip_all)]
     pub async fn read_piece(
@@ -255,6 +272,15 @@ impl Content {
         let fd = self.fd_cache.open(&task_path).await.inspect_err(|err| {
             error!("open {:?} failed: {}", task_path, err);
         })?;
+
+        // Queue readahead of the range explicitly, since interleaved uploads
+        // on the shared descriptor break the sequential detection. Skip the
+        // small ranges, which the kernel readahead covers quickly.
+        if target_length >= MIN_PIECE_LENGTH {
+            fadvise_willneed(&fd, target_offset, target_length)
+                .await
+                .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
+        }
 
         Ok(super::io::RangeReader::new(
             fd,
@@ -433,7 +459,16 @@ impl Content {
     /// Copies the persistent task content to the destination.
     #[instrument(level = "debug", skip_all)]
     pub async fn copy_persistent_task(&self, task_id: &str, to: &Path) -> Result<()> {
-        fs::copy(self.get_persistent_task_path(task_id), to).await?;
+        let length = fs::copy(self.get_persistent_task_path(task_id), to).await?;
+
+        // Kick off writeback of the copied content, so dirty pages do not
+        // accumulate until the kernel writeback thresholds kick in.
+        if let Ok(f) = fs::File::open(to).await {
+            sync_file_range(&f.into_std().await, 0, length)
+                .await
+                .unwrap_or_else(|err| warn!("sync_file_range failed: {}", err));
+        }
+
         info!("copy to {:?} success", to);
         Ok(())
     }
@@ -456,6 +491,15 @@ impl Content {
         let fd = self.fd_cache.open(&task_path).await.inspect_err(|err| {
             error!("open {:?} failed: {}", task_path, err);
         })?;
+
+        // Queue readahead of the range explicitly, since interleaved uploads
+        // on the shared descriptor break the sequential detection. Skip the
+        // small ranges, which the kernel readahead covers quickly.
+        if target_length >= MIN_PIECE_LENGTH {
+            fadvise_willneed(&fd, target_offset, target_length)
+                .await
+                .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
+        }
 
         Ok(super::io::RangeReader::new(
             fd,
@@ -554,6 +598,13 @@ impl Content {
                 error!("remove {:?} failed: {}", persistent_task_path, err);
             })?;
         Ok(())
+    }
+
+    /// Drops the cached pages of the persistent task content.
+    #[instrument(level = "debug", skip_all)]
+    pub async fn fadvise_dontneed_persistent_task(&self, task_id: &str) -> Result<()> {
+        let f = fs::File::open(self.get_persistent_task_path(task_id)).await?;
+        fadvise_dontneed(&f).await
     }
 
     /// Returns the persistent task path by task id.
@@ -696,7 +747,16 @@ impl Content {
     /// Copies the persistent cache task content to the destination.
     #[instrument(level = "debug", skip_all)]
     pub async fn copy_persistent_cache_task(&self, task_id: &str, to: &Path) -> Result<()> {
-        fs::copy(self.get_persistent_cache_task_path(task_id), to).await?;
+        let length = fs::copy(self.get_persistent_cache_task_path(task_id), to).await?;
+
+        // Kick off writeback of the copied content, so dirty pages do not
+        // accumulate until the kernel writeback thresholds kick in.
+        if let Ok(f) = fs::File::open(to).await {
+            sync_file_range(&f.into_std().await, 0, length)
+                .await
+                .unwrap_or_else(|err| warn!("sync_file_range failed: {}", err));
+        }
+
         info!("copy to {:?} success", to);
         Ok(())
     }
@@ -719,6 +779,15 @@ impl Content {
         let fd = self.fd_cache.open(&task_path).await.inspect_err(|err| {
             error!("open {:?} failed: {}", task_path, err);
         })?;
+
+        // Queue readahead of the range explicitly, since interleaved uploads
+        // on the shared descriptor break the sequential detection. Skip the
+        // small ranges, which the kernel readahead covers quickly.
+        if target_length >= MIN_PIECE_LENGTH {
+            fadvise_willneed(&fd, target_offset, target_length)
+                .await
+                .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
+        }
 
         Ok(super::io::RangeReader::new(
             fd,
@@ -820,6 +889,13 @@ impl Content {
         Ok(())
     }
 
+    /// Drops the cached pages of the persistent cache task content.
+    #[instrument(level = "debug", skip_all)]
+    pub async fn fadvise_dontneed_persistent_cache_task(&self, task_id: &str) -> Result<()> {
+        let f = fs::File::open(self.get_persistent_cache_task_path(task_id)).await?;
+        fadvise_dontneed(&f).await
+    }
+
     /// Returns the persistent cache task path by task id.
     fn get_persistent_cache_task_path(&self, task_id: &str) -> PathBuf {
         // The persistent cache task needs split by the first 3 characters of task id(sha256) to
@@ -900,6 +976,82 @@ mod tests {
 
         content.delete_task(task_id).await.unwrap();
         assert!(!task_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_fadvise_dontneed_task() {
+        let temp_dir = tempdir().unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+        content.create_task(task_id, 13).await.unwrap();
+
+        let data = b"hello, world!";
+        let mut stream = futures::stream::iter([Ok(Bytes::from_static(data))]);
+        content
+            .write_piece_from_stream(task_id, 0, 13, &mut stream)
+            .await
+            .unwrap();
+
+        content.fadvise_dontneed_task(task_id).await.unwrap();
+
+        let mut reader = content.read_piece(task_id, 0, 13, None).await.unwrap();
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await.unwrap();
+        assert_eq!(buffer, data);
+
+        assert!(content
+            .fadvise_dontneed_task(
+                "aaa6963dccfd5b4f60b48845606946cea72084f14ed5cce61ec96e69f80a30f8"
+            )
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_fadvise_dontneed_persistent_task() {
+        let temp_dir = tempdir().unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        content.create_persistent_task(task_id, 13).await.unwrap();
+        content
+            .fadvise_dontneed_persistent_task(task_id)
+            .await
+            .unwrap();
+
+        assert!(content
+            .fadvise_dontneed_persistent_task(
+                "aaa6963dccfd5b4f60b48845606946cea72084f14ed5cce61ec96e69f80a30f8"
+            )
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_fadvise_dontneed_persistent_cache_task() {
+        let temp_dir = tempdir().unwrap();
+        let config = Arc::new(Config::default());
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let task_id = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+        content
+            .create_persistent_cache_task(task_id, 13)
+            .await
+            .unwrap();
+        content
+            .fadvise_dontneed_persistent_cache_task(task_id)
+            .await
+            .unwrap();
+
+        assert!(content
+            .fadvise_dontneed_persistent_cache_task(
+                "aaa6963dccfd5b4f60b48845606946cea72084f14ed5cce61ec96e69f80a30f8"
+            )
+            .await
+            .is_err());
     }
 
     #[tokio::test]

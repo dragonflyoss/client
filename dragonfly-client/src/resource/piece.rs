@@ -36,14 +36,8 @@ use std::time::Instant;
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt};
 use tracing::{debug, error, instrument, warn, Span};
 
-/// The maximum piece count. If the piece count is upper
-/// than MAX_PIECE_COUNT, the piece length will be optimized by the file length.
-/// When piece length became the MAX_PIECE_LENGTH, the piece count
-/// probably will be upper than MAX_PIECE_COUNT.
-pub const MAX_PIECE_COUNT: u64 = 500;
-
 /// The minimum piece length.
-pub const MIN_PIECE_LENGTH: u64 = 4 * 1024 * 1024;
+pub use dragonfly_client_config::MIN_PIECE_LENGTH;
 
 /// The maximum piece length.
 pub const MAX_PIECE_LENGTH: u64 = 64 * 1024 * 1024;
@@ -290,6 +284,12 @@ impl Piece {
 
     /// Calculates the piece size by content_length.
     pub fn calculate_piece_length(&self, strategy: PieceLengthStrategy) -> u64 {
+        // The maximum piece count. If the piece count is upper than
+        // MAX_PIECE_COUNT, the piece length will be optimized by the file
+        // length. When piece length became the MAX_PIECE_LENGTH, the piece
+        // count probably will be upper than MAX_PIECE_COUNT.
+        const MAX_PIECE_COUNT: u64 = 500;
+
         match strategy {
             PieceLengthStrategy::OptimizeByFileLength(content_length) => {
                 let piece_length = (content_length as f64 / MAX_PIECE_COUNT as f64) as u64;

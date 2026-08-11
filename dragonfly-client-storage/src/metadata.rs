@@ -30,6 +30,10 @@ use tracing::{error, info, instrument};
 
 use crate::storage_engine::{rocksdb::RocksdbStorageEngine, DatabaseObject, StorageEngineOwned};
 
+/// The default timeout for downloading tasks. The started task that exceeds the
+/// timeout will be garbage collected by disk usage.
+pub const DEFAULT_DOWNLOAD_TASK_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
+
 /// The metadata of the task.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Task {
@@ -89,6 +93,23 @@ impl Task {
     /// Returns whether the task is expired.
     pub fn is_expired(&self, ttl: Duration) -> bool {
         self.updated_at + ttl < Utc::now().naive_utc()
+    }
+
+    /// Returns whether the page cache of the task needs to be dropped:
+    /// downloads finished, not uploading and no download or upload activity
+    /// within the idle timeout.
+    pub fn need_drop_page_cache(&self, idle_timeout: Duration) -> bool {
+        self.is_finished()
+            && !self.is_uploading()
+            && self.updated_at + idle_timeout < Utc::now().naive_utc()
+    }
+
+    /// Returns whether the task needs to be evicted: the download is
+    /// finished, failed, or has exceeded the download timeout.
+    pub fn need_evict(&self) -> bool {
+        self.is_finished()
+            || self.is_failed()
+            || self.created_at + DEFAULT_DOWNLOAD_TASK_TIMEOUT < Utc::now().naive_utc()
     }
 
     /// Returns whether the task is prefetched.
@@ -195,6 +216,25 @@ impl PersistentTask {
         self.created_at + self.ttl < Utc::now().naive_utc()
     }
 
+    /// Returns whether the page cache of the persistent task needs to be
+    /// dropped: downloads finished, not uploading and no download or upload
+    /// activity within the idle timeout.
+    pub fn need_drop_page_cache(&self, idle_timeout: Duration) -> bool {
+        self.is_finished()
+            && !self.is_uploading()
+            && self.updated_at + idle_timeout < Utc::now().naive_utc()
+    }
+
+    /// Returns whether the persistent task needs to be evicted: not
+    /// persistent and the download is finished, failed, or has exceeded the
+    /// download timeout.
+    pub fn need_evict(&self) -> bool {
+        !self.is_persistent()
+            && (self.is_finished()
+                || self.is_failed()
+                || self.created_at + DEFAULT_DOWNLOAD_TASK_TIMEOUT < Utc::now().naive_utc())
+    }
+
     /// Returns whether the persistent task downloads failed.
     pub fn is_failed(&self) -> bool {
         self.failed_at.is_some()
@@ -292,6 +332,25 @@ impl PersistentCacheTask {
     /// Returns whether the persistent cache task is expired.
     pub fn is_expired(&self) -> bool {
         self.created_at + self.ttl < Utc::now().naive_utc()
+    }
+
+    /// Returns whether the page cache of the persistent cache task needs to
+    /// be dropped: downloads finished, not uploading and no download or
+    /// upload activity within the idle timeout.
+    pub fn need_drop_page_cache(&self, idle_timeout: Duration) -> bool {
+        self.is_finished()
+            && !self.is_uploading()
+            && self.updated_at + idle_timeout < Utc::now().naive_utc()
+    }
+
+    /// Returns whether the persistent cache task needs to be evicted: not
+    /// persistent and the download is finished, failed, or has exceeded the
+    /// download timeout.
+    pub fn need_evict(&self) -> bool {
+        !self.is_persistent()
+            && (self.is_finished()
+                || self.is_failed()
+                || self.created_at + DEFAULT_DOWNLOAD_TASK_TIMEOUT < Utc::now().naive_utc())
     }
 
     /// Returns whether the persistent cache task downloads failed.
@@ -1630,6 +1689,46 @@ impl Metadata<RocksdbStorageEngine> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn test_task_need_drop_page_cache() {
+        let mut task = Task {
+            finished_at: Some(Utc::now().naive_utc()),
+            ..Default::default()
+        };
+        assert!(task.need_drop_page_cache(Duration::from_secs(2_400)));
+
+        task.uploading_count = 1;
+        assert!(!task.need_drop_page_cache(Duration::from_secs(2_400)));
+
+        task.uploading_count = 0;
+        task.updated_at = Utc::now().naive_utc();
+        assert!(!task.need_drop_page_cache(Duration::from_secs(2_400)));
+
+        task.updated_at = NaiveDateTime::default();
+        task.finished_at = None;
+        assert!(!task.need_drop_page_cache(Duration::from_secs(2_400)));
+    }
+
+    #[test]
+    fn test_task_need_evict() {
+        let mut task = Task {
+            created_at: Utc::now().naive_utc(),
+            ..Default::default()
+        };
+        assert!(!task.need_evict());
+
+        task.failed_at = Some(Utc::now().naive_utc());
+        assert!(task.need_evict());
+
+        task.failed_at = None;
+        task.finished_at = Some(Utc::now().naive_utc());
+        assert!(task.need_evict());
+
+        task.finished_at = None;
+        task.created_at = NaiveDateTime::default();
+        assert!(task.need_evict());
+    }
 
     #[test]
     fn test_calculate_digest() {
