@@ -131,6 +131,12 @@ impl Storage {
         self.content.copy_task(id, to).await
     }
 
+    /// Drops the cached pages of the task content.
+    #[instrument(level = "debug", skip_all)]
+    pub async fn fadvise_dontneed_task(&self, id: &str) -> Result<()> {
+        self.content.fadvise_dontneed_task(id).await
+    }
+
     /// Checks if the task content is on the same device inode as the
     /// destination.
     pub async fn is_same_dev_inode_as_task(&self, id: &str, to: &Path) -> Result<bool> {
@@ -360,6 +366,12 @@ impl Storage {
         self.metadata.get_persistent_tasks()
     }
 
+    /// Drops the cached pages of the persistent task content.
+    #[instrument(level = "debug", skip_all)]
+    pub async fn fadvise_dontneed_persistent_task(&self, id: &str) -> Result<()> {
+        self.content.fadvise_dontneed_persistent_task(id).await
+    }
+
     /// Deletes the persistent task metadatas, persistent task content and piece metadatas.
     #[instrument(level = "debug", skip_all)]
     pub async fn delete_persistent_task(&self, id: &str) {
@@ -536,6 +548,14 @@ impl Storage {
     #[instrument(level = "debug", skip_all)]
     pub fn get_persistent_cache_tasks(&self) -> Result<Vec<metadata::PersistentCacheTask>> {
         self.metadata.get_persistent_cache_tasks()
+    }
+
+    /// Drops the cached pages of the persistent cache task content.
+    #[instrument(level = "debug", skip_all)]
+    pub async fn fadvise_dontneed_persistent_cache_task(&self, id: &str) -> Result<()> {
+        self.content
+            .fadvise_dontneed_persistent_cache_task(id)
+            .await
     }
 
     /// Deletes the persistent cache task metadatas, persistent cache task content and piece metadatas.

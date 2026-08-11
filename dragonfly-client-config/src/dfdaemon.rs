@@ -321,6 +321,13 @@ fn default_gc_policy_persistent_cache_task_ttl() -> Duration {
     Duration::from_secs(86_400)
 }
 
+/// Returns the default idle timeout of the task's page cache, default is 40
+/// minutes.
+#[inline]
+fn default_gc_policy_page_cache_idle_timeout() -> Duration {
+    Duration::from_secs(2_400)
+}
+
 /// Returns the default threshold of the disk usage to do gc.
 #[inline]
 fn default_gc_policy_disk_threshold() -> ByteSize {
@@ -1081,6 +1088,15 @@ pub struct Policy {
     )]
     pub persistent_cache_task_ttl: Duration,
 
+    /// The idle timeout of the task's page cache. If the finished task has no
+    /// download or upload activity within the timeout, dfdaemon will drop the
+    /// page cache of the task content.
+    #[serde(
+        default = "default_gc_policy_page_cache_idle_timeout",
+        with = "humantime_serde"
+    )]
+    pub page_cache_idle_timeout: Duration,
+
     /// Optionally defines a specific disk capacity to be used as the base for
     /// calculating GC trigger points with `disk_high_threshold_percent` and `disk_low_threshold_percent`.
     ///
@@ -1125,6 +1141,7 @@ impl Default for Policy {
             task_ttl: default_gc_policy_task_ttl(),
             persistent_task_ttl: default_gc_policy_persistent_task_ttl(),
             persistent_cache_task_ttl: default_gc_policy_persistent_cache_task_ttl(),
+            page_cache_idle_timeout: default_gc_policy_page_cache_idle_timeout(),
             disk_high_threshold_percent: default_gc_policy_disk_high_threshold_percent(),
             disk_low_threshold_percent: default_gc_policy_disk_low_threshold_percent(),
         }
@@ -2168,6 +2185,7 @@ key: /etc/ssl/private/client.pem
             task_ttl: Duration::from_secs(12 * 3600),
             persistent_task_ttl: Duration::from_secs(24 * 3600),
             persistent_cache_task_ttl: Duration::from_secs(48 * 3600),
+            page_cache_idle_timeout: default_gc_policy_page_cache_idle_timeout(),
             disk_threshold: ByteSize::mb(100),
             disk_high_threshold_percent: 90,
             disk_low_threshold_percent: 70,
@@ -2178,6 +2196,7 @@ key: /etc/ssl/private/client.pem
             task_ttl: Duration::from_secs(12 * 3600),
             persistent_task_ttl: Duration::from_secs(24 * 3600),
             persistent_cache_task_ttl: Duration::from_secs(48 * 3600),
+            page_cache_idle_timeout: default_gc_policy_page_cache_idle_timeout(),
             disk_threshold: ByteSize::mb(100),
             disk_high_threshold_percent: 100,
             disk_low_threshold_percent: 70,

@@ -32,6 +32,9 @@ pub const SERVICE_NAME: &str = "dragonfly";
 /// The name of the package.
 pub const NAME: &str = "client";
 
+/// The minimum piece length.
+pub const MIN_PIECE_LENGTH: u64 = 4 * 1024 * 1024;
+
 /// The version of the cargo package.
 pub const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 

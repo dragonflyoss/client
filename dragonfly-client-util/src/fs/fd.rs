@@ -21,6 +21,9 @@ use std::io;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use tracing::warn;
+
+use super::fadvise_sequential;
 
 /// The default capacity of the file descriptor cache.
 pub const DEFAULT_FD_CACHE_CAPACITY: usize = 1024;
@@ -55,6 +58,15 @@ impl FDCache {
     /// caching it if it is absent. Concurrent misses may open the file more than
     /// once, the last inserted descriptor wins and the others are closed when
     /// their readers finish.
+    ///
+    /// The descriptor is advised for sequential reads, doubling its readahead
+    /// cap over the device read_ahead_kb: 128KiB -> 256KiB on the NVMe/SSD/HDD
+    /// default, 4MiB -> 8MiB on md/RAID commonly tuned by distributions. With
+    /// a 128KiB cap, one 512KiB positional read is served by several small
+    /// readahead I/Os. At 256KiB each I/O is larger and the async readahead
+    /// marker is placed earlier, keeping the disk ahead of the sequential
+    /// in-piece reads and sendfile. The cap only bounds detected sequential
+    /// streams, so it costs nothing on random reads.
     pub async fn open(&self, path: &Path) -> Result<Arc<File>> {
         if let Some(fd) = self.read_fds.lock()?.get(path) {
             return Ok(fd.clone());
@@ -64,7 +76,14 @@ impl FDCache {
         let fd = Arc::new(
             tokio::task::spawn_blocking({
                 let path = path.clone();
-                move || File::open(path)
+                move || -> io::Result<File> {
+                    let f = File::open(path)?;
+                    fadvise_sequential(&f).unwrap_or_else(|err| {
+                        warn!("fadvise_sequential failed: {}", err);
+                    });
+
+                    Ok(f)
+                }
             })
             .await
             .map_err(io::Error::other)??,
