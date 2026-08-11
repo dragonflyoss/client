@@ -92,6 +92,23 @@ pub async fn fadvise_dontneed(f: &fs::File) -> Result<()> {
     Ok(())
 }
 
+/// Fadvise sequential advises the kernel that the file will be read
+/// sequentially, doubling the readahead window, only on Linux.
+#[allow(unused_variables)]
+pub fn fadvise_sequential(f: &std::fs::File) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        use dragonfly_client_core::Error;
+        use rustix::fs::{fadvise, Advice};
+        use std::os::unix::io::AsFd;
+
+        fadvise(f.as_fd(), 0, None, Advice::Sequential)
+            .map_err(|err| Error::IO(std::io::Error::from_raw_os_error(err.raw_os_error())))?;
+    }
+
+    Ok(())
+}
+
 /// Sync file range initiates asynchronous writeback of the file range without
 /// waiting for it to complete, only on Linux.
 #[allow(unused_variables)]
@@ -142,6 +159,17 @@ mod tests {
 
         let f = fs::File::open(&path).await.unwrap();
         fadvise_dontneed(&f).await.unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"hello, world!");
+    }
+
+    #[test]
+    fn test_fadvise_sequential() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        std::fs::write(&path, b"hello, world!").unwrap();
+
+        let f = std::fs::File::open(&path).unwrap();
+        fadvise_sequential(&f).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"hello, world!");
     }
 

@@ -37,7 +37,7 @@ pub const DEFAULT_DOWNLOAD_TASK_TIMEOUT: Duration = Duration::from_secs(24 * 60 
 /// The default timeout for the finished task to be considered cold, which covers
 /// the propagation window of the task and the reads of the hard linked
 /// destination. The page cache of the cold task is dropped.
-pub const DEFAULT_PAGE_CACHE_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+pub const DEFAULT_PAGE_CACHE_IDLE_TIMEOUT: Duration = Duration::from_secs(40 * 60);
 
 /// The metadata of the task.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
