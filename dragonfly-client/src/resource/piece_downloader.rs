@@ -120,9 +120,9 @@ struct QUICClientFactory {
 impl Factory<String, QUICClient> for QUICClientFactory {
     type Error = Error;
 
-    /// Creates a new QUICClient for the given address.
+    /// Creates a new QUICClient connected to the given address.
     async fn make_client(&self, addr: &String) -> Result<QUICClient> {
-        Ok(QUICClient::new(self.config.clone(), addr.clone()))
+        QUICClient::new(self.config.clone(), addr.clone()).await
     }
 }
 
@@ -143,8 +143,15 @@ impl QUICDownloader {
         }
     }
 
-    /// Returns a client entry by the address.
+    /// Returns a client entry by the address, recreating the client if its
+    /// connection is closed.
     async fn get_client_entry(&self, key: String, addr: String) -> Result<Entry<QUICClient>> {
+        let entry = self.client_pool.entry(&key, &addr).await?;
+        if !entry.client.is_closed() {
+            return Ok(entry);
+        }
+
+        self.client_pool.remove_entry(&key).await;
         self.client_pool.entry(&key, &addr).await
     }
 
