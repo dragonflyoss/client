@@ -146,7 +146,15 @@ impl TCPServer {
         loop {
             tokio::select! {
                 tcp_accepted = listener.accept() => {
-                    let (tcp, remote_address) = tcp_accepted?;
+                    let (tcp, remote_address) = match tcp_accepted {
+                        Ok(accepted) => accepted,
+                        // Accept errors are transient (e.g. ECONNABORTED,
+                        // EMFILE), so keep serving.
+                        Err(err) => {
+                            error!("failed to accept connection: {}", err);
+                            continue;
+                        }
+                    };
                     debug!("accepted connection from {}", remote_address);
 
                     let handler = self.handler.clone();
