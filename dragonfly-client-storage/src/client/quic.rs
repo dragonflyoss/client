@@ -22,8 +22,12 @@ use dragonfly_client_core::{
 };
 use futures::StreamExt;
 use quinn::crypto::rustls::QuicClientConfig;
-use quinn::{AckFrequencyConfig, ClientConfig, Connection, Endpoint, RecvStream, TransportConfig};
+use quinn::{
+    AckFrequencyConfig, ClientConfig, Connection, Endpoint, EndpointConfig, RecvStream,
+    TokioRuntime, TransportConfig,
+};
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
+use socket2::{Domain, Protocol, Socket, Type};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::time;
@@ -79,7 +83,23 @@ impl QUICClient {
 
         // Port is zero to let the OS assign an ephemeral port, so each client
         // is a distinct flow to the server.
-        let mut endpoint = Endpoint::client(SocketAddr::new(config.storage.server.ip.unwrap(), 0))?;
+        let bind_addr = SocketAddr::new(config.storage.server.ip.unwrap(), 0);
+        let socket = Socket::new(
+            Domain::for_address(bind_addr),
+            Type::DGRAM,
+            Some(Protocol::UDP),
+        )?;
+        socket.set_nonblocking(true)?;
+        socket.set_send_buffer_size(super::DEFAULT_SEND_BUFFER_SIZE)?;
+        socket.set_recv_buffer_size(super::DEFAULT_RECV_BUFFER_SIZE)?;
+        socket.bind(&bind_addr.into())?;
+
+        let mut endpoint = Endpoint::new(
+            EndpointConfig::default(),
+            None,
+            socket.into(),
+            Arc::new(TokioRuntime),
+        )?;
         endpoint.set_default_client_config(client_config);
 
         // Connect's server name used for verifying the certificate. Since we used

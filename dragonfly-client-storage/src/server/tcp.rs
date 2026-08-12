@@ -106,8 +106,6 @@ impl TCPServer {
         )?;
         socket.set_tcp_nodelay(true)?;
         socket.set_nonblocking(true)?;
-        socket.set_send_buffer_size(super::DEFAULT_SEND_BUFFER_SIZE)?;
-        socket.set_recv_buffer_size(super::DEFAULT_RECV_BUFFER_SIZE)?;
         socket.set_tcp_keepalive(
             &TcpKeepalive::new()
                 .with_interval(super::DEFAULT_KEEPALIVE_INTERVAL)
