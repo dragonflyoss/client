@@ -302,6 +302,8 @@ mod tests {
 
     #[tokio::test]
     async fn should_get_operator() {
+        dragonfly_client_util::tls::install_crypto_provider();
+
         let url: Url = Url::parse("hdfs://127.0.0.1:9870/file").unwrap();
         let operator = Hdfs::new().operator(url, None, Duration::from_secs(10));
 
