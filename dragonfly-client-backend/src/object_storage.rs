@@ -1015,6 +1015,8 @@ mod tests {
 
     #[test]
     fn should_get_operator() {
+        dragonfly_client_util::tls::install_crypto_provider();
+
         let test_cases = vec![
             (
                 Scheme::S3,
@@ -1083,6 +1085,8 @@ mod tests {
 
     #[test]
     fn should_get_s3_operator_with_extra_info() {
+        dragonfly_client_util::tls::install_crypto_provider();
+
         let test_cases = vec![
             ObjectStorageInfo {
                 access_key_id: Some("access_key_id".into()),
@@ -1123,6 +1127,8 @@ mod tests {
 
     #[test]
     fn should_get_gcs_operator_with_extra_info() {
+        dragonfly_client_util::tls::install_crypto_provider();
+
         let test_cases = vec![
             ObjectStorageInfo {
                 credential_path: Some("credential_path".into()),
@@ -1174,6 +1180,8 @@ mod tests {
 
     #[test]
     fn should_return_error_when_lacks_of_info() {
+        dragonfly_client_util::tls::install_crypto_provider();
+
         let url: Url = "s3://test-bucket/file".parse().unwrap();
         let parsed_url: ParsedURL = url.try_into().unwrap();
 
@@ -1190,6 +1198,8 @@ mod tests {
 
     #[test]
     fn should_return_error_when_abs_lacks_of_info() {
+        dragonfly_client_util::tls::install_crypto_provider();
+
         let test_cases = vec![
             (
                 ObjectStorageInfo::default(),
@@ -1234,6 +1244,8 @@ mod tests {
 
     #[test]
     fn should_return_error_when_oss_lacks_of_info() {
+        dragonfly_client_util::tls::install_crypto_provider();
+
         let test_cases = vec![
             (
                 ObjectStorageInfo::default(),
@@ -1278,6 +1290,8 @@ mod tests {
 
     #[test]
     fn should_return_error_when_obs_lacks_of_info() {
+        dragonfly_client_util::tls::install_crypto_provider();
+
         let test_cases = vec![
             (
                 ObjectStorageInfo::default(),
@@ -1322,6 +1336,8 @@ mod tests {
 
     #[test]
     fn should_return_error_when_cos_lacks_of_info() {
+        dragonfly_client_util::tls::install_crypto_provider();
+
         let test_cases = vec![
             (
                 ObjectStorageInfo::default(),
@@ -1366,6 +1382,8 @@ mod tests {
 
     #[test]
     fn should_handle_insecure_skip_verify_parameter() {
+        dragonfly_client_util::tls::install_crypto_provider();
+
         let test_cases = vec![
             ObjectStorageInfo {
                 endpoint: Some("https://oss-cn-beijing.aliyuncs.com".into()),
