@@ -27,7 +27,6 @@ use futures::Stream;
 use std::cmp::max;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::fs;
 use tokio::io::AsyncRead;
