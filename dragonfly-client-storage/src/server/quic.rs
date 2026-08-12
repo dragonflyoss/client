@@ -110,15 +110,22 @@ impl QUICServer {
         loop {
             tokio::select! {
                 Some(quic_accepted) = endpoint.accept() => {
-                    let quic = quic_accepted.await.or_err(
-                        ErrorType::ConnectError
-                    )?;
-                    let remote_address = quic.remote_address();
-                    debug!("accepted connection from {}", remote_address);
-
                     let handler = self.handler.clone();
                     tokio::spawn(async move {
-                       if let Err(err) = handler.handle(quic, remote_address).await {
+                        // Await the handshake in the task, so a slow or failed
+                        // handshake does not block or kill the accept loop.
+                        let quic = match quic_accepted.await {
+                            Ok(quic) => quic,
+                            Err(err) => {
+                                error!("failed to accept connection: {}", err);
+                                return;
+                            }
+                        };
+
+                        let remote_address = quic.remote_address();
+                        debug!("accepted connection from {}", remote_address);
+
+                        if let Err(err) = handler.handle(quic, remote_address).await {
                             error!("failed to handle connection from {}: {}", remote_address, err);
                         }
                     });
