@@ -105,6 +105,7 @@ impl RocksdbStorageEngine {
         block_options.set_block_size(Self::DEFAULT_BLOCK_SIZE);
         block_options.set_cache_index_and_filter_blocks(true);
         block_options.set_pin_l0_filter_and_index_blocks_in_cache(true);
+        block_options.set_bloom_filter(10.0, false);
         options.set_block_based_table_factory(&block_options);
 
         // Initialize column family options.
@@ -112,6 +113,7 @@ impl RocksdbStorageEngine {
         cf_options.set_prefix_extractor(rocksdb::SliceTransform::create_fixed_prefix(64));
         cf_options.set_memtable_prefix_bloom_ratio(0.25);
         cf_options.optimize_level_style_compaction(Self::DEFAULT_MEMTABLE_MEMORY_BUDGET);
+        cf_options.set_block_based_table_factory(&block_options);
 
         // Initialize column families.
         let cfs = cf_names

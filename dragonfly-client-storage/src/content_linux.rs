@@ -20,18 +20,43 @@ use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_config::MIN_PIECE_LENGTH;
 use dragonfly_client_core::{Error, Result};
+use dragonfly_client_metric::collect_read_piece_pagecache_metrics;
 use dragonfly_client_util::buffer_pool::BufferPool;
 use dragonfly_client_util::fs::fd::{FDCache, DEFAULT_FD_CACHE_CAPACITY};
-use dragonfly_client_util::fs::{fadvise_dontneed, fadvise_willneed, fallocate, sync_file_range};
+use dragonfly_client_util::fs::{
+    fadvise_dontneed, fadvise_willneed, fallocate, pagecache_residency, sync_file_range,
+};
 use futures::Stream;
 use std::cmp::max;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::fs;
 use tokio::io::AsyncRead;
-use tracing::{error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 use walkdir::WalkDir;
+
+/// The interval of the piece reads sampled for pagecache residency.
+const PAGECACHE_RESIDENCY_SAMPLE_INTERVAL: u64 = 128;
+
+/// Samples the pagecache residency of the piece range off the read path and
+/// collects the metrics.
+fn sample_pagecache_residency(fd: Arc<std::fs::File>, offset: u64, length: u64) {
+    static SAMPLES: AtomicU64 = AtomicU64::new(0);
+    if SAMPLES.fetch_add(1, Ordering::Relaxed) % PAGECACHE_RESIDENCY_SAMPLE_INTERVAL != 0 {
+        return;
+    }
+
+    tokio::spawn(async move {
+        match pagecache_residency(&fd, offset, length).await {
+            Ok((cached_pages, sampled_pages)) => {
+                collect_read_piece_pagecache_metrics(cached_pages, sampled_pages)
+            }
+            Err(err) => debug!("pagecache_residency failed: {}", err),
+        }
+    });
+}
 
 /// The content of a piece.
 pub struct Content {
@@ -282,6 +307,7 @@ impl Content {
                 .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
         }
 
+        sample_pagecache_residency(fd.clone(), target_offset, target_length);
         Ok(super::io::RangeReader::new(
             fd,
             target_offset,
@@ -501,6 +527,7 @@ impl Content {
                 .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
         }
 
+        sample_pagecache_residency(fd.clone(), target_offset, target_length);
         Ok(super::io::RangeReader::new(
             fd,
             target_offset,
@@ -789,6 +816,7 @@ impl Content {
                 .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
         }
 
+        sample_pagecache_residency(fd.clone(), target_offset, target_length);
         Ok(super::io::RangeReader::new(
             fd,
             target_offset,
