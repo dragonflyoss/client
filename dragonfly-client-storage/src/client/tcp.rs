@@ -84,7 +84,7 @@ impl TCPClient {
     /// This method performs the actual protocol communication:
     /// 1. Creates a download piece request.
     /// 2. Establishes TCP connection and sends the request.
-    /// 3. Reads and validates the response header.
+    /// 3. Receives and validates the response header.
     /// 4. Processes the piece content based on the response type.
     #[instrument(skip_all)]
     async fn handle_download_piece(
@@ -98,12 +98,12 @@ impl TCPClient {
         )
         .into();
 
-        let (mut reader, _writer) = self.connect_and_write_request(request).await?;
-        let header = self.read_header(&mut reader).await?;
+        let (mut reader, _writer) = self.send_request(request).await?;
+        let header = self.recv_header(&mut reader).await?;
         match header.tag() {
             Tag::PieceContent => {
                 let piece_content: piece_content::PieceContent = self
-                    .read_piece_content(&mut reader, piece_content::METADATA_LENGTH_SIZE)
+                    .recv_piece_content(&mut reader, piece_content::METADATA_LENGTH_SIZE)
                     .await?;
                 debug!("received piece content: {:?}", piece_content.metadata());
 
@@ -114,7 +114,7 @@ impl TCPClient {
                     metadata.digest,
                 ))
             }
-            Tag::Error => Err(self.read_error(&mut reader, header.length() as usize).await),
+            Tag::Error => Err(self.recv_error(&mut reader, header.length() as usize).await),
             _ => Err(ClientError::Unknown(format!(
                 "unexpected tag: {:?}",
                 header.tag()
@@ -157,12 +157,12 @@ impl TCPClient {
         )
         .into();
 
-        let (mut reader, _writer) = self.connect_and_write_request(request).await?;
-        let header = self.read_header(&mut reader).await?;
+        let (mut reader, _writer) = self.send_request(request).await?;
+        let header = self.recv_header(&mut reader).await?;
         match header.tag() {
             Tag::PersistentPieceContent => {
                 let persistent_piece_content: persistent_piece_content::PersistentPieceContent =
-                    self.read_piece_content(&mut reader, piece_content::METADATA_LENGTH_SIZE)
+                    self.recv_piece_content(&mut reader, piece_content::METADATA_LENGTH_SIZE)
                         .await?;
                 debug!(
                     "received piece content: {:?}",
@@ -176,7 +176,7 @@ impl TCPClient {
                     metadata.digest,
                 ))
             }
-            Tag::Error => Err(self.read_error(&mut reader, header.length() as usize).await),
+            Tag::Error => Err(self.recv_error(&mut reader, header.length() as usize).await),
             _ => Err(ClientError::Unknown(format!(
                 "unexpected tag: {:?}",
                 header.tag()
@@ -219,12 +219,12 @@ impl TCPClient {
         )
         .into();
 
-        let (mut reader, _writer) = self.connect_and_write_request(request).await?;
-        let header = self.read_header(&mut reader).await?;
+        let (mut reader, _writer) = self.send_request(request).await?;
+        let header = self.recv_header(&mut reader).await?;
         match header.tag() {
             Tag::PersistentCachePieceContent => {
                 let persistent_cache_piece_content: persistent_cache_piece_content::PersistentCachePieceContent =
-                    self.read_piece_content(&mut reader, piece_content::METADATA_LENGTH_SIZE)
+                    self.recv_piece_content(&mut reader, piece_content::METADATA_LENGTH_SIZE)
                         .await?;
                 debug!(
                     "received piece content: {:?}",
@@ -238,7 +238,7 @@ impl TCPClient {
                     metadata.digest,
                 ))
             }
-            Tag::Error => Err(self.read_error(&mut reader, header.length() as usize).await),
+            Tag::Error => Err(self.recv_error(&mut reader, header.length() as usize).await),
             _ => Err(ClientError::Unknown(format!(
                 "unexpected tag: {:?}",
                 header.tag()
@@ -246,16 +246,13 @@ impl TCPClient {
         }
     }
 
-    /// Establishes TCP connection and writes a vortex protocol request.
+    /// Establishes a TCP connection and sends a vortex protocol request.
     ///
     /// This is a low-level utility function that handles the TCP connection
     /// lifecycle and request transmission. It ensures proper error handling
     /// and connection cleanup.
     #[instrument(skip_all)]
-    async fn connect_and_write_request(
-        &self,
-        request: Bytes,
-    ) -> ClientResult<(OwnedReadHalf, OwnedWriteHalf)> {
+    async fn send_request(&self, request: Bytes) -> ClientResult<(OwnedReadHalf, OwnedWriteHalf)> {
         let stream = tokio::time::timeout(
             super::DEFAULT_CONNECT_TIMEOUT,
             tokio::net::TcpStream::connect(self.addr.clone()),
@@ -300,13 +297,13 @@ impl TCPClient {
         Ok((reader, writer))
     }
 
-    /// Reads and parses a vortex protocol header from the TCP stream.
+    /// Receives and parses a vortex protocol header from the TCP stream.
     ///
     /// The header contains metadata about the following message, including
     /// the message type (tag) and payload length. This is critical for
     /// proper protocol message framing.
     #[instrument(skip_all)]
-    async fn read_header(&self, reader: &mut OwnedReadHalf) -> ClientResult<Header> {
+    async fn recv_header(&self, reader: &mut OwnedReadHalf) -> ClientResult<Header> {
         let mut header_bytes = BytesMut::with_capacity(HEADER_SIZE);
         header_bytes.resize(HEADER_SIZE, 0);
         reader
@@ -319,13 +316,13 @@ impl TCPClient {
         Header::try_from(header_bytes.freeze()).map_err(Into::into)
     }
 
-    /// Reads and parses piece content with variable-length metadata.
+    /// Receives and parses piece content with variable-length metadata.
     ///
     /// This generic function handles the two-stage reading process for
     /// piece content: first reading the metadata length, then reading
     /// the actual metadata, and finally constructing the complete message.
     #[instrument(skip_all)]
-    async fn read_piece_content<T>(
+    async fn recv_piece_content<T>(
         &self,
         reader: &mut OwnedReadHalf,
         metadata_length_size: usize,
@@ -358,13 +355,13 @@ impl TCPClient {
         content_bytes.freeze().try_into().map_err(Into::into)
     }
 
-    /// Reads and processes error responses from the server.
+    /// Receives and processes error responses from the server.
     ///
     /// When the server responds with an error tag, this function reads
     /// the error payload and converts it into an appropriate client error.
     /// This provides structured error handling for protocol-level failures.
     #[instrument(skip_all)]
-    async fn read_error(&self, reader: &mut OwnedReadHalf, header_length: usize) -> ClientError {
+    async fn recv_error(&self, reader: &mut OwnedReadHalf, header_length: usize) -> ClientError {
         let mut error_bytes = BytesMut::with_capacity(header_length);
         error_bytes.resize(header_length, 0);
         if let Err(err) = reader.read_exact(&mut error_bytes).await {
