@@ -29,7 +29,11 @@ use dragonfly_client_util::{
     id_generator::IDGenerator, shutdown, tls::generate_simple_self_signed_certs,
 };
 use leaky_bucket::RateLimiter;
-use quinn::{congestion::BbrConfig, AckFrequencyConfig, Endpoint, ServerConfig, TransportConfig};
+use quinn::{
+    congestion::BbrConfig, AckFrequencyConfig, Endpoint, EndpointConfig, ServerConfig,
+    TokioRuntime, TransportConfig,
+};
+use socket2::{Domain, Protocol, Socket, Type};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{copy_buf, AsyncBufRead};
@@ -104,7 +108,22 @@ impl QUICServer {
         transport.stream_receive_window((super::DEFAULT_RECV_BUFFER_SIZE as u32).into());
         server_config.transport_config(Arc::new(transport));
 
-        let endpoint = Endpoint::server(server_config, self.addr)?;
+        let socket = Socket::new(
+            Domain::for_address(self.addr),
+            Type::DGRAM,
+            Some(Protocol::UDP),
+        )?;
+        socket.set_nonblocking(true)?;
+        socket.set_send_buffer_size(super::DEFAULT_SEND_BUFFER_SIZE)?;
+        socket.set_recv_buffer_size(super::DEFAULT_RECV_BUFFER_SIZE)?;
+        socket.bind(&self.addr.into())?;
+
+        let endpoint = Endpoint::new(
+            EndpointConfig::default(),
+            Some(server_config),
+            socket.into(),
+            Arc::new(TokioRuntime),
+        )?;
         info!("storage quic server listening on {}", self.addr);
 
         loop {
