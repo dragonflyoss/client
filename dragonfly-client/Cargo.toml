@@ -31,6 +31,7 @@ name = "dfctl"
 path = "src/bin/dfctl/main.rs"
 
 [dependencies]
+dragonfly-client-auth.workspace = true
 dragonfly-client-core.workspace = true
 dragonfly-client-config.workspace = true
 dragonfly-client-storage.workspace = true

@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "dragonfly-client",
+  "dragonfly-client-auth",
   "dragonfly-client-backend",
   "dragonfly-client-backend/examples/plugin",
   "dragonfly-client-config",
@@ -27,6 +28,7 @@ keywords = ["container", "docker-image", "dragonfly", "dragonfly-client", "p2p"]
 [workspace.dependencies]
 anyhow = "1.0.102"
 async-trait = "0.1"
+base64 = "0.22.1"
 bytes = "1.11"
 bytesize = { version = "1.3.3", features = ["serde"] }
 bytesize-serde = "0.2.1"
@@ -37,6 +39,7 @@ crc32fast = "1.5.0"
 dashmap = "6.1.0"
 dragonfly-api = "=2.2.32"
 dragonfly-client = { path = "dragonfly-client", version = "1.4.9" }
+dragonfly-client-auth = { path = "dragonfly-client-auth", version = "1.4.9" }
 dragonfly-client-backend = { path = "dragonfly-client-backend", version = "1.4.9" }
 dragonfly-client-config = { path = "dragonfly-client-config", version = "1.4.9" }
 dragonfly-client-core = { path = "dragonfly-client-core", version = "1.4.9" }
@@ -71,6 +74,7 @@ hyper-util = { version = "0.1.20", features = [
   "server-auto",
   "tokio",
 ] }
+jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
 leaky-bucket = "1.1.2"
 local-ip-address = "0.6.5"
 lru = "0.18.1"
@@ -91,6 +95,7 @@ opendal = { version = "0.55.0", default-features = false, features = [
   "services-webhdfs",
 ] }
 percent-encoding = "2.3.2"
+prometheus = { version = "0.13.4", features = ["process"] }
 prost-wkt-types = "0.7"
 rcgen = { version = "0.12.1", features = ["x509-parser"] }
 regex = "1.12.3"

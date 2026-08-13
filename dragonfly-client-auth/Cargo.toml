@@ -1,0 +1,26 @@
+[package]
+name = "dragonfly-client-auth"
+description = "Inter-component gRPC authentication for the Dragonfly client"
+version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+license.workspace = true
+readme.workspace = true
+edition.workspace = true
+
+[dependencies]
+base64.workspace = true
+humantime-serde.workspace = true
+jsonwebtoken.workspace = true
+prometheus.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tonic.workspace = true
+validator.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+serde_yaml.workspace = true
+tempfile.workspace = true

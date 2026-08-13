@@ -19,6 +19,7 @@ use dragonfly_api::manager::v2::{
     manager_client::ManagerClient as ManagerGRPCClient, DeleteSeedPeerRequest,
     ListSchedulersRequest, ListSchedulersResponse, SeedPeer, UpdateSeedPeerRequest,
 };
+use dragonfly_client_auth::{GrpcAuth, AUDIENCE_MANAGER};
 use dragonfly_client_config::dfdaemon::Manager;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
@@ -41,9 +42,19 @@ pub struct ManagerClient {
 
 /// Implements the grpc client of the manager.
 impl ManagerClient {
-    /// Creates a new manager client.
+    /// Creates a new manager client without inter-component authentication.
     pub async fn new(config: &Manager, addr: String) -> Result<Self> {
-        let domain_name = Url::parse(addr.as_str())?
+        Self::new_with_auth(config, GrpcAuth::default(), addr).await
+    }
+
+    /// Creates a new manager client with inter-component authentication.
+    pub async fn new_with_auth(
+        config: &Manager,
+        grpc_auth: GrpcAuth,
+        addr: String,
+    ) -> Result<Self> {
+        let url = Url::parse(addr.as_str())?;
+        let domain_name = url
             .host_str()
             .ok_or(Error::InvalidParameter)
             .inspect_err(|_err| {
@@ -52,6 +63,7 @@ impl ManagerClient {
             .to_string();
 
         let client_tls_config = config.load_client_tls_config(domain_name.as_str()).await?;
+        let secure_transport = client_tls_config.is_some() || url.scheme() == "https";
         let health_client = HealthClient::new(addr.as_str(), client_tls_config.clone()).await?;
         match health_client.check().await {
             Ok(resp) => {
@@ -94,7 +106,10 @@ impl ManagerClient {
                 .or_err(ErrorType::ConnectError)?,
         };
 
-        let client = ManagerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
+        let interceptor =
+            InjectTracingInterceptor::with_auth(grpc_auth, AUDIENCE_MANAGER, secure_transport)
+                .map_err(|error| Error::Unknown(error.to_string()))?;
+        let client = ManagerGRPCClient::with_interceptor(channel, interceptor)
             .max_decoding_message_size(usize::MAX)
             .max_encoding_message_size(usize::MAX);
         Ok(Self { client })

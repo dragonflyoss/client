@@ -21,6 +21,9 @@ use dragonfly_api::dfdaemon::v2::{
     dfdaemon_upload_client::DfdaemonUploadClient as DfdaemonUploadGRPCClient, DownloadTaskRequest,
 };
 use dragonfly_api::scheduler::v2::scheduler_client::SchedulerClient;
+use dragonfly_client_auth::{
+    ClientInterceptor as AuthClientInterceptor, GrpcAuth, AUDIENCE_DFDAEMON, AUDIENCE_SCHEDULER,
+};
 use dragonfly_client_util::digest::is_blob_url;
 use dragonfly_client_util::http::{
     headermap_to_hashmap, query_params::default_proxy_rule_filtered_query_params,
@@ -408,6 +411,9 @@ pub struct Builder {
 
     /// The number of times to retry a request.
     max_retries: u8,
+
+    /// Inter-component gRPC JWT authentication configuration.
+    grpc_auth: GrpcAuth,
 }
 
 /// Implements Default trait.
@@ -419,6 +425,7 @@ impl Default for Builder {
             scheduler_request_timeout: DEFAULT_SCHEDULER_REQUEST_TIMEOUT,
             health_check_interval: Duration::from_secs(60),
             max_retries: 1,
+            grpc_auth: GrpcAuth::default(),
         }
     }
 }
@@ -449,6 +456,12 @@ impl Builder {
         self
     }
 
+    /// Sets inter-component gRPC JWT authentication.
+    pub fn grpc_auth(mut self, grpc_auth: GrpcAuth) -> Self {
+        self.grpc_auth = grpc_auth;
+        self
+    }
+
     /// Builds and returns a Proxy instance.
     pub async fn build(self) -> Result<Proxy> {
         // Validate input parameters.
@@ -468,8 +481,18 @@ impl Builder {
                 ))
             })?;
 
-        // Create scheduler client.
-        let scheduler_client = SchedulerClient::new(scheduler_channel);
+        // Create scheduler client. Health checks remain unauthenticated.
+        let secure_transport = url::Url::parse(&self.scheduler_endpoint)
+            .map(|url| url.scheme() == "https")
+            .unwrap_or(false);
+        let scheduler_interceptor = AuthClientInterceptor::new(
+            self.grpc_auth.clone(),
+            AUDIENCE_SCHEDULER,
+            secure_transport,
+        )
+        .map_err(|error| Error::InvalidArgument(error.to_string()))?;
+        let scheduler_client =
+            SchedulerClient::with_interceptor(scheduler_channel, scheduler_interceptor);
 
         // Create seed peer selector.
         let seed_peer_selector = Arc::new(
@@ -506,6 +529,7 @@ impl Builder {
                 .idle_timeout(DEFAULT_CLIENT_POOL_IDLE_TIMEOUT)
                 .build(),
             id_generator: Arc::new(id_generator),
+            grpc_auth: self.grpc_auth,
         };
 
         Ok(proxy)
@@ -552,6 +576,9 @@ pub struct Proxy {
 
     /// The task id generator.
     id_generator: Arc<IDGenerator>,
+
+    /// Inter-component gRPC JWT authentication configuration.
+    grpc_auth: GrpcAuth,
 }
 
 /// Implements the proxy client that sends requests via Dragonfly.
@@ -795,7 +822,10 @@ impl Request for Proxy {
                         Error::Internal(format!("failed to connect to seed peer {addr}: {err}"))
                     })?;
 
-                let mut client = DfdaemonUploadGRPCClient::new(channel)
+                let interceptor =
+                    AuthClientInterceptor::new(self.grpc_auth.clone(), AUDIENCE_DFDAEMON, false)
+                        .map_err(|err| Error::InvalidArgument(err.to_string()))?;
+                let mut client = DfdaemonUploadGRPCClient::with_interceptor(channel, interceptor)
                     .max_decoding_message_size(usize::MAX)
                     .max_encoding_message_size(usize::MAX);
 

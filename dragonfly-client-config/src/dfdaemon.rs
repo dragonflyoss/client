@@ -15,6 +15,7 @@
  */
 
 use bytesize::ByteSize;
+use dragonfly_client_auth::GrpcAuth;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Result,
@@ -1652,6 +1653,10 @@ pub struct Config {
     /// The upload configuration for dfdaemon.
     #[validate]
     pub upload: Upload,
+
+    /// Inter-component gRPC authentication configuration.
+    #[validate]
+    pub grpc_auth: GrpcAuth,
 
     /// The manager configuration for dfdaemon.
     #[validate]

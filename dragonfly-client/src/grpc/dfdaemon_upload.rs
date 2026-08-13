@@ -36,6 +36,7 @@ use dragonfly_api::dfdaemon::v2::{
     UpdatePersistentTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
+use dragonfly_client_auth::AUDIENCE_DFDAEMON;
 use dragonfly_client_backend::StatRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
@@ -160,13 +161,20 @@ impl DfdaemonUploadServer {
                 persistent_cache_task: self.persistent_cache_task.clone(),
                 system_monitor: self.system_monitor.clone(),
             },
-            ExtractTracingInterceptor,
+            ExtractTracingInterceptor::with_auth(self.config.grpc_auth.clone(), AUDIENCE_DFDAEMON),
         );
 
         // Register the reflection service.
         let reflection = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(dragonfly_api::FILE_DESCRIPTOR_SET)
             .build_v1()?;
+        let reflection = InterceptedService::new(
+            reflection,
+            dragonfly_client_auth::ServerInterceptor::new(
+                self.config.grpc_auth.clone(),
+                AUDIENCE_DFDAEMON,
+            ),
+        );
 
         // Clone the shutdown channel.
         let mut shutdown = self.shutdown.clone();
@@ -2500,12 +2508,14 @@ impl DfdaemonUploadClient {
             super::REQUEST_TIMEOUT
         };
 
-        let channel = match config
+        let client_tls_config = config
             .upload
             .client
             .load_client_tls_config(domain_name.as_str())
-            .await?
-        {
+            .await?;
+        let secure_transport =
+            client_tls_config.is_some() || Url::parse(addr.as_str())?.scheme() == "https";
+        let channel = match client_tls_config {
             Some(client_tls_config) => {
                 Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
                     .tls_config(client_tls_config)?
@@ -2537,7 +2547,13 @@ impl DfdaemonUploadClient {
                 .or_err(ErrorType::ConnectError)?,
         };
 
-        let client = DfdaemonUploadGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
+        let interceptor = InjectTracingInterceptor::with_auth(
+            config.grpc_auth.clone(),
+            AUDIENCE_DFDAEMON,
+            secure_transport,
+        )
+        .map_err(|error| ClientError::Unknown(error.to_string()))?;
+        let client = DfdaemonUploadGRPCClient::with_interceptor(channel, interceptor)
             .max_decoding_message_size(usize::MAX)
             .max_encoding_message_size(usize::MAX);
         Ok(Self { client })

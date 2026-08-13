@@ -16,6 +16,9 @@ COPY dragonfly-client/src ./dragonfly-client/src
 COPY dragonfly-client-core/Cargo.toml ./dragonfly-client-core/Cargo.toml
 COPY dragonfly-client-core/src ./dragonfly-client-core/src
 
+COPY dragonfly-client-auth/Cargo.toml ./dragonfly-client-auth/Cargo.toml
+COPY dragonfly-client-auth/src ./dragonfly-client-auth/src
+
 COPY dragonfly-client-config/Cargo.toml ./dragonfly-client-config/Cargo.toml
 COPY dragonfly-client-config/src ./dragonfly-client-config/src
 COPY dragonfly-client-config/build.rs ./dragonfly-client-config/build.rs
