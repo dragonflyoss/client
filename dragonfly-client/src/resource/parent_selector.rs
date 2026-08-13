@@ -154,7 +154,7 @@ impl ParentSelector {
     /// (better idle bandwidth) have a higher probability of being selected. If weight
     /// calculation fails, falls back to uniform random selection.
     #[instrument(skip_all)]
-    pub fn select(&self, parents: Vec<CollectedParent>) -> CollectedParent {
+    pub fn select(&self, parents: &[CollectedParent]) -> CollectedParent {
         let weights: Vec<u64> = parents
             .iter()
             .map(|parent| {
@@ -474,7 +474,7 @@ impl PersistentParentSelector {
     /// (better idle bandwidth) have a higher probability of being selected. If weight
     /// calculation fails, falls back to uniform random selection.
     #[instrument(skip_all)]
-    pub fn select(&self, parents: Vec<CollectedParent>) -> CollectedParent {
+    pub fn select(&self, parents: &[CollectedParent]) -> CollectedParent {
         let weights: Vec<u64> = parents
             .iter()
             .map(|parent| {
@@ -795,7 +795,7 @@ impl PersistentCacheParentSelector {
     /// (better idle bandwidth) have a higher probability of being selected. If weight
     /// calculation fails, falls back to uniform random selection.
     #[instrument(skip_all)]
-    pub fn select(&self, parents: Vec<CollectedParent>) -> CollectedParent {
+    pub fn select(&self, parents: &[CollectedParent]) -> CollectedParent {
         let weights: Vec<u64> = parents
             .iter()
             .map(|parent| {

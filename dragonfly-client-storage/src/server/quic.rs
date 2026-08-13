@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::io::RangeReader;
 use crate::Storage;
 use bytes::{Bytes, BytesMut};
 use dragonfly_api::common::v2::TrafficType;
@@ -36,7 +37,6 @@ use quinn::{
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{copy_buf, AsyncBufRead};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, instrument, Span};
 use vortex_protocol::{
@@ -526,7 +526,7 @@ impl QUICServerHandler {
         &self,
         piece_id: &str,
         task_id: &str,
-    ) -> Result<(PieceContent, impl AsyncBufRead), Error> {
+    ) -> Result<(PieceContent, RangeReader), Error> {
         // Get the piece metadata from the local storage.
         let piece = match self.storage.get_piece(piece_id) {
             Ok(Some(piece)) => piece,
@@ -590,7 +590,7 @@ impl QUICServerHandler {
         &self,
         piece_id: &str,
         task_id: &str,
-    ) -> Result<(PersistentPieceContent, impl AsyncBufRead), Error> {
+    ) -> Result<(PersistentPieceContent, RangeReader), Error> {
         // Get the piece metadata from the local storage.
         let piece = match self.storage.get_persistent_piece(piece_id) {
             Ok(Some(piece)) => piece,
@@ -654,7 +654,7 @@ impl QUICServerHandler {
         &self,
         piece_id: &str,
         task_id: &str,
-    ) -> Result<(PersistentCachePieceContent, impl AsyncBufRead), Error> {
+    ) -> Result<(PersistentCachePieceContent, RangeReader), Error> {
         // Get the piece metadata from the local storage.
         let piece = match self.storage.get_persistent_cache_piece(piece_id) {
             Ok(Some(piece)) => piece,
@@ -771,21 +771,29 @@ impl QUICServerHandler {
 
     /// Streams data from a reader directly to the QUIC writer.
     ///
-    /// This function efficiently copies all data from the provided stream
-    /// to the QUIC connection using tokio's copy_buf utility, which writes the
-    /// reader's internal buffer directly without an intermediate copy buffer.
-    /// It's designed for streaming large piece content without loading
-    /// everything into memory. The operation is flushed to ensure data delivery.
+    /// This function reads owned chunks from the range reader and hands them
+    /// to quinn's write_chunk, so the piece content is queued for sending
+    /// without being copied into the stream's internal send buffer.
     #[instrument(skip_all)]
-    async fn write_stream<R: AsyncBufRead + Unpin + ?Sized>(
+    async fn write_stream(
         &self,
-        stream: &mut R,
+        reader: &mut RangeReader,
         writer: &mut quinn::SendStream,
     ) -> ClientResult<()> {
-        copy_buf(stream, writer)
-            .await
-            .inspect_err(|err| error!("copy failed: {}", err))?;
+        loop {
+            let chunk = reader
+                .read_chunk()
+                .await
+                .inspect_err(|err| error!("failed to read chunk: {}", err))?;
+            if chunk.is_empty() {
+                return Ok(());
+            }
 
-        Ok(())
+            writer
+                .write_chunk(chunk)
+                .await
+                .inspect_err(|err| error!("failed to send chunk: {}", err))
+                .or_err(ErrorType::ConnectError)?;
+        }
     }
 }

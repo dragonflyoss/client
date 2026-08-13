@@ -2039,37 +2039,50 @@ impl PersistentTask {
                 parent_selector: Arc<PersistentParentSelector>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
-                let parent = parent_selector.select(parents);
+                let mut collected_parents = parents;
+                let metadata = loop {
+                    let parent = parent_selector.select(&collected_parents);
 
-                debug!(
-                    "start to download persistent piece {} from parent {:?}",
-                    piece_id,
-                    parent.id.clone()
-                );
+                    debug!(
+                        "start to download persistent piece {} from parent {:?}",
+                        piece_id,
+                        parent.id.clone()
+                    );
 
-                let metadata = piece_manager
-                    .download_persistent_from_parent(
-                        piece_id.as_str(),
-                        host_id.as_str(),
-                        task_id.as_str(),
-                        number,
-                        offset,
-                        length,
-                        parent.clone(),
-                    )
-                    .await
-                    .map_err(|err| {
-                        error!(
-                            "download persistent piece {} from parent {:?} error: {:?}",
-                            piece_id,
-                            parent.id.clone(),
-                            err
-                        );
-                        Error::DownloadFromParentFailed(DownloadFromParentFailed {
-                            piece_number: number,
-                            parent_id: parent.id.clone(),
-                        })
-                    })?;
+                    match piece_manager
+                        .download_persistent_from_parent(
+                            piece_id.as_str(),
+                            host_id.as_str(),
+                            task_id.as_str(),
+                            number,
+                            offset,
+                            length,
+                            parent.clone(),
+                        )
+                        .await
+                    {
+                        Ok(metadata) => break metadata,
+                        Err(err) => {
+                            error!(
+                                "download persistent piece {} from parent {:?} error: {:?}",
+                                piece_id,
+                                parent.id.clone(),
+                                err
+                            );
+
+                            collected_parents
+                                .retain(|collected_parent| collected_parent.id != parent.id);
+                            if collected_parents.is_empty() {
+                                return Err(Error::DownloadFromParentFailed(
+                                    DownloadFromParentFailed {
+                                        piece_number: number,
+                                        parent_id: parent.id.clone(),
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                };
 
                 // Construct the piece.
                 let piece = Piece {

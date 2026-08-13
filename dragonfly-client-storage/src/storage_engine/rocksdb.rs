@@ -48,8 +48,12 @@ impl RocksdbStorageEngine {
     /// The default directory name to store metadata.
     const DEFAULT_DIR_NAME: &'static str = "metadata";
 
-    /// The default memory budget for memtable, default is 512MB.
-    const DEFAULT_MEMTABLE_MEMORY_BUDGET: usize = 512 * 1024 * 1024;
+    /// The default memory budget for the memtable of a column family, default is 64MB.
+    const DEFAULT_MEMTABLE_MEMORY_BUDGET: usize = 64 * 1024 * 1024;
+
+    /// The default memory budget for the memtable of the prefix-scanned column
+    /// families, which hold the high-cardinality write-heavy data, default is 512MB.
+    const DEFAULT_PREFIX_CF_MEMTABLE_MEMORY_BUDGET: usize = 512 * 1024 * 1024;
 
     // DEFAULT_MAX_BACKGROUND_JOBS is the default max background jobs for rocksdb, default is 2.
     const DEFAULT_MAX_BACKGROUND_JOBS: i32 = 2;
@@ -70,7 +74,16 @@ impl RocksdbStorageEngine {
     const DEFAULT_BYTES_PER_SYNC: u64 = 2 * 1024 * 1024;
 
     /// Opens a rocksdb storage engine with the given directory and column families.
-    pub fn open(dir: &Path, log_dir: &PathBuf, cf_names: &[&str], keep: bool) -> Result<Self> {
+    /// The column families in `prefix_cf_names` are scanned by prefix and get the
+    /// prefix extractor, the memtable prefix bloom and a larger memtable budget,
+    /// the column families in `cf_names` are point-lookup only.
+    pub fn open(
+        dir: &Path,
+        log_dir: &PathBuf,
+        cf_names: &[&str],
+        prefix_cf_names: &[&str],
+        keep: bool,
+    ) -> Result<Self> {
         info!("initializing metadata directory: {:?} {:?}", dir, cf_names);
         // Initialize rocksdb options.
         let mut options = rocksdb::Options::default();
@@ -108,10 +121,16 @@ impl RocksdbStorageEngine {
         block_options.set_bloom_filter(10.0, false);
         options.set_block_based_table_factory(&block_options);
 
-        // Initialize column family options.
+        // Initialize the column family options for the prefix-scanned column families.
+        let mut prefix_cf_options = rocksdb::Options::default();
+        prefix_cf_options.set_prefix_extractor(rocksdb::SliceTransform::create_fixed_prefix(64));
+        prefix_cf_options.set_memtable_prefix_bloom_ratio(0.25);
+        prefix_cf_options
+            .optimize_level_style_compaction(Self::DEFAULT_PREFIX_CF_MEMTABLE_MEMORY_BUDGET);
+        prefix_cf_options.set_block_based_table_factory(&block_options);
+
+        // Initialize the column family options for the point-lookup column families.
         let mut cf_options = rocksdb::Options::default();
-        cf_options.set_prefix_extractor(rocksdb::SliceTransform::create_fixed_prefix(64));
-        cf_options.set_memtable_prefix_bloom_ratio(0.25);
         cf_options.optimize_level_style_compaction(Self::DEFAULT_MEMTABLE_MEMORY_BUDGET);
         cf_options.set_block_based_table_factory(&block_options);
 
@@ -119,6 +138,11 @@ impl RocksdbStorageEngine {
         let cfs = cf_names
             .iter()
             .map(|name| (name.to_string(), cf_options.clone()))
+            .chain(
+                prefix_cf_names
+                    .iter()
+                    .map(|name| (name.to_string(), prefix_cf_options.clone())),
+            )
             .collect::<Vec<_>>();
 
         // Initialize rocksdb directory.
@@ -198,7 +222,9 @@ impl Operations for RocksdbStorageEngine {
     /// Iterates all objects.
     fn iter<O: DatabaseObject>(&self) -> Result<impl Iterator<Item = Result<(Box<[u8]>, O)>>> {
         let cf = cf_handle::<O>(self)?;
-        let iter = self.iterator_cf(cf, rocksdb::IteratorMode::Start);
+        let mut options = rocksdb::ReadOptions::default();
+        options.fill_cache(false);
+        let iter = self.iterator_cf_opt(cf, options, rocksdb::IteratorMode::Start);
         Ok(iter.map(|ele| {
             let (key, value) = ele.or_err(ErrorType::StorageError)?;
             Ok((key, O::deserialize_from(&value)?))
@@ -210,8 +236,10 @@ impl Operations for RocksdbStorageEngine {
         &self,
     ) -> Result<impl Iterator<Item = Result<(Box<[u8]>, Box<[u8]>)>>> {
         let cf = cf_handle::<O>(self)?;
+        let mut options = rocksdb::ReadOptions::default();
+        options.fill_cache(false);
         Ok(self
-            .iterator_cf(cf, rocksdb::IteratorMode::Start)
+            .iterator_cf_opt(cf, options, rocksdb::IteratorMode::Start)
             .map(|ele| {
                 let (key, value) = ele.or_err(ErrorType::StorageError)?;
                 Ok((key, value))
@@ -291,7 +319,8 @@ mod tests {
     fn create_test_engine() -> RocksdbStorageEngine {
         let temp_dir = tempdir().unwrap();
         let log_dir = temp_dir.path().to_path_buf();
-        RocksdbStorageEngine::open(temp_dir.path(), &log_dir, &[Object::NAMESPACE], false).unwrap()
+        RocksdbStorageEngine::open(temp_dir.path(), &log_dir, &[], &[Object::NAMESPACE], false)
+            .unwrap()
     }
 
     #[test]

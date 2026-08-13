@@ -75,14 +75,19 @@ impl GC {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    // Drop the page cache of the cold tasks.
-                    if let Err(err) = self.drop_task_page_cache().await {
-                        info!("failed to drop task page cache: {}", err);
-                    }
+                    // Snapshot the tasks once and share it between the passes.
+                    if let Ok(tasks) = self.storage.get_tasks().inspect_err(|err| {
+                        info!("failed to get tasks: {}", err);
+                    }) {
+                        // Drop the page cache of the cold tasks.
+                        if let Err(err) = self.drop_task_page_cache(&tasks).await {
+                            info!("failed to drop task page cache: {}", err);
+                        }
 
-                    // Evict the task by ttl.
-                    if let Err(err) = self.evict_task_by_ttl().await {
-                        info!("failed to evict task by ttl: {}", err);
+                        // Evict the task by ttl.
+                        if let Err(err) = self.evict_task_by_ttl(&tasks).await {
+                            info!("failed to evict task by ttl: {}", err);
+                        }
                     }
 
                     // Evict the task by disk usage.
@@ -90,14 +95,19 @@ impl GC {
                         info!("failed to evict task by disk usage: {}", err);
                     }
 
-                    // Drop the page cache of the cold persistent cache tasks.
-                    if let Err(err) = self.drop_persistent_cache_task_page_cache().await {
-                        info!("failed to drop persistent cache task page cache: {}", err);
-                    }
+                    // Snapshot the persistent cache tasks once and share it between the passes.
+                    if let Ok(persistent_cache_tasks) = self.storage.get_persistent_cache_tasks().inspect_err(|err| {
+                        info!("failed to get persistent cache tasks: {}", err);
+                    }) {
+                        // Drop the page cache of the cold persistent cache tasks.
+                        if let Err(err) = self.drop_persistent_cache_task_page_cache(&persistent_cache_tasks).await {
+                            info!("failed to drop persistent cache task page cache: {}", err);
+                        }
 
-                    // Evict the persistent cache task by ttl.
-                    if let Err(err) = self.evict_persistent_cache_task_by_ttl().await {
-                        info!("failed to evict persistent cache task by ttl: {}", err);
+                        // Evict the persistent cache task by ttl.
+                        if let Err(err) = self.evict_persistent_cache_task_by_ttl(&persistent_cache_tasks).await {
+                            info!("failed to evict persistent cache task by ttl: {}", err);
+                        }
                     }
 
                     // Evict the cache by disk usage.
@@ -105,14 +115,19 @@ impl GC {
                         info!("failed to evict persistent cache task by disk usage: {}", err);
                     }
 
-                    // Drop the page cache of the cold persistent tasks.
-                    if let Err(err) = self.drop_persistent_task_page_cache().await {
-                        info!("failed to drop persistent task page cache: {}", err);
-                    }
+                    // Snapshot the persistent tasks once and share it between the passes.
+                    if let Ok(persistent_tasks) = self.storage.get_persistent_tasks().inspect_err(|err| {
+                        info!("failed to get persistent tasks: {}", err);
+                    }) {
+                        // Drop the page cache of the cold persistent tasks.
+                        if let Err(err) = self.drop_persistent_task_page_cache(&persistent_tasks).await {
+                            info!("failed to drop persistent task page cache: {}", err);
+                        }
 
-                    // Evict the persistent task by ttl.
-                    if let Err(err) = self.evict_persistent_task_by_ttl().await {
-                        info!("failed to evict persistent task by ttl: {}", err);
+                        // Evict the persistent task by ttl.
+                        if let Err(err) = self.evict_persistent_task_by_ttl(&persistent_tasks).await {
+                            info!("failed to evict persistent task by ttl: {}", err);
+                        }
                     }
 
                     // Evict the by disk usage.
@@ -131,9 +146,9 @@ impl GC {
 
     /// Evicts tasks that have exceeded their TTL.
     #[instrument(skip_all)]
-    async fn evict_task_by_ttl(&self) -> Result<()> {
+    async fn evict_task_by_ttl(&self, tasks: &[metadata::Task]) -> Result<()> {
         info!("start to evict by task ttl");
-        for task in self.storage.get_tasks()? {
+        for task in tasks {
             // If the task is expired and not uploading, evict the task.
             if task.is_expired(self.config.gc.policy.task_ttl) {
                 self.storage.delete_task(&task.id).await;
@@ -151,9 +166,9 @@ impl GC {
     /// Drops the page cache of the cold tasks, so the
     /// write-once content does not occupy the page cache of the node.
     #[instrument(skip_all)]
-    async fn drop_task_page_cache(&self) -> Result<()> {
+    async fn drop_task_page_cache(&self, tasks: &[metadata::Task]) -> Result<()> {
         info!("start to drop task page cache");
-        for task in self.storage.get_tasks()? {
+        for task in tasks {
             // The drop is idempotent, so the task heated by new uploads is
             // dropped again after it cools down.
             if task.need_drop_page_cache(self.config.gc.policy.page_cache_idle_timeout) {
@@ -268,9 +283,9 @@ impl GC {
 
     /// Evicts persistent tasks that have exceeded their TTL.
     #[instrument(skip_all)]
-    async fn evict_persistent_task_by_ttl(&self) -> Result<()> {
+    async fn evict_persistent_task_by_ttl(&self, tasks: &[metadata::PersistentTask]) -> Result<()> {
         info!("start to evict by persistent task ttl");
-        for task in self.storage.get_persistent_tasks()? {
+        for task in tasks {
             // If the persistent task is expired and not uploading, evict the persistent task.
             if task.is_expired() {
                 self.storage.delete_persistent_task(&task.id).await;
@@ -285,9 +300,12 @@ impl GC {
     /// Drops the page cache of the cold persistent tasks,
     /// so the write-once content does not occupy the page cache of the node.
     #[instrument(skip_all)]
-    async fn drop_persistent_task_page_cache(&self) -> Result<()> {
+    async fn drop_persistent_task_page_cache(
+        &self,
+        tasks: &[metadata::PersistentTask],
+    ) -> Result<()> {
         info!("start to drop persistent task page cache");
-        for task in self.storage.get_persistent_tasks()? {
+        for task in tasks {
             // Unlike the evictions, the persistent task is not skipped, since
             // dropping the page cache does not delete the content.
             if task.need_drop_page_cache(self.config.gc.policy.page_cache_idle_timeout) {
@@ -342,9 +360,12 @@ impl GC {
 
     /// Evicts persistent cache tasks that have exceeded their TTL.
     #[instrument(skip_all)]
-    async fn evict_persistent_cache_task_by_ttl(&self) -> Result<()> {
+    async fn evict_persistent_cache_task_by_ttl(
+        &self,
+        tasks: &[metadata::PersistentCacheTask],
+    ) -> Result<()> {
         info!("start to evict by persistent cache task ttl");
-        for task in self.storage.get_persistent_cache_tasks()? {
+        for task in tasks {
             // If the persistent cache task is expired and not uploading, evict the persistent cache task.
             if task.is_expired() {
                 self.storage.delete_persistent_cache_task(&task.id).await;
@@ -359,9 +380,12 @@ impl GC {
     /// Drops the page cache of the cold persistent cache tasks, so the write-once content does not occupy the page cache of the
     /// node.
     #[instrument(skip_all)]
-    async fn drop_persistent_cache_task_page_cache(&self) -> Result<()> {
+    async fn drop_persistent_cache_task_page_cache(
+        &self,
+        tasks: &[metadata::PersistentCacheTask],
+    ) -> Result<()> {
         info!("start to drop persistent cache task page cache");
-        for task in self.storage.get_persistent_cache_tasks()? {
+        for task in tasks {
             // Unlike the evictions, the persistent task is not skipped, since
             // dropping the page cache does not delete the content.
             if task.need_drop_page_cache(self.config.gc.policy.page_cache_idle_timeout) {
