@@ -823,8 +823,7 @@ pub struct PreheatCommand {
         default_value_t = false,
         env = "DFCTL_TASK_PREHEAT_REQUEST_SDK",
         help = "Specify whether to use request SDK mode for preheat. If not set, uses gRPC mode to call the scheduler directly. \
-         If set, uses the request SDK to trigger the seed peers to download the task without streaming the content back to dfctl, \
-         refer to https://github.com/dragonflyoss/client/tree/main/dragonfly-client-request"
+         If set, uses the request SDK to trigger the seed peers to download the task without streaming the content back to dfctl."
     )]
     request_sdk: bool,
 

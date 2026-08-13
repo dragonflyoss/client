@@ -1303,7 +1303,6 @@ dependencies = [
  "dragonfly-client-config",
  "dragonfly-client-core",
  "dragonfly-client-metric",
- "dragonfly-client-request",
  "dragonfly-client-storage",
  "dragonfly-client-util",
  "fastrand",
@@ -1482,34 +1481,6 @@ dependencies = [
  "prometheus",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "dragonfly-client-request"
-version = "1.5.0"
-dependencies = [
- "async-trait",
- "bytes",
- "dragonfly-api",
- "dragonfly-client-core",
- "dragonfly-client-util",
- "futures",
- "hostname",
- "mocktail",
- "oci-client",
- "oci-spec",
- "prost-wkt-types",
- "reqwest 0.12.28",
- "reqwest-middleware",
- "reqwest-tracing",
- "rustls-pki-types",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tonic",
- "tonic-health",
- "tracing",
- "url",
 ]
 
 [[package]]
@@ -4557,15 +4528,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "request"
-version = "1.5.0"
-dependencies = [
- "anyhow",
- "dragonfly-client-request",
- "tokio",
-]
-
-[[package]]
 name = "reqwest"
 version = "0.12.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4686,22 +4648,6 @@ dependencies = [
  "tokio",
  "tracing",
  "wasmtimer",
-]
-
-[[package]]
-name = "reqwest-tracing"
-version = "0.5.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d70ea85f131b2ee9874f0b160ac5976f8af75f3c9badfe0d955880257d10bd83"
-dependencies = [
- "anyhow",
- "async-trait",
- "getrandom 0.2.12",
- "http",
- "matchit",
- "reqwest 0.12.28",
- "reqwest-middleware",
- "tracing",
 ]
 
 [[package]]
