@@ -15,6 +15,7 @@ default = []
 preheat = ["dep:oci-client", "dep:oci-spec"]
 
 [dependencies]
+dragonfly-client-auth.workspace = true
 dragonfly-client-core.workspace = true
 dragonfly-client-util.workspace = true
 dragonfly-api.workspace = true

@@ -24,6 +24,7 @@ use dragonfly_api::scheduler::v2::{
     scheduler_client::SchedulerClient as SchedulerGRPCClient, PreheatFileRequest,
     PreheatImageRequest,
 };
+use dragonfly_client_auth::{ClientInterceptor, GrpcAuth, AUDIENCE_SCHEDULER};
 use dragonfly_client_backend::{hdfs, object_storage, oci};
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
@@ -38,6 +39,7 @@ use dragonfly_client_util::{
     net::preferred_local_ip,
 };
 use oci_client::Reference;
+use serde::Deserialize;
 use std::path::PathBuf;
 use std::time::Duration;
 use tabled::{
@@ -820,6 +822,13 @@ pub struct PreheatCommand {
 
     #[arg(
         long,
+        env = "DFCTL_TASK_PREHEAT_GRPC_AUTH_CONFIG",
+        help = "Path to a YAML file containing the Dragonfly grpcAuth configuration"
+    )]
+    grpc_auth_config: Option<PathBuf>,
+
+    #[arg(
+        long,
         default_value_t = false,
         env = "DFCTL_TASK_PREHEAT_REQUEST_SDK",
         help = "Specify whether to use request SDK mode for preheat. If not set, uses gRPC mode to call the scheduler directly. \
@@ -1248,16 +1257,37 @@ impl PreheatCommand {
 
     /// Run the preheat logic based on the URL type (image or file) and mode (gRPC or request SDK).
     async fn run(&self) -> Result<()> {
+        let grpc_auth = self.load_grpc_auth().await?;
         match (self.url.starts_with(oci::SCHEME), self.request_sdk) {
-            (true, true) => self.preheat_image_by_request_sdk().await,
-            (true, false) => self.preheat_image().await,
-            (false, true) => self.preheat_file_by_request_sdk().await,
-            (false, false) => self.preheat_file().await,
+            (true, true) => self.preheat_image_by_request_sdk(grpc_auth).await,
+            (true, false) => self.preheat_image(grpc_auth).await,
+            (false, true) => self.preheat_file_by_request_sdk(grpc_auth).await,
+            (false, false) => self.preheat_file(grpc_auth).await,
         }
     }
 
+    /// Loads the shared grpcAuth section used by dfdaemon and dfctl.
+    async fn load_grpc_auth(&self) -> Result<GrpcAuth> {
+        #[derive(Deserialize)]
+        struct GrpcAuthFile {
+            #[serde(rename = "grpcAuth")]
+            grpc_auth: GrpcAuth,
+        }
+
+        let Some(path) = &self.grpc_auth_config else {
+            return Ok(GrpcAuth::default());
+        };
+
+        let content = tokio::fs::read(path)
+            .await
+            .map_err(|error| Error::Unknown(format!("read gRPC auth config: {error}")))?;
+        serde_yaml::from_slice::<GrpcAuthFile>(&content)
+            .map(|config| config.grpc_auth)
+            .map_err(|error| Error::Unknown(format!("parse gRPC auth config: {error}")))
+    }
+
     /// Preheats an OCI image via the scheduler's gRPC PreheatImage RPC.
-    async fn preheat_image(&self) -> Result<()> {
+    async fn preheat_image(&self, grpc_auth: GrpcAuth) -> Result<()> {
         let reference: Reference = self
             .url
             .strip_prefix(&format!("{}://", oci::SCHEME))
@@ -1276,7 +1306,12 @@ impl PreheatCommand {
             .or_err(ErrorType::ParseError)?
             .connect()
             .await?;
-        let mut client = SchedulerGRPCClient::new(channel);
+        let secure_transport = Url::parse(&self.scheduler_endpoint)
+            .map(|url| url.scheme() == "https")
+            .unwrap_or(false);
+        let interceptor = ClientInterceptor::new(grpc_auth, AUDIENCE_SCHEDULER, secure_transport)
+            .map_err(|error| Error::Unknown(error.to_string()))?;
+        let mut client = SchedulerGRPCClient::with_interceptor(channel, interceptor);
 
         let filtered_query_params = self
             .filtered_query_params
@@ -1321,12 +1356,17 @@ impl PreheatCommand {
     }
 
     /// Preheats a file via the scheduler's gRPC PreheatFile RPC.
-    async fn preheat_file(&self) -> Result<()> {
+    async fn preheat_file(&self, grpc_auth: GrpcAuth) -> Result<()> {
         let channel = Channel::from_shared(self.scheduler_endpoint.clone())
             .or_err(ErrorType::ParseError)?
             .connect()
             .await?;
-        let mut client = SchedulerGRPCClient::new(channel);
+        let secure_transport = Url::parse(&self.scheduler_endpoint)
+            .map(|url| url.scheme() == "https")
+            .unwrap_or(false);
+        let interceptor = ClientInterceptor::new(grpc_auth, AUDIENCE_SCHEDULER, secure_transport)
+            .map_err(|error| Error::Unknown(error.to_string()))?;
+        let mut client = SchedulerGRPCClient::with_interceptor(channel, interceptor);
 
         let filtered_query_params = self
             .filtered_query_params
@@ -1396,9 +1436,10 @@ impl PreheatCommand {
     }
 
     /// Preheats an OCI image via the Dragonfly request SDK.
-    async fn preheat_image_by_request_sdk(&self) -> Result<()> {
+    async fn preheat_image_by_request_sdk(&self, grpc_auth: GrpcAuth) -> Result<()> {
         let proxy = Proxy::builder()
             .scheduler_endpoint(self.scheduler_endpoint.clone())
+            .grpc_auth(grpc_auth)
             .build()
             .await
             .map_err(|err| Error::Unknown(format!("failed to build proxy: {err}")))?;
@@ -1450,9 +1491,10 @@ impl PreheatCommand {
     }
 
     /// Preheats a file via the Dragonfly request SDK.
-    async fn preheat_file_by_request_sdk(&self) -> Result<()> {
+    async fn preheat_file_by_request_sdk(&self, grpc_auth: GrpcAuth) -> Result<()> {
         let proxy = Proxy::builder()
             .scheduler_endpoint(self.scheduler_endpoint.clone())
+            .grpc_auth(grpc_auth)
             .build()
             .await
             .map_err(|err| Error::Unknown(format!("failed to build proxy: {err}")))?;

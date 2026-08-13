@@ -12,6 +12,7 @@ edition.workspace = true
 
 [dependencies]
 dragonfly-api.workspace = true
+dragonfly-client-auth.workspace = true
 dragonfly-client-config.workspace = true
 dragonfly-client-util.workspace = true
 bytes.workspace = true

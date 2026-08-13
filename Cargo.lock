@@ -1299,6 +1299,7 @@ dependencies = [
  "console-subscriber",
  "dashmap",
  "dragonfly-api",
+ "dragonfly-client-auth",
  "dragonfly-client-backend",
  "dragonfly-client-config",
  "dragonfly-client-core",
@@ -1364,6 +1365,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "dragonfly-client-auth"
+version = "1.4.9"
+dependencies = [
+ "base64 0.22.1",
+ "humantime-serde",
+ "jsonwebtoken 10.3.0",
+ "prometheus",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tonic",
+ "validator",
+]
+
+[[package]]
 name = "dragonfly-client-backend"
 version = "1.4.9"
 dependencies = [
@@ -1408,6 +1426,7 @@ dependencies = [
  "bytesize",
  "bytesize-serde",
  "clap",
+ "dragonfly-client-auth",
  "dragonfly-client-core",
  "dragonfly-client-util",
  "home",
@@ -1473,6 +1492,7 @@ version = "1.4.9"
 dependencies = [
  "bytes",
  "dragonfly-api",
+ "dragonfly-client-auth",
  "dragonfly-client-config",
  "dragonfly-client-util",
  "fs2",
@@ -1491,6 +1511,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "dragonfly-api",
+ "dragonfly-client-auth",
  "dragonfly-client-core",
  "dragonfly-client-util",
  "futures",
@@ -2813,9 +2834,11 @@ dependencies = [
  "base64 0.22.1",
  "getrandom 0.2.12",
  "js-sys",
+ "pem",
  "serde",
  "serde_json",
  "signature",
+ "simple_asn1",
 ]
 
 [[package]]

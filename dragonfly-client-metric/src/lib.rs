@@ -16,6 +16,7 @@
 
 use bytes::Bytes;
 use dragonfly_api::common::v2::{Range, TrafficType};
+use dragonfly_client_auth::{GRPC_AUTH_CLIENT_TOKEN_EVENTS, GRPC_AUTH_REQUESTS};
 use dragonfly_client_config::{
     dfdaemon::Config, BUILD_PLATFORM, CARGO_PKG_VERSION, GIT_COMMIT_DATE, GIT_COMMIT_SHORT_HASH,
 };
@@ -740,6 +741,14 @@ fn register_custom_metrics() {
     REGISTRY
         .register(Box::new(UPLOAD_TASK_BLOCKED_COUNT.clone()))
         .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(GRPC_AUTH_REQUESTS.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(GRPC_AUTH_CLIENT_TOKEN_EVENTS.clone()))
+        .expect("metric can be registered");
 }
 
 /// Resets all custom metrics.
@@ -776,6 +785,8 @@ fn reset_custom_metrics() {
     DELETE_HOST_FAILURE_COUNT.reset();
     DISK_SPACE.reset();
     DISK_USAGE_SPACE.reset();
+    GRPC_AUTH_REQUESTS.reset();
+    GRPC_AUTH_CLIENT_TOKEN_EVENTS.reset();
 }
 
 /// Represents the size of the task.

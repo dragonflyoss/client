@@ -17,6 +17,7 @@
 use async_trait::async_trait;
 use dragonfly_api::common::v2::Host;
 use dragonfly_api::scheduler::v2::{scheduler_client::SchedulerClient, ListHostsRequest};
+use dragonfly_client_auth::ClientInterceptor as AuthClientInterceptor;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::hashring::VNodeHashRing;
 use dragonfly_client_util::net::format_url;
@@ -27,6 +28,7 @@ use std::str::FromStr;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinSet;
+use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Channel, Endpoint};
 use tonic_health::pb::{
     health_client::HealthClient as HealthGRPCClient, HealthCheckRequest, HealthCheckResponse,
@@ -61,7 +63,7 @@ pub struct SeedPeerSelector {
     health_check_interval: Duration,
 
     /// The client to communicate with the scheduler service.
-    scheduler_client: SchedulerClient<Channel>,
+    scheduler_client: SchedulerClient<InterceptedService<Channel, AuthClientInterceptor>>,
 
     /// The data of the seed peer selector.
     seed_peers: RwLock<SeedPeers>,
@@ -74,7 +76,7 @@ pub struct SeedPeerSelector {
 impl SeedPeerSelector {
     /// Creates a new seed peer selector.
     pub async fn new(
-        scheduler_client: SchedulerClient<Channel>,
+        scheduler_client: SchedulerClient<InterceptedService<Channel, AuthClientInterceptor>>,
         health_check_interval: Duration,
     ) -> Result<Self> {
         let seed_peer_selector = Self {
@@ -229,6 +231,7 @@ impl Selector for SeedPeerSelector {
 mod tests {
     use super::*;
     use dragonfly_api::common::v2::Host;
+    use dragonfly_client_auth::{GrpcAuth, AUDIENCE_SCHEDULER};
     use dragonfly_client_util::net::format_socket_addr;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -262,7 +265,10 @@ mod tests {
 
         SeedPeerSelector {
             health_check_interval: Duration::from_secs(10),
-            scheduler_client: SchedulerClient::new(channel),
+            scheduler_client: SchedulerClient::with_interceptor(
+                channel,
+                AuthClientInterceptor::new(GrpcAuth::default(), AUDIENCE_SCHEDULER, false).unwrap(),
+            ),
             seed_peers: RwLock::new(SeedPeers {
                 hosts: HashMap::new(),
                 hashring: VNodeHashRing::new(1),

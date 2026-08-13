@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+use dragonfly_client_auth::{
+    AuthError, ClientInterceptor as AuthClientInterceptor, GrpcAuth,
+    ServerInterceptor as AuthServerInterceptor,
+};
 use tonic::{metadata, service::Interceptor, Request, Status};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
@@ -51,9 +55,33 @@ impl opentelemetry::propagation::Injector for MetadataMap<'_> {
     }
 }
 
-/// Auto-inject tracing gRPC interceptor.
+/// Auto-inject tracing and optional component authentication gRPC interceptor.
 #[derive(Clone)]
-pub struct InjectTracingInterceptor;
+pub struct InjectTracingInterceptor {
+    auth: Option<AuthClientInterceptor>,
+}
+
+/// Backward-compatible tracing-only interceptor value.
+#[allow(non_upper_case_globals)]
+pub const InjectTracingInterceptor: InjectTracingInterceptor =
+    InjectTracingInterceptor { auth: None };
+
+impl InjectTracingInterceptor {
+    /// Creates an interceptor for the target component audience.
+    pub fn with_auth(
+        auth: GrpcAuth,
+        audience: &'static str,
+        secure_transport: bool,
+    ) -> Result<Self, AuthError> {
+        Ok(Self {
+            auth: Some(AuthClientInterceptor::new(
+                auth,
+                audience,
+                secure_transport,
+            )?),
+        })
+    }
+}
 
 /// Implements the tonic Interceptor interface.
 impl Interceptor for InjectTracingInterceptor {
@@ -64,18 +92,41 @@ impl Interceptor for InjectTracingInterceptor {
             prop.inject_context(&context, &mut MetadataMap(request.metadata_mut()));
         });
 
-        Ok(request)
+        match self.auth.as_mut() {
+            Some(auth) => auth.call(request),
+            None => Ok(request),
+        }
     }
 }
 
-/// Auto-extract tracing gRPC interceptor.
+/// Auto-extract tracing and optional component authentication gRPC interceptor.
 #[derive(Clone)]
-pub struct ExtractTracingInterceptor;
+pub struct ExtractTracingInterceptor {
+    auth: Option<AuthServerInterceptor>,
+}
+
+/// Backward-compatible tracing-only interceptor value.
+#[allow(non_upper_case_globals)]
+pub const ExtractTracingInterceptor: ExtractTracingInterceptor =
+    ExtractTracingInterceptor { auth: None };
+
+impl ExtractTracingInterceptor {
+    /// Creates an authenticated interceptor for the target component audience.
+    pub fn with_auth(auth: GrpcAuth, audience: &'static str) -> Self {
+        Self {
+            auth: Some(AuthServerInterceptor::new(auth, audience)),
+        }
+    }
+}
 
 /// Implements the tonic Interceptor interface.
 impl Interceptor for ExtractTracingInterceptor {
     /// Calls and injects tracing context into global propagator.
     fn call(&mut self, mut request: Request<()>) -> std::result::Result<Request<()>, Status> {
+        if let Some(auth) = self.auth.as_mut() {
+            request = auth.call(request)?;
+        }
+
         let parent_cx = opentelemetry::global::get_text_map_propagator(|prop| {
             prop.extract(&MetadataMap(request.metadata_mut()))
         });

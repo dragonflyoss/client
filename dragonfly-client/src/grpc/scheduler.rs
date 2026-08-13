@@ -32,6 +32,7 @@ use dragonfly_api::scheduler::v2::{
     UploadPersistentTaskFailedRequest, UploadPersistentTaskFinishedRequest,
     UploadPersistentTaskStartedRequest,
 };
+use dragonfly_client_auth::AUDIENCE_SCHEDULER;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
@@ -198,10 +199,12 @@ impl SchedulerClient {
 
                 // Reuse the cached channel of the scheduler.
                 let channel = scheduler_client.channel(addr).await?;
-                let mut client =
-                    SchedulerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
-                        .max_decoding_message_size(usize::MAX)
-                        .max_encoding_message_size(usize::MAX);
+                let mut client = SchedulerGRPCClient::with_interceptor(
+                    channel,
+                    scheduler_client.auth_interceptor()?,
+                )
+                .max_decoding_message_size(usize::MAX)
+                .max_encoding_message_size(usize::MAX);
                 client.announce_host(request).await?;
                 Ok(())
             }
@@ -244,10 +247,12 @@ impl SchedulerClient {
 
                 // Reuse the cached channel of the scheduler.
                 let channel = scheduler_client.channel(addr).await?;
-                let mut client =
-                    SchedulerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
-                        .max_decoding_message_size(usize::MAX)
-                        .max_encoding_message_size(usize::MAX);
+                let mut client = SchedulerGRPCClient::with_interceptor(
+                    channel,
+                    scheduler_client.auth_interceptor()?,
+                )
+                .max_decoding_message_size(usize::MAX)
+                .max_encoding_message_size(usize::MAX);
                 client.announce_host(request).await?;
                 Ok(())
             }
@@ -295,10 +300,12 @@ impl SchedulerClient {
 
                 // Reuse the cached channel of the scheduler.
                 let channel = scheduler_client.channel(addr).await?;
-                let mut client =
-                    SchedulerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
-                        .max_decoding_message_size(usize::MAX)
-                        .max_encoding_message_size(usize::MAX);
+                let mut client = SchedulerGRPCClient::with_interceptor(
+                    channel,
+                    scheduler_client.auth_interceptor()?,
+                )
+                .max_decoding_message_size(usize::MAX)
+                .max_encoding_message_size(usize::MAX);
                 client.delete_host(request).await?;
                 Ok(())
             }
@@ -584,10 +591,23 @@ impl SchedulerClient {
 
         let channel = self.channel(addr.addr).await?;
         Ok(
-            SchedulerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
+            SchedulerGRPCClient::with_interceptor(channel, self.auth_interceptor()?)
                 .max_decoding_message_size(usize::MAX)
                 .max_encoding_message_size(usize::MAX),
         )
+    }
+
+    /// Creates a JWT and tracing interceptor for scheduler RPCs.
+    fn auth_interceptor(&self) -> Result<InjectTracingInterceptor> {
+        let secure_transport = self.config.scheduler.ca_cert.is_some()
+            && self.config.scheduler.cert.is_some()
+            && self.config.scheduler.key.is_some();
+        InjectTracingInterceptor::with_auth(
+            self.config.grpc_auth.clone(),
+            AUDIENCE_SCHEDULER,
+            secure_transport,
+        )
+        .map_err(|error| Error::Unknown(error.to_string()))
     }
 
     /// Returns the cached grpc channel of the scheduler address, connecting and

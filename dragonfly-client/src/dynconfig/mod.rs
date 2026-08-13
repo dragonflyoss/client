@@ -219,11 +219,15 @@ impl Dynconfig {
     async fn backend(config: Arc<Config>, dynconfig_path: PathBuf) -> Result<Backend> {
         match config.manager.addr {
             Some(ref addr) => {
-                let manager_client = ManagerClient::new(&config.manager, addr.clone())
-                    .await
-                    .inspect_err(|err| {
-                        error!("initialize manager client failed: {}", err);
-                    })?;
+                let manager_client = ManagerClient::new_with_auth(
+                    &config.manager,
+                    config.grpc_auth.clone(),
+                    addr.clone(),
+                )
+                .await
+                .inspect_err(|err| {
+                    error!("initialize manager client failed: {}", err);
+                })?;
 
                 info!("refresh dynamic configuration from manager {}", addr);
                 Ok(Backend::Remote(Remote::new(
