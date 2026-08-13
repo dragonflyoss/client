@@ -34,6 +34,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt};
+use tokio::sync::Notify;
 use tracing::{debug, error, instrument, warn, Span};
 
 /// The minimum piece length.
@@ -122,6 +123,12 @@ impl Piece {
     /// Gets all pieces of a task from the local storage.
     pub fn get_all(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
         self.storage.get_pieces(task_id)
+    }
+
+    /// Returns the completion notifier of the in-flight piece, or `None` if the
+    /// piece is not being downloaded by this process.
+    pub fn in_flight_notifier(&self, piece_id: &str) -> Option<Arc<Notify>> {
+        self.storage.in_flight_piece_notifier(piece_id)
     }
 
     /// Calculates the interested pieces by content_length and range.
