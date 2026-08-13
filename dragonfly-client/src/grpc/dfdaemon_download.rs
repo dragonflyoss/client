@@ -2318,23 +2318,23 @@ impl DfdaemonDownloadClient {
             .load_client_tls_config(domain_name.as_str())
             .await?
         {
-            Some(client_tls_config) => {
-                Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
-                    .tls_config(client_tls_config)?
-                    .buffer_size(super::BUFFER_SIZE)
-                    .connect_timeout(super::CONNECT_TIMEOUT)
-                    .timeout(super::REQUEST_TIMEOUT)
-                    .tcp_keepalive(Some(super::TCP_KEEPALIVE))
-                    .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
-                    .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
-                    .connect()
-                    .await
-                    .inspect_err(|err| {
-                        error!("connect to {} failed: {}", addr, err);
-                    })
-                    .or_err(ErrorType::ConnectError)?
-            }
-            None => Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
+            Some(client_tls_config) => Channel::from_shared(addr.clone())
+                .map_err(|_| ClientError::InvalidURI(addr.clone()))?
+                .tls_config(client_tls_config)?
+                .buffer_size(super::BUFFER_SIZE)
+                .connect_timeout(super::CONNECT_TIMEOUT)
+                .timeout(super::REQUEST_TIMEOUT)
+                .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+                .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+                .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
+                .connect()
+                .await
+                .inspect_err(|err| {
+                    error!("connect to {} failed: {}", addr, err);
+                })
+                .or_err(ErrorType::ConnectError)?,
+            None => Channel::from_shared(addr.clone())
+                .map_err(|_| ClientError::InvalidURI(addr.clone()))?
                 .buffer_size(super::BUFFER_SIZE)
                 .connect_timeout(super::CONNECT_TIMEOUT)
                 .timeout(super::REQUEST_TIMEOUT)
