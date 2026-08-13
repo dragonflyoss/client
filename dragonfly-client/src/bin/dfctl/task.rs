@@ -29,12 +29,8 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
-use dragonfly_client_request::{PreheatRequest, Proxy, Request};
 use dragonfly_client_util::{
-    http::{
-        header_vec_to_hashmap, header_vec_to_headermap,
-        query_params::default_proxy_rule_filtered_query_params,
-    },
+    http::{header_vec_to_hashmap, query_params::default_proxy_rule_filtered_query_params},
     net::preferred_local_ip,
 };
 use oci_client::Reference;
@@ -820,31 +816,9 @@ pub struct PreheatCommand {
 
     #[arg(
         long,
-        default_value_t = false,
-        env = "DFCTL_TASK_PREHEAT_REQUEST_SDK",
-        help = "Specify whether to use request SDK mode for preheat. If not set, uses gRPC mode to call the scheduler directly. \
-         If set, uses the request SDK to trigger the seed peers to download the task without streaming the content back to dfctl, \
-         refer to https://github.com/dragonflyoss/client/tree/main/dragonfly-client-request"
-    )]
-    request_sdk: bool,
-
-    #[arg(
-        long,
-        default_value_t = true,
-        env = "DFCTL_TASK_ENABLE_TASK_ID_BASED_BLOB_DIGEST",
-        help = "Specify whether to generate task id based blob digest. It indicates whether to use the blob digest for task ID calculation \
-         when downloading from OCI registries. When enabled for OCI blob URLs (e.g., /v2/<name>/blobs/sha256:<digest>), \
-         the task ID is derived from the blob digest rather than the full URL. This enables deduplication across \
-         registries - the same blob from different registries shares one task ID, eliminating redundant downloads \
-         and storage"
-    )]
-    enable_task_id_based_blob_digest: bool,
-
-    #[arg(
-        long,
         env = "DFCTL_TASK_PREHEAT_SCOPE",
         default_value = "all_seed_peers",
-        help = "Specify the scope for preheating, only used in gRPC mode (non-request-sdk). Possible values: 'single_seed_peer' (preheat from a single seed peer), \
+        help = "Specify the scope for preheating. Possible values: 'single_seed_peer' (preheat from a single seed peer), \
          'all_peers' (preheat from all available peers), 'all_seed_peers' (preheat from all seed peers)."
     )]
     scope: String,
@@ -1080,9 +1054,8 @@ pub struct PreheatCommand {
 impl PreheatCommand {
     /// Executes the preheat command to preheat an image or file.
     ///
-    /// This function preheats content via the Dragonfly scheduler. It supports two modes:
-    /// - gRPC mode (default): directly calls the scheduler's preheat RPC.
-    /// - Request SDK mode (--request-sdk): uses the request SDK proxy for preheat.
+    /// This function preheats content via the Dragonfly scheduler by directly
+    /// calling the scheduler's preheat RPC.
     pub async fn execute(&self) -> Result<()> {
         // Initialize tracing.
         let _guards = init_command_tracing(self.log_level, self.console);
@@ -1246,13 +1219,12 @@ impl PreheatCommand {
         Ok(())
     }
 
-    /// Run the preheat logic based on the URL type (image or file) and mode (gRPC or request SDK).
+    /// Run the preheat logic based on the URL type (image or file).
     async fn run(&self) -> Result<()> {
-        match (self.url.starts_with(oci::SCHEME), self.request_sdk) {
-            (true, true) => self.preheat_image_by_request_sdk().await,
-            (true, false) => self.preheat_image().await,
-            (false, true) => self.preheat_file_by_request_sdk().await,
-            (false, false) => self.preheat_file().await,
+        if self.url.starts_with(oci::SCHEME) {
+            self.preheat_image().await
+        } else {
+            self.preheat_file().await
         }
     }
 
@@ -1385,106 +1357,6 @@ impl PreheatCommand {
         };
 
         client.preheat_file(request).await?;
-        println!(
-            "{}{}Preheat Succeeded!{}",
-            color::Fg(color::Green),
-            style::Bold,
-            style::Reset
-        );
-
-        Ok(())
-    }
-
-    /// Preheats an OCI image via the Dragonfly request SDK.
-    async fn preheat_image_by_request_sdk(&self) -> Result<()> {
-        let proxy = Proxy::builder()
-            .scheduler_endpoint(self.scheduler_endpoint.clone())
-            .build()
-            .await
-            .map_err(|err| Error::Unknown(format!("failed to build proxy: {err}")))?;
-
-        let filtered_query_params = self
-            .filtered_query_params
-            .clone()
-            .unwrap_or_else(default_proxy_rule_filtered_query_params);
-
-        let request = dragonfly_client_request::PreheatImageRequest {
-            image: self
-                .url
-                .strip_prefix(&format!("{}://", oci::SCHEME))
-                .ok_or_else(|| {
-                    Error::Unknown("URL must start with oci:// for image preheat".to_string())
-                })?
-                .to_string(),
-            username: self.username.clone(),
-            password: self.password.clone(),
-            platform: self.platform.clone(),
-            piece_length: self.piece_length.map(|piece_length| piece_length.as_u64()),
-            tag: self.tag.clone(),
-            application: self.application.clone(),
-            filtered_query_params,
-
-            // TODO: Support content for calculating task ID.
-            content_for_calculating_task_id: None,
-            enable_task_id_based_blob_digest: self.enable_task_id_based_blob_digest,
-            priority: Some(self.priority),
-            timeout: self.timeout,
-
-            // TODO: Support certificate chain.
-            client_cert: None,
-        };
-
-        proxy
-            .preheat_image(&request)
-            .await
-            .map_err(|err| Error::Unknown(format!("preheat failed: {err}")))?;
-
-        println!(
-            "{}{}Preheat Succeeded!{}",
-            color::Fg(color::Green),
-            style::Bold,
-            style::Reset
-        );
-
-        Ok(())
-    }
-
-    /// Preheats a file via the Dragonfly request SDK.
-    async fn preheat_file_by_request_sdk(&self) -> Result<()> {
-        let proxy = Proxy::builder()
-            .scheduler_endpoint(self.scheduler_endpoint.clone())
-            .build()
-            .await
-            .map_err(|err| Error::Unknown(format!("failed to build proxy: {err}")))?;
-
-        let filtered_query_params = self
-            .filtered_query_params
-            .clone()
-            .unwrap_or_else(default_proxy_rule_filtered_query_params);
-
-        let request = PreheatRequest {
-            url: self.url.clone(),
-            piece_length: self.piece_length.map(|piece_length| piece_length.as_u64()),
-            tag: self.tag.clone(),
-            application: self.application.clone(),
-            filtered_query_params,
-            header: header_vec_to_headermap(self.header.clone())?,
-
-            // TODO: Support content for calculating task ID.
-            content_for_calculating_task_id: None,
-            enable_task_id_based_blob_digest: self.enable_task_id_based_blob_digest,
-            priority: Some(self.priority),
-            timeout: self.timeout,
-
-            // TODO: Support certificate chain.
-            client_cert: None,
-        };
-
-        proxy
-            .preheat(&request)
-            .await
-            .map_err(|err| Error::Unknown(format!("preheat failed: {err}")))?;
-
         println!(
             "{}{}Preheat Succeeded!{}",
             color::Fg(color::Green),
