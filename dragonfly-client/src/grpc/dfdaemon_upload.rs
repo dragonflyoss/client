@@ -60,6 +60,7 @@ use dragonfly_client_util::{
     sysinfo::SystemMonitor,
     types::redacted::{RedactedDownload, RedactedDownloadPersistentTaskRequest},
 };
+use futures::future::select_all;
 use opentelemetry::Context;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -67,7 +68,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
-use tokio::sync::Barrier;
+use tokio::sync::{Barrier, Notify};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::service::interceptor::InterceptedService;
 use tonic::{
@@ -88,8 +89,14 @@ use url::Url;
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
 use super::middleware::BBRLayer;
 
-/// The default interval for waiting for the piece to be finished.
-pub const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_millis(100);
+/// The interval for re-checking the interested pieces when none of them is in-flight,
+/// since a piece whose download has not started has no notifier to subscribe to.
+const DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL: Duration = Duration::from_millis(100);
+
+/// The fallback interval for re-checking the interested pieces while waiting for the
+/// in-flight piece completion notifications, guarding against the pieces that start
+/// and finish between two subscription rounds without ever being subscribed.
+const DEFAULT_WAIT_FOR_PIECE_FINISHED_FALLBACK_INTERVAL: Duration = Duration::from_secs(1);
 
 /// gRPC server for upload operations.
 pub struct DfdaemonUploadServer {
@@ -1011,6 +1018,29 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 };
 
                 loop {
+                    // Subscribe to the completion of the in-flight interested pieces
+                    // before checking the local storage.
+                    let notifiers: Vec<(u32, Arc<Notify>)> = interested_piece_numbers
+                        .iter()
+                        .filter_map(|number| {
+                            task_manager
+                                .piece
+                                .in_flight_notifier(
+                                    task_manager.piece.id(task_id.as_str(), *number).as_str(),
+                                )
+                                .map(|notifier| (*number, notifier))
+                        })
+                        .collect();
+
+                    let mut notifieds: Vec<(u32, _)> = notifiers
+                        .iter()
+                        .map(|(number, notifier)| {
+                            let mut notified = Box::pin(notifier.notified());
+                            notified.as_mut().enable();
+                            (*number, notified)
+                        })
+                        .collect();
+
                     let mut finished_piece_numbers = Vec::new();
                     for interested_piece_number in interested_piece_numbers.iter() {
                         let piece = match task_manager.piece.get(
@@ -1093,8 +1123,19 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         return;
                     }
 
-                    // Wait for the piece to be finished.
-                    tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL).await;
+                    // Keep only the subscriptions of the remaining interested pieces.
+                    notifieds.retain(|(number, _)| interested_piece_numbers.contains(number));
+
+                    // Wait for any of the in-flight pieces to complete, or fall back
+                    // to the interval for the pieces whose download has not started.
+                    if notifieds.is_empty() {
+                        tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL).await;
+                    } else {
+                        tokio::select! {
+                            _ = select_all(notifieds.iter_mut().map(|(_, notified)| notified)) => {}
+                            _ = tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_FALLBACK_INTERVAL) => {}
+                        }
+                    }
                 }
             }
             .in_current_span(),
@@ -1754,6 +1795,32 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 };
 
                 loop {
+                    // Subscribe to the completion of the in-flight interested pieces
+                    // before checking the local storage.
+                    let notifiers: Vec<(u32, Arc<Notify>)> = interested_piece_numbers
+                        .iter()
+                        .filter_map(|number| {
+                            persistent_task_manager
+                                .piece
+                                .in_flight_notifier(
+                                    persistent_task_manager
+                                        .piece
+                                        .persistent_id(task_id.as_str(), *number)
+                                        .as_str(),
+                                )
+                                .map(|notifier| (*number, notifier))
+                        })
+                        .collect();
+
+                    let mut notifieds: Vec<(u32, _)> = notifiers
+                        .iter()
+                        .map(|(number, notifier)| {
+                            let mut notified = Box::pin(notifier.notified());
+                            notified.as_mut().enable();
+                            (*number, notified)
+                        })
+                        .collect();
+
                     let mut finished_piece_numbers = Vec::new();
                     for interested_piece_number in interested_piece_numbers.iter() {
                         let piece = match persistent_task_manager.piece.get(
@@ -1844,8 +1911,19 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         return;
                     }
 
-                    // Wait for the piece to be finished.
-                    tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL).await;
+                    // Keep only the subscriptions of the remaining interested pieces.
+                    notifieds.retain(|(number, _)| interested_piece_numbers.contains(number));
+
+                    // Wait for any of the in-flight pieces to complete, or fall back
+                    // to the interval for the pieces whose download has not started.
+                    if notifieds.is_empty() {
+                        tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL).await;
+                    } else {
+                        tokio::select! {
+                            _ = select_all(notifieds.iter_mut().map(|(_, notified)| notified)) => {}
+                            _ = tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_FALLBACK_INTERVAL) => {}
+                        }
+                    }
                 }
             }
             .in_current_span(),
@@ -2320,6 +2398,32 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 };
 
                 loop {
+                    // Subscribe to the completion of the in-flight interested pieces
+                    // before checking the local storage.
+                    let notifiers: Vec<(u32, Arc<Notify>)> = interested_piece_numbers
+                        .iter()
+                        .filter_map(|number| {
+                            persistent_cache_task_manager
+                                .piece
+                                .in_flight_notifier(
+                                    persistent_cache_task_manager
+                                        .piece
+                                        .persistent_cache_id(task_id.as_str(), *number)
+                                        .as_str(),
+                                )
+                                .map(|notifier| (*number, notifier))
+                        })
+                        .collect();
+
+                    let mut notifieds: Vec<(u32, _)> = notifiers
+                        .iter()
+                        .map(|(number, notifier)| {
+                            let mut notified = Box::pin(notifier.notified());
+                            notified.as_mut().enable();
+                            (*number, notified)
+                        })
+                        .collect();
+
                     let mut finished_piece_numbers = Vec::new();
                     for interested_piece_number in interested_piece_numbers.iter() {
                         let piece = match persistent_cache_task_manager.piece.get(
@@ -2401,8 +2505,19 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         return;
                     }
 
-                    // Wait for the piece to be finished.
-                    tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL).await;
+                    // Keep only the subscriptions of the remaining interested pieces.
+                    notifieds.retain(|(number, _)| interested_piece_numbers.contains(number));
+
+                    // Wait for any of the in-flight pieces to complete, or fall back
+                    // to the interval for the pieces whose download has not started.
+                    if notifieds.is_empty() {
+                        tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_INTERVAL).await;
+                    } else {
+                        tokio::select! {
+                            _ = select_all(notifieds.iter_mut().map(|(_, notified)| notified)) => {}
+                            _ = tokio::time::sleep(DEFAULT_WAIT_FOR_PIECE_FINISHED_FALLBACK_INTERVAL) => {}
+                        }
+                    }
                 }
             }
             .in_current_span(),
@@ -2506,23 +2621,29 @@ impl DfdaemonUploadClient {
             .load_client_tls_config(domain_name.as_str())
             .await?
         {
-            Some(client_tls_config) => {
-                Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
-                    .tls_config(client_tls_config)?
-                    .buffer_size(super::BUFFER_SIZE)
-                    .connect_timeout(super::CONNECT_TIMEOUT)
-                    .timeout(timeout)
-                    .tcp_keepalive(Some(super::TCP_KEEPALIVE))
-                    .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
-                    .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
-                    .connect()
-                    .await
-                    .inspect_err(|err| {
-                        error!("connect to {} failed: {}", addr, err);
-                    })
-                    .or_err(ErrorType::ConnectError)?
-            }
-            None => Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
+            Some(client_tls_config) => Channel::from_shared(addr.clone())
+                .inspect_err(|err| {
+                    error!("invalid address {}: {}", addr, err);
+                })
+                .or_err(ErrorType::ParseError)?
+                .tls_config(client_tls_config)?
+                .buffer_size(super::BUFFER_SIZE)
+                .connect_timeout(super::CONNECT_TIMEOUT)
+                .timeout(timeout)
+                .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+                .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+                .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
+                .connect()
+                .await
+                .inspect_err(|err| {
+                    error!("connect to {} failed: {}", addr, err);
+                })
+                .or_err(ErrorType::ConnectError)?,
+            None => Channel::from_shared(addr.clone())
+                .inspect_err(|err| {
+                    error!("invalid address {}: {}", addr, err);
+                })
+                .or_err(ErrorType::ParseError)?
                 .buffer_size(super::BUFFER_SIZE)
                 .connect_timeout(super::CONNECT_TIMEOUT)
                 .timeout(timeout)

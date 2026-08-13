@@ -1668,11 +1668,11 @@ impl Metadata<RocksdbStorageEngine> {
             log_dir,
             &[
                 Task::NAMESPACE,
-                Piece::NAMESPACE,
                 PersistentTask::NAMESPACE,
                 PersistentCacheTask::NAMESPACE,
                 CacheTask::NAMESPACE,
             ],
+            &[Piece::NAMESPACE],
             config.storage.keep,
         )?;
 
