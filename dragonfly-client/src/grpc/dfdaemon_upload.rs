@@ -2621,10 +2621,10 @@ impl DfdaemonUploadClient {
             .load_client_tls_config(domain_name.as_str())
             .await?
         {
-            Some(client_tls_config) => {
-                Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
-                    .tls_config(client_tls_config)?
-                    .buffer_size(super::BUFFER_SIZE)
+            Some(client_tls_config) => Channel::from_shared(addr.clone())
+                .map_err(|_| ClientError::InvalidURI(addr.clone()))?
+                .tls_config(client_tls_config)?
+                .buffer_size(super::BUFFER_SIZE)
                     .connect_timeout(super::CONNECT_TIMEOUT)
                     .timeout(timeout)
                     .tcp_keepalive(Some(super::TCP_KEEPALIVE))
