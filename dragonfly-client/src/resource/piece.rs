@@ -752,9 +752,7 @@ impl Piece {
                     .await?
             }
             ("quic", Some(ip), _, Some(port)) => {
-                let quic_downloader =
-                    piece_downloader::DownloaderFactory::new("quic", self.config.clone())?.build();
-                quic_downloader
+                self.quic_downloader
                     .download_persistent_piece(
                         &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
                         number,
@@ -1099,9 +1097,7 @@ impl Piece {
                     .await?
             }
             ("quic", Some(ip), _, Some(port)) => {
-                let quic_downloader =
-                    piece_downloader::DownloaderFactory::new("quic", self.config.clone())?.build();
-                quic_downloader
+                self.quic_downloader
                     .download_persistent_cache_piece(
                         &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
                         number,
