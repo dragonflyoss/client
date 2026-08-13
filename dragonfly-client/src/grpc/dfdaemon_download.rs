@@ -2319,7 +2319,10 @@ impl DfdaemonDownloadClient {
             .await?
         {
             Some(client_tls_config) => Channel::from_shared(addr.clone())
-                .map_err(|_| ClientError::InvalidURI(addr.clone()))?
+                .inspect_err(|err| {
+                    error!("invalid address {}: {}", addr, err);
+                })
+                .or_err(ErrorType::ParseError)?
                 .tls_config(client_tls_config)?
                 .buffer_size(super::BUFFER_SIZE)
                 .connect_timeout(super::CONNECT_TIMEOUT)
@@ -2334,7 +2337,10 @@ impl DfdaemonDownloadClient {
                 })
                 .or_err(ErrorType::ConnectError)?,
             None => Channel::from_shared(addr.clone())
-                .map_err(|_| ClientError::InvalidURI(addr.clone()))?
+                .inspect_err(|err| {
+                    error!("invalid address {}: {}", addr, err);
+                })
+                .or_err(ErrorType::ParseError)?
                 .buffer_size(super::BUFFER_SIZE)
                 .connect_timeout(super::CONNECT_TIMEOUT)
                 .timeout(super::REQUEST_TIMEOUT)
