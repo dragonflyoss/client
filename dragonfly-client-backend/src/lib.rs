@@ -16,7 +16,7 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use dragonfly_api::common::v2::{Hdfs, HuggingFace, ModelScope, ObjectStorage, Range};
+use dragonfly_api::common::v2::{Hdfs, HuggingFace, ModelScope, ObjectStorage, OpenCsg, Range};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
@@ -42,6 +42,7 @@ pub mod hugging_face;
 pub mod model_scope;
 pub mod object_storage;
 pub mod oci;
+pub mod opencsg;
 
 /// The max idle connections per host.
 const POOL_MAX_IDLE_PER_HOST: usize = 1024;
@@ -105,6 +106,9 @@ pub struct StatRequest {
 
     /// Model Scope is the model scope related information.
     pub model_scope: Option<ModelScope>,
+
+    /// OpenCSG protocol information.
+    pub open_csg: Option<OpenCsg>,
 }
 
 /// The stat response for backend.
@@ -164,6 +168,9 @@ pub struct GetRequest {
 
     /// Model Scope is the model scope related information.
     pub model_scope: Option<ModelScope>,
+
+    /// OpenCSG protocol information.
+    pub open_csg: Option<OpenCsg>,
 }
 
 /// The get response for backend.
@@ -242,6 +249,9 @@ pub struct ExistsRequest {
 
     /// Model Scope is the model scope related information.
     pub model_scope: Option<ModelScope>,
+
+    /// OpenCSG protocol information.
+    pub open_csg: Option<OpenCsg>,
 }
 
 /// The put request for backend.
@@ -275,6 +285,9 @@ pub struct PutRequest {
 
     /// Model Scope is the model scope related information.
     pub model_scope: Option<ModelScope>,
+
+    /// OpenCSG protocol information.
+    pub open_csg: Option<OpenCsg>,
 }
 
 /// The put response for backend.
@@ -497,6 +510,12 @@ impl BackendFactory {
         );
         info!("load [hf] builtin backend");
 
+        self.backends.insert(
+            opencsg::SCHEME.to_string(),
+            Box::new(opencsg::OpenCsg::new(self.config.clone())?),
+        );
+        info!("load [opencsg] builtin backend");
+
         Ok(())
     }
 
@@ -567,6 +586,7 @@ mod tests {
             "hdfs",
             "hf",
             "modelscope",
+            "opencsg",
         ];
         for backend in expected_backends {
             assert!(factory.backends.contains_key(backend));
@@ -598,7 +618,7 @@ mod tests {
         let plugin_dir = dir.path().join("non_existent_plugin_dir");
 
         let factory = BackendFactory::new(Arc::new(Config::default()), Some(&plugin_dir)).unwrap();
-        assert_eq!(factory.backends.len(), 11);
+        assert_eq!(factory.backends.len(), 12);
     }
 
     #[test]
@@ -642,7 +662,18 @@ mod tests {
 
         let factory = BackendFactory::new(Arc::new(Config::default()), Some(&plugin_dir)).unwrap();
         let schemes = vec![
-            "http", "https", "s3", "gs", "abs", "oss", "obs", "cos", "hdfs", "hf",
+            "http",
+            "https",
+            "s3",
+            "gs",
+            "abs",
+            "oss",
+            "obs",
+            "cos",
+            "hdfs",
+            "hf",
+            "modelscope",
+            "opencsg",
         ];
 
         for scheme in schemes {

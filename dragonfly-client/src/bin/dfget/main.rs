@@ -16,7 +16,9 @@
 
 use bytesize::ByteSize;
 use clap::Parser;
-use dragonfly_api::common::v2::{Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, TaskType};
+use dragonfly_api::common::v2::{
+    Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, OpenCsg, TaskType,
+};
 use dragonfly_api::dfdaemon::v2::{
     download_task_response, DownloadTaskRequest, ListTaskEntriesRequest,
 };
@@ -26,7 +28,7 @@ use dragonfly_client::resource::piece::MIN_PIECE_LENGTH;
 use dragonfly_client::terminal;
 use dragonfly_client::tracing::init_command_tracing;
 use dragonfly_client_backend::{
-    hdfs, hugging_face, model_scope, object_storage, BackendFactory, DirEntry,
+    hdfs, hugging_face, model_scope, object_storage, opencsg, BackendFactory, DirEntry,
 };
 use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{self, dfdaemon, dfget};
@@ -110,6 +112,18 @@ Examples:
 
   # Download from ModelScope Hub with authentication token.
   $ dfget modelscope://<owner>/<repo>/<path> -O /tmp/model.safetensors --ms-token=<token>
+
+  # Download a single file from OpenCSG Hub.
+  $ dfget opencsg://<owner>/<repo>/<path> -O /tmp/model.safetensors
+
+  # Download an entire repository from OpenCSG Hub.
+  $ dfget opencsg://<owner>/<repo> -O /tmp/repo/ -r
+
+  # Download an OpenCSG repository at a specified revision.
+  $ dfget opencsg://<owner>/<repo> --csg-revision main -O /tmp/repo/ -r
+
+  # Download from OpenCSG Hub with authentication token.
+  $ dfget opencsg://<owner>/<repo>/<path> -O /tmp/model.safetensors --csg-token=<token>
 "#;
 
 #[derive(Debug, Parser, Clone)]
@@ -342,6 +356,28 @@ struct Args {
         help = "Specify the base URL of the ModelScope Hub endpoint (e.g., https://modelscope-mirror.example.com). If unspecified, it defaults to https://modelscope.cn"
     )]
     ms_base_url: Option<String>,
+
+    #[arg(
+        long = "csg-revision",
+        default_value = "main",
+        env = "DFGET_CSG_REVISION",
+        help = "Specify the revision version for OpenCSG Hub"
+    )]
+    csg_revision: String,
+
+    #[arg(
+        long = "csg-token",
+        env = "DFGET_CSG_TOKEN",
+        help = "Specify the authentication token for OpenCSG Hub"
+    )]
+    csg_token: Option<String>,
+
+    #[arg(
+        long = "csg-base-url",
+        env = "DFGET_CSG_BASE_URL",
+        help = "Specify the base URL of the OpenCSG Hub endpoint. If unspecified, it defaults to https://hub.opencsg.com/csg/"
+    )]
+    csg_base_url: Option<String>,
 
     #[arg(
         long,
@@ -623,6 +659,16 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         None
     };
 
+    let open_csg = if url.scheme() == opencsg::SCHEME {
+        Some(OpenCsg {
+            revision: args.csg_revision.clone(),
+            token: args.csg_token.clone(),
+            base_url: args.csg_base_url.clone(),
+        })
+    } else {
+        None
+    };
+
     // Get all entries in the directory with include files filter.
     let entries: Vec<DirEntry> = get_all_entries(
         &args.url,
@@ -632,6 +678,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         hdfs,
         hugging_face,
         model_scope,
+        open_csg,
         download_client.clone(),
     )
     .await?;
@@ -720,6 +767,7 @@ async fn get_all_entries(
     hdfs: Option<Hdfs>,
     hugging_face: Option<HuggingFace>,
     model_scope: Option<ModelScope>,
+    open_csg: Option<OpenCsg>,
     download_client: DfdaemonDownloadClient,
 ) -> Result<Vec<DirEntry>> {
     let urls: HashSet<Url> = match include_files {
@@ -772,6 +820,7 @@ async fn get_all_entries(
             hdfs.clone(),
             hugging_face.clone(),
             model_scope.clone(),
+            open_csg.clone(),
             download_client.clone(),
         )
         .await
@@ -870,6 +919,16 @@ async fn download(
         None
     };
 
+    let open_csg = if url.scheme() == opencsg::SCHEME {
+        Some(OpenCsg {
+            revision: args.csg_revision.clone(),
+            token: args.csg_token.clone(),
+            base_url: args.csg_base_url.clone(),
+        })
+    } else {
+        None
+    };
+
     // If the `filtered_query_params` is not provided, then use the default value.
     let filtered_query_params = args
         .filtered_query_params
@@ -914,6 +973,7 @@ async fn download(
                 hdfs,
                 hugging_face,
                 model_scope,
+                open_csg,
                 force_hard_link: args.force_hard_link,
                 content_for_calculating_task_id: args.content_for_calculating_task_id,
                 remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
@@ -1121,6 +1181,7 @@ async fn download(
 /// various storage backends including object storage and HDFS by passing
 /// the appropriate credentials and configuration. The function converts
 /// the gRPC response into a local `DirEntry` format for further processing.
+#[allow(clippy::too_many_arguments)]
 async fn get_entries(
     url: &Url,
     header: Vec<String>,
@@ -1128,6 +1189,7 @@ async fn get_entries(
     hdfs: Option<Hdfs>,
     hugging_face: Option<HuggingFace>,
     model_scope: Option<ModelScope>,
+    open_csg: Option<OpenCsg>,
     download_client: DfdaemonDownloadClient,
 ) -> Result<Vec<DirEntry>> {
     info!("list task entries: {:?}", url);
@@ -1142,6 +1204,7 @@ async fn get_entries(
             hdfs,
             hugging_face,
             model_scope,
+            open_csg,
             remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
         })
         .await
@@ -1220,6 +1283,25 @@ fn convert_args(mut args: Args) -> Args {
 /// The validation prevents common user errors and potential security issues before
 /// starting the download process.
 fn validate_args(args: &Args) -> Result<()> {
+    if args.url.scheme() == opencsg::SCHEME {
+        if args.csg_revision.trim().is_empty() {
+            return Err(Error::ValidationError(
+                "OpenCSG revision must not be empty".to_string(),
+            ));
+        }
+
+        if let Some(base_url) = args.csg_base_url.as_deref() {
+            let base_url = Url::parse(base_url).map_err(|err| {
+                Error::ValidationError(format!("invalid OpenCSG base URL: {err}"))
+            })?;
+            if !matches!(base_url.scheme(), "http" | "https") || base_url.cannot_be_a_base() {
+                return Err(Error::ValidationError(
+                    "OpenCSG base URL must be an HTTP or HTTPS base URL".to_string(),
+                ));
+            }
+        }
+    }
+
     // If the URL is a directory, the output path should be a directory.
     if args.url.path().ends_with('/') && !args.output.is_dir() {
         return Err(Error::ValidationError(format!(
@@ -1308,6 +1390,76 @@ mod tests {
     use mocktail::prelude::*;
     use std::collections::HashMap;
     use tempfile::tempdir;
+
+    /// Verifies explicit OpenCSG CLI options are parsed and accepted.
+    #[test]
+    fn should_parse_open_csg_options() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let output = tempdir.path().join("model.bin");
+        let args = Args::parse_from([
+            "dfget",
+            "opencsg://owner/repo/model.bin",
+            "--output",
+            output.to_str().unwrap(),
+            "--csg-revision",
+            "release-v1",
+            "--csg-token",
+            "secret",
+            "--csg-base-url",
+            "https://mirror.example/private/csg/",
+        ]);
+
+        assert_eq!(args.csg_revision, "release-v1");
+        assert_eq!(args.csg_token.as_deref(), Some("secret"));
+        assert_eq!(
+            args.csg_base_url.as_deref(),
+            Some("https://mirror.example/private/csg/")
+        );
+        assert!(validate_args(&args).is_ok());
+    }
+
+    /// Verifies OpenCSG downloads default to the main revision without credentials.
+    #[test]
+    fn should_use_default_open_csg_revision() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let output = tempdir.path().join("model.bin");
+        let args = Args::parse_from([
+            "dfget",
+            "opencsg://owner/repo/model.bin",
+            "--output",
+            output.to_str().unwrap(),
+        ]);
+
+        assert_eq!(args.csg_revision, "main");
+        assert!(args.csg_token.is_none());
+        assert!(args.csg_base_url.is_none());
+    }
+
+    /// Verifies invalid OpenCSG revisions and endpoint schemes are rejected.
+    #[test]
+    fn should_reject_invalid_open_csg_options() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let output = tempdir.path().join("model.bin");
+        let empty_revision = Args::parse_from([
+            "dfget",
+            "opencsg://owner/repo/model.bin",
+            "--output",
+            output.to_str().unwrap(),
+            "--csg-revision",
+            " ",
+        ]);
+        assert!(validate_args(&empty_revision).is_err());
+
+        let invalid_endpoint = Args::parse_from([
+            "dfget",
+            "opencsg://owner/repo/model.bin",
+            "--output",
+            output.to_str().unwrap(),
+            "--csg-base-url",
+            "ftp://mirror.example/csg/",
+        ]);
+        assert!(validate_args(&invalid_endpoint).is_err());
+    }
 
     #[test]
     fn should_convert_args() {
@@ -1481,6 +1633,21 @@ mod tests {
         assert_eq!(result.unwrap(), output_path.join("dir/file.txt"));
     }
 
+    /// Verifies recursive OpenCSG entries retain their repository-relative output path.
+    #[test]
+    fn should_make_output_by_open_csg_entry() {
+        let url = Url::parse("opencsg://datasets/owner/repo/").unwrap();
+        let temp_dir = tempdir().unwrap();
+        let entry = DirEntry {
+            url: "opencsg://datasets/owner/repo/nested/train.json".to_string(),
+            content_length: 0,
+            is_dir: false,
+        };
+
+        let output = make_output_by_entry(url, temp_dir.path(), entry).unwrap();
+        assert_eq!(output, temp_dir.path().join("nested/train.json"));
+    }
+
     #[test]
     fn should_make_output_by_entry_no_trailing_slash_in_output() {
         let url = Url::parse("http://example.com/root/").unwrap();
@@ -1555,6 +1722,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             dfdaemon_download_client,
         )
         .await
@@ -1610,6 +1778,7 @@ mod tests {
         let entries = get_all_entries(
             &Url::parse("http://example.com/root/").unwrap(),
             Vec::new(),
+            None,
             None,
             None,
             None,
@@ -1701,6 +1870,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             dfdaemon_download_client,
         )
         .await
@@ -1782,6 +1952,7 @@ mod tests {
         let entries = get_all_entries(
             &Url::parse("http://example.com/root/").unwrap(),
             Vec::new(),
+            None,
             None,
             None,
             None,

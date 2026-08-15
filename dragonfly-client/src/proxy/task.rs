@@ -96,7 +96,8 @@ pub async fn download(
                     .hugging_face
                     .as_ref()
                     .map(|hf| hf.revision.clone())
-                    .or_else(|| download.model_scope.as_ref().map(|ms| ms.revision.clone()));
+                    .or_else(|| download.model_scope.as_ref().map(|ms| ms.revision.clone()))
+                    .or_else(|| download.open_csg.as_ref().map(|csg| csg.revision.clone()));
 
                 TaskIDParameter::URLBased {
                     url: download.url.clone(),

@@ -318,7 +318,8 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         .hugging_face
                         .as_ref()
                         .map(|hf| hf.revision.clone())
-                        .or_else(|| download.model_scope.as_ref().map(|ms| ms.revision.clone()));
+                        .or_else(|| download.model_scope.as_ref().map(|ms| ms.revision.clone()))
+                        .or_else(|| download.open_csg.as_ref().map(|csg| csg.revision.clone()));
 
                     TaskIDParameter::URLBased {
                         url: download.url.clone(),
@@ -846,6 +847,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 hdfs: request.hdfs.clone(),
                 hugging_face: request.hugging_face.clone(),
                 model_scope: request.model_scope.clone(),
+                open_csg: request.open_csg.clone(),
             })
             .await
             .map_err(|err| {

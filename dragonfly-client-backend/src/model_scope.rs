@@ -1080,6 +1080,7 @@ mod tests {
                     token: None,
                     base_url: Some(server.uri()),
                 }),
+                open_csg: None,
             })
             .await
             .unwrap();
@@ -1125,6 +1126,7 @@ mod tests {
                     token: None,
                     base_url: Some(server.uri()),
                 }),
+                open_csg: None,
             })
             .await
             .unwrap();
