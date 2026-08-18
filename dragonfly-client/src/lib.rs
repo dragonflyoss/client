@@ -22,4 +22,5 @@ pub mod health;
 pub mod proxy;
 pub mod resource;
 pub mod stats;
+pub mod terminal;
 pub mod tracing;
