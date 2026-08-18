@@ -18,6 +18,7 @@ use chrono::{DateTime, Local};
 use clap::{Parser, Subcommand};
 use dragonfly_api::dfdaemon::v2::ListLocalPersistentCacheTasksRequest;
 use dragonfly_api::errordetails::v2::Backend;
+use dragonfly_client::terminal;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::net::preferred_local_ip;
 use std::path::PathBuf;
@@ -25,7 +26,6 @@ use tabled::{
     settings::{object::Rows, Alignment, Modify, Style},
     Table, Tabled,
 };
-use termion::{color, style};
 use tracing::Level;
 
 use super::*;
@@ -100,39 +100,17 @@ impl LsCommand {
             match get_dfdaemon_download_client(self.endpoint.clone()).await {
                 Ok(client) => client,
                 Err(err) => {
-                    println!(
-                        "{}{}{}Connect Dfdaemon Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
+                    terminal::error("Connect Dfdaemon Failed!");
+                    terminal::separator();
+                    terminal::field(
+                        "Message:",
+                        format!(
+                            "can not connect {}, please check the unix socket {}",
+                            err,
+                            self.endpoint.to_string_lossy()
+                        ),
                     );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} can not connect {}, please check the unix socket {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err,
-                        self.endpoint.to_string_lossy(),
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::separator();
 
                     std::process::exit(1);
                 }
@@ -144,197 +122,62 @@ impl LsCommand {
                 Error::TonicStatus(status) => {
                     let details = status.details();
                     if let Ok(backend_err) = serde_json::from_slice::<Backend>(details) {
-                        println!(
-                            "{}{}{}Listing Persistent Cache Tasks Failed!{}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}****************************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::error("Listing Persistent Cache Tasks Failed!");
+                        terminal::separator();
 
                         if let Some(status_code) = backend_err.status_code {
-                            println!(
-                                "{}{}{}Bad Status Code:{} {}",
-                                color::Fg(color::Red),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset,
-                                status_code
-                            );
+                            terminal::error_field("Bad Status Code:", status_code);
                         }
 
-                        println!(
-                            "{}{}{}Message:{} {}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            backend_err.message
-                        );
+                        terminal::field("Message:", backend_err.message);
 
                         if !backend_err.header.is_empty() {
-                            println!(
-                                "{}{}{}Header:{}",
-                                color::Fg(color::Cyan),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset
+                            terminal::headers(
+                                backend_err
+                                    .header
+                                    .iter()
+                                    .map(|(key, value)| (key.as_str(), value.as_str())),
                             );
-                            for (key, value) in backend_err.header.iter() {
-                                println!("  [{}]: {}", key.as_str(), value.as_str());
-                            }
                         }
 
-                        println!(
-                            "{}{}{}****************************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::separator();
                     } else {
-                        println!(
-                            "{}{}{}Listing Persistent Cache Tasks Failed!{}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}*********************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}Bad Code:{} {}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            status.code()
-                        );
-
-                        println!(
-                            "{}{}{}Message:{} {}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            status.message()
-                        );
+                        terminal::error("Listing Persistent Cache Tasks Failed!");
+                        terminal::separator();
+                        terminal::error_field("Bad Code:", status.code());
+                        terminal::field("Message:", status.message());
 
                         if !status.details().is_empty() {
-                            println!(
-                                "{}{}{}Details:{} {}",
-                                color::Fg(color::Cyan),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset,
-                                std::str::from_utf8(status.details()).unwrap()
+                            terminal::field(
+                                "Details:",
+                                std::str::from_utf8(status.details()).unwrap(),
                             );
                         }
 
-                        println!(
-                            "{}{}{}*********************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::separator();
                     }
                 }
                 Error::BackendError(err) => {
-                    println!(
-                        "{}{}{}Listing Persistent Cache Tasks Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err.message
-                    );
+                    terminal::error("Listing Persistent Cache Tasks Failed!");
+                    terminal::separator();
+                    terminal::error_field("Message:", err.message);
 
                     if err.header.is_some() {
-                        println!(
-                            "{}{}{}Header:{}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
+                        terminal::headers(
+                            err.header
+                                .unwrap_or_default()
+                                .iter()
+                                .map(|(key, value)| (key.as_str(), value.to_str().unwrap())),
                         );
-                        for (key, value) in err.header.unwrap_or_default().iter() {
-                            println!("  [{}]: {}", key.as_str(), value.to_str().unwrap());
-                        }
                     }
 
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::separator();
                 }
                 err => {
-                    println!(
-                        "{}{}{}Listing Persistent Cache Tasks Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::error("Listing Persistent Cache Tasks Failed!");
+                    terminal::separator();
+                    terminal::error_field("Message:", err);
+                    terminal::separator();
                 }
             }
 

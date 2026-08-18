@@ -30,6 +30,7 @@ use dragonfly_client::resource::{
     persistent_cache_task::PersistentCacheTask, persistent_task::PersistentTask, task::Task,
 };
 use dragonfly_client::stats::Stats;
+use dragonfly_client::terminal;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::BackendFactory;
 use dragonfly_client_config::{dfdaemon, VersionValueParser};
@@ -44,7 +45,6 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use termion::{color, style};
 use tokio::sync::mpsc;
 use tokio::sync::Barrier;
 use tracing::{error, info, Level};
@@ -156,25 +156,14 @@ async fn main() -> Result<(), anyhow::Error> {
     let config = match dfdaemon::Config::load(&args.config).await {
         Ok(config) => config,
         Err(err) => {
-            println!(
-                "{}{}Load config {} error: {}{}\n",
-                color::Fg(color::Red),
-                style::Bold,
+            terminal::error(format!(
+                "Load config {} error: {}",
                 args.config.display(),
-                err,
-                style::Reset
-            );
+                err
+            ));
+            println!();
 
-            println!(
-                "{}{}If the file does not exist, you need to new a default config file refer to: {}{}{}{}https://d7y.io/docs/next/reference/configuration/client/dfdaemon/{}",
-                color::Fg(color::Yellow),
-                style::Bold,
-                style::Reset,
-                color::Fg(color::Cyan),
-                style::Underline,
-                style::Italic,
-                style::Reset,
-            );
+            terminal::warn("If the file does not exist, you need to new a default config file refer to: https://d7y.io/docs/next/reference/configuration/client/dfdaemon/");
             std::process::exit(1);
         }
     };
