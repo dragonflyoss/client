@@ -23,6 +23,7 @@ use dragonfly_api::dfdaemon::v2::{
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::resource::piece::MIN_PIECE_LENGTH;
+use dragonfly_client::terminal;
 use dragonfly_client::tracing::init_command_tracing;
 use dragonfly_client_backend::{
     hdfs, hugging_face, model_scope, object_storage, BackendFactory, DirEntry,
@@ -45,7 +46,6 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use std::{cmp::min, fmt::Write};
-use termion::{color, style};
 use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, BufWriter, SeekFrom};
 use tokio::sync::Semaphore;
@@ -442,38 +442,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Validate command line arguments.
     if let Err(err) = validate_args(&args) {
-        println!(
-            "{}{}{}Validating Failed!{}",
-            color::Fg(color::Red),
-            style::Italic,
-            style::Bold,
-            style::Reset
-        );
-
-        println!(
-            "{}{}{}****************************************{}",
-            color::Fg(color::Black),
-            style::Italic,
-            style::Bold,
-            style::Reset
-        );
-
-        println!(
-            "{}{}{}Message:{} {}",
-            color::Fg(color::Cyan),
-            style::Italic,
-            style::Bold,
-            style::Reset,
-            err,
-        );
-
-        println!(
-            "{}{}{}****************************************{}",
-            color::Fg(color::Black),
-            style::Italic,
-            style::Bold,
-            style::Reset
-        );
+        terminal::error("Validating Failed!");
+        terminal::separator();
+        terminal::field("Message:", err);
+        terminal::separator();
 
         std::process::exit(1);
     }
@@ -483,39 +455,17 @@ async fn main() -> anyhow::Result<()> {
         match get_dfdaemon_download_client(args.endpoint.to_path_buf()).await {
             Ok(client) => client,
             Err(err) => {
-                println!(
-                    "{}{}{}Connect Dfdaemon Failed!{}",
-                    color::Fg(color::Red),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
+                terminal::error("Connect Dfdaemon Failed!");
+                terminal::separator();
+                terminal::field(
+                    "Message:",
+                    format!(
+                        "can not connect {}, please check the unix socket {}",
+                        err,
+                        args.endpoint.to_string_lossy()
+                    ),
                 );
-
-                println!(
-                    "{}{}{}****************************************{}",
-                    color::Fg(color::Black),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
-                );
-
-                println!(
-                    "{}{}{}Message:{}, can not connect {}, please check the unix socket {}",
-                    color::Fg(color::Cyan),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset,
-                    err,
-                    args.endpoint.to_string_lossy(),
-                );
-
-                println!(
-                    "{}{}{}****************************************{}",
-                    color::Fg(color::Black),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
-                );
+                terminal::separator();
 
                 std::process::exit(1);
             }
@@ -527,197 +477,59 @@ async fn main() -> anyhow::Result<()> {
             Error::TonicStatus(status) => {
                 let details = status.details();
                 if let Ok(backend_err) = serde_json::from_slice::<Backend>(details) {
-                    println!(
-                        "{}{}{}Downloading Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::error("Downloading Failed!");
+                    terminal::separator();
 
                     if let Some(status_code) = backend_err.status_code {
-                        println!(
-                            "{}{}{}Bad Status Code:{} {}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            status_code
-                        );
+                        terminal::error_field("Bad Status Code:", status_code);
                     }
 
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        backend_err.message
-                    );
+                    terminal::field("Message:", backend_err.message);
 
                     if !backend_err.header.is_empty() {
-                        println!(
-                            "{}{}{}Header:{}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
+                        terminal::headers(
+                            backend_err
+                                .header
+                                .iter()
+                                .map(|(key, value)| (key.as_str(), value.as_str())),
                         );
-                        for (key, value) in backend_err.header.iter() {
-                            println!("  [{}]: {}", key.as_str(), value.as_str());
-                        }
                     }
 
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::separator();
                 } else {
-                    println!(
-                        "{}{}{}Downloading Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}*********************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Bad Code:{} {}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        status.code()
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        status.message()
-                    );
+                    terminal::error("Downloading Failed!");
+                    terminal::separator();
+                    terminal::error_field("Bad Code:", status.code());
+                    terminal::field("Message:", status.message());
 
                     if !status.details().is_empty() {
-                        println!(
-                            "{}{}{}Details:{} {}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            std::str::from_utf8(status.details()).unwrap()
-                        );
+                        terminal::field("Details:", std::str::from_utf8(status.details()).unwrap());
                     }
 
-                    println!(
-                        "{}{}{}*********************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::separator();
                 }
             }
             Error::BackendError(err) => {
-                println!(
-                    "{}{}{}Downloading Failed!{}",
-                    color::Fg(color::Red),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
-                );
-
-                println!(
-                    "{}{}{}****************************************{}",
-                    color::Fg(color::Black),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
-                );
-
-                println!(
-                    "{}{}{}Message:{} {}",
-                    color::Fg(color::Red),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset,
-                    err.message
-                );
+                terminal::error("Downloading Failed!");
+                terminal::separator();
+                terminal::error_field("Message:", err.message);
 
                 if err.header.is_some() {
-                    println!(
-                        "{}{}{}Header:{}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
+                    terminal::headers(
+                        err.header
+                            .unwrap_or_default()
+                            .iter()
+                            .map(|(key, value)| (key.as_str(), value.to_str().unwrap())),
                     );
-                    for (key, value) in err.header.unwrap_or_default().iter() {
-                        println!("  [{}]: {}", key.as_str(), value.to_str().unwrap());
-                    }
                 }
 
-                println!(
-                    "{}{}{}****************************************{}",
-                    color::Fg(color::Black),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
-                );
+                terminal::separator();
             }
             err => {
-                println!(
-                    "{}{}{}Downloading Failed!{}",
-                    color::Fg(color::Red),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
-                );
-
-                println!(
-                    "{}{}{}****************************************{}",
-                    color::Fg(color::Black),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
-                );
-
-                println!(
-                    "{}{}{}Message:{} {}",
-                    color::Fg(color::Red),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset,
-                    err
-                );
-
-                println!(
-                    "{}{}{}****************************************{}",
-                    color::Fg(color::Black),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
-                );
+                terminal::error("Downloading Failed!");
+                terminal::separator();
+                terminal::error_field("Message:", err);
+                terminal::separator();
             }
         }
 

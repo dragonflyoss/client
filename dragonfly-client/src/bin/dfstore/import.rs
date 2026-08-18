@@ -17,6 +17,7 @@
 use clap::Parser;
 use dragonfly_api::common::v2::ObjectStorage;
 use dragonfly_api::dfdaemon::v2::UploadPersistentTaskRequest;
+use dragonfly_client::terminal;
 use dragonfly_client_config::dfstore::default_dfstore_persistent_replica_count;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
@@ -27,7 +28,6 @@ use indicatif::{ProgressBar, ProgressStyle};
 use path_absolutize::*;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use termion::{color, style};
 use tracing::info;
 use url::Url;
 
@@ -190,38 +190,10 @@ impl ImportCommand {
 
         // Validate the command line arguments.
         if let Err(err) = self.validate_args() {
-            println!(
-                "{}{}{}Validating Failed!{}",
-                color::Fg(color::Red),
-                style::Italic,
-                style::Bold,
-                style::Reset
-            );
-
-            println!(
-                "{}{}{}****************************************{}",
-                color::Fg(color::Black),
-                style::Italic,
-                style::Bold,
-                style::Reset
-            );
-
-            println!(
-                "{}{}{}Message:{} {}",
-                color::Fg(color::Cyan),
-                style::Italic,
-                style::Bold,
-                style::Reset,
-                err,
-            );
-
-            println!(
-                "{}{}{}****************************************{}",
-                color::Fg(color::Black),
-                style::Italic,
-                style::Bold,
-                style::Reset
-            );
+            terminal::error("Validating Failed!");
+            terminal::separator();
+            terminal::field("Message:", err);
+            terminal::separator();
 
             std::process::exit(1);
         }
@@ -231,39 +203,17 @@ impl ImportCommand {
             match get_dfdaemon_download_client(self.endpoint.to_path_buf()).await {
                 Ok(client) => client,
                 Err(err) => {
-                    println!(
-                        "{}{}{}Connect Dfdaemon Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
+                    terminal::error("Connect Dfdaemon Failed!");
+                    terminal::separator();
+                    terminal::field(
+                        "Message:",
+                        format!(
+                            "can not connect {}, please check the unix socket {}",
+                            err,
+                            self.endpoint.to_string_lossy()
+                        ),
                     );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{}, can not connect {}, please check the unix socket {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err,
-                        self.endpoint.to_string_lossy(),
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::separator();
 
                     std::process::exit(1);
                 }
@@ -273,90 +223,18 @@ impl ImportCommand {
         if let Err(err) = self.run(dfdaemon_download_client).await {
             match err {
                 Error::TonicStatus(status) => {
-                    println!(
-                        "{}{}{}Importing Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                    );
-
-                    println!(
-                        "{}{}{}*********************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Bad Code:{} {}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        status.code()
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        status.message()
-                    );
-
-                    println!(
-                        "{}{}{}Details:{} {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        std::str::from_utf8(status.details()).unwrap()
-                    );
-
-                    println!(
-                        "{}{}{}*********************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::error("Importing Failed!");
+                    terminal::separator();
+                    terminal::error_field("Bad Code:", status.code());
+                    terminal::field("Message:", status.message());
+                    terminal::field("Details:", std::str::from_utf8(status.details()).unwrap());
+                    terminal::separator();
                 }
                 err => {
-                    println!(
-                        "{}{}{}Importing Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::error("Importing Failed!");
+                    terminal::separator();
+                    terminal::error_field("Message:", err);
+                    terminal::separator();
                 }
             }
 

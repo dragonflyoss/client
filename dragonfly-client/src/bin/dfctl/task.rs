@@ -24,6 +24,7 @@ use dragonfly_api::scheduler::v2::{
     scheduler_client::SchedulerClient as SchedulerGRPCClient, PreheatFileRequest,
     PreheatImageRequest,
 };
+use dragonfly_client::terminal;
 use dragonfly_client_backend::{hdfs, object_storage, oci};
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
@@ -44,7 +45,6 @@ use tabled::{
     settings::{object::Rows, Alignment, Modify, Style},
     Table, Tabled,
 };
-use termion::{color, style};
 use tonic::transport::Channel;
 use tracing::Level;
 use url::Url;
@@ -147,39 +147,17 @@ impl LsCommand {
             match get_dfdaemon_download_client(self.endpoint.clone()).await {
                 Ok(client) => client,
                 Err(err) => {
-                    println!(
-                        "{}{}{}Connect Dfdaemon Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
+                    terminal::error("Connect Dfdaemon Failed!");
+                    terminal::separator();
+                    terminal::field(
+                        "Message:",
+                        format!(
+                            "can not connect {}, please check the unix socket {}",
+                            err,
+                            self.endpoint.to_string_lossy()
+                        ),
                     );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} can not connect {}, please check the unix socket {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err,
-                        self.endpoint.to_string_lossy(),
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::separator();
 
                     std::process::exit(1);
                 }
@@ -191,197 +169,62 @@ impl LsCommand {
                 Error::TonicStatus(status) => {
                     let details = status.details();
                     if let Ok(backend_err) = serde_json::from_slice::<Backend>(details) {
-                        println!(
-                            "{}{}{}Listing Tasks Failed!{}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}****************************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::error("Listing Tasks Failed!");
+                        terminal::separator();
 
                         if let Some(status_code) = backend_err.status_code {
-                            println!(
-                                "{}{}{}Bad Status Code:{} {}",
-                                color::Fg(color::Red),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset,
-                                status_code
-                            );
+                            terminal::error_field("Bad Status Code:", status_code);
                         }
 
-                        println!(
-                            "{}{}{}Message:{} {}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            backend_err.message
-                        );
+                        terminal::field("Message:", backend_err.message);
 
                         if !backend_err.header.is_empty() {
-                            println!(
-                                "{}{}{}Header:{}",
-                                color::Fg(color::Cyan),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset
+                            terminal::headers(
+                                backend_err
+                                    .header
+                                    .iter()
+                                    .map(|(key, value)| (key.as_str(), value.as_str())),
                             );
-                            for (key, value) in backend_err.header.iter() {
-                                println!("  [{}]: {}", key.as_str(), value.as_str());
-                            }
                         }
 
-                        println!(
-                            "{}{}{}****************************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::separator();
                     } else {
-                        println!(
-                            "{}{}{}Listing Tasks Failed!{}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}*********************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}Bad Code:{} {}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            status.code()
-                        );
-
-                        println!(
-                            "{}{}{}Message:{} {}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            status.message()
-                        );
+                        terminal::error("Listing Tasks Failed!");
+                        terminal::separator();
+                        terminal::error_field("Bad Code:", status.code());
+                        terminal::field("Message:", status.message());
 
                         if !status.details().is_empty() {
-                            println!(
-                                "{}{}{}Details:{} {}",
-                                color::Fg(color::Cyan),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset,
-                                std::str::from_utf8(status.details()).unwrap()
+                            terminal::field(
+                                "Details:",
+                                std::str::from_utf8(status.details()).unwrap(),
                             );
                         }
 
-                        println!(
-                            "{}{}{}*********************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::separator();
                     }
                 }
                 Error::BackendError(err) => {
-                    println!(
-                        "{}{}{}Listing Tasks Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err.message
-                    );
+                    terminal::error("Listing Tasks Failed!");
+                    terminal::separator();
+                    terminal::error_field("Message:", err.message);
 
                     if err.header.is_some() {
-                        println!(
-                            "{}{}{}Header:{}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
+                        terminal::headers(
+                            err.header
+                                .unwrap_or_default()
+                                .iter()
+                                .map(|(key, value)| (key.as_str(), value.to_str().unwrap())),
                         );
-                        for (key, value) in err.header.unwrap_or_default().iter() {
-                            println!("  [{}]: {}", key.as_str(), value.to_str().unwrap());
-                        }
                     }
 
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::separator();
                 }
                 err => {
-                    println!(
-                        "{}{}{}Listing Tasks Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::error("Listing Tasks Failed!");
+                    terminal::separator();
+                    terminal::error_field("Message:", err);
+                    terminal::separator();
                 }
             }
 
@@ -535,39 +378,17 @@ impl RmCommand {
             match get_dfdaemon_download_client(self.endpoint.clone()).await {
                 Ok(client) => client,
                 Err(err) => {
-                    println!(
-                        "{}{}{}Connect Dfdaemon Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
+                    terminal::error("Connect Dfdaemon Failed!");
+                    terminal::separator();
+                    terminal::field(
+                        "Message:",
+                        format!(
+                            "can not connect {}, please check the unix socket {}",
+                            err,
+                            self.endpoint.to_string_lossy()
+                        ),
                     );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} can not connect {}, please check the unix socket {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err,
-                        self.endpoint.to_string_lossy(),
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::separator();
 
                     std::process::exit(1);
                 }
@@ -579,197 +400,62 @@ impl RmCommand {
                 Error::TonicStatus(status) => {
                     let details = status.details();
                     if let Ok(backend_err) = serde_json::from_slice::<Backend>(details) {
-                        println!(
-                            "{}{}{}Removing Task Failed!{}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}****************************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::error("Removing Task Failed!");
+                        terminal::separator();
 
                         if let Some(status_code) = backend_err.status_code {
-                            println!(
-                                "{}{}{}Bad Status Code:{} {}",
-                                color::Fg(color::Red),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset,
-                                status_code
-                            );
+                            terminal::error_field("Bad Status Code:", status_code);
                         }
 
-                        println!(
-                            "{}{}{}Message:{} {}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            backend_err.message
-                        );
+                        terminal::field("Message:", backend_err.message);
 
                         if !backend_err.header.is_empty() {
-                            println!(
-                                "{}{}{}Header:{}",
-                                color::Fg(color::Cyan),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset
+                            terminal::headers(
+                                backend_err
+                                    .header
+                                    .iter()
+                                    .map(|(key, value)| (key.as_str(), value.as_str())),
                             );
-                            for (key, value) in backend_err.header.iter() {
-                                println!("  [{}]: {}", key.as_str(), value.as_str());
-                            }
                         }
 
-                        println!(
-                            "{}{}{}****************************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::separator();
                     } else {
-                        println!(
-                            "{}{}{}Removing Task Failed!{}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}*********************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}Bad Code:{} {}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            status.code()
-                        );
-
-                        println!(
-                            "{}{}{}Message:{} {}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            status.message()
-                        );
+                        terminal::error("Removing Task Failed!");
+                        terminal::separator();
+                        terminal::error_field("Bad Code:", status.code());
+                        terminal::field("Message:", status.message());
 
                         if !status.details().is_empty() {
-                            println!(
-                                "{}{}{}Details:{} {}",
-                                color::Fg(color::Cyan),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset,
-                                std::str::from_utf8(status.details()).unwrap()
+                            terminal::field(
+                                "Details:",
+                                std::str::from_utf8(status.details()).unwrap(),
                             );
                         }
 
-                        println!(
-                            "{}{}{}*********************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::separator();
                     }
                 }
                 Error::BackendError(err) => {
-                    println!(
-                        "{}{}{}Removing Task Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err.message
-                    );
+                    terminal::error("Removing Task Failed!");
+                    terminal::separator();
+                    terminal::error_field("Message:", err.message);
 
                     if err.header.is_some() {
-                        println!(
-                            "{}{}{}Header:{}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
+                        terminal::headers(
+                            err.header
+                                .unwrap_or_default()
+                                .iter()
+                                .map(|(key, value)| (key.as_str(), value.to_str().unwrap())),
                         );
-                        for (key, value) in err.header.unwrap_or_default().iter() {
-                            println!("  [{}]: {}", key.as_str(), value.to_str().unwrap());
-                        }
                     }
 
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::separator();
                 }
                 err => {
-                    println!(
-                        "{}{}{}Removing Task Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::error("Removing Task Failed!");
+                    terminal::separator();
+                    terminal::error_field("Message:", err);
+                    terminal::separator();
                 }
             }
 
@@ -791,13 +477,7 @@ impl RmCommand {
             })
             .await?;
 
-        println!(
-            "{}{}{}Task Removed!{}",
-            color::Fg(color::Green),
-            style::Italic,
-            style::Bold,
-            style::Reset
-        );
+        terminal::success("Task Removed!");
 
         Ok(())
     }
@@ -1093,150 +773,46 @@ impl PreheatCommand {
                 Error::TonicStatus(status) => {
                     let details = status.details();
                     if let Ok(backend_err) = serde_json::from_slice::<Backend>(details) {
-                        println!(
-                            "{}{}{}Preheating Task Failed!{}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}****************************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::error("Preheating Task Failed!");
+                        terminal::separator();
 
                         if let Some(status_code) = backend_err.status_code {
-                            println!(
-                                "{}{}{}Bad Status Code:{} {}",
-                                color::Fg(color::Red),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset,
-                                status_code
-                            );
+                            terminal::error_field("Bad Status Code:", status_code);
                         }
 
-                        println!(
-                            "{}{}{}Message:{} {}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            backend_err.message
-                        );
+                        terminal::field("Message:", backend_err.message);
 
                         if !backend_err.header.is_empty() {
-                            println!(
-                                "{}{}{}Header:{}",
-                                color::Fg(color::Cyan),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset
+                            terminal::headers(
+                                backend_err
+                                    .header
+                                    .iter()
+                                    .map(|(key, value)| (key.as_str(), value.as_str())),
                             );
-                            for (key, value) in backend_err.header.iter() {
-                                println!("  [{}]: {}", key.as_str(), value.as_str());
-                            }
                         }
 
-                        println!(
-                            "{}{}{}****************************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::separator();
                     } else {
-                        println!(
-                            "{}{}{}Preheating Task Failed!{}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}*********************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}Bad Code:{} {}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            status.code()
-                        );
-
-                        println!(
-                            "{}{}{}Message:{} {}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            status.message()
-                        );
+                        terminal::error("Preheating Task Failed!");
+                        terminal::separator();
+                        terminal::error_field("Bad Code:", status.code());
+                        terminal::field("Message:", status.message());
 
                         if !status.details().is_empty() {
-                            println!(
-                                "{}{}{}Details:{} {}",
-                                color::Fg(color::Cyan),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset,
-                                std::str::from_utf8(status.details()).unwrap()
+                            terminal::field(
+                                "Details:",
+                                std::str::from_utf8(status.details()).unwrap(),
                             );
                         }
 
-                        println!(
-                            "{}{}{}*********************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::separator();
                     }
                 }
                 err => {
-                    println!(
-                        "{}{}{}Preheating Task Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::error("Preheating Task Failed!");
+                    terminal::separator();
+                    terminal::error_field("Message:", err);
+                    terminal::separator();
                 }
             }
 
@@ -1310,12 +886,7 @@ impl PreheatCommand {
         };
 
         client.preheat_image(request).await?;
-        println!(
-            "{}{}Preheat Succeeded!{}",
-            color::Fg(color::Green),
-            style::Bold,
-            style::Reset
-        );
+        terminal::success("Preheat Succeeded!");
 
         Ok(())
     }
@@ -1385,12 +956,7 @@ impl PreheatCommand {
         };
 
         client.preheat_file(request).await?;
-        println!(
-            "{}{}Preheat Succeeded!{}",
-            color::Fg(color::Green),
-            style::Bold,
-            style::Reset
-        );
+        terminal::success("Preheat Succeeded!");
 
         Ok(())
     }
@@ -1439,12 +1005,7 @@ impl PreheatCommand {
             .await
             .map_err(|err| Error::Unknown(format!("preheat failed: {err}")))?;
 
-        println!(
-            "{}{}Preheat Succeeded!{}",
-            color::Fg(color::Green),
-            style::Bold,
-            style::Reset
-        );
+        terminal::success("Preheat Succeeded!");
 
         Ok(())
     }
@@ -1485,12 +1046,7 @@ impl PreheatCommand {
             .await
             .map_err(|err| Error::Unknown(format!("preheat failed: {err}")))?;
 
-        println!(
-            "{}{}Preheat Succeeded!{}",
-            color::Fg(color::Green),
-            style::Bold,
-            style::Reset
-        );
+        terminal::success("Preheat Succeeded!");
 
         Ok(())
     }
