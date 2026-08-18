@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-pub use dragonfly_api;
 pub mod buffer_pool;
 pub mod container;
 pub mod digest;
