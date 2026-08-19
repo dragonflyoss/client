@@ -15,7 +15,7 @@
  */
 
 use crate::digest;
-use dragonfly_api::common::v2::TaskType;
+use dragonfly_api::common::v2::{Download, TaskType};
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
@@ -72,6 +72,24 @@ pub enum PersistentCacheTaskIDParameter {
         tag: Option<String>,
         application: Option<String>,
     },
+}
+
+/// Returns the repository revision from the download options of the hub backends
+/// (Hugging Face, ModelScope or OpenCSG), used as the task id revision.
+pub fn repository_revision(download: &Download) -> Option<String> {
+    if let Some(hugging_face) = &download.hugging_face {
+        return Some(hugging_face.revision.clone());
+    }
+
+    if let Some(model_scope) = &download.model_scope {
+        return Some(model_scope.revision.clone());
+    }
+
+    if let Some(open_csg) = &download.open_csg {
+        return Some(open_csg.revision.clone());
+    }
+
+    None
 }
 
 /// Used to generate the id for the resources.
@@ -285,9 +303,42 @@ impl IDGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dragonfly_api::common::v2::{HuggingFace, ModelScope, OpenCsg};
     use std::fs::File;
     use std::io::Write;
     use tempfile::tempdir;
+
+    #[test]
+    fn should_get_repository_revision() {
+        let download = Download {
+            hugging_face: Some(HuggingFace {
+                revision: "main".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(repository_revision(&download).as_deref(), Some("main"));
+
+        let download = Download {
+            model_scope: Some(ModelScope {
+                revision: "master".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(repository_revision(&download).as_deref(), Some("master"));
+
+        let download = Download {
+            open_csg: Some(OpenCsg {
+                revision: "main".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(repository_revision(&download).as_deref(), Some("main"));
+
+        assert!(repository_revision(&Download::default()).is_none());
+    }
 
     #[test]
     fn should_generate_host_id() {

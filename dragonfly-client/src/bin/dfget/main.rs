@@ -1372,7 +1372,6 @@ mod tests {
     use std::collections::HashMap;
     use tempfile::tempdir;
 
-    /// Verifies explicit OpenCSG CLI options are parsed and accepted.
     #[test]
     fn should_parse_open_csg_options() {
         let tempdir = tempfile::tempdir().unwrap();
@@ -1398,7 +1397,6 @@ mod tests {
         );
     }
 
-    /// Verifies OpenCSG downloads default to the main revision without credentials.
     #[test]
     fn should_use_default_open_csg_revision() {
         let tempdir = tempfile::tempdir().unwrap();
@@ -1413,6 +1411,85 @@ mod tests {
         assert_eq!(args.csg_revision, "main");
         assert!(args.csg_token.is_none());
         assert!(args.csg_base_url.is_none());
+    }
+
+    #[test]
+    fn should_parse_hugging_face_options() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let output = tempdir.path().join("model.bin");
+        let args = Args::parse_from([
+            "dfget",
+            "hf://owner/repo/model.bin",
+            "--output",
+            output.to_str().unwrap(),
+            "--hf-revision",
+            "release-v1",
+            "--hf-token",
+            "secret",
+            "--hf-base-url",
+            "https://hf-mirror.com/",
+        ]);
+
+        assert_eq!(args.hf_revision, "release-v1");
+        assert_eq!(args.hf_token.as_deref(), Some("secret"));
+        assert_eq!(args.hf_base_url.as_deref(), Some("https://hf-mirror.com/"));
+    }
+
+    #[test]
+    fn should_use_default_hugging_face_revision() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let output = tempdir.path().join("model.bin");
+        let args = Args::parse_from([
+            "dfget",
+            "hf://owner/repo/model.bin",
+            "--output",
+            output.to_str().unwrap(),
+        ]);
+
+        assert_eq!(args.hf_revision, "main");
+        assert!(args.hf_token.is_none());
+        assert!(args.hf_base_url.is_none());
+    }
+
+    #[test]
+    fn should_parse_model_scope_options() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let output = tempdir.path().join("model.bin");
+        let args = Args::parse_from([
+            "dfget",
+            "modelscope://owner/repo/model.bin",
+            "--output",
+            output.to_str().unwrap(),
+            "--ms-revision",
+            "release-v1",
+            "--ms-token",
+            "secret",
+            "--ms-base-url",
+            "https://modelscope-mirror.example.com/",
+        ]);
+
+        assert_eq!(args.ms_revision, "release-v1");
+        assert_eq!(args.ms_token.as_deref(), Some("secret"));
+        assert_eq!(
+            args.ms_base_url.as_deref(),
+            Some("https://modelscope-mirror.example.com/")
+        );
+    }
+
+    #[test]
+    fn should_use_default_model_scope_revision() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let output = tempdir.path().join("model.bin");
+        let args = Args::parse_from([
+            "dfget",
+            "modelscope://owner/repo/model.bin",
+            "--output",
+            output.to_str().unwrap(),
+        ]);
+
+        assert_eq!(args.ms_revision, "master");
+        assert!(args.ms_token.is_none());
+        assert!(args.ms_base_url.is_none());
     }
 
     #[test]
@@ -1587,13 +1664,40 @@ mod tests {
         assert_eq!(result.unwrap(), output_path.join("dir/file.txt"));
     }
 
-    /// Verifies recursive OpenCSG entries retain their repository-relative output path.
     #[test]
     fn should_make_output_by_open_csg_entry() {
         let url = Url::parse("opencsg://datasets/owner/repo/").unwrap();
         let temp_dir = tempdir().unwrap();
         let entry = DirEntry {
             url: "opencsg://datasets/owner/repo/nested/train.json".to_string(),
+            content_length: 0,
+            is_dir: false,
+        };
+
+        let output = make_output_by_entry(url, temp_dir.path(), entry).unwrap();
+        assert_eq!(output, temp_dir.path().join("nested/train.json"));
+    }
+
+    #[test]
+    fn should_make_output_by_hugging_face_entry() {
+        let url = Url::parse("hf://datasets/owner/repo/").unwrap();
+        let temp_dir = tempdir().unwrap();
+        let entry = DirEntry {
+            url: "hf://datasets/owner/repo/nested/train.json".to_string(),
+            content_length: 0,
+            is_dir: false,
+        };
+
+        let output = make_output_by_entry(url, temp_dir.path(), entry).unwrap();
+        assert_eq!(output, temp_dir.path().join("nested/train.json"));
+    }
+
+    #[test]
+    fn should_make_output_by_model_scope_entry() {
+        let url = Url::parse("modelscope://datasets/owner/repo/").unwrap();
+        let temp_dir = tempdir().unwrap();
+        let entry = DirEntry {
+            url: "modelscope://datasets/owner/repo/nested/train.json".to_string(),
             content_length: 0,
             is_dir: false,
         };
