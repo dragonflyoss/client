@@ -456,31 +456,25 @@ impl Backend for HuggingFace {
                     &api_base_url,
                 )?;
 
-                let response = match self
+                let response = self
                     .client
                     .get(repository_revision_url.as_str())
                     .headers(request_header)
                     .timeout(request.timeout)
                     .send()
                     .await
-                {
-                    Ok(response) => response,
-                    Err(err) => {
+                    .map_err(|err| {
                         error!(
                             "stat request failed {} {}: {}",
                             request.task_id, repository_revision_url, err
                         );
 
-                        return Ok(StatResponse {
-                            success: false,
-                            content_length: None,
-                            http_header: None,
-                            http_status_code: None,
-                            entries: Vec::new(),
-                            error_message: Some(err.to_string()),
-                        });
-                    }
-                };
+                        Error::BackendError(Box::new(BackendError {
+                            message: err.to_string(),
+                            status_code: None,
+                            header: None,
+                        }))
+                    })?;
 
                 let response_status_code = response.status();
                 let response_header = response.headers().clone();
@@ -490,14 +484,16 @@ impl Backend for HuggingFace {
                 };
 
                 if !response.status().is_success() {
-                    return Ok(StatResponse {
-                        success: false,
-                        content_length: None,
-                        http_header: Some(response_header),
-                        http_status_code: response_status_code.into(),
-                        error_message: Some(response_status_code.to_string()),
-                        entries: Vec::new(),
-                    });
+                    error!(
+                        "stat request failed {} {}: {}",
+                        request.task_id, repository_revision_url, response_status_code
+                    );
+
+                    return Err(Error::BackendError(Box::new(BackendError {
+                        message: response_status_code.to_string(),
+                        status_code: Some(response_status_code),
+                        header: Some(response_header),
+                    })));
                 }
 
                 let text = response.text().await.map_err(|err| {
@@ -791,6 +787,12 @@ impl Backend for HuggingFace {
 mod tests {
     use super::*;
     use crate::DEFAULT_USER_AGENT;
+    use dragonfly_api::common::v2::HuggingFace as HuggingFaceOptions;
+    use std::time::Duration;
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
 
     #[test]
     fn test_parse_url_simple() {
@@ -990,5 +992,41 @@ mod tests {
             request_headers.get(RANGE).unwrap(),
             HeaderValue::from_static("bytes=0-1023")
         );
+    }
+
+    #[tokio::test]
+    async fn test_stat_repository_with_error_status() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/models/owner/repo"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let backend = HuggingFace::new(Arc::new(Config::default())).unwrap();
+        let err = backend
+            .stat(StatRequest {
+                task_id: "task".to_string(),
+                url: "hf://owner/repo".to_string(),
+                http_header: None,
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: Some(HuggingFaceOptions {
+                    revision: "main".to_string(),
+                    token: None,
+                    base_url: Some(server.uri()),
+                }),
+                model_scope: None,
+                open_csg: None,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::BackendError(err) if err.status_code == Some(reqwest::StatusCode::UNAUTHORIZED)
+        ));
     }
 }

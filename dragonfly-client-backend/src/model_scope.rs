@@ -426,31 +426,26 @@ impl Backend for ModelScope {
             None => {
                 let file_list_url =
                     Self::build_file_list_url(&parsed_url, &model_scope.revision, &api_base_url)?;
-                let response = match self
+
+                let response = self
                     .client
                     .get(file_list_url.as_str())
                     .headers(request_header)
                     .timeout(request.timeout)
                     .send()
                     .await
-                {
-                    Ok(response) => response,
-                    Err(err) => {
+                    .map_err(|err| {
                         error!(
                             "stat request failed {} {}: {}",
                             request.task_id, file_list_url, err
                         );
 
-                        return Ok(StatResponse {
-                            success: false,
-                            content_length: None,
-                            http_header: None,
-                            http_status_code: None,
-                            entries: Vec::new(),
-                            error_message: Some(err.to_string()),
-                        });
-                    }
-                };
+                        Error::BackendError(Box::new(BackendError {
+                            message: err.to_string(),
+                            status_code: None,
+                            header: None,
+                        }))
+                    })?;
 
                 let response_status_code = response.status();
                 let response_header = response.headers().clone();
@@ -460,14 +455,16 @@ impl Backend for ModelScope {
                 };
 
                 if !response.status().is_success() {
-                    return Ok(StatResponse {
-                        success: false,
-                        content_length: None,
-                        http_header: Some(response_header),
-                        http_status_code: response_status_code.into(),
-                        error_message: Some(response_status_code.to_string()),
-                        entries: Vec::new(),
-                    });
+                    error!(
+                        "stat request failed {} {}: {}",
+                        request.task_id, file_list_url, response_status_code
+                    );
+
+                    return Err(Error::BackendError(Box::new(BackendError {
+                        message: response_status_code.to_string(),
+                        status_code: Some(response_status_code),
+                        header: Some(response_header),
+                    })));
                 }
 
                 let text = response.text().await.map_err(|err| {
@@ -1137,5 +1134,41 @@ mod tests {
             .error_message
             .unwrap()
             .contains("expected 206 Partial Content"));
+    }
+
+    #[tokio::test]
+    async fn test_stat_repository_with_error_status() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/models/owner/repo/repo/files"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let backend = ModelScope::new(Arc::new(Config::default())).unwrap();
+        let err = backend
+            .stat(StatRequest {
+                task_id: "task".to_string(),
+                url: "modelscope://owner/repo".to_string(),
+                http_header: None,
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: Some(ModelScopeOptions {
+                    revision: "master".to_string(),
+                    token: None,
+                    base_url: Some(server.uri()),
+                }),
+                open_csg: None,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::BackendError(err) if err.status_code == Some(reqwest::StatusCode::UNAUTHORIZED)
+        ));
     }
 }

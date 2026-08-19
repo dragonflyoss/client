@@ -720,7 +720,6 @@ mod tests {
             "libhdfs.so"
         };
 
-        // Copy the shared build artifact because these tests can run concurrently.
         std::fs::copy(
             format!("../target/debug/{plugin_file}"),
             backend_dir.join(plugin_file),
