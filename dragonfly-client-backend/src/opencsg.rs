@@ -339,7 +339,10 @@ impl OpenCsg {
     fn build_opencsg_url(parsed_url: &ParsedURL, filename: &str) -> Result<Url> {
         let url = match parsed_url.repository_type {
             RepositoryType::Model => {
-                format!("{}://{}/{}", SCHEME, parsed_url.repository_id, filename)
+                format!(
+                    "{}://models/{}/{}",
+                    SCHEME, parsed_url.repository_id, filename
+                )
             }
             RepositoryType::Dataset => {
                 format!(
@@ -1015,7 +1018,7 @@ mod tests {
         let url = OpenCsg::build_opencsg_url(&parsed_url, "model.safetensors").unwrap();
         assert_eq!(
             url.as_str(),
-            "opencsg://OpenCSG/csg-wukong-1B/model.safetensors"
+            "opencsg://models/OpenCSG/csg-wukong-1B/model.safetensors"
         );
     }
 
@@ -1131,7 +1134,7 @@ mod tests {
         assert_eq!(
             response.entries[0],
             DirEntry {
-                url: "opencsg://owner/repo/nested/config%20file.json".to_string(),
+                url: "opencsg://models/owner/repo/nested/config%20file.json".to_string(),
                 content_length: 12,
                 is_dir: false,
             }
