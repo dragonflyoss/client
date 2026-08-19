@@ -107,7 +107,7 @@ pub struct StatRequest {
     /// Model Scope is the model scope related information.
     pub model_scope: Option<ModelScope>,
 
-    /// OpenCSG protocol information.
+    /// OpenCSG is the OpenCSG related information.
     pub open_csg: Option<OpenCsg>,
 }
 
@@ -169,7 +169,7 @@ pub struct GetRequest {
     /// Model Scope is the model scope related information.
     pub model_scope: Option<ModelScope>,
 
-    /// OpenCSG protocol information.
+    /// OpenCSG is the OpenCSG related information.
     pub open_csg: Option<OpenCsg>,
 }
 
@@ -250,7 +250,7 @@ pub struct ExistsRequest {
     /// Model Scope is the model scope related information.
     pub model_scope: Option<ModelScope>,
 
-    /// OpenCSG protocol information.
+    /// OpenCSG is the OpenCSG related information.
     pub open_csg: Option<OpenCsg>,
 }
 
@@ -286,7 +286,7 @@ pub struct PutRequest {
     /// Model Scope is the model scope related information.
     pub model_scope: Option<ModelScope>,
 
-    /// OpenCSG protocol information.
+    /// OpenCSG is the OpenCSG related information.
     pub open_csg: Option<OpenCsg>,
 }
 

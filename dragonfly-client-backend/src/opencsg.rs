@@ -14,12 +14,24 @@
  * limitations under the License.
  */
 
-//! OpenCSG repository backend.
+//! OpenCSG backend implementation for downloading models and datasets.
 //!
-//! OpenCSG exposes Hugging Face compatible SDK routes below `/csg`. Repository
-//! metadata is used for recursive downloads and file resolve routes are used
-//! for ranged piece downloads. Authentication is deliberately kept in the
-//! request options, so it never becomes part of a task URL.
+//! This module provides support for the `opencsg://` URL scheme to download files
+//! from OpenCSG Hub repositories through its Hugging Face compatible SDK API. It
+//! handles both regular files and Git LFS files.
+//!
+//! # URL Format
+//!
+//! The URL format is: `opencsg://[<repository_type>/]<owner>/<repository>[/<path>]`
+//!
+//! Examples:
+//! - `opencsg://OpenCSG/csg-wukong-1B` - Download entire repository
+//! - `opencsg://OpenCSG/csg-wukong-1B/model.safetensors` - Download specific file
+//! - `opencsg://datasets/OpenCSG/chinese-fineweb-edu` - Download a dataset repository
+//!
+//! # Authentication
+//!
+//! For private repositories, use the `--csg-token` flag.
 
 use crate::{
     empty_body, Backend, Body, DirEntry, ExistsRequest, GetRequest, GetResponse, PutRequest,
@@ -27,7 +39,7 @@ use crate::{
     POOL_MAX_IDLE_PER_HOST,
 };
 use async_trait::async_trait;
-use dragonfly_api::common::v2::{OpenCsg as OpenCsgOptions, Range};
+use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{BackendError, ErrorType, OrErr},
@@ -43,84 +55,131 @@ use std::error::Error as _;
 use std::io::Error as IOError;
 use std::sync::Arc;
 use tokio_util::io::StreamReader;
-use tracing::{error, instrument};
+use tracing::{debug, error, instrument};
 use url::Url;
 
-/// The URL scheme for OpenCSG repositories.
+/// The URL scheme for OpenCSG backend.
 pub const SCHEME: &str = "opencsg";
 
-/// The default OpenCSG SDK endpoint. The `/csg/` prefix is significant.
+/// The base URL for OpenCSG Hub, the `/csg/` path prefix routes to the SDK API.
 const OPEN_CSG_BASE_URL: &str = "https://hub.opencsg.com/csg/";
 
-/// OpenCSG repository kinds exposed by the SDK mapping routes.
+/// Represents the OpenCSG repository information returned by the API.
+#[derive(Default, Debug, Deserialize)]
+#[serde(default)]
+struct Repository {
+    siblings: Option<Vec<Sibling>>,
+}
+
+/// Represents a file or directory in the OpenCSG repository.
+#[derive(Default, Debug, Deserialize)]
+#[serde(default)]
+struct Sibling {
+    rfilename: String,
+    size: Option<u64>,
+    lfs: Option<Lfs>,
+    r#type: Option<String>,
+}
+
+/// Represents Git LFS metadata for large files in the OpenCSG repository.
+#[derive(Default, Debug, Deserialize)]
+#[serde(default)]
+struct Lfs {
+    size: Option<u64>,
+}
+
+/// A parsed representation of an OpenCSG URL.
+///
+/// Format: `opencsg://[<repository_type>/]<owner>/<repository>[/<path>]`
+#[derive(Debug, Clone)]
+pub struct ParsedURL {
+    /// The original, unparsed URL.
+    pub url: Url,
+
+    /// The repository identifier in `<owner>/<repository>` format (e.g., `"OpenCSG/csg-wukong-1B"`).
+    pub repository_id: String,
+
+    /// The type of repository: model, dataset, space, code, mcp, or skill.
+    pub repository_type: RepositoryType,
+
+    /// An optional file path within the repository (e.g., `"path/to/weights.bin"`).
+    pub file_path: Option<String>,
+}
+
+/// The type of an OpenCSG repository.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepositoryType {
-    /// A model repository, the default kind.
+    /// A model repository. This is the default when no type prefix is specified,
+    /// or when explicitly prefixed with `models/`.
     Model,
-    /// A dataset repository.
+
+    /// A dataset repository, prefixed with `datasets/`.
     Dataset,
-    /// A space repository.
+
+    /// A space repository, prefixed with `spaces/`.
     Space,
-    /// A code repository.
+
+    /// A code repository, prefixed with `codes/`.
     Code,
-    /// An MCP server repository.
+
+    /// An MCP server repository, prefixed with `mcps/`.
     Mcp,
-    /// A skill repository.
+
+    /// A skill repository, prefixed with `skills/`.
     Skill,
 }
 
+/// Implements methods for getting string representations and API paths.
 impl RepositoryType {
-    /// Returns the route segment used by OpenCSG.
-    pub fn as_str(self) -> &'static str {
+    /// Returns the canonical route segment (e.g., `"models"`, `"datasets"`).
+    pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Model => "models",
-            Self::Dataset => "datasets",
-            Self::Space => "spaces",
-            Self::Code => "codes",
-            Self::Mcp => "mcps",
-            Self::Skill => "skills",
+            RepositoryType::Model => "models",
+            RepositoryType::Dataset => "datasets",
+            RepositoryType::Space => "spaces",
+            RepositoryType::Code => "codes",
+            RepositoryType::Mcp => "mcps",
+            RepositoryType::Skill => "skills",
         }
     }
 
-    /// Parses a canonical repository type route segment.
+    /// Parses a canonical route segment into a repository type.
     fn from_segment(segment: &str) -> Option<Self> {
         match segment {
-            "models" => Some(Self::Model),
-            "datasets" => Some(Self::Dataset),
-            "spaces" => Some(Self::Space),
-            "codes" => Some(Self::Code),
-            "mcps" => Some(Self::Mcp),
-            "skills" => Some(Self::Skill),
+            "models" => Some(RepositoryType::Model),
+            "datasets" => Some(RepositoryType::Dataset),
+            "spaces" => Some(RepositoryType::Space),
+            "codes" => Some(RepositoryType::Code),
+            "mcps" => Some(RepositoryType::Mcp),
+            "skills" => Some(RepositoryType::Skill),
             _ => None,
         }
     }
 }
 
-/// Parsed representation of an `opencsg://` URL.
-#[derive(Debug, Clone)]
-pub struct ParsedURL {
-    /// Original URL.
-    pub url: Url,
-    /// Repository identifier in `owner/name` form.
-    pub repository_id: String,
-    /// OpenCSG repository kind.
-    pub repository_type: RepositoryType,
-    /// Optional repository-relative file path.
-    pub file_path: Option<String>,
-}
-
+/// Parses an OpenCSG URL into its constituent components.
+///
+/// URL Format: opencsg://[<repository_type>/]<owner>/<repository>[/<path>]
+/// - repository_type  Optional. One of "models" (default), "datasets", "spaces",
+///   "codes", "mcps", or "skills".
+/// - owner/repository Required. For example, "OpenCSG/csg-wukong-1B".
+/// - path             Optional file path within the repository.
 impl TryFrom<Url> for ParsedURL {
     type Error = Error;
 
-    /// Parses `opencsg://[type/]owner/repository[/path]`.
+    /// Parses the URL and returns a ParsedURL.
     fn try_from(url: Url) -> std::result::Result<Self, Self::Error> {
         if url.scheme() != SCHEME {
             return Err(Error::InvalidURI(url.to_string()));
         }
+
         let host = url
             .host_str()
             .ok_or_else(|| Error::InvalidURI(url.to_string()))?;
         let raw_path = format!("{}{}", host, url.path().trim_end_matches('/'));
+
+        // Decode each segment so it is re-encoded canonically when building
+        // provider URLs, and reject decoded separators and NUL bytes.
         let segments: Vec<String> = raw_path
             .trim_matches('/')
             .split('/')
@@ -131,88 +190,75 @@ impl TryFrom<Url> for ParsedURL {
                     .map_err(|_| Error::InvalidURI(url.to_string()))
             })
             .collect::<Result<_>>()?;
-        if segments.iter().any(|segment| {
-            segment.contains('/') || segment.contains('\\') || segment.contains('\0')
-        }) {
+        if segments
+            .iter()
+            .any(|segment| segment.contains(['/', '\\', '\0']))
+        {
             return Err(Error::InvalidURI(url.to_string()));
         }
+
         let (repository_type, offset) = match segments.first() {
             Some(segment) => match RepositoryType::from_segment(segment) {
-                Some(kind) => (kind, 1),
+                Some(repository_type) => (repository_type, 1),
                 None => (RepositoryType::Model, 0),
             },
             None => return Err(Error::InvalidParameter),
         };
+
+        // After stripping the optional type prefix, at least two non-empty
+        // segments (owner and repository name) must remain.
         let remaining = &segments[offset..];
         if remaining.len() < 2 || remaining.iter().any(|segment| segment.is_empty()) {
             return Err(Error::InvalidParameter);
         }
-        Ok(Self {
+
+        let repository_id = format!("{}/{}", remaining[0], remaining[1]);
+        let file_path = if remaining.len() > 2 {
+            Some(remaining[2..].join("/"))
+        } else {
+            None
+        };
+
+        Ok(ParsedURL {
             url,
-            repository_id: format!("{}/{}", remaining[0], remaining[1]),
             repository_type,
-            file_path: (remaining.len() > 2).then(|| remaining[2..].join("/")),
+            repository_id,
+            file_path,
         })
     }
 }
 
+/// Implements TryFrom for &str.
 impl TryFrom<&str> for ParsedURL {
     type Error = Error;
 
-    /// Parses a string URL.
+    /// Try to parse a string URL into a ParsedURL struct.
     fn try_from(url: &str) -> std::result::Result<Self, Self::Error> {
-        ParsedURL::try_from(Url::parse(url).or_err(ErrorType::ParseError)?)
+        let parsed_url = Url::parse(url).or_err(ErrorType::ParseError)?;
+        ParsedURL::try_from(parsed_url)
     }
 }
 
-/// Repository metadata returned by OpenCSG SDK-compatible APIs.
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct Metadata {
-    /// Files contained in the requested repository revision.
-    siblings: Option<Vec<Sibling>>,
-}
-
-/// A repository metadata entry.
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct Sibling {
-    /// Repository-relative file name.
-    #[serde(rename = "rfilename")]
-    filename: String,
-    /// File size when provided by the metadata endpoint.
-    size: Option<u64>,
-    /// Git LFS metadata when the entry is backed by LFS.
-    lfs: Option<Lfs>,
-    /// Entry kind when returned by a compatible endpoint.
-    #[serde(rename = "type")]
-    entry_type: Option<String>,
-}
-
-/// Relevant Git LFS metadata for a repository entry.
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct Lfs {
-    /// Downloadable LFS object size.
-    size: Option<u64>,
-}
-
-/// OpenCSG backend implementation.
+/// The OpenCSG backend implementation.
 pub struct OpenCsg {
-    /// Registered backend scheme.
+    /// The scheme of the OpenCSG backend.
     scheme: String,
-    /// HTTP client used for metadata and resolve requests.
+
+    /// HTTP client for making requests.
     client: Client,
 }
 
+/// Implements the OpenCSG interface.
 impl OpenCsg {
-    /// Creates an OpenCSG backend using dfdaemon's common TLS and DNS settings.
+    /// Create a new OpenCsg backend.
     pub fn new(config: Arc<Config>) -> Result<Self> {
+        // Default TLS client config with no validation.
         let client_config_builder = rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(NoVerifier::new())
             .with_no_client_auth();
-        let client = Client::builder()
+
+        let client = reqwest::Client::builder()
             .no_gzip()
             .no_brotli()
             .no_zstd()
@@ -223,54 +269,58 @@ impl OpenCsg {
             .tcp_keepalive(KEEP_ALIVE_INTERVAL)
             .tcp_nodelay(true)
             .build()?;
+
         Ok(Self {
             scheme: SCHEME.to_string(),
             client,
         })
     }
 
-    /// Normalizes a base URL while retaining any user-supplied path prefix.
+    /// Resolves the base URLs from gRPC OpenCSG options, keeping any path prefix
+    /// (e.g., `/csg/`) from custom endpoints.
     fn resolve_base_urls(base_url: Option<&str>) -> Result<(Url, Url)> {
-        let mut base = Url::parse(base_url.unwrap_or(OPEN_CSG_BASE_URL))?;
-        if !base.path().ends_with('/') {
-            let path = format!("{}/", base.path());
-            base.set_path(&path);
+        let mut base_url = Url::parse(base_url.unwrap_or(OPEN_CSG_BASE_URL))?;
+        if !base_url.path().ends_with('/') {
+            let path = format!("{}/", base_url.path());
+            base_url.set_path(&path);
         }
-        let api = base.join("api/")?;
-        Ok((base, api))
+
+        let api_base_url = base_url.join("api/")?;
+        Ok((base_url, api_base_url))
     }
 
     /// Appends already-decoded path segments so `Url` performs canonical escaping.
-    fn append_segments(mut base: Url, segments: impl IntoIterator<Item = String>) -> Result<Url> {
-        let base_string = base.to_string();
+    fn append_segments(
+        mut base_url: Url,
+        segments: impl IntoIterator<Item = String>,
+    ) -> Result<Url> {
         {
-            let mut path = base
+            let mut path_segments = base_url
                 .path_segments_mut()
-                .map_err(|_| Error::InvalidURI(base_string))?;
-            path.pop_if_empty();
+                .map_err(|_| Error::InvalidParameter)?;
+            path_segments.pop_if_empty();
             for segment in segments {
-                path.push(&segment);
+                path_segments.push(&segment);
             }
         }
-        Ok(base)
+
+        Ok(base_url)
     }
 
-    /// Splits a repository-relative path and rejects components unsafe for local output paths.
+    /// Splits a repository-relative path and rejects components unsafe for local
+    /// output paths.
     fn repository_path_segments(path: &str) -> Result<Vec<String>> {
         let segments: Vec<&str> = path.split('/').collect();
-        if segments.is_empty()
-            || segments
-                .iter()
-                .any(|segment| segment.is_empty() || matches!(*segment, "." | ".."))
-            || segments.iter().any(|segment| segment.contains('\\'))
-            || segments.iter().any(|segment| segment.contains('\0'))
-        {
+        if segments.iter().any(|segment| {
+            segment.is_empty() || matches!(*segment, "." | "..") || segment.contains(['\\', '\0'])
+        }) {
             return Err(Error::InvalidParameter);
         }
+
         Ok(segments.into_iter().map(str::to_string).collect())
     }
 
-    /// Builds a provider resolve URL for a file.
+    /// Builds the download URL for a file based on the repository type and path.
     fn build_download_url(
         parsed_url: &ParsedURL,
         file_path: &str,
@@ -281,6 +331,7 @@ impl OpenCsg {
         if parsed_url.repository_type != RepositoryType::Model {
             segments.push(parsed_url.repository_type.as_str().to_string());
         }
+
         segments.extend(parsed_url.repository_id.split('/').map(str::to_string));
         segments.push("resolve".to_string());
         segments.push(revision.to_string());
@@ -288,236 +339,341 @@ impl OpenCsg {
         Self::append_segments(base_url.clone(), segments)
     }
 
-    /// Builds the revision metadata URL used for recursive repository listing.
-    fn build_metadata_url(parsed_url: &ParsedURL, revision: &str, api_base: &Url) -> Result<Url> {
+    /// Builds the API URL for fetching repository information at a specific revision.
+    fn build_repository_revision_url(
+        parsed_url: &ParsedURL,
+        revision: &str,
+        api_base_url: &Url,
+    ) -> Result<Url> {
         let mut segments = vec![parsed_url.repository_type.as_str().to_string()];
         segments.extend(parsed_url.repository_id.split('/').map(str::to_string));
         segments.push("revision".to_string());
         segments.push(revision.to_string());
-        let mut url = Self::append_segments(api_base.clone(), segments)?;
+
+        let mut url = Self::append_segments(api_base_url.clone(), segments)?;
         if parsed_url.repository_type == RepositoryType::Model {
             url.query_pairs_mut().append_pair("blobs", "true");
         }
+
         Ok(url)
     }
 
-    /// Builds an `opencsg://` child URL that keeps downloads on this backend.
+    /// Builds an `opencsg://` URL for a file so downstream downloads continue to
+    /// use the OpenCSG backend (preserving auth and URL semantics).
     fn build_opencsg_url(parsed_url: &ParsedURL, filename: &str) -> Result<Url> {
-        let repository_segments: Vec<&str> = parsed_url.repository_id.split('/').collect();
-        let owner = repository_segments.first().ok_or(Error::InvalidParameter)?;
-        let repository = repository_segments.get(1).ok_or(Error::InvalidParameter)?;
-        let explicit_model = parsed_url.repository_type == RepositoryType::Model
-            && parsed_url.url.host_str() == Some(RepositoryType::Model.as_str());
-        let (authority, mut path) = if explicit_model {
-            (
-                RepositoryType::Model.as_str(),
-                vec![(*owner).to_string(), (*repository).to_string()],
-            )
-        } else if parsed_url.repository_type == RepositoryType::Model {
-            (*owner, vec![(*repository).to_string()])
-        } else {
-            (
-                parsed_url.repository_type.as_str(),
-                vec![(*owner).to_string(), (*repository).to_string()],
-            )
+        let (owner, repository) = parsed_url
+            .repository_id
+            .split_once('/')
+            .ok_or(Error::InvalidParameter)?;
+        let (authority, mut segments) = match parsed_url.repository_type {
+            RepositoryType::Model => (owner, vec![repository.to_string()]),
+            repository_type => (
+                repository_type.as_str(),
+                vec![owner.to_string(), repository.to_string()],
+            ),
         };
-        let mut url = Url::parse(&format!("{SCHEME}://{authority}"))?;
-        path.extend(Self::repository_path_segments(filename)?);
-        let url_string = url.to_string();
-        {
-            let mut path_segments = url
-                .path_segments_mut()
-                .map_err(|_| Error::InvalidURI(url_string))?;
-            for segment in path {
-                path_segments.push(&segment);
-            }
-        }
-        Ok(url)
+
+        segments.extend(Self::repository_path_segments(filename)?);
+        Self::append_segments(Url::parse(&format!("{SCHEME}://{authority}"))?, segments)
     }
 
-    /// Builds Authorization, User-Agent and optional single-range headers.
+    /// Build the request headers for OpenCSG API requests, including authentication if a
+    /// token is provided by the `--csg-token` CLI flag.
     fn build_request_headers(token: Option<String>, range: Option<Range>) -> Result<HeaderMap> {
-        let mut headers = HeaderMap::new();
-        if let Some(range) = range {
+        let mut request_header = HeaderMap::new();
+
+        // Add Range header if present in the request.
+        if let Some(range) = &range {
             if range.length == 0 {
                 return Err(Error::InvalidParameter);
             }
+
             let end = range
                 .start
                 .checked_add(range.length - 1)
                 .ok_or(Error::InvalidParameter)?;
-            headers.insert(RANGE, format!("bytes={}-{end}", range.start).parse()?);
-        }
-        headers
+            request_header.insert(RANGE, format!("bytes={}-{}", range.start, end).parse()?);
+        };
+
+        // Make the user agent if not specified in header.
+        request_header
             .entry(USER_AGENT)
             .or_insert(HeaderValue::from_static(DEFAULT_USER_AGENT));
+
+        // Add the Authorization header for OpenCSG API authentication.
         if let Some(token) = token {
-            headers.insert(
-                AUTHORIZATION,
-                HeaderValue::from_str(&format!("Bearer {token}"))
-                    .map_err(|_| Error::InvalidParameter)?,
-            );
+            request_header.insert(AUTHORIZATION, format!("Bearer {token}").parse()?);
         }
-        Ok(headers)
-    }
 
-    /// Wraps response decoding failures as backend errors.
-    fn backend_error(message: impl Into<String>) -> Error {
-        Error::BackendError(Box::new(BackendError {
-            message: message.into(),
-            status_code: None,
-            header: None,
-        }))
-    }
-
-    /// Validates options that are required by every OpenCSG request.
-    fn validate_options(options: &OpenCsgOptions) -> Result<()> {
-        if options.revision.trim().is_empty() {
-            return Err(Error::InvalidParameter);
-        }
-        Ok(())
+        Ok(request_header)
     }
 }
 
+/// Backend implementation for OpenCSG.
 #[async_trait]
 impl Backend for OpenCsg {
-    /// Returns the OpenCSG URL scheme.
+    /// Returns the scheme of the backend.
     fn scheme(&self) -> String {
         self.scheme.clone()
     }
 
-    /// Stats a file with HEAD or lists repository metadata with GET.
+    /// Stat the file or repository information.
     #[instrument(skip_all)]
     async fn stat(&self, request: StatRequest) -> Result<StatResponse> {
-        let options = request.open_csg.as_ref().ok_or_else(|| {
+        debug!(
+            "stat request {} {}: {:?}",
+            request.task_id, request.url, request.http_header
+        );
+
+        // Get the OpenCSG information from the request, request must contain OpenCSG
+        // information for stat request, otherwise return error.
+        let open_csg = request.open_csg.as_ref().ok_or_else(|| {
             error!(
                 "stat request {} {}: missing OpenCSG information",
                 request.task_id, request.url
             );
+
             Error::InvalidParameter
         })?;
-        Self::validate_options(options)?;
-        let headers = Self::build_request_headers(options.token.clone(), None)?;
-        let parsed = ParsedURL::try_from(request.url.as_str())?;
-        let (base, api) = Self::resolve_base_urls(options.base_url.as_deref())?;
-        let response = if let Some(file_path) = parsed.file_path.as_deref() {
-            let url = Self::build_download_url(&parsed, file_path, &options.revision, &base)?;
-            self.client
-                .head(url)
-                .headers(headers)
-                .timeout(request.timeout)
-                .send()
-                .await
-        } else {
-            let url = Self::build_metadata_url(&parsed, &options.revision, &api)?;
-            self.client
-                .get(url)
-                .headers(headers)
-                .timeout(request.timeout)
-                .send()
-                .await
-        };
-        let response = match response {
-            Ok(response) => response,
-            Err(err) => {
-                return Ok(StatResponse {
-                    success: false,
-                    content_length: None,
-                    http_header: None,
-                    http_status_code: None,
-                    entries: vec![],
-                    error_message: Some(err.to_string()),
-                });
-            }
-        };
-        let status = response.status();
-        let response_headers = response.headers().clone();
-        let content_length = response_headers
-            .get(CONTENT_LENGTH)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<u64>().ok())
-            .or(response.content_length());
-        if parsed.file_path.is_some() {
-            return Ok(StatResponse {
-                success: status.is_success(),
-                content_length,
-                http_header: Some(response_headers),
-                http_status_code: Some(status),
-                entries: vec![],
-                error_message: Some(status.to_string()),
-            });
-        }
-        if !status.is_success() {
-            return Ok(StatResponse {
-                success: false,
-                content_length: None,
-                http_header: Some(response_headers),
-                http_status_code: Some(status),
-                entries: vec![],
-                error_message: Some(status.to_string()),
-            });
-        }
-        let body = response
-            .text()
-            .await
-            .map_err(|err| Self::backend_error(err.to_string()))?;
-        let metadata: Metadata =
-            serde_json::from_str(&body).map_err(|err| Self::backend_error(err.to_string()))?;
-        let entries = metadata
-            .siblings
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|sibling| {
-                !sibling.filename.is_empty() && sibling.entry_type.as_deref() != Some("tree")
-            })
-            .map(|sibling| {
-                Ok(DirEntry {
-                    url: Self::build_opencsg_url(&parsed, &sibling.filename)?.to_string(),
-                    content_length: sibling
-                        .lfs
-                        .and_then(|lfs| lfs.size)
-                        .or(sibling.size)
-                        .unwrap_or_default() as usize,
-                    is_dir: false,
+
+        // Build request headers, including authentication if provided OpenCSG token.
+        let request_header = Self::build_request_headers(open_csg.token.clone(), None)?;
+
+        let parsed_url = ParsedURL::try_from(request.url.as_str())?;
+        let (base_url, api_base_url) = Self::resolve_base_urls(open_csg.base_url.as_deref())?;
+        match &parsed_url.file_path {
+            Some(file_path) => {
+                let download_url = Self::build_download_url(
+                    &parsed_url,
+                    file_path,
+                    &open_csg.revision,
+                    &base_url,
+                )?;
+
+                let response = match self
+                    .client
+                    .head(download_url.as_str())
+                    .headers(request_header)
+                    .timeout(request.timeout)
+                    .send()
+                    .await
+                {
+                    Ok(response) => response,
+                    Err(err) => {
+                        error!(
+                            "stat request failed {} {}: {}",
+                            request.task_id, download_url, err
+                        );
+
+                        return Ok(StatResponse {
+                            success: false,
+                            content_length: None,
+                            http_header: None,
+                            http_status_code: None,
+                            entries: Vec::new(),
+                            error_message: Some(err.to_string()),
+                        });
+                    }
+                };
+
+                let response_status_code = response.status();
+                let response_header = response.headers().clone();
+                let content_length = match response_header.get(CONTENT_LENGTH) {
+                    Some(content_length) => content_length.to_str()?.parse::<u64>().ok(),
+                    None => response.content_length(),
+                };
+
+                debug!(
+                    "stat response {} {}: {:?} {:?} {:?}",
+                    request.task_id,
+                    download_url,
+                    response_status_code,
+                    content_length,
+                    response_header
+                );
+
+                Ok(StatResponse {
+                    success: response_status_code.is_success(),
+                    content_length,
+                    http_header: Some(response_header),
+                    http_status_code: Some(response_status_code),
+                    error_message: Some(response_status_code.to_string()),
+                    entries: Vec::new(),
                 })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(StatResponse {
-            success: true,
-            content_length,
-            http_header: Some(response_headers),
-            http_status_code: Some(status),
-            entries,
-            error_message: Some(status.to_string()),
-        })
+            }
+            None => {
+                let repository_revision_url = Self::build_repository_revision_url(
+                    &parsed_url,
+                    &open_csg.revision,
+                    &api_base_url,
+                )?;
+
+                // A failed listing must not be mistaken for an empty repository, so
+                // listing failures are returned as backend errors.
+                let response = self
+                    .client
+                    .get(repository_revision_url.as_str())
+                    .headers(request_header)
+                    .timeout(request.timeout)
+                    .send()
+                    .await
+                    .map_err(|err| {
+                        error!(
+                            "stat request failed {} {}: {}",
+                            request.task_id, repository_revision_url, err
+                        );
+
+                        Error::BackendError(Box::new(BackendError {
+                            message: err.to_string(),
+                            status_code: None,
+                            header: None,
+                        }))
+                    })?;
+
+                let response_status_code = response.status();
+                let response_header = response.headers().clone();
+                if !response_status_code.is_success() {
+                    error!(
+                        "stat request failed {} {}: {}",
+                        request.task_id, repository_revision_url, response_status_code
+                    );
+
+                    return Err(Error::BackendError(Box::new(BackendError {
+                        message: response_status_code.to_string(),
+                        status_code: Some(response_status_code),
+                        header: Some(response_header),
+                    })));
+                }
+
+                let content_length = match response_header.get(CONTENT_LENGTH) {
+                    Some(content_length) => content_length.to_str()?.parse::<u64>().ok(),
+                    None => response.content_length(),
+                };
+
+                let text = response.text().await.map_err(|err| {
+                    error!(
+                        "stat request failed {} {}: {}",
+                        request.task_id, repository_revision_url, err
+                    );
+
+                    Error::BackendError(Box::new(BackendError {
+                        message: err.to_string(),
+                        status_code: None,
+                        header: None,
+                    }))
+                })?;
+
+                let repository: Repository = serde_json::from_str(&text).map_err(|err| {
+                    error!(
+                        "stat request failed {} {}: {}",
+                        request.task_id, repository_revision_url, err
+                    );
+
+                    Error::BackendError(Box::new(BackendError {
+                        message: err.to_string(),
+                        status_code: None,
+                        header: None,
+                    }))
+                })?;
+
+                let entries: Vec<DirEntry> = repository
+                    .siblings
+                    .unwrap_or_default()
+                    .into_iter()
+                    // OpenCSG lists files recursively, skip directory placeholders.
+                    .filter(|sibling| {
+                        !sibling.rfilename.is_empty() && sibling.r#type.as_deref() != Some("tree")
+                    })
+                    .map(|sibling| -> Result<DirEntry> {
+                        // Return opencsg:// URLs so downstream downloads continue to use
+                        // the OpenCSG backend (preserving auth and URL semantics).
+                        let opencsg_url = Self::build_opencsg_url(&parsed_url, &sibling.rfilename)?;
+                        let content_length = sibling
+                            .lfs
+                            .and_then(|lfs| lfs.size)
+                            .or(sibling.size)
+                            .unwrap_or(0);
+
+                        Ok(DirEntry {
+                            url: opencsg_url.to_string(),
+                            content_length: content_length as usize,
+                            is_dir: false,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                debug!(
+                    "stat response {} {}: {:?} {:?} {:?}",
+                    request.task_id,
+                    repository_revision_url,
+                    response_status_code,
+                    content_length,
+                    response_header
+                );
+
+                Ok(StatResponse {
+                    success: true,
+                    content_length,
+                    http_header: Some(response_header),
+                    http_status_code: Some(response_status_code),
+                    error_message: Some(response_status_code.to_string()),
+                    entries,
+                })
+            }
+        }
     }
 
-    /// Downloads a file through a single-range GET and streams the response.
+    /// Get the content from the backend.
     #[instrument(skip_all)]
     async fn get(&self, request: GetRequest) -> Result<GetResponse<Body>> {
-        let options = request.open_csg.as_ref().ok_or_else(|| {
+        debug!(
+            "get request {} {} {}: {:?}",
+            request.task_id, request.piece_id, request.url, request.http_header
+        );
+
+        // Get the OpenCSG information from the request, request must contain OpenCSG
+        // information for get request, otherwise return error.
+        let open_csg = request.open_csg.as_ref().ok_or_else(|| {
             error!(
                 "get request {} {}: missing OpenCSG information",
                 request.task_id, request.url
             );
+
             Error::InvalidParameter
         })?;
-        Self::validate_options(options)?;
-        let parsed = ParsedURL::try_from(request.url.as_str())?;
-        let file_path = parsed.file_path.as_deref().ok_or(Error::InvalidParameter)?;
-        let (base, _) = Self::resolve_base_urls(options.base_url.as_deref())?;
-        let url = Self::build_download_url(&parsed, file_path, &options.revision, &base)?;
-        let headers = Self::build_request_headers(options.token.clone(), request.range)?;
+
+        // Build request headers, including authentication if provided OpenCSG token.
+        let request_header = Self::build_request_headers(open_csg.token.clone(), request.range)?;
+
+        // Parse the URL and build the download URL for the specified file.
+        let parsed_url = ParsedURL::try_from(request.url.as_str())?;
+        let Some(file_path) = &parsed_url.file_path else {
+            error!(
+                "get request {} {}: URL must specify a file path",
+                request.task_id, request.url
+            );
+
+            return Err(Error::InvalidParameter);
+        };
+
+        let (base_url, _) = Self::resolve_base_urls(open_csg.base_url.as_deref())?;
+        let download_url =
+            Self::build_download_url(&parsed_url, file_path, &open_csg.revision, &base_url)?;
         let response = match self
             .client
-            .get(url)
-            .headers(headers)
+            .get(download_url.as_str())
+            .headers(request_header)
             .timeout(request.timeout)
             .send()
             .await
         {
             Ok(response) => response,
             Err(err) => {
+                error!(
+                    "get request failed {} {} {}: {}",
+                    request.task_id, request.piece_id, download_url, err
+                );
+
                 return Ok(GetResponse {
                     success: false,
                     http_header: None,
@@ -527,35 +683,30 @@ impl Backend for OpenCsg {
                 });
             }
         };
-        let response_headers = response.headers().clone();
-        let status = response.status();
-        if request.range.is_some()
-            && status.is_success()
-            && status != reqwest::StatusCode::PARTIAL_CONTENT
+
+        let response_header = response.headers().clone();
+        let response_status_code = response.status();
+        if let Err(err) =
+            validate_ranged_response(request.range, response_status_code, &response_header)
         {
+            error!(
+                "get request failed {} {} {}: {}",
+                request.task_id, request.piece_id, download_url, err
+            );
+
             return Ok(GetResponse {
                 success: false,
-                http_header: Some(response_headers),
-                http_status_code: Some(status),
-                reader: empty_body(),
-                error_message: Some(format!(
-                    "expected 206 Partial Content for ranged OpenCSG request, got {status}"
-                )),
-            });
-        }
-        if let Err(err) = validate_ranged_response(request.range, status, &response_headers) {
-            return Ok(GetResponse {
-                success: false,
-                http_header: Some(response_headers),
-                http_status_code: Some(status),
+                http_header: Some(response_header),
+                http_status_code: Some(response_status_code),
                 reader: empty_body(),
                 error_message: Some(err.to_string()),
             });
         }
-        let reader = StreamReader::new(
+
+        let response_reader = StreamReader::new(
             response
                 .bytes_stream()
-                .map_err(|err| {
+                .map_err(move |err| {
                     let mut chain = err.to_string();
                     let mut source = err.source();
                     while let Some(err) = source {
@@ -568,53 +719,90 @@ impl Backend for OpenCsg {
                 })
                 .boxed(),
         );
+
+        debug!(
+            "get response {} {}: {:?} {:?}",
+            request.task_id, request.piece_id, response_status_code, response_header,
+        );
+
         Ok(GetResponse {
-            success: status.is_success(),
-            http_header: Some(response_headers),
-            http_status_code: Some(status),
-            reader,
-            error_message: Some(status.to_string()),
+            success: response_status_code.is_success(),
+            http_header: Some(response_header),
+            http_status_code: Some(response_status_code),
+            reader: response_reader,
+            error_message: Some(response_status_code.to_string()),
         })
     }
 
-    /// OpenCSG upload is outside the download protocol.
-    #[instrument(skip_all)]
+    /// Put the content to the backend.
     async fn put(&self, _request: PutRequest) -> Result<PutResponse> {
         unimplemented!()
     }
 
-    /// Checks file existence with HEAD, or repository existence with metadata GET.
+    /// Exists checks whether the file or the repository exists in the backend.
     #[instrument(skip_all)]
     async fn exists(&self, request: ExistsRequest) -> Result<bool> {
-        let options = request.open_csg.as_ref().ok_or(Error::InvalidParameter)?;
-        Self::validate_options(options)?;
-        let headers = Self::build_request_headers(options.token.clone(), None)?;
-        let parsed = ParsedURL::try_from(request.url.as_str())?;
-        let (base, api) = Self::resolve_base_urls(options.base_url.as_deref())?;
-        let response = if let Some(file_path) = parsed.file_path.as_deref() {
-            let url = Self::build_download_url(&parsed, file_path, &options.revision, &base)?;
-            self.client
-                .head(url)
-                .headers(headers)
-                .timeout(request.timeout)
-                .send()
-                .await
-        } else {
-            let url = Self::build_metadata_url(&parsed, &options.revision, &api)?;
-            self.client
-                .get(url)
-                .headers(headers)
-                .timeout(request.timeout)
-                .send()
-                .await
-        }?;
-        Ok(response.status().is_success())
+        debug!(
+            "exists request {} {}: {:?}",
+            request.task_id, request.url, request.http_header
+        );
+
+        // Get the OpenCSG information from the request, request must contain OpenCSG
+        // information for exists request, otherwise return error.
+        let open_csg = request.open_csg.as_ref().ok_or_else(|| {
+            error!(
+                "exists request {} {}: missing OpenCSG information",
+                request.task_id, request.url
+            );
+
+            Error::InvalidParameter
+        })?;
+
+        // Build request headers, including authentication if provided OpenCSG token.
+        let request_header = Self::build_request_headers(open_csg.token.clone(), None)?;
+
+        let parsed_url = ParsedURL::try_from(request.url.as_str())?;
+        let (base_url, api_base_url) = Self::resolve_base_urls(open_csg.base_url.as_deref())?;
+        let url = match &parsed_url.file_path {
+            Some(file_path) => {
+                Self::build_download_url(&parsed_url, file_path, &open_csg.revision, &base_url)?
+            }
+            None => {
+                Self::build_repository_revision_url(&parsed_url, &open_csg.revision, &api_base_url)?
+            }
+        };
+
+        let response = self
+            .client
+            .head(url.as_str())
+            .headers(request_header)
+            .timeout(request.timeout)
+            .send()
+            .await
+            .inspect_err(|err| {
+                error!(
+                    "exists request failed {} {}: {}",
+                    request.task_id, request.url, err
+                );
+            })?;
+
+        let response_status_code = response.status();
+        debug!(
+            "exists response {} {}: {:?} {:?}",
+            request.task_id,
+            request.url,
+            response_status_code,
+            response.headers()
+        );
+
+        Ok(response_status_code.is_success())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dragonfly_api::common::v2::OpenCsg as OpenCsgOptions;
     use std::time::Duration;
     use wiremock::{
         matchers::{header, method, path, query_param},
@@ -644,39 +832,42 @@ mod tests {
             ("mcps", RepositoryType::Mcp),
             ("skills", RepositoryType::Skill),
         ] {
-            let parsed =
+            let parsed_url =
                 ParsedURL::try_from(format!("opencsg://{segment}/owner/repo").as_str()).unwrap();
-            assert_eq!(parsed.repository_type, repository_type);
+            assert_eq!(parsed_url.repository_type, repository_type);
         }
     }
 
-    /// Verifies resolve and metadata URLs retain custom endpoint path prefixes.
+    /// Verifies resolve and revision URLs retain custom endpoint path prefixes.
     #[test]
     fn builds_urls_and_preserves_csg_prefix() {
-        let parsed = ParsedURL::try_from("opencsg://owner/repo/model%20file.bin").unwrap();
-        let (base, api) =
+        let parsed_url = ParsedURL::try_from("opencsg://owner/repo/model%20file.bin").unwrap();
+        let (base_url, api_base_url) =
             OpenCsg::resolve_base_urls(Some("https://example.test/private/csg")).unwrap();
-        let download =
-            OpenCsg::build_download_url(&parsed, "model file.bin", "main", &base).unwrap();
+        let download_url =
+            OpenCsg::build_download_url(&parsed_url, "model file.bin", "main", &base_url).unwrap();
         assert_eq!(
-            download.as_str(),
+            download_url.as_str(),
             "https://example.test/private/csg/owner/repo/resolve/main/model%20file.bin"
         );
-        let metadata = OpenCsg::build_metadata_url(&parsed, "main", &api).unwrap();
+        let repository_revision_url =
+            OpenCsg::build_repository_revision_url(&parsed_url, "main", &api_base_url).unwrap();
         assert_eq!(
-            metadata.as_str(),
+            repository_revision_url.as_str(),
             "https://example.test/private/csg/api/models/owner/repo/revision/main?blobs=true"
         );
 
         let dataset = ParsedURL::try_from("opencsg://datasets/owner/repo/data.json").unwrap();
-        let download = OpenCsg::build_download_url(&dataset, "data.json", "dev", &base).unwrap();
+        let download_url =
+            OpenCsg::build_download_url(&dataset, "data.json", "dev", &base_url).unwrap();
         assert_eq!(
-            download.as_str(),
+            download_url.as_str(),
             "https://example.test/private/csg/datasets/owner/repo/resolve/dev/data.json"
         );
-        let metadata = OpenCsg::build_metadata_url(&dataset, "dev", &api).unwrap();
+        let repository_revision_url =
+            OpenCsg::build_repository_revision_url(&dataset, "dev", &api_base_url).unwrap();
         assert_eq!(
-            metadata.as_str(),
+            repository_revision_url.as_str(),
             "https://example.test/private/csg/api/datasets/owner/repo/revision/dev"
         );
         assert_eq!(
@@ -691,7 +882,7 @@ mod tests {
             OpenCsg::build_opencsg_url(&explicit_model, "model.bin")
                 .unwrap()
                 .as_str(),
-            "opencsg://models/owner/repo/model.bin"
+            "opencsg://owner/repo/model.bin"
         );
     }
 
@@ -716,8 +907,8 @@ mod tests {
     /// Verifies an empty repository represented by JSON null is accepted.
     #[test]
     fn accepts_null_siblings_for_empty_repository() {
-        let metadata: Metadata = serde_json::from_str(r#"{"siblings":null}"#).unwrap();
-        assert!(metadata.siblings.unwrap_or_default().is_empty());
+        let repository: Repository = serde_json::from_str(r#"{"siblings":null}"#).unwrap();
+        assert!(repository.siblings.unwrap_or_default().is_empty());
     }
 
     /// Verifies recursive model metadata, authentication, sizes and child URLs.
@@ -816,6 +1007,40 @@ mod tests {
         );
     }
 
+    /// Verifies a failed repository listing returns a backend error instead of an
+    /// empty repository.
+    #[tokio::test]
+    async fn stats_repository_with_error_status() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/models/owner/repo/revision/main"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let backend = OpenCsg::new(Arc::new(Config::default())).unwrap();
+        let err = backend
+            .stat(StatRequest {
+                task_id: "task".to_string(),
+                url: "opencsg://owner/repo".to_string(),
+                http_header: None,
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+                open_csg: Some(options(&server)),
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::BackendError(err) if err.status_code == Some(reqwest::StatusCode::UNAUTHORIZED)
+        ));
+    }
+
     /// Verifies file HEAD uses the resolve route and reports its length.
     #[tokio::test]
     async fn stats_file_with_head() {
@@ -889,43 +1114,6 @@ mod tests {
         assert_eq!(response.text().await.unwrap(), "partial content here");
     }
 
-    /// Verifies a successful full-body response cannot satisfy a Range request.
-    #[tokio::test]
-    async fn rejects_full_body_for_range_from_zero() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/owner/repo/resolve/main/model.bin"))
-            .and(header("range", "bytes=0-19"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("full body"))
-            .mount(&server)
-            .await;
-
-        let backend = OpenCsg::new(Arc::new(Config::default())).unwrap();
-        let response = backend
-            .get(GetRequest {
-                task_id: "task".to_string(),
-                piece_id: "piece".to_string(),
-                url: "opencsg://owner/repo/model.bin".to_string(),
-                range: Some(Range {
-                    start: 0,
-                    length: 20,
-                }),
-                http_header: None,
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: Some(options(&server)),
-            })
-            .await
-            .unwrap();
-
-        assert!(!response.success);
-        assert_eq!(response.http_status_code, Some(reqwest::StatusCode::OK));
-    }
-
     /// Verifies LFS redirects retain the Range request and stream the object response.
     #[tokio::test]
     async fn follows_lfs_redirect() {
@@ -980,7 +1168,8 @@ mod tests {
         assert!(object_requests[0].headers.get("authorization").is_none());
     }
 
-    /// Verifies existence checks select HEAD for files and metadata GET for repositories.
+    /// Verifies existence checks select the resolve route for files and the
+    /// revision route for repositories.
     #[tokio::test]
     async fn checks_file_and_repository_existence() {
         let server = MockServer::start().await;
@@ -989,7 +1178,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
-        Mock::given(method("GET"))
+        Mock::given(method("HEAD"))
             .and(path("/api/models/owner/repo/revision/main"))
             .and(query_param("blobs", "true"))
             .respond_with(ResponseTemplate::new(200))

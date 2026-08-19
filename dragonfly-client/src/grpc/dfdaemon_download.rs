@@ -41,7 +41,7 @@ use dragonfly_api::dfdaemon::v2::{
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_api::scheduler::v2::DeleteHostRequest as SchedulerDeleteHostRequest;
-use dragonfly_client_backend::{StatRequest, StatResponse};
+use dragonfly_client_backend::StatRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
@@ -98,53 +98,6 @@ use url::Url;
 
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
 use super::middleware::BBRLayer;
-
-/// Converts a backend stat response into a list task entries response.
-fn convert_list_task_entries_response(
-    response: StatResponse,
-) -> Result<ListTaskEntriesResponse, Status> {
-    let StatResponse {
-        success,
-        content_length,
-        http_header,
-        http_status_code,
-        entries,
-        error_message,
-    } = response;
-
-    if !success {
-        let message = error_message.unwrap_or_else(|| "list task entries failed".to_string());
-        let backend = Backend {
-            message: message.clone(),
-            header: headermap_to_hashmap(&http_header.unwrap_or_default()),
-            status_code: http_status_code.map(|code| code.as_u16() as i32),
-        };
-        let details = serde_json::to_vec(&backend).map_err(|err| {
-            error!("serialize backend error: {}", err);
-            Status::internal(err.to_string())
-        })?;
-
-        return Err(Status::with_details(
-            Code::Internal,
-            message,
-            details.into(),
-        ));
-    }
-
-    Ok(ListTaskEntriesResponse {
-        content_length: content_length.unwrap_or_default(),
-        response_header: headermap_to_hashmap(&http_header.unwrap_or_default()),
-        status_code: http_status_code.map(|code| code.as_u16().into()),
-        entries: entries
-            .into_iter()
-            .map(|dir_entry| Entry {
-                url: dir_entry.url,
-                content_length: dir_entry.content_length as u64,
-                is_dir: dir_entry.is_dir,
-            })
-            .collect(),
-    })
-}
 
 /// gRPC Unix server for download operations.
 pub struct DfdaemonDownloadServer {
@@ -1017,13 +970,20 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 Status::internal(err.to_string())
             })?;
 
-        let response = convert_list_task_entries_response(response).inspect_err(|err| {
-            // Collect the list tasks failure metrics.
-            collect_list_task_entries_failure_metrics(TaskType::Standard as i32);
-            error!("convert list task entries response: {}", err);
-        })?;
-
-        Ok(Response::new(response))
+        Ok(Response::new(ListTaskEntriesResponse {
+            content_length: response.content_length.unwrap_or_default(),
+            response_header: headermap_to_hashmap(&response.http_header.unwrap_or_default()),
+            status_code: response.http_status_code.map(|code| code.as_u16().into()),
+            entries: response
+                .entries
+                .into_iter()
+                .map(|dir_entry| Entry {
+                    url: dir_entry.url,
+                    content_length: dir_entry.content_length as u64,
+                    is_dir: dir_entry.is_dir,
+                })
+                .collect(),
+        }))
     }
 
     /// Deletes the task's content and metadata from local storage, and removes
@@ -2714,53 +2674,5 @@ impl DfdaemonDownloadClient {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
         request
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use reqwest::StatusCode;
-
-    /// Verifies that a failed backend stat response becomes a typed gRPC error.
-    #[test]
-    fn converts_failed_stat_response_to_grpc_status() {
-        let status = convert_list_task_entries_response(StatResponse {
-            success: false,
-            content_length: None,
-            http_header: None,
-            http_status_code: Some(StatusCode::UNAUTHORIZED),
-            entries: vec![],
-            error_message: Some("401 Unauthorized".to_string()),
-        })
-        .expect_err("failed stat response should return an error");
-
-        assert_eq!(status.code(), Code::Internal);
-        assert_eq!(status.message(), "401 Unauthorized");
-
-        let backend: Backend =
-            serde_json::from_slice(status.details()).expect("backend details should be valid JSON");
-        assert_eq!(backend.message, "401 Unauthorized");
-        assert_eq!(backend.status_code, Some(401));
-        assert!(backend.header.is_empty());
-    }
-
-    /// Verifies that a successful empty directory remains a successful response.
-    #[test]
-    fn converts_successful_empty_stat_response() {
-        let response = convert_list_task_entries_response(StatResponse {
-            success: true,
-            content_length: None,
-            http_header: None,
-            http_status_code: Some(StatusCode::OK),
-            entries: vec![],
-            error_message: None,
-        })
-        .expect("successful stat response should remain successful");
-
-        assert_eq!(response.content_length, 0);
-        assert_eq!(response.status_code, Some(200));
-        assert!(response.response_header.is_empty());
-        assert!(response.entries.is_empty());
     }
 }

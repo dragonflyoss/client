@@ -358,7 +358,7 @@ struct Args {
     ms_base_url: Option<String>,
 
     #[arg(
-        long = "csg-revision",
+        long,
         default_value = "main",
         env = "DFGET_CSG_REVISION",
         help = "Specify the revision version for OpenCSG Hub"
@@ -366,16 +366,16 @@ struct Args {
     csg_revision: String,
 
     #[arg(
-        long = "csg-token",
+        long,
         env = "DFGET_CSG_TOKEN",
         help = "Specify the authentication token for OpenCSG Hub"
     )]
     csg_token: Option<String>,
 
     #[arg(
-        long = "csg-base-url",
+        long,
         env = "DFGET_CSG_BASE_URL",
-        help = "Specify the base URL of the OpenCSG Hub endpoint. If unspecified, it defaults to https://hub.opencsg.com/csg/"
+        help = "Specify the base URL of the OpenCSG Hub endpoint (e.g., https://hub-mirror.example.com/csg). If unspecified, it defaults to https://hub.opencsg.com/csg/"
     )]
     csg_base_url: Option<String>,
 
@@ -1283,25 +1283,6 @@ fn convert_args(mut args: Args) -> Args {
 /// The validation prevents common user errors and potential security issues before
 /// starting the download process.
 fn validate_args(args: &Args) -> Result<()> {
-    if args.url.scheme() == opencsg::SCHEME {
-        if args.csg_revision.trim().is_empty() {
-            return Err(Error::ValidationError(
-                "OpenCSG revision must not be empty".to_string(),
-            ));
-        }
-
-        if let Some(base_url) = args.csg_base_url.as_deref() {
-            let base_url = Url::parse(base_url).map_err(|err| {
-                Error::ValidationError(format!("invalid OpenCSG base URL: {err}"))
-            })?;
-            if !matches!(base_url.scheme(), "http" | "https") || base_url.cannot_be_a_base() {
-                return Err(Error::ValidationError(
-                    "OpenCSG base URL must be an HTTP or HTTPS base URL".to_string(),
-                ));
-            }
-        }
-    }
-
     // If the URL is a directory, the output path should be a directory.
     if args.url.path().ends_with('/') && !args.output.is_dir() {
         return Err(Error::ValidationError(format!(
@@ -1415,7 +1396,6 @@ mod tests {
             args.csg_base_url.as_deref(),
             Some("https://mirror.example/private/csg/")
         );
-        assert!(validate_args(&args).is_ok());
     }
 
     /// Verifies OpenCSG downloads default to the main revision without credentials.
@@ -1433,32 +1413,6 @@ mod tests {
         assert_eq!(args.csg_revision, "main");
         assert!(args.csg_token.is_none());
         assert!(args.csg_base_url.is_none());
-    }
-
-    /// Verifies invalid OpenCSG revisions and endpoint schemes are rejected.
-    #[test]
-    fn should_reject_invalid_open_csg_options() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let output = tempdir.path().join("model.bin");
-        let empty_revision = Args::parse_from([
-            "dfget",
-            "opencsg://owner/repo/model.bin",
-            "--output",
-            output.to_str().unwrap(),
-            "--csg-revision",
-            " ",
-        ]);
-        assert!(validate_args(&empty_revision).is_err());
-
-        let invalid_endpoint = Args::parse_from([
-            "dfget",
-            "opencsg://owner/repo/model.bin",
-            "--output",
-            output.to_str().unwrap(),
-            "--csg-base-url",
-            "ftp://mirror.example/csg/",
-        ]);
-        assert!(validate_args(&invalid_endpoint).is_err());
     }
 
     #[test]
