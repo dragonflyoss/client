@@ -1113,6 +1113,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await
             .unwrap();
@@ -1146,6 +1147,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await
             .unwrap();
@@ -1188,6 +1190,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await
             .unwrap();
@@ -1221,6 +1224,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await;
 
@@ -1254,6 +1258,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await
             .unwrap();
@@ -1293,6 +1298,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await
             .unwrap();
@@ -1329,6 +1335,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await
             .unwrap();
@@ -1372,6 +1379,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await
             .unwrap();
@@ -1399,6 +1407,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await
             .unwrap();
@@ -1421,6 +1430,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await;
 
@@ -1444,6 +1454,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await
             .unwrap();
@@ -1469,6 +1480,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await;
 
@@ -1490,6 +1502,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await
             .unwrap();
@@ -1515,6 +1528,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await
             .unwrap();
@@ -1547,6 +1561,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await
             .unwrap();
@@ -1578,6 +1593,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await
             .unwrap();
@@ -1609,6 +1625,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await;
 
@@ -1770,6 +1787,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await
             .unwrap();
@@ -1791,6 +1809,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await
             .unwrap();
@@ -1836,6 +1855,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await
             .unwrap();
@@ -1857,6 +1877,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await
             .unwrap();
@@ -1904,6 +1925,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await
             .unwrap();
@@ -1927,6 +1949,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await
             .unwrap();
