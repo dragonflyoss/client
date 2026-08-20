@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use dragonfly_api::common::v2::{Download, Hdfs, HuggingFace, ModelScope, ObjectStorage};
+use dragonfly_api::common::v2::{Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, OpenCsg};
 use dragonfly_api::dfdaemon::v2::DownloadPersistentTaskRequest;
 use http::header::{HOST, RANGE, USER_AGENT};
 use std::collections::HashMap;
@@ -46,6 +46,7 @@ const REDACTED: &str = "[REDACTED]";
 /// - `hdfs.delegation_token`
 /// - `hugging_face.token`
 /// - `model_scope.token`
+/// - `open_csg.token`
 ///
 /// Non-secret identifiers such as `object_storage.access_key_id` are left
 /// intact because an AKIA/ASIA-style ID on its own is not sufficient to
@@ -74,6 +75,7 @@ impl fmt::Debug for RedactedDownload<'_> {
             remote_ip,
             hugging_face,
             model_scope,
+            open_csg,
             digest: _,
             r#type: _,
             priority: _,
@@ -112,6 +114,7 @@ impl fmt::Debug for RedactedDownload<'_> {
             .field("hdfs", &scrubbed(hdfs, scrub_hdfs))
             .field("hugging_face", &scrubbed(hugging_face, scrub_hugging_face))
             .field("model_scope", &scrubbed(model_scope, scrub_model_scope))
+            .field("open_csg", &scrubbed(open_csg, scrub_open_csg))
             .finish_non_exhaustive()
     }
 }
@@ -258,6 +261,15 @@ fn scrub_model_scope(ms: &mut Option<ModelScope>) {
     }
 }
 
+/// Mutates the given `OpenCsg` by replacing any present token with [`REDACTED`].
+fn scrub_open_csg(csg: &mut Option<OpenCsg>) {
+    if let Some(csg) = csg.as_mut() {
+        if csg.token.is_some() {
+            csg.token = Some(REDACTED.to_string());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,6 +371,18 @@ mod tests {
         assert_eq!(ms.unwrap().token.as_deref(), Some(REDACTED));
     }
 
+    /// Verifies OpenCSG access tokens are replaced before logging.
+    #[test]
+    fn scrub_open_csg_redacts_token() {
+        let mut csg = Some(OpenCsg {
+            token: Some("csg_xxxxx".to_string()),
+            ..Default::default()
+        });
+
+        scrub_open_csg(&mut csg);
+        assert_eq!(csg.unwrap().token.as_deref(), Some(REDACTED));
+    }
+
     #[test]
     fn redacted_download_debug_does_not_leak_secrets() {
         let mut header = HashMap::new();
@@ -381,6 +405,10 @@ mod tests {
                 token: Some("MS_SECRET".to_string()),
                 ..Default::default()
             }),
+            open_csg: Some(OpenCsg {
+                token: Some("CSG_SECRET".to_string()),
+                ..Default::default()
+            }),
             request_header: header,
             ..Default::default()
         };
@@ -394,6 +422,7 @@ mod tests {
             "HDFS_SECRET",
             "HF_SECRET",
             "MS_SECRET",
+            "CSG_SECRET",
             "SECRET_BEARER",
         ] {
             assert!(!download.contains(secret),);

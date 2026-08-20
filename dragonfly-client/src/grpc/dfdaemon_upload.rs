@@ -54,7 +54,7 @@ use dragonfly_client_metric::{
 use dragonfly_client_util::{
     digest::{is_blob_url, verify_file_digest, Digest},
     http::{hashmap_to_headermap, headermap_to_hashmap, parse_range_header},
-    id_generator::{PersistentTaskIDParameter, TaskIDParameter},
+    id_generator::{repository_revision, PersistentTaskIDParameter, TaskIDParameter},
     ratelimiter::bbr::BBR,
     shutdown,
     sysinfo::SystemMonitor,
@@ -314,19 +314,13 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 } else if download.enable_task_id_based_blob_digest && is_blob_url(&download.url) {
                     TaskIDParameter::BlobDigestBased(download.url.clone())
                 } else {
-                    let revision = download
-                        .hugging_face
-                        .as_ref()
-                        .map(|hf| hf.revision.clone())
-                        .or_else(|| download.model_scope.as_ref().map(|ms| ms.revision.clone()));
-
                     TaskIDParameter::URLBased {
                         url: download.url.clone(),
                         piece_length: download.piece_length,
                         tag: download.tag.clone(),
                         application: download.application.clone(),
                         filtered_query_params: download.filtered_query_params.clone(),
-                        revision,
+                        revision: repository_revision(&download),
                     }
                 },
             )
@@ -846,6 +840,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 hdfs: request.hdfs.clone(),
                 hugging_face: request.hugging_face.clone(),
                 model_scope: request.model_scope.clone(),
+                open_csg: request.open_csg.clone(),
             })
             .await
             .map_err(|err| {

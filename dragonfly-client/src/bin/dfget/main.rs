@@ -16,7 +16,9 @@
 
 use bytesize::ByteSize;
 use clap::Parser;
-use dragonfly_api::common::v2::{Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, TaskType};
+use dragonfly_api::common::v2::{
+    Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, OpenCsg, TaskType,
+};
 use dragonfly_api::dfdaemon::v2::{
     download_task_response, DownloadTaskRequest, ListTaskEntriesRequest,
 };
@@ -26,7 +28,7 @@ use dragonfly_client::resource::piece::MIN_PIECE_LENGTH;
 use dragonfly_client::terminal;
 use dragonfly_client::tracing::init_command_tracing;
 use dragonfly_client_backend::{
-    hdfs, hugging_face, model_scope, object_storage, BackendFactory, DirEntry,
+    hdfs, hugging_face, model_scope, object_storage, opencsg, BackendFactory, DirEntry,
 };
 use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{self, dfdaemon, dfget};
@@ -110,6 +112,18 @@ Examples:
 
   # Download from ModelScope Hub with authentication token.
   $ dfget modelscope://<owner>/<repo>/<path> -O /tmp/model.safetensors --ms-token=<token>
+
+  # Download a single file from OpenCSG Hub.
+  $ dfget opencsg://<owner>/<repo>/<path> -O /tmp/model.safetensors
+
+  # Download an entire repository from OpenCSG Hub.
+  $ dfget opencsg://<owner>/<repo> -O /tmp/repo/ -r
+
+  # Download an OpenCSG repository at a specified revision.
+  $ dfget opencsg://<owner>/<repo> --csg-revision main -O /tmp/repo/ -r
+
+  # Download from OpenCSG Hub with authentication token.
+  $ dfget opencsg://<owner>/<repo>/<path> -O /tmp/model.safetensors --csg-token=<token>
 "#;
 
 #[derive(Debug, Parser, Clone)]
@@ -342,6 +356,28 @@ struct Args {
         help = "Specify the base URL of the ModelScope Hub endpoint (e.g., https://modelscope-mirror.example.com). If unspecified, it defaults to https://modelscope.cn"
     )]
     ms_base_url: Option<String>,
+
+    #[arg(
+        long,
+        default_value = "main",
+        env = "DFGET_CSG_REVISION",
+        help = "Specify the revision version for OpenCSG Hub"
+    )]
+    csg_revision: String,
+
+    #[arg(
+        long,
+        env = "DFGET_CSG_TOKEN",
+        help = "Specify the authentication token for OpenCSG Hub"
+    )]
+    csg_token: Option<String>,
+
+    #[arg(
+        long,
+        env = "DFGET_CSG_BASE_URL",
+        help = "Specify the base URL of the OpenCSG Hub endpoint (e.g., https://hub-mirror.example.com/csg). If unspecified, it defaults to https://hub.opencsg.com/csg/"
+    )]
+    csg_base_url: Option<String>,
 
     #[arg(
         long,
@@ -623,6 +659,16 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         None
     };
 
+    let open_csg = if url.scheme() == opencsg::SCHEME {
+        Some(OpenCsg {
+            revision: args.csg_revision.clone(),
+            token: args.csg_token.clone(),
+            base_url: args.csg_base_url.clone(),
+        })
+    } else {
+        None
+    };
+
     // Get all entries in the directory with include files filter.
     let entries: Vec<DirEntry> = get_all_entries(
         &args.url,
@@ -632,6 +678,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         hdfs,
         hugging_face,
         model_scope,
+        open_csg,
         download_client.clone(),
     )
     .await?;
@@ -720,6 +767,7 @@ async fn get_all_entries(
     hdfs: Option<Hdfs>,
     hugging_face: Option<HuggingFace>,
     model_scope: Option<ModelScope>,
+    open_csg: Option<OpenCsg>,
     download_client: DfdaemonDownloadClient,
 ) -> Result<Vec<DirEntry>> {
     let urls: HashSet<Url> = match include_files {
@@ -772,6 +820,7 @@ async fn get_all_entries(
             hdfs.clone(),
             hugging_face.clone(),
             model_scope.clone(),
+            open_csg.clone(),
             download_client.clone(),
         )
         .await
@@ -870,6 +919,16 @@ async fn download(
         None
     };
 
+    let open_csg = if url.scheme() == opencsg::SCHEME {
+        Some(OpenCsg {
+            revision: args.csg_revision.clone(),
+            token: args.csg_token.clone(),
+            base_url: args.csg_base_url.clone(),
+        })
+    } else {
+        None
+    };
+
     // If the `filtered_query_params` is not provided, then use the default value.
     let filtered_query_params = args
         .filtered_query_params
@@ -914,6 +973,7 @@ async fn download(
                 hdfs,
                 hugging_face,
                 model_scope,
+                open_csg,
                 force_hard_link: args.force_hard_link,
                 content_for_calculating_task_id: args.content_for_calculating_task_id,
                 remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
@@ -1121,6 +1181,7 @@ async fn download(
 /// various storage backends including object storage and HDFS by passing
 /// the appropriate credentials and configuration. The function converts
 /// the gRPC response into a local `DirEntry` format for further processing.
+#[allow(clippy::too_many_arguments)]
 async fn get_entries(
     url: &Url,
     header: Vec<String>,
@@ -1128,6 +1189,7 @@ async fn get_entries(
     hdfs: Option<Hdfs>,
     hugging_face: Option<HuggingFace>,
     model_scope: Option<ModelScope>,
+    open_csg: Option<OpenCsg>,
     download_client: DfdaemonDownloadClient,
 ) -> Result<Vec<DirEntry>> {
     info!("list task entries: {:?}", url);
@@ -1142,6 +1204,7 @@ async fn get_entries(
             hdfs,
             hugging_face,
             model_scope,
+            open_csg,
             remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
         })
         .await
@@ -1308,6 +1371,126 @@ mod tests {
     use mocktail::prelude::*;
     use std::collections::HashMap;
     use tempfile::tempdir;
+
+    #[test]
+    fn should_parse_open_csg_options() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let output = tempdir.path().join("model.bin");
+        let args = Args::parse_from([
+            "dfget",
+            "opencsg://owner/repo/model.bin",
+            "--output",
+            output.to_str().unwrap(),
+            "--csg-revision",
+            "release-v1",
+            "--csg-token",
+            "secret",
+            "--csg-base-url",
+            "https://mirror.example/private/csg/",
+        ]);
+
+        assert_eq!(args.csg_revision, "release-v1");
+        assert_eq!(args.csg_token.as_deref(), Some("secret"));
+        assert_eq!(
+            args.csg_base_url.as_deref(),
+            Some("https://mirror.example/private/csg/")
+        );
+    }
+
+    #[test]
+    fn should_use_default_open_csg_revision() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let output = tempdir.path().join("model.bin");
+        let args = Args::parse_from([
+            "dfget",
+            "opencsg://owner/repo/model.bin",
+            "--output",
+            output.to_str().unwrap(),
+        ]);
+
+        assert_eq!(args.csg_revision, "main");
+        assert!(args.csg_token.is_none());
+        assert!(args.csg_base_url.is_none());
+    }
+
+    #[test]
+    fn should_parse_hugging_face_options() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let output = tempdir.path().join("model.bin");
+        let args = Args::parse_from([
+            "dfget",
+            "hf://owner/repo/model.bin",
+            "--output",
+            output.to_str().unwrap(),
+            "--hf-revision",
+            "release-v1",
+            "--hf-token",
+            "secret",
+            "--hf-base-url",
+            "https://hf-mirror.com/",
+        ]);
+
+        assert_eq!(args.hf_revision, "release-v1");
+        assert_eq!(args.hf_token.as_deref(), Some("secret"));
+        assert_eq!(args.hf_base_url.as_deref(), Some("https://hf-mirror.com/"));
+    }
+
+    #[test]
+    fn should_use_default_hugging_face_revision() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let output = tempdir.path().join("model.bin");
+        let args = Args::parse_from([
+            "dfget",
+            "hf://owner/repo/model.bin",
+            "--output",
+            output.to_str().unwrap(),
+        ]);
+
+        assert_eq!(args.hf_revision, "main");
+        assert!(args.hf_token.is_none());
+        assert!(args.hf_base_url.is_none());
+    }
+
+    #[test]
+    fn should_parse_model_scope_options() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let output = tempdir.path().join("model.bin");
+        let args = Args::parse_from([
+            "dfget",
+            "modelscope://owner/repo/model.bin",
+            "--output",
+            output.to_str().unwrap(),
+            "--ms-revision",
+            "release-v1",
+            "--ms-token",
+            "secret",
+            "--ms-base-url",
+            "https://modelscope-mirror.example.com/",
+        ]);
+
+        assert_eq!(args.ms_revision, "release-v1");
+        assert_eq!(args.ms_token.as_deref(), Some("secret"));
+        assert_eq!(
+            args.ms_base_url.as_deref(),
+            Some("https://modelscope-mirror.example.com/")
+        );
+    }
+
+    #[test]
+    fn should_use_default_model_scope_revision() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let output = tempdir.path().join("model.bin");
+        let args = Args::parse_from([
+            "dfget",
+            "modelscope://owner/repo/model.bin",
+            "--output",
+            output.to_str().unwrap(),
+        ]);
+
+        assert_eq!(args.ms_revision, "master");
+        assert!(args.ms_token.is_none());
+        assert!(args.ms_base_url.is_none());
+    }
 
     #[test]
     fn should_convert_args() {
@@ -1482,6 +1665,48 @@ mod tests {
     }
 
     #[test]
+    fn should_make_output_by_open_csg_entry() {
+        let url = Url::parse("opencsg://datasets/owner/repo/").unwrap();
+        let temp_dir = tempdir().unwrap();
+        let entry = DirEntry {
+            url: "opencsg://datasets/owner/repo/nested/train.json".to_string(),
+            content_length: 0,
+            is_dir: false,
+        };
+
+        let output = make_output_by_entry(url, temp_dir.path(), entry).unwrap();
+        assert_eq!(output, temp_dir.path().join("nested/train.json"));
+    }
+
+    #[test]
+    fn should_make_output_by_hugging_face_entry() {
+        let url = Url::parse("hf://datasets/owner/repo/").unwrap();
+        let temp_dir = tempdir().unwrap();
+        let entry = DirEntry {
+            url: "hf://datasets/owner/repo/nested/train.json".to_string(),
+            content_length: 0,
+            is_dir: false,
+        };
+
+        let output = make_output_by_entry(url, temp_dir.path(), entry).unwrap();
+        assert_eq!(output, temp_dir.path().join("nested/train.json"));
+    }
+
+    #[test]
+    fn should_make_output_by_model_scope_entry() {
+        let url = Url::parse("modelscope://datasets/owner/repo/").unwrap();
+        let temp_dir = tempdir().unwrap();
+        let entry = DirEntry {
+            url: "modelscope://datasets/owner/repo/nested/train.json".to_string(),
+            content_length: 0,
+            is_dir: false,
+        };
+
+        let output = make_output_by_entry(url, temp_dir.path(), entry).unwrap();
+        assert_eq!(output, temp_dir.path().join("nested/train.json"));
+    }
+
+    #[test]
     fn should_make_output_by_entry_no_trailing_slash_in_output() {
         let url = Url::parse("http://example.com/root/").unwrap();
         let temp_dir = tempdir().unwrap();
@@ -1555,6 +1780,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             dfdaemon_download_client,
         )
         .await
@@ -1610,6 +1836,7 @@ mod tests {
         let entries = get_all_entries(
             &Url::parse("http://example.com/root/").unwrap(),
             Vec::new(),
+            None,
             None,
             None,
             None,
@@ -1701,6 +1928,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             dfdaemon_download_client,
         )
         .await
@@ -1782,6 +2010,7 @@ mod tests {
         let entries = get_all_entries(
             &Url::parse("http://example.com/root/").unwrap(),
             Vec::new(),
+            None,
             None,
             None,
             None,

@@ -31,7 +31,7 @@ use dragonfly_client_metric::{
 use dragonfly_client_util::{
     digest::is_blob_url,
     http::{headermap_to_hashmap, parse_range_header},
-    id_generator::TaskIDParameter,
+    id_generator::{repository_revision, TaskIDParameter},
     types::redacted::RedactedDownload,
 };
 use std::sync::Arc;
@@ -92,19 +92,13 @@ pub async fn download(
             } else if download.enable_task_id_based_blob_digest && is_blob_url(&download.url) {
                 TaskIDParameter::BlobDigestBased(download.url.clone())
             } else {
-                let revision = download
-                    .hugging_face
-                    .as_ref()
-                    .map(|hf| hf.revision.clone())
-                    .or_else(|| download.model_scope.as_ref().map(|ms| ms.revision.clone()));
-
                 TaskIDParameter::URLBased {
                     url: download.url.clone(),
                     piece_length: download.piece_length,
                     tag: download.tag.clone(),
                     application: download.application.clone(),
                     filtered_query_params: download.filtered_query_params.clone(),
-                    revision,
+                    revision: repository_revision(&download),
                 }
             },
         )
