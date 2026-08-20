@@ -398,31 +398,25 @@ impl Backend for HuggingFace {
                     &base_url,
                 )?;
 
-                let response = match self
+                let response = self
                     .client
                     .head(download_url.as_str())
                     .headers(request_header)
                     .timeout(request.timeout)
                     .send()
                     .await
-                {
-                    Ok(response) => response,
-                    Err(err) => {
+                    .map_err(|err| {
                         error!(
                             "stat request failed {} {}: {}",
                             request.task_id, download_url, err
                         );
 
-                        return Ok(StatResponse {
-                            success: false,
-                            content_length: None,
-                            http_header: None,
-                            http_status_code: None,
-                            entries: Vec::new(),
-                            error_message: Some(err.to_string()),
-                        });
-                    }
-                };
+                        Error::BackendError(Box::new(BackendError {
+                            message: err.to_string(),
+                            status_code: None,
+                            header: None,
+                        }))
+                    })?;
 
                 let response_status_code = response.status();
                 let response_header = response.headers().clone();
@@ -430,6 +424,19 @@ impl Backend for HuggingFace {
                     Some(content_length) => content_length.to_str()?.parse::<u64>().ok(),
                     None => response.content_length(),
                 };
+
+                if !response.status().is_success() {
+                    error!(
+                        "stat request failed {} {}: {}",
+                        request.task_id, download_url, response_status_code
+                    );
+
+                    return Err(Error::BackendError(Box::new(BackendError {
+                        message: response_status_code.to_string(),
+                        status_code: Some(response_status_code),
+                        header: Some(response_header),
+                    })));
+                }
 
                 debug!(
                     "stat response {} {}: {:?} {:?} {:?}",
@@ -992,6 +999,42 @@ mod tests {
             request_headers.get(RANGE).unwrap(),
             HeaderValue::from_static("bytes=0-1023")
         );
+    }
+
+    #[tokio::test]
+    async fn test_stat_file_with_error_status() {
+        let server = MockServer::start().await;
+        Mock::given(method("HEAD"))
+            .and(path("/owner/repo/resolve/main/model.bin"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let backend = HuggingFace::new(Arc::new(Config::default())).unwrap();
+        let err = backend
+            .stat(StatRequest {
+                task_id: "task".to_string(),
+                url: "hf://owner/repo/model.bin".to_string(),
+                http_header: None,
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: Some(HuggingFaceOptions {
+                    revision: "main".to_string(),
+                    token: None,
+                    base_url: Some(server.uri()),
+                }),
+                model_scope: None,
+                open_csg: None,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::BackendError(err) if err.status_code == Some(reqwest::StatusCode::NOT_FOUND)
+        ));
     }
 
     #[tokio::test]
