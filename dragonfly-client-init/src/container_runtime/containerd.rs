@@ -27,6 +27,35 @@ use tokio::{self, fs};
 use toml_edit::{value, Array, DocumentMut, Item, Table, Value};
 use tracing::{info, instrument};
 
+const CONTAINERD_LEGACY_CRI_PLUGIN_ID: &str = "io.containerd.grpc.v1.cri";
+const CONTAINERD_IMAGES_CRI_PLUGIN_ID: &str = "io.containerd.cri.v1.images";
+
+fn select_containerd_cri_plugin_id(containerd_config: &DocumentMut, version: i64) -> &'static str {
+    let (preferred_plugin_id, fallback_plugin_id) = if version == 3 {
+        (
+            CONTAINERD_IMAGES_CRI_PLUGIN_ID,
+            CONTAINERD_LEGACY_CRI_PLUGIN_ID,
+        )
+    } else {
+        (
+            CONTAINERD_LEGACY_CRI_PLUGIN_ID,
+            CONTAINERD_IMAGES_CRI_PLUGIN_ID,
+        )
+    };
+
+    let Some(plugins) = containerd_config.get("plugins") else {
+        return preferred_plugin_id;
+    };
+
+    if plugins.get(preferred_plugin_id).is_some() {
+        preferred_plugin_id
+    } else if plugins.get(fallback_plugin_id).is_some() {
+        fallback_plugin_id
+    } else {
+        preferred_plugin_id
+    }
+}
+
 /// Represents the containerd runtime manager.
 #[derive(Debug, Clone)]
 pub struct Containerd {
@@ -66,11 +95,8 @@ impl Containerd {
             .unwrap_or(2);
         info!("containerd version: {}", version);
 
-        let plugin_id = if version == 3 {
-            "io.containerd.cri.v1.images"
-        } else {
-            "io.containerd.grpc.v1.cri"
-        };
+        let plugin_id = select_containerd_cri_plugin_id(&containerd_config, version);
+        info!("containerd CRI plugin: {}", plugin_id);
 
         // If containerd supports config_path mode and config_path is not empty,
         // add registries to the certs.d directory.
@@ -318,6 +344,39 @@ X-Dragonfly-Registry = "https://registry.example.com"
 "#;
 
         assert_eq!(contents.trim(), expected_contents.trim());
+    }
+
+    #[tokio::test]
+    async fn test_containerd_config_with_v2_images_plugin_config_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+        let certs_dir = temp_dir.path().join("certs.d");
+        let certs_dir_str = certs_dir.to_str().unwrap();
+
+        let initial_config = format!(
+            r#"
+version = 2
+
+[plugins]
+  [plugins."io.containerd.cri.v1.images"]
+    [plugins."io.containerd.cri.v1.images".registry]
+      config_path = "{certs_dir_str}"
+"#
+        );
+        fs::write(&config_path, initial_config).await.unwrap();
+
+        let containerd = Containerd::new(
+            dfinit::Containerd {
+                config_path,
+                registries: vec![],
+                proxy_all_registries: false,
+            },
+            dfinit::Proxy {
+                addr: "http://127.0.0.1:65001".into(),
+            },
+        );
+
+        assert!(containerd.run().await.is_ok());
     }
 
     #[tokio::test]
