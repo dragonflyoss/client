@@ -28,6 +28,7 @@ pub mod shutdown;
 pub mod sysinfo;
 pub mod tls;
 pub mod types;
+pub mod url;
 
 #[cfg(target_os = "linux")]
 pub mod cgroups;

@@ -22,7 +22,7 @@ use dragonfly_client_config::MIN_PIECE_LENGTH;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::buffer_pool::BufferPool;
 use dragonfly_client_util::fs::fd::{FDCache, DEFAULT_FD_CACHE_CAPACITY};
-use dragonfly_client_util::fs::{fadvise_dontneed, fadvise_willneed, fallocate, sync_file_range};
+use dragonfly_client_util::fs::{fadvise_dontneed, fadvise_willneed, fallocate};
 use futures::Stream;
 use std::cmp::max;
 use std::os::unix::fs::MetadataExt;
@@ -223,12 +223,11 @@ impl Content {
     pub async fn copy_task(&self, task_id: &str, to: &Path) -> Result<()> {
         let length = fs::copy(self.get_task_path(task_id), to).await?;
 
-        // Kick off writeback of the copied content, so dirty pages do not
-        // accumulate until the kernel writeback thresholds kick in.
+        // Triggers writeback of the copied content per storage.writebackMode.
         if let Ok(f) = fs::File::open(to).await {
-            sync_file_range(&f.into_std().await, 0, length)
-                .await
-                .unwrap_or_else(|err| warn!("sync_file_range failed: {}", err));
+            self.writeback
+                .trigger(&Arc::new(f.into_std().await), 0, length)
+                .await;
         }
 
         info!("copy to {:?} success", to);
@@ -469,12 +468,11 @@ impl Content {
     pub async fn copy_persistent_task(&self, task_id: &str, to: &Path) -> Result<()> {
         let length = fs::copy(self.get_persistent_task_path(task_id), to).await?;
 
-        // Kick off writeback of the copied content, so dirty pages do not
-        // accumulate until the kernel writeback thresholds kick in.
+        // Triggers writeback of the copied content per storage.writebackMode.
         if let Ok(f) = fs::File::open(to).await {
-            sync_file_range(&f.into_std().await, 0, length)
-                .await
-                .unwrap_or_else(|err| warn!("sync_file_range failed: {}", err));
+            self.writeback
+                .trigger(&Arc::new(f.into_std().await), 0, length)
+                .await;
         }
 
         info!("copy to {:?} success", to);
@@ -763,12 +761,11 @@ impl Content {
     pub async fn copy_persistent_cache_task(&self, task_id: &str, to: &Path) -> Result<()> {
         let length = fs::copy(self.get_persistent_cache_task_path(task_id), to).await?;
 
-        // Kick off writeback of the copied content, so dirty pages do not
-        // accumulate until the kernel writeback thresholds kick in.
+        // Triggers writeback of the copied content per storage.writebackMode.
         if let Ok(f) = fs::File::open(to).await {
-            sync_file_range(&f.into_std().await, 0, length)
-                .await
-                .unwrap_or_else(|err| warn!("sync_file_range failed: {}", err));
+            self.writeback
+                .trigger(&Arc::new(f.into_std().await), 0, length)
+                .await;
         }
 
         info!("copy to {:?} success", to);

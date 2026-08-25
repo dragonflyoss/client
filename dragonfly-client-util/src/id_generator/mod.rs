@@ -15,15 +15,12 @@
  */
 
 use crate::digest;
+use crate::url::filter_query_params;
 use dragonfly_api::common::v2::{Download, TaskType};
-use dragonfly_client_core::{
-    error::{ErrorType, OrErr},
-    Error, Result,
-};
+use dragonfly_client_core::{Error, Result};
 use sha2::{Digest, Sha256};
 use std::io::{self, Read};
 use std::path::PathBuf;
-use url::Url;
 use uuid::Uuid;
 
 /// The suffix of the seed peer.
@@ -141,30 +138,8 @@ impl IDGenerator {
                 filtered_query_params,
                 revision,
             } => {
-                // Filter the query parameters.
-                let url = Url::parse(url.as_str()).or_err(ErrorType::ParseError)?;
-                let mut query = url
-                    .query_pairs()
-                    .filter(|(k, _)| {
-                        !filtered_query_params
-                            .iter()
-                            .any(|param| param.as_str() == k.as_ref())
-                    })
-                    .peekable();
-
-                let mut artifact_url = url.clone();
-                if query.peek().is_none() {
-                    artifact_url.set_query(None);
-                } else {
-                    artifact_url.query_pairs_mut().clear().extend_pairs(query);
-                }
-
-                let artifact_url_str = artifact_url.to_string();
-                let final_url = if artifact_url_str.ends_with('/') && artifact_url.path() == "/" {
-                    artifact_url_str.trim_end_matches('/').to_string()
-                } else {
-                    artifact_url_str
-                };
+                // Canonicalize the url, identical to the scheduler's task id generation.
+                let final_url = filter_query_params(&url, &filtered_query_params)?;
 
                 // Initialize the hasher.
                 let mut hasher = Sha256::new();
@@ -436,6 +411,66 @@ mod tests {
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
                 TaskIDParameter::URLBased {
+                    url: "https://example.com/file.txt?z=9&b=2&a=1".to_string(),
+                    piece_length: None,
+                    tag: Some("foo".to_string()),
+                    application: Some("bar".to_string()),
+                    filtered_query_params: vec!["z".to_string()],
+                    revision: None,
+                },
+                "8b3f6e9b9b8fe20903bced565cfd1d0aaef354a4c17573f0c2c1979210443f9d",
+            ),
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                TaskIDParameter::URLBased {
+                    url: "https://example.com/file.txt?b=2&a=1&b=1".to_string(),
+                    piece_length: None,
+                    tag: None,
+                    application: None,
+                    filtered_query_params: vec!["c".to_string()],
+                    revision: None,
+                },
+                "7c8801d0596be5e8f9449d5c4af23866c72fe5205119c0e5912981f3b16a37aa",
+            ),
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                TaskIDParameter::URLBased {
+                    url: "https://example.com/file.txt?k=a b&m=x*y&n=c~d".to_string(),
+                    piece_length: Some(1024_u64),
+                    tag: None,
+                    application: None,
+                    filtered_query_params: vec!["none".to_string()],
+                    revision: None,
+                },
+                "6196a6846023f6d3c1e4d30f6c86f3d4186e4c664a33e5692b0e04e49b26a9af",
+            ),
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                TaskIDParameter::URLBased {
+                    url: "https://example.com/file.txt?a=1&b=2".to_string(),
+                    piece_length: None,
+                    tag: Some("foo".to_string()),
+                    application: None,
+                    filtered_query_params: vec!["a".to_string(), "b".to_string()],
+                    revision: None,
+                },
+                "c8f4b41117329d54af920010394f6f607bac707e933ab2f18d372e3dd4c7fcb3",
+            ),
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                TaskIDParameter::URLBased {
+                    url: "https://example.com/file.txt?b=2&a=1".to_string(),
+                    piece_length: None,
+                    tag: None,
+                    application: None,
+                    filtered_query_params: vec![],
+                    revision: None,
+                },
+                "980ee327518ccc5a7c30703e1a2232e8ba9047b39431f940636c85b6146f8b9a",
+            ),
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                TaskIDParameter::URLBased {
                     url: "https://example.com".to_string(),
                     piece_length: None,
                     tag: None,
@@ -453,16 +488,43 @@ mod tests {
             (
                 IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
                 TaskIDParameter::BlobDigestBased(
-                    "https://registry.example.com/v2/myorg/myrepo/blobs/sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+                    "http://registry.example.com/v2/library/ubuntu/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e"
                         .to_string(),
                 ),
-                "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+                "b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e",
+            ),
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                TaskIDParameter::BlobDigestBased(
+                    "https://registry.example.com/v2/myorg/myrepo/blobs/sha512:94381a28e8c039fedfa78de025158a068226c3ccd041b22c2c8e73fc993584e9b167d9ae32bc8b372c66701c808ab134e0768c8f16b9a3e61eec1ccf8faa9db8"
+                        .to_string(),
+                ),
+                "94381a28e8c039fedfa78de025158a068226c3ccd041b22c2c8e73fc993584e9b167d9ae32bc8b372c66701c808ab134e0768c8f16b9a3e61eec1ccf8faa9db8",
+            ),
+            (
+                IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false),
+                TaskIDParameter::BlobDigestBased(
+                    "http://localhost:5000/v2/myrepo/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e?ns=docker.io"
+                        .to_string(),
+                ),
+                "b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e",
             ),
         ];
 
         for (generator, parameter, expected_id) in test_cases {
             let task_id = generator.task_id(parameter).unwrap();
             assert_eq!(task_id, expected_id);
+        }
+
+        let generator = IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false);
+        for url in [
+            "https://example.com/file.txt",
+            "http://registry.example.com/v2/library/ubuntu/blobs/sha256:abc",
+            "http://registry.example.com/v2/library/ubuntu/blobs/md5:8a04994a666b4e4b20a2fd9e5a44f44c",
+        ] {
+            assert!(generator
+                .task_id(TaskIDParameter::BlobDigestBased(url.to_string()))
+                .is_err());
         }
     }
 
