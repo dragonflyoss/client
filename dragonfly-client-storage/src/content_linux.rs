@@ -1024,8 +1024,6 @@ mod tests {
                 .unwrap();
             assert_eq!(response.length, 13);
 
-            // Give the background writeback task a chance to process the
-            // enqueued range, so the async path itself is exercised.
             if mode == WritebackMode::Async {
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
