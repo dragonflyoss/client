@@ -141,6 +141,13 @@ pub struct Containerd {
     #[serde(default = "default_container_runtime_containerd_config_path")]
     pub config_path: PathBuf,
 
+    /// The CRI plugin id owning the registry configuration, e.g. "io.containerd.grpc.v1.cri"
+    /// or "io.containerd.cri.v1.images". If not set, the plugin table present in the
+    /// containerd configuration is used, preferring "io.containerd.grpc.v1.cri" for
+    /// version 2 configurations and "io.containerd.cri.v1.images" for version 3.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cri_plugin_id: Option<String>,
+
     /// The list of containerd registries.
     pub registries: Vec<ContainerdRegistry>,
 
@@ -157,6 +164,7 @@ impl Default for Containerd {
     fn default() -> Self {
         Self {
             config_path: PathBuf::default(),
+            cri_plugin_id: None,
             registries: Vec::default(),
             proxy_all_registries: default_container_runtime_containerd_proxy_all_registries(),
         }
@@ -493,16 +501,21 @@ containerRuntime:
         assert_eq!("hello".to_string(), cfg.proxy.addr);
 
         let raw_data = r#"
-            proxy: 
+            proxy:
                 addr: "hello"
             containerRuntime:
                 containerd:
                     configPath: "test_path"
+                    criPluginId: "io.containerd.cri.v1.images"
         "#;
         let cfg: Config = serde_yaml::from_str(raw_data).expect("failed to deserialize");
         assert_eq!("hello".to_string(), cfg.proxy.addr);
         if let Some(ContainerRuntimeConfig::Containerd(c)) = cfg.container_runtime.config {
             assert_eq!(PathBuf::from("test_path"), c.config_path);
+            assert_eq!(
+                Some("io.containerd.cri.v1.images".to_string()),
+                c.cri_plugin_id
+            );
         } else {
             panic!("failed to deserialize");
         }
