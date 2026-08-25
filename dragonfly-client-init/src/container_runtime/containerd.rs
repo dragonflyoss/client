@@ -27,35 +27,6 @@ use tokio::{self, fs};
 use toml_edit::{value, Array, DocumentMut, Item, Table, Value};
 use tracing::{info, instrument};
 
-const CONTAINERD_LEGACY_CRI_PLUGIN_ID: &str = "io.containerd.grpc.v1.cri";
-const CONTAINERD_IMAGES_CRI_PLUGIN_ID: &str = "io.containerd.cri.v1.images";
-
-fn select_containerd_cri_plugin_id(containerd_config: &DocumentMut, version: i64) -> &'static str {
-    let (preferred_plugin_id, fallback_plugin_id) = if version == 3 {
-        (
-            CONTAINERD_IMAGES_CRI_PLUGIN_ID,
-            CONTAINERD_LEGACY_CRI_PLUGIN_ID,
-        )
-    } else {
-        (
-            CONTAINERD_LEGACY_CRI_PLUGIN_ID,
-            CONTAINERD_IMAGES_CRI_PLUGIN_ID,
-        )
-    };
-
-    let Some(plugins) = containerd_config.get("plugins") else {
-        return preferred_plugin_id;
-    };
-
-    if plugins.get(preferred_plugin_id).is_some() {
-        preferred_plugin_id
-    } else if plugins.get(fallback_plugin_id).is_some() {
-        fallback_plugin_id
-    } else {
-        preferred_plugin_id
-    }
-}
-
 /// Represents the containerd runtime manager.
 #[derive(Debug, Clone)]
 pub struct Containerd {
@@ -95,7 +66,11 @@ impl Containerd {
             .unwrap_or(2);
         info!("containerd version: {}", version);
 
-        let plugin_id = select_containerd_cri_plugin_id(&containerd_config, version);
+        let plugin_id = self
+            .config
+            .cri_plugin_id
+            .as_deref()
+            .unwrap_or_else(|| Self::get_cri_plugin_id(&containerd_config, version));
         info!("containerd CRI plugin: {}", plugin_id);
 
         // If containerd supports config_path mode and config_path is not empty,
@@ -166,6 +141,28 @@ impl Containerd {
         }
 
         Ok(())
+    }
+
+    /// Gets the CRI plugin id owning the registry configuration: the first plugin table
+    /// present in the config, checked in version-preferred order. Version 2 configurations
+    /// default to "io.containerd.grpc.v1.cri" and version 3 to "io.containerd.cri.v1.images",
+    /// but e.g. AKS ships version 2 configurations with the containerd 2.x images plugin.
+    #[instrument(skip_all)]
+    fn get_cri_plugin_id(containerd_config: &DocumentMut, version: i64) -> &'static str {
+        let candidates = match version {
+            ..=2 => ["io.containerd.grpc.v1.cri", "io.containerd.cri.v1.images"],
+            _ => ["io.containerd.cri.v1.images", "io.containerd.grpc.v1.cri"],
+        };
+
+        candidates
+            .into_iter()
+            .find(|&plugin_id| {
+                containerd_config
+                    .get("plugins")
+                    .and_then(|plugins| plugins.get(plugin_id))
+                    .is_some()
+            })
+            .unwrap_or(candidates[0])
     }
 
     /// Adds registries to the containerd configuration, when containerd supports
@@ -304,6 +301,7 @@ mod tests {
         let containerd = Containerd::new(
             dfinit::Containerd {
                 config_path: config_path.clone(),
+                cri_plugin_id: None,
                 registries: vec![ContainerdRegistry {
                     host_namespace: "docker.io".into(),
                     server_addr: "https://registry.example.com".into(),
@@ -367,8 +365,15 @@ version = 2
 
         let containerd = Containerd::new(
             dfinit::Containerd {
-                config_path,
-                registries: vec![],
+                config_path: config_path.clone(),
+                cri_plugin_id: None,
+                registries: vec![ContainerdRegistry {
+                    host_namespace: "docker.io".into(),
+                    server_addr: "https://registry.example.com".into(),
+                    skip_verify: None,
+                    ca: None,
+                    capabilities: vec!["pull".into(), "resolve".into()],
+                }],
                 proxy_all_registries: false,
             },
             dfinit::Proxy {
@@ -377,6 +382,66 @@ version = 2
         );
 
         assert!(containerd.run().await.is_ok());
+
+        let contents = fs::read_to_string(certs_dir.join("docker.io").join("hosts.toml"))
+            .await
+            .unwrap();
+        assert!(contents.contains("X-Dragonfly-Registry = \"https://registry.example.com\""));
+
+        let config_contents = fs::read_to_string(&config_path).await.unwrap();
+        assert!(!config_contents.contains("io.containerd.grpc.v1.cri"));
+    }
+
+    #[tokio::test]
+    async fn test_containerd_config_with_cri_plugin_id() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("config.toml");
+        let certs_dir = temp_dir.path().join("certs.d");
+        let certs_dir_str = certs_dir.to_str().unwrap();
+
+        let initial_config = format!(
+            r#"
+version = 2
+
+[plugins]
+  [plugins."io.containerd.grpc.v1.cri"]
+  [plugins."io.containerd.cri.v1.images"]
+    [plugins."io.containerd.cri.v1.images".registry]
+      config_path = "{certs_dir_str}"
+"#
+        );
+        fs::write(&config_path, initial_config.as_bytes())
+            .await
+            .unwrap();
+
+        let containerd = Containerd::new(
+            dfinit::Containerd {
+                config_path: config_path.clone(),
+                cri_plugin_id: Some("io.containerd.cri.v1.images".into()),
+                registries: vec![ContainerdRegistry {
+                    host_namespace: "docker.io".into(),
+                    server_addr: "https://registry.example.com".into(),
+                    skip_verify: None,
+                    ca: None,
+                    capabilities: vec!["pull".into(), "resolve".into()],
+                }],
+                proxy_all_registries: false,
+            },
+            dfinit::Proxy {
+                addr: "http://127.0.0.1:65001".into(),
+            },
+        );
+
+        assert!(containerd.run().await.is_ok());
+
+        let contents = fs::read_to_string(certs_dir.join("docker.io").join("hosts.toml"))
+            .await
+            .unwrap();
+        assert!(contents.contains("X-Dragonfly-Registry = \"https://registry.example.com\""));
+        assert_eq!(
+            fs::read_to_string(&config_path).await.unwrap(),
+            initial_config
+        );
     }
 
     #[tokio::test]
@@ -399,6 +464,7 @@ version = 2
         let containerd = Containerd::new(
             dfinit::Containerd {
                 config_path: config_path.clone(),
+                cri_plugin_id: None,
                 registries: vec![ContainerdRegistry {
                     host_namespace: "docker.io".into(),
                     server_addr: "https://registry.example.com".into(),
@@ -416,14 +482,11 @@ version = 2
         let result = containerd.run().await;
         assert!(result.is_ok(), "containerd.run() failed: {result:?}");
 
-        // Explicitly configured registry still gets its own hosts.toml with the registry header.
         let explicit_hosts = fs::read_to_string(certs_dir.join("docker.io").join("hosts.toml"))
             .await
             .unwrap();
         assert!(explicit_hosts.contains("X-Dragonfly-Registry = \"https://registry.example.com\""));
 
-        // _default catch-all is written, without a top-level `server` or X-Dragonfly-Registry
-        // header — dfdaemon infers the upstream from the containerd `ns=` query parameter.
         let default_hosts = fs::read_to_string(certs_dir.join("_default").join("hosts.toml"))
             .await
             .unwrap();
@@ -453,6 +516,7 @@ capabilities = ["pull", "resolve"]
         let containerd = Containerd::new(
             dfinit::Containerd {
                 config_path: config_path.clone(),
+                cri_plugin_id: None,
                 registries: vec![],
                 proxy_all_registries: false,
             },
@@ -472,7 +536,6 @@ capabilities = ["pull", "resolve"]
         let certs_dir = temp_dir.path().join("certs.d");
         let certs_dir_str = certs_dir.to_str().unwrap();
 
-        // Create initial containerd config with version = 3 and config_path
         let initial_config = format!(
             r#"
 version = 3
@@ -489,6 +552,7 @@ version = 3
         let containerd = Containerd::new(
             dfinit::Containerd {
                 config_path: config_path.clone(),
+                cri_plugin_id: None,
                 registries: vec![ContainerdRegistry {
                     host_namespace: "docker.io".into(),
                     server_addr: "https://registry.example.com".into(),
@@ -503,7 +567,6 @@ version = 3
             },
         );
 
-        // Run containerd configuration
         let result = containerd.run().await;
         if let Err(e) = &result {
             println!("Error: {e:?}");
@@ -513,7 +576,6 @@ version = 3
         }
         assert!(result.is_ok());
 
-        // Verify the hosts.toml file content
         let hosts_file_path = certs_dir.join("docker.io").join("hosts.toml");
         let contents = fs::read_to_string(&hosts_file_path).await.unwrap();
 
