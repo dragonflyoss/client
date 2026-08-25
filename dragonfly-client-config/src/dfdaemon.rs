@@ -2128,11 +2128,9 @@ key: /etc/ssl/private/client.pem
 
     #[test]
     fn default_writeback_mode_correctly() {
-        // Test if the default value is WritebackMode::Async.
         let default_writeback_mode: WritebackMode = Default::default();
         assert_eq!(default_writeback_mode, WritebackMode::Async);
 
-        // Test if the missing field falls back to the default.
         let storage: Storage = serde_yaml::from_str("{}").unwrap();
         assert_eq!(storage.writeback_mode, WritebackMode::Async);
     }
