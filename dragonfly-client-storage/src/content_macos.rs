@@ -46,6 +46,9 @@ pub struct Content {
 
     /// The pool of the staging buffers for reading and writing pieces.
     buffer_pool: BufferPool,
+
+    /// Initiates writeback of written piece ranges per storage.writebackMode.
+    writeback: super::content::Writeback,
 }
 
 /// Implements the content storage.
@@ -65,6 +68,7 @@ impl Content {
         fs::create_dir_all(&dir.join(super::content::DEFAULT_PERSISTENT_TASK_DIR)).await?;
         fs::create_dir_all(&dir.join(super::content::DEFAULT_PERSISTENT_CACHE_TASK_DIR)).await?;
         info!("content initialized directory: {:?}", dir);
+
         Ok(Content {
             buffer_pool: BufferPool::new(
                 super::content::MAX_BUFFER_POOL_IDLE_BUFFERS
@@ -73,6 +77,7 @@ impl Content {
                         config.storage.read_buffer_size,
                     ),
             ),
+            writeback: super::content::Writeback::new(config.storage.writeback_mode),
             config,
             dir,
             fd_cache: FDCache::new(DEFAULT_FD_CACHE_CAPACITY),
@@ -341,8 +346,8 @@ impl Content {
                 error!("open {:?} failed: {}", task_path, err);
             })?;
 
-        super::io::write_range_from_stream(
-            fd,
+        let response = super::io::write_range_from_stream(
+            fd.clone(),
             offset,
             expected_length,
             self.config.storage.write_buffer_size,
@@ -351,7 +356,10 @@ impl Content {
         .await
         .inspect_err(|err| {
             error!("write {:?} failed: {}", task_path, err);
-        })
+        })?;
+
+        self.writeback.trigger(&fd, offset, response.length).await;
+        Ok(response)
     }
 
     /// Returns the task path by task id.
@@ -557,8 +565,8 @@ impl Content {
                 error!("open {:?} failed: {}", task_path, err);
             })?;
 
-        super::io::write_range(
-            fd,
+        let response = super::io::write_range(
+            fd.clone(),
             offset,
             expected_length,
             self.config.storage.write_buffer_size,
@@ -568,7 +576,10 @@ impl Content {
         .await
         .inspect_err(|err| {
             error!("write {:?} failed: {}", task_path, err);
-        })
+        })?;
+
+        self.writeback.trigger(&fd, offset, response.length).await;
+        Ok(response)
     }
 
     /// Writes the persistent piece from the stream of bytes chunks to the
@@ -593,8 +604,8 @@ impl Content {
                 error!("open {:?} failed: {}", task_path, err);
             })?;
 
-        super::io::write_range_from_stream(
-            fd,
+        let response = super::io::write_range_from_stream(
+            fd.clone(),
             offset,
             expected_length,
             self.config.storage.write_buffer_size,
@@ -603,7 +614,10 @@ impl Content {
         .await
         .inspect_err(|err| {
             error!("write {:?} failed: {}", task_path, err);
-        })
+        })?;
+
+        self.writeback.trigger(&fd, offset, response.length).await;
+        Ok(response)
     }
 
     /// Deletes the persistent task content.
@@ -845,8 +859,8 @@ impl Content {
                 error!("open {:?} failed: {}", task_path, err);
             })?;
 
-        super::io::write_range(
-            fd,
+        let response = super::io::write_range(
+            fd.clone(),
             offset,
             expected_length,
             self.config.storage.write_buffer_size,
@@ -856,7 +870,10 @@ impl Content {
         .await
         .inspect_err(|err| {
             error!("write {:?} failed: {}", task_path, err);
-        })
+        })?;
+
+        self.writeback.trigger(&fd, offset, response.length).await;
+        Ok(response)
     }
 
     /// Writes the persistent cache piece from the stream of bytes chunks to
@@ -882,8 +899,8 @@ impl Content {
                 error!("open {:?} failed: {}", task_path, err);
             })?;
 
-        super::io::write_range_from_stream(
-            fd,
+        let response = super::io::write_range_from_stream(
+            fd.clone(),
             offset,
             expected_length,
             self.config.storage.write_buffer_size,
@@ -892,7 +909,10 @@ impl Content {
         .await
         .inspect_err(|err| {
             error!("write {:?} failed: {}", task_path, err);
-        })
+        })?;
+
+        self.writeback.trigger(&fd, offset, response.length).await;
+        Ok(response)
     }
 
     /// Deletes the persistent cache task content.
@@ -939,6 +959,7 @@ impl Content {
 mod tests {
     use super::*;
     use crate::content;
+    use dragonfly_client_config::dfdaemon::WritebackMode;
     use std::io::Cursor;
     use tempfile::tempdir;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1004,6 +1025,42 @@ mod tests {
 
         content.delete_task(task_id).await.unwrap();
         assert!(!task_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_write_piece_writeback_modes() {
+        for mode in [
+            WritebackMode::Sync,
+            WritebackMode::Async,
+            WritebackMode::Off,
+        ] {
+            let temp_dir = tempdir().unwrap();
+            let mut config = Config::default();
+            config.storage.writeback_mode = mode;
+            let content = Content::new(Arc::new(config), temp_dir.path())
+                .await
+                .unwrap();
+
+            let task_id = "60409bd0ec44160f44c53c39b3fe1c5fdfb23faded0228c68bee83bc15a200e3";
+            content.create_task(task_id, 13).await.unwrap();
+
+            let data = b"hello, world!";
+            let mut stream = futures::stream::iter([Ok(Bytes::from_static(data))]);
+            let response = content
+                .write_piece_from_stream(task_id, 0, 13, &mut stream)
+                .await
+                .unwrap();
+            assert_eq!(response.length, 13);
+
+            if mode == WritebackMode::Async {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+
+            let mut reader = content.read_piece(task_id, 0, 13, None).await.unwrap();
+            let mut buffer = Vec::new();
+            reader.read_to_end(&mut buffer).await.unwrap();
+            assert_eq!(buffer, data);
+        }
     }
 
     #[tokio::test]
