@@ -977,14 +977,15 @@ pub enum WritebackMode {
     /// when the device writeback queue is congested.
     Sync,
 
-    /// Async enqueues written ranges to a dedicated background task, so the
-    /// write path is never paced by the disk. A full queue drops ranges and
-    /// the kernel writeback thresholds cover them.
+    /// Async enqueues written ranges to a dedicated background task, so writes
+    /// are not paced by a congested disk until the kernel dirty thresholds
+    /// throttle them. A full queue drops ranges and the kernel writeback
+    /// covers them.
     #[default]
     Async,
 
     /// Off skips per-piece writeback and leaves it entirely to the kernel
-    /// writeback thresholds.
+    /// writeback.
     Off,
 }
 

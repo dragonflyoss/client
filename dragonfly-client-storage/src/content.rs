@@ -47,7 +47,7 @@ pub const DEFAULT_PERSISTENT_CACHE_TASK_DIR: &str = "persistent-cache-tasks";
 /// content, multiplied by the largest configured buffer size to size the pool.
 pub const MAX_BUFFER_POOL_IDLE_BUFFERS: usize = 128;
 
-/// The capacity of the background writeback queue, matching the ranges a
+/// The capacity of the background writeback queue, roughly the ranges a
 /// congested disk drains within the kernel dirty expire window. A full
 /// queue drops further ranges and the kernel writeback covers them.
 const WRITEBACK_QUEUE_CAPACITY: usize = 1024;
@@ -61,14 +61,14 @@ pub enum Writeback {
     /// Sends written ranges to the background writeback task.
     Async(mpsc::Sender<(Arc<File>, u64, u64)>),
 
-    /// Leaves writeback to the kernel writeback thresholds.
+    /// Leaves it to the kernel writeback.
     Off,
 }
 
 /// Implements the writeback.
 impl Writeback {
     /// Creates a new writeback. In async mode it spawns the background task,
-    /// which exits when the last sender drops.
+    /// which drains the queue and exits when the last sender drops.
     pub fn new(mode: WritebackMode) -> Self {
         match mode {
             WritebackMode::Sync => Writeback::Sync,
@@ -88,8 +88,7 @@ impl Writeback {
         }
     }
 
-    /// Triggers writeback of the written range, awaited on the write path
-    /// or enqueued to the background task.
+    /// Triggers writeback of the written range per the configured mode.
     pub async fn trigger(&self, fd: &Arc<File>, offset: u64, length: u64) {
         match self {
             Writeback::Sync => {
