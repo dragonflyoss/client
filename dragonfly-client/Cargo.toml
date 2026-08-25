@@ -77,7 +77,7 @@ fastrand.workspace = true
 opendal.workspace = true
 regex.workspace = true
 serde_regex.workspace = true
-dragonfly-client-request = { version = "=1.5.0", features = ["preheat"] }
+dragonfly-client-request = { version = "=1.6.0", features = ["preheat"] }
 tracing-appender = "0.2.4"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "chrono"] }
 tracing-panic = "0.1.2"
