@@ -17,7 +17,6 @@
 use bytes::{Bytes, BytesMut};
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::buffer_pool::BufferPool;
-use dragonfly_client_util::fs::sync_file_range;
 use futures::{Stream, TryStreamExt};
 use std::cmp::{max, min};
 use std::fs::File;
@@ -29,7 +28,6 @@ use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, ReadBuf};
 use tokio::task::JoinHandle;
-use tracing::warn;
 
 /// The response of writing a range.
 pub struct WriteRangeResponse {
@@ -320,12 +318,6 @@ pub async fn write_range<R: AsyncRead + Unpin + ?Sized>(
         )));
     }
 
-    // Kick off writeback of the written range, so dirty pages do not
-    // accumulate across pieces until the kernel writeback thresholds kick in.
-    sync_file_range(&fd, offset - length, length)
-        .await
-        .unwrap_or_else(|err| warn!("sync_file_range failed: {}", err));
-
     Ok(WriteRangeResponse {
         length,
         hash: hasher.finalize().to_string(),
@@ -481,12 +473,6 @@ where
             "expected length {expected_length} but got {length}"
         )));
     }
-
-    // Kick off writeback of the written range, so dirty pages do not
-    // accumulate across pieces until the kernel writeback thresholds kick in.
-    sync_file_range(&fd, offset - length, length)
-        .await
-        .unwrap_or_else(|err| warn!("sync_file_range failed: {}", err));
 
     Ok(WriteRangeResponse {
         length,

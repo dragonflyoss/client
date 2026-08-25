@@ -967,12 +967,38 @@ impl Default for StorageServer {
     }
 }
 
+/// WritebackMode controls how the storage initiates writeback of written
+/// piece ranges to disk.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WritebackMode {
+    /// Sync awaits sync_file_range on the write path after each piece write.
+    /// It keeps dirty pages bounded, but paces the write path at disk speed
+    /// when the device writeback queue is congested.
+    Sync,
+
+    /// Async enqueues written ranges to a dedicated background task, so writes
+    /// are not paced by a congested disk until the kernel dirty thresholds
+    /// throttle them. A full queue drops ranges and the kernel writeback
+    /// covers them.
+    #[default]
+    Async,
+
+    /// Off skips per-piece writeback and leaves it entirely to the kernel
+    /// writeback.
+    Off,
+}
+
 /// The storage configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Storage {
     /// The storage server configuration for dfdaemon.
     pub server: StorageServer,
+
+    /// The writeback mode for written piece ranges, default is async.
+    #[serde(default)]
+    pub writeback_mode: WritebackMode,
 
     /// The directory to store task's metadata and content.
     #[serde(default = "crate::default_storage_dir")]
@@ -1045,6 +1071,7 @@ impl Default for Storage {
     fn default() -> Self {
         Storage {
             server: StorageServer::default(),
+            writeback_mode: WritebackMode::default(),
             dir: crate::default_storage_dir(),
             keep: default_storage_keep(),
             write_piece_timeout: default_storage_write_piece_timeout(),
@@ -2097,6 +2124,25 @@ key: /etc/ssl/private/client.pem
         let super_json = serde_json::to_string(&HostType::Super).unwrap();
         assert_eq!(normal_json, "\"normal\"");
         assert_eq!(super_json, "\"super\"");
+    }
+
+    #[test]
+    fn default_writeback_mode_correctly() {
+        let default_writeback_mode: WritebackMode = Default::default();
+        assert_eq!(default_writeback_mode, WritebackMode::Async);
+
+        let storage: Storage = serde_yaml::from_str("{}").unwrap();
+        assert_eq!(storage.writeback_mode, WritebackMode::Async);
+    }
+
+    #[test]
+    fn serialize_writeback_mode_correctly() {
+        let sync: WritebackMode = serde_json::from_str("\"sync\"").unwrap();
+        let asynchronous: WritebackMode = serde_json::from_str("\"async\"").unwrap();
+        let off: WritebackMode = serde_json::from_str("\"off\"").unwrap();
+        assert_eq!(sync, WritebackMode::Sync);
+        assert_eq!(asynchronous, WritebackMode::Async);
+        assert_eq!(off, WritebackMode::Off);
     }
 
     #[test]
