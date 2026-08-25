@@ -1577,6 +1577,7 @@ dependencies = [
  "lru",
  "mocktail",
  "parking_lot",
+ "percent-encoding",
  "pnet",
  "rcgen",
  "regex",
