@@ -17,7 +17,7 @@
 use bytesize::ByteSize;
 use clap::Parser;
 use dragonfly_api::common::v2::{
-    Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, OpenCsg, TaskType,
+    Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, OpenCsg, SchedulingPolicy, TaskType,
 };
 use dragonfly_api::dfdaemon::v2::{
     download_task_response, DownloadTaskRequest, ListTaskEntriesRequest,
@@ -263,6 +263,15 @@ struct Args {
         help = "Disable back-to-source download when dfget download failed"
     )]
     disable_back_to_source: bool,
+
+    #[arg(
+        long = "scheduling-policy",
+        default_value = "auto",
+        value_parser = ["auto", "always"],
+        env = "DFGET_SCHEDULING_POLICY",
+        help = "Specify how the download interacts with the scheduler, 'auto' downloads small files from the source directly, 'always' downloads through the scheduler even for small files, so the peer announces the task and other peers can discover it as a parent"
+    )]
+    scheduling_policy: String,
 
     #[arg(
         long,
@@ -964,6 +973,11 @@ async fn download(
                         .or_err(ErrorType::ParseError)?,
                 ),
                 need_back_to_source: false,
+                scheduling_policy: if args.scheduling_policy.eq_ignore_ascii_case("always") {
+                    SchedulingPolicy::Always as i32
+                } else {
+                    SchedulingPolicy::Auto as i32
+                },
                 disable_back_to_source: args.disable_back_to_source,
                 certificate_chain: Vec::new(),
                 prefetch: false,
