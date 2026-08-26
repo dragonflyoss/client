@@ -215,6 +215,21 @@ pub static DOWNLOAD_TRAFFIC: LazyLock<IntCounterVec> = LazyLock::new(|| {
     .expect("metric can be created")
 });
 
+/// Used to record the download piece duration.
+pub static DOWNLOAD_PIECE_DURATION: LazyLock<HistogramVec> = LazyLock::new(|| {
+    HistogramVec::new(
+        HistogramOpts::new(
+            "download_piece_duration_milliseconds",
+            "Histogram of the download piece duration.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME)
+        .buckets(exponential_buckets(1.0, 2.0, 24).unwrap()),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
+
 /// Used to count the upload traffic.
 pub static UPLOAD_TRAFFIC: LazyLock<IntCounterVec> = LazyLock::new(|| {
     IntCounterVec::new(
@@ -638,6 +653,10 @@ fn register_custom_metrics() {
         .expect("metric can be registered");
 
     REGISTRY
+        .register(Box::new(DOWNLOAD_PIECE_DURATION.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
         .register(Box::new(UPLOAD_TRAFFIC.clone()))
         .expect("metric can be registered");
 
@@ -752,6 +771,7 @@ fn reset_custom_metrics() {
     CONCURRENT_DOWNLOAD_TASK_GAUGE.reset();
     CONCURRENT_UPLOAD_PIECE_GAUGE.reset();
     DOWNLOAD_TRAFFIC.reset();
+    DOWNLOAD_PIECE_DURATION.reset();
     UPLOAD_TRAFFIC.reset();
     DOWNLOAD_TASK_DURATION.reset();
     BACKEND_REQUEST_COUNT.reset();
@@ -1049,6 +1069,13 @@ pub fn collect_download_piece_traffic_metrics(typ: &TrafficType, length: u64) {
     DOWNLOAD_TRAFFIC
         .with_label_values(&[typ.as_str_name()])
         .inc_by(length);
+}
+
+/// Collects the download piece duration metrics.
+pub fn collect_download_piece_duration_metrics(typ: &TrafficType, cost: Duration) {
+    DOWNLOAD_PIECE_DURATION
+        .with_label_values(&[typ.as_str_name()])
+        .observe(cost.as_millis() as f64);
 }
 
 /// Collects the upload piece started metrics.
@@ -1688,6 +1715,17 @@ mod tests {
             .with_label_values(&[traffic_type.as_str_name()])
             .get();
         assert!(traffic >= 2048);
+    }
+
+    #[test]
+    fn test_collect_download_piece_duration_metrics() {
+        let traffic_type = TrafficType::RemotePeer;
+        collect_download_piece_duration_metrics(&traffic_type, Duration::from_millis(42));
+
+        let count = DOWNLOAD_PIECE_DURATION
+            .with_label_values(&[traffic_type.as_str_name()])
+            .get_sample_count();
+        assert!(count >= 1);
     }
 
     #[test]
