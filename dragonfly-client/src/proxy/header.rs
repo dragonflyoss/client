@@ -15,7 +15,7 @@
  */
 
 use bytesize::ByteSize;
-use dragonfly_api::common::v2::Priority;
+use dragonfly_api::common::v2::{Priority, SchedulingPolicy};
 use reqwest::header::HeaderMap;
 use std::{fmt, str::FromStr};
 use tracing::error;
@@ -87,6 +87,14 @@ pub const DRAGONFLY_CONTENT_FOR_CALCULATING_TASK_ID_HEADER: &str =
 /// registries shares one task ID, eliminating redundant downloads and storage.
 pub const DRAGONFLY_ENABLE_TASK_ID_BASED_BLOB_DIGEST: &str =
     "X-Dragonfly-Enable-Task-ID-Based-Blob-Digest";
+
+/// The header key of scheduling policy. It represents how the download interacts
+/// with the scheduler. The value is case-insensitive, e.g. "auto" or "always".
+/// "auto" downloads small files from the source directly, skipping the scheduler.
+/// "always" downloads through the scheduler even if the content length is smaller
+/// than the minimum piece length, so that the peer announces the task to the
+/// scheduler and other peers can discover it as a parent.
+pub const DRAGONFLY_SCHEDULING_POLICY_HEADER: &str = "X-Dragonfly-Scheduling-Policy";
 
 /// The response header key to indicate whether the task download finished.
 /// When the task download is finished, the response will include this header with the value `"true"`,
@@ -322,6 +330,26 @@ pub fn get_enable_task_id_based_blob_digest(header: &HeaderMap, default: bool) -
     }
 }
 
+/// Get X-Dragonfly-Scheduling-Policy header value to determine how the download
+/// interacts with the scheduler.
+pub fn get_scheduling_policy(header: &HeaderMap, default: SchedulingPolicy) -> SchedulingPolicy {
+    match header.get(DRAGONFLY_SCHEDULING_POLICY_HEADER) {
+        Some(value) => match value.to_str() {
+            Ok(value) if value.eq_ignore_ascii_case("auto") => SchedulingPolicy::Auto,
+            Ok(value) if value.eq_ignore_ascii_case("always") => SchedulingPolicy::Always,
+            Ok(value) => {
+                error!("invalid scheduling policy from header: {}", value);
+                default
+            }
+            Err(err) => {
+                error!("get scheduling policy from header failed: {}", err);
+                default
+            }
+        },
+        None => default,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -516,5 +544,48 @@ mod tests {
         let empty_headers = HeaderMap::new();
         assert!(get_enable_task_id_based_blob_digest(&empty_headers, true));
         assert!(!get_enable_task_id_based_blob_digest(&empty_headers, false));
+    }
+
+    #[test]
+    fn test_get_scheduling_policy() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            DRAGONFLY_SCHEDULING_POLICY_HEADER,
+            HeaderValue::from_static("always"),
+        );
+        assert_eq!(
+            get_scheduling_policy(&headers, SchedulingPolicy::Auto),
+            SchedulingPolicy::Always
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            DRAGONFLY_SCHEDULING_POLICY_HEADER,
+            HeaderValue::from_static("AUTO"),
+        );
+        assert_eq!(
+            get_scheduling_policy(&headers, SchedulingPolicy::Always),
+            SchedulingPolicy::Auto
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            DRAGONFLY_SCHEDULING_POLICY_HEADER,
+            HeaderValue::from_static("invalid"),
+        );
+        assert_eq!(
+            get_scheduling_policy(&headers, SchedulingPolicy::Always),
+            SchedulingPolicy::Always
+        );
+
+        let empty_headers = HeaderMap::new();
+        assert_eq!(
+            get_scheduling_policy(&empty_headers, SchedulingPolicy::Always),
+            SchedulingPolicy::Always
+        );
+        assert_eq!(
+            get_scheduling_policy(&empty_headers, SchedulingPolicy::Auto),
+            SchedulingPolicy::Auto
+        );
     }
 }

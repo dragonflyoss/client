@@ -17,7 +17,7 @@
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
 use crate::resource::parent_selector::ParentSelector;
 use dragonfly_api::common::v2::{
-    Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, OpenCsg, Peer, Piece,
+    Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, OpenCsg, Peer, Piece, SchedulingPolicy,
     Task as CommonTask, TrafficType,
 };
 use dragonfly_api::dfdaemon::{
@@ -336,6 +336,28 @@ impl Task {
         self.storage.copy_task(id, to).await
     }
 
+    /// Returns whether the download should bypass the scheduler and download the
+    /// pieces from the source directly. It returns true only if all of the
+    /// following conditions are met:
+    ///
+    /// 1. The scheduling policy is AUTO, which decides by the size heuristic below.
+    ///    If the policy is ALWAYS, the download always goes through the scheduler,
+    ///    so that the peer announces the task to the scheduler and other peers can
+    ///    discover it as a parent.
+    /// 2. The back-to-source download is allowed, since bypassing the scheduler
+    ///    downloads from the source directly.
+    /// 3. The task is small enough that the scheduling overhead outweighs the
+    ///    transfer: the requested range length or the content length is less than
+    ///    or equal to the min piece length, i.e. a single-piece task.
+    fn should_bypass_scheduler(&self, request: &Download, content_length: u64) -> bool {
+        request.scheduling_policy() == SchedulingPolicy::Auto
+            && !request.disable_back_to_source
+            && (request
+                .range
+                .is_some_and(|range| range.length <= piece::MIN_PIECE_LENGTH)
+                || content_length <= piece::MIN_PIECE_LENGTH)
+    }
+
     /// Downloads a task.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
@@ -510,14 +532,9 @@ impl Task {
             interested_pieces
         };
 
-        // If the range length is less than or equal to the min piece
-        // length, download the pieces from the source directly.
-        if !request.disable_back_to_source
-            && (request
-                .range
-                .is_some_and(|range| range.length <= super::piece::MIN_PIECE_LENGTH)
-                || content_length <= super::piece::MIN_PIECE_LENGTH)
-        {
+        // Download the pieces from the source directly, skipping the scheduler,
+        // if the task is small enough and the scheduling policy allows it.
+        if self.should_bypass_scheduler(&request, content_length) {
             debug!("peer downloads the range task from source directly, skipping the scheduler");
 
             if let Err(err) = self

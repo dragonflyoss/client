@@ -11,6 +11,7 @@ edition.workspace = true
 build = "build.rs"
 
 [dependencies]
+dragonfly-api.workspace = true
 dragonfly-client-core.workspace = true
 dragonfly-client-util.workspace = true
 local-ip-address.workspace = true

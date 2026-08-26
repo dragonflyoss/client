@@ -1304,6 +1304,8 @@ fn make_download_task_request(
             output_path: header::get_output_path(header),
             timeout: None,
             need_back_to_source: false,
+            scheduling_policy: header::get_scheduling_policy(header, rule.scheduling_policy.into())
+                as i32,
             disable_back_to_source: config.proxy.disable_back_to_source,
             certificate_chain: Vec::new(),
             prefetch: need_prefetch(&config, header),
