@@ -2092,7 +2092,7 @@ mod tests {
     #[test]
     fn deserialize_proxy_rule_correctly() {
         let yaml = r#"
-regex: 'manifests/sha256:.*'
+regex: 'manifests/sha256.*'
 schedulingPolicy: always
 "#;
 
