@@ -1300,6 +1300,33 @@ impl ProxyServer {
     }
 }
 
+/// SchedulingPolicy represents how the download interacts with the scheduler.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SchedulingPolicy {
+    /// Auto downloads through the scheduler unless the content length is smaller
+    /// than the minimum piece length, in which case it downloads from the source
+    /// directly, skipping the scheduler.
+    #[default]
+    Auto,
+
+    /// Always downloads through the scheduler even if the content length is smaller
+    /// than the minimum piece length, so that the peer announces the task to the
+    /// scheduler and other peers can discover it as a parent. It is useful for
+    /// sharing small artifacts, such as OCI image manifests.
+    Always,
+}
+
+/// Implement From<SchedulingPolicy> for the scheduling policy of the download.
+impl From<SchedulingPolicy> for dragonfly_api::common::v2::SchedulingPolicy {
+    fn from(policy: SchedulingPolicy) -> Self {
+        match policy {
+            SchedulingPolicy::Auto => dragonfly_api::common::v2::SchedulingPolicy::Auto,
+            SchedulingPolicy::Always => dragonfly_api::common::v2::SchedulingPolicy::Always,
+        }
+    }
+}
+
 /// The proxy rule configuration.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -1322,6 +1349,12 @@ pub struct Rule {
     /// Default value includes the filtered query params of s3, gcs, oss, obs, cos.
     #[serde(default = "default_proxy_rule_filtered_query_params")]
     pub filtered_query_params: Vec<String>,
+
+    /// Represents how the download interacts with the scheduler, default is auto.
+    /// Auto downloads small files from the source directly, skipping the scheduler.
+    /// Always downloads through the scheduler even for small files, so that the peer
+    /// announces the task to the scheduler and other peers can discover it as a parent.
+    pub scheduling_policy: SchedulingPolicy,
 }
 
 /// Implement Default for Rule.
@@ -1332,6 +1365,7 @@ impl Default for Rule {
             use_tls: false,
             redirect: None,
             filtered_query_params: default_proxy_rule_filtered_query_params(),
+            scheduling_policy: SchedulingPolicy::default(),
         }
     }
 }
@@ -2053,6 +2087,26 @@ mod tests {
         assert!(result.is_ok());
         let config = result.unwrap();
         assert!(config.is_some());
+    }
+
+    #[test]
+    fn deserialize_proxy_rule_correctly() {
+        let yaml = r#"
+regex: 'manifests/sha256:.*'
+schedulingPolicy: always
+"#;
+
+        let rule: Rule = serde_yaml::from_str(yaml).expect("Failed to deserialize");
+        assert!(rule.regex.is_match("https://example.com/v2/library/ubuntu/manifests/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e"));
+        assert_eq!(rule.scheduling_policy, SchedulingPolicy::Always);
+
+        let yaml = r#"
+regex: 'blobs/sha256.*'
+"#;
+
+        let rule: Rule = serde_yaml::from_str(yaml).expect("Failed to deserialize");
+        assert_eq!(rule.scheduling_policy, SchedulingPolicy::Auto);
+        assert_eq!(Rule::default().scheduling_policy, SchedulingPolicy::Auto);
     }
 
     #[test]

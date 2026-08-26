@@ -83,6 +83,7 @@ impl fmt::Debug for RedactedDownload<'_> {
             timeout: _,
             disable_back_to_source: _,
             need_back_to_source: _,
+            scheduling_policy: _,
             certificate_chain: _,
             need_piece_content: _,
             force_hard_link: _,
