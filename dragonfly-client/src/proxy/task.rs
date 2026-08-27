@@ -29,7 +29,7 @@ use dragonfly_client_metric::{
     collect_prefetch_task_failure_metrics, collect_prefetch_task_started_metrics,
 };
 use dragonfly_client_util::{
-    digest::is_blob_url,
+    digest::{is_blob_url, is_manifest_digest_url},
     http::{headermap_to_hashmap, parse_range_header},
     id_generator::{repository_revision, TaskIDParameter},
     types::redacted::RedactedDownload,
@@ -91,6 +91,10 @@ pub async fn download(
                 TaskIDParameter::Content(content)
             } else if download.enable_task_id_based_blob_digest && is_blob_url(&download.url) {
                 TaskIDParameter::BlobDigestBased(download.url.clone())
+            } else if download.enable_task_id_based_blob_digest
+                && is_manifest_digest_url(&download.url)
+            {
+                TaskIDParameter::ManifestDigestBased(download.url.clone())
             } else {
                 TaskIDParameter::URLBased {
                     url: download.url.clone(),
