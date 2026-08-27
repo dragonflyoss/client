@@ -1487,9 +1487,9 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-request"
-version = "1.6.0"
+version = "1.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfad171928d9de122a2ddb484ed474d7e5ecceb94898a6c897cf44cb256346be"
+checksum = "fe1379d1f7ea6a83a7525cef4f4c82ec9a423f13ba220b9d97a531cfcece0d29"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1502,6 +1502,7 @@ dependencies = [
  "local-ip-address",
  "oci-client",
  "oci-spec",
+ "percent-encoding",
  "prost-wkt-types",
  "rand 0.9.4",
  "regex",
@@ -5808,9 +5809,9 @@ checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
 name = "tonic"
-version = "0.14.2"
+version = "0.14.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb7613188ce9f7df5bfe185db26c5814347d110db17920415cf2fbcad85e7203"
+checksum = "ac2a5518c70fa84342385732db33fb3f44bc4cc748936eb5833d2df34d6445ef"
 dependencies = [
  "async-trait",
  "axum",
