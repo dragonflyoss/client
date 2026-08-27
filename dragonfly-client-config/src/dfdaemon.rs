@@ -382,7 +382,7 @@ fn default_proxy_registry_mirror_addr() -> String {
 /// blob download URLs.
 #[inline]
 fn default_enable_task_id_based_blob_digest() -> bool {
-    false
+    true
 }
 
 /// The host configuration for dfdaemon.
