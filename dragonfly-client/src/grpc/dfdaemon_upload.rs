@@ -52,7 +52,7 @@ use dragonfly_client_metric::{
     collect_update_task_started_metrics,
 };
 use dragonfly_client_util::{
-    digest::{is_blob_url, verify_file_digest, Digest},
+    digest::{is_blob_url, is_manifest_digest_url, verify_file_digest, Digest},
     http::{hashmap_to_headermap, headermap_to_hashmap, parse_range_header},
     id_generator::{repository_revision, PersistentTaskIDParameter, TaskIDParameter},
     ratelimiter::bbr::BBR,
@@ -313,6 +313,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                     TaskIDParameter::Content(content)
                 } else if download.enable_task_id_based_blob_digest && is_blob_url(&download.url) {
                     TaskIDParameter::BlobDigestBased(download.url.clone())
+                } else if download.enable_task_id_based_blob_digest
+                    && is_manifest_digest_url(&download.url)
+                {
+                    TaskIDParameter::ManifestDigestBased(download.url.clone())
                 } else {
                     TaskIDParameter::URLBased {
                         url: download.url.clone(),

@@ -77,7 +77,8 @@ fastrand.workspace = true
 opendal.workspace = true
 regex.workspace = true
 serde_regex.workspace = true
-dragonfly-client-request = { version = "=1.6.0", features = ["preheat"] }
+# TODO(Gaius): Remove the path dependency after the next release of dragonfly-client-request.
+dragonfly-client-request = { path = "../../dragonfly-sdk/client-request/rust", version = "1.6.2", features = ["preheat"] }
 tracing-appender = "0.2.4"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "chrono"] }
 tracing-panic = "0.1.2"

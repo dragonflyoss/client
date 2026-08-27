@@ -45,6 +45,9 @@ pub enum TaskIDParameter {
     /// BlobDigestBased will extract the digest in the oci blob url and use the digest's encoded as
     /// the task id.
     BlobDigestBased(String),
+    /// ManifestDigestBased will extract the digest in the oci manifest url and use the digest's
+    /// encoded as the task id.
+    ManifestDigestBased(String),
 }
 
 /// The parameter of the persistent task id.
@@ -175,6 +178,12 @@ impl IDGenerator {
             }
             TaskIDParameter::BlobDigestBased(url) => {
                 Ok(digest::Digest::extract_from_blob_url(&url)
+                    .ok_or_else(|| Error::InvalidURI(url))?
+                    .encoded()
+                    .to_string())
+            }
+            TaskIDParameter::ManifestDigestBased(url) => {
+                Ok(digest::Digest::extract_from_manifest_url(&url)
                     .ok_or_else(|| Error::InvalidURI(url))?
                     .encoded()
                     .to_string())
