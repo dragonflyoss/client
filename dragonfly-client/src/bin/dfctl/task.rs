@@ -512,11 +512,11 @@ pub struct PreheatCommand {
         long,
         default_value_t = true,
         env = "DFCTL_TASK_PREHEAT_ENABLE_TASK_ID_BASED_BLOB_DIGEST",
-        help = "Specify whether to generate task id based blob digest. It indicates whether to use the blob digest for task ID calculation \
+        help = "Specify whether to generate task id based blob digest, used in both scheduler gRPC mode and request SDK mode \
+         (scheduler gRPC mode applies it to image preheat only). It indicates whether to use the blob digest for task ID calculation \
          when downloading from OCI registries. When enabled for OCI blob URLs (e.g., /v2/<name>/blobs/sha256:<digest>), \
-         the task ID is derived from the blob digest rather than the full URL. This enables deduplication across \
-         registries - the same blob from different registries shares one task ID, eliminating redundant downloads \
-         and storage"
+         the task ID is derived from the blob digest rather than the full URL, so the same blob from different registries \
+         shares one task ID. This enables deduplication across registries and eliminates redundant downloads and storage"
     )]
     enable_task_id_based_blob_digest: bool,
 
@@ -893,6 +893,7 @@ impl PreheatCommand {
             timeout: Some(
                 prost_wkt_types::Duration::try_from(self.timeout).or_err(ErrorType::ParseError)?,
             ),
+            enable_task_id_based_blob_digest: self.enable_task_id_based_blob_digest,
 
             // TODO: Support certificate chain.
             certificate_chain: Vec::new(),
