@@ -338,9 +338,9 @@ impl Piece {
 
         // Record the start time.
         let start_time = Instant::now();
+
         // Upload the piece content.
         let (_, reader) = self.storage.upload_piece(piece_id, task_id, range).await?;
-
         collect_download_piece_duration_metrics(&TrafficType::LocalPeer, start_time.elapsed());
 
         Ok(reader)
@@ -404,7 +404,6 @@ impl Piece {
 
         // Record the start time.
         let start_time = Instant::now();
-
         let (mut stream, offset, digest) = match (
             self.config.download.protocol.as_str(),
             parent.download_ip,
@@ -452,9 +451,6 @@ impl Piece {
             }
         };
 
-        // Collect the download piece duration metrics.
-        collect_download_piece_duration_metrics(&TrafficType::RemotePeer, start_time.elapsed());
-
         // Record the finish of downloading piece.
         match self
             .storage
@@ -472,6 +468,10 @@ impl Piece {
         {
             Ok(piece) => {
                 collect_download_piece_traffic_metrics(&TrafficType::RemotePeer, length);
+                collect_download_piece_duration_metrics(
+                    &TrafficType::RemotePeer,
+                    start_time.elapsed(),
+                );
 
                 scopeguard::ScopeGuard::into_inner(guard);
                 Ok(piece)
@@ -618,9 +618,6 @@ impl Piece {
             start_time.elapsed(),
         );
 
-        // Collect the download piece duration metrics.
-        collect_download_piece_duration_metrics(&TrafficType::BackToSource, start_time.elapsed());
-
         let mut stream = response.reader.into_inner();
         match self
             .storage
@@ -636,6 +633,10 @@ impl Piece {
         {
             Ok(piece) => {
                 collect_download_piece_traffic_metrics(&TrafficType::BackToSource, length);
+                collect_download_piece_duration_metrics(
+                    &TrafficType::BackToSource,
+                    start_time.elapsed(),
+                );
 
                 scopeguard::ScopeGuard::into_inner(guard);
                 Ok(piece)
@@ -701,6 +702,7 @@ impl Piece {
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
 
+        // Record the start time.
         let start_time = Instant::now();
 
         // Upload the piece content.
@@ -708,8 +710,6 @@ impl Piece {
             .storage
             .upload_persistent_piece(piece_id, task_id, range)
             .await?;
-
-        // Collect the download piece duration metrics.
         collect_download_piece_duration_metrics(&TrafficType::LocalPeer, start_time.elapsed());
 
         Ok(reader)
@@ -767,8 +767,8 @@ impl Piece {
             };
         });
 
+        // Record the start time.
         let start_time = Instant::now();
-
         let (mut stream, offset, digest) = match (
             self.config.download.protocol.as_str(),
             parent.download_ip,
@@ -816,8 +816,6 @@ impl Piece {
             }
         };
 
-        collect_download_piece_duration_metrics(&TrafficType::RemotePeer, start_time.elapsed());
-
         // Record the finish of downloading piece.
         match self
             .storage
@@ -834,6 +832,10 @@ impl Piece {
         {
             Ok(piece) => {
                 collect_download_piece_traffic_metrics(&TrafficType::RemotePeer, length);
+                collect_download_piece_duration_metrics(
+                    &TrafficType::RemotePeer,
+                    start_time.elapsed(),
+                );
 
                 scopeguard::ScopeGuard::into_inner(guard);
                 Ok(piece)
@@ -975,9 +977,6 @@ impl Piece {
             start_time.elapsed(),
         );
 
-        // Collect the download piece duration metrics.
-        collect_download_piece_duration_metrics(&TrafficType::BackToSource, start_time.elapsed());
-
         // Record the finish of downloading piece. Consumes the stream of
         // bytes chunks underlying the reader, so the chunks are written to
         // the storage without copying.
@@ -996,6 +995,10 @@ impl Piece {
         {
             Ok(piece) => {
                 collect_download_piece_traffic_metrics(&TrafficType::BackToSource, length);
+                collect_download_piece_duration_metrics(
+                    &TrafficType::BackToSource,
+                    start_time.elapsed(),
+                );
 
                 scopeguard::ScopeGuard::into_inner(guard);
                 Ok(piece)
@@ -1061,6 +1064,7 @@ impl Piece {
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
 
+        // Record the start time.
         let start_time = Instant::now();
 
         // Upload the piece content.
@@ -1068,8 +1072,6 @@ impl Piece {
             .storage
             .upload_persistent_cache_piece(piece_id, task_id, range)
             .await?;
-
-        // Collect the download piece duration metrics.
         collect_download_piece_duration_metrics(&TrafficType::LocalPeer, start_time.elapsed());
 
         Ok(reader)
@@ -1127,8 +1129,8 @@ impl Piece {
             };
         });
 
+        // Record the start time.
         let start_time = Instant::now();
-
         let (mut stream, offset, digest) = match (
             self.config.download.protocol.as_str(),
             parent.download_ip,
@@ -1176,8 +1178,6 @@ impl Piece {
             }
         };
 
-        collect_download_piece_duration_metrics(&TrafficType::RemotePeer, start_time.elapsed());
-
         // Record the finish of downloading piece.
         match self
             .storage
@@ -1194,6 +1194,10 @@ impl Piece {
         {
             Ok(piece) => {
                 collect_download_piece_traffic_metrics(&TrafficType::RemotePeer, length);
+                collect_download_piece_duration_metrics(
+                    &TrafficType::RemotePeer,
+                    start_time.elapsed(),
+                );
 
                 scopeguard::ScopeGuard::into_inner(guard);
                 Ok(piece)
