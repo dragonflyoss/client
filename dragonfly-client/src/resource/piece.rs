@@ -381,6 +381,7 @@ impl Piece {
         // return the piece directly.
         if piece.is_finished() {
             debug!("finished piece {} from local", piece_id);
+            collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
             return Ok(piece);
         }
 
@@ -516,6 +517,7 @@ impl Piece {
         // return the piece directly.
         if piece.is_finished() {
             debug!("finished piece {} from local", piece_id);
+            collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
             return Ok(piece);
         }
 
@@ -754,6 +756,7 @@ impl Piece {
         // return the piece directly.
         if piece.is_finished() {
             debug!("finished persistent piece {} from local", piece_id);
+            collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
             return Ok(piece);
         }
 
@@ -879,6 +882,7 @@ impl Piece {
         // return the piece directly.
         if piece.is_finished() {
             debug!("finished piece {} from local", piece_id);
+            collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
             return Ok(piece);
         }
 
@@ -1116,6 +1120,7 @@ impl Piece {
         // return the piece directly.
         if piece.is_finished() {
             debug!("finished persistent cache piece {} from local", piece_id);
+            collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
             return Ok(piece);
         }
 
