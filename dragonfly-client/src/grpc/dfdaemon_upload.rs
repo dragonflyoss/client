@@ -1176,7 +1176,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         info!("sync host in upload server");
 
         // Clone the network monitor.
-        let network = self.system_monitor.network.clone();
+        let mut network = self.system_monitor.network.clone();
 
         // Initialize stream channel.
         let (out_stream_tx, out_stream_rx) = mpsc::channel(128);
@@ -1184,8 +1184,11 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
             async move {
                 // Start the host info update loop.
                 loop {
-                    // Wait for getting the network stats.
-                    let network_stats = network.get_stats().await;
+                    // Wait for the next network stats.
+                    let Some(network_stats) = network.get_stats().await else {
+                        return;
+                    };
+
                     debug!(
                         "network data: rx bandwidth {}/{} bps, tx bandwidth {}/{} bps",
                         network_stats.rx_bandwidth.unwrap_or(0),
