@@ -24,7 +24,7 @@ use dragonfly_client_config::{
     CARGO_PKG_RUSTC_VERSION, CARGO_PKG_VERSION, GIT_COMMIT_SHORT_HASH, INSTANCE_NAME,
 };
 use dragonfly_client_core::error::{ErrorType, OrErr};
-use dragonfly_client_core::Result;
+use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::{container::is_running_in_container, shutdown, sysinfo::SystemMonitor};
 use std::env;
 use std::sync::Arc;
@@ -188,7 +188,13 @@ impl SchedulerAnnouncer {
         }
 
         // Wait for getting the network data.
-        let network_stats = self.system_monitor.network.get_stats().await;
+        let network_stats = self
+            .system_monitor
+            .network
+            .clone()
+            .get_stats()
+            .await
+            .ok_or_else(|| Error::Unknown("network stats collector stopped".to_string()))?;
         debug!(
             "network data: rx bandwidth {}/{} bps, tx bandwidth {}/{} bps",
             network_stats.rx_bandwidth.unwrap_or(0),
