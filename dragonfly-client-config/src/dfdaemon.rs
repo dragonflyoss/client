@@ -177,6 +177,12 @@ fn default_download_concurrent_piece_count() -> u32 {
     8
 }
 
+/// Returns the default number of concurrent pieces to download from source.
+#[inline]
+fn default_back_to_source_concurrent_piece_count() -> u32 {
+    8
+}
+
 /// Returns the default max retries for backend request, default is 1.
 #[inline]
 fn default_backend_max_retries() -> u32 {
@@ -531,6 +537,11 @@ pub struct Download {
     #[serde(default = "default_download_concurrent_piece_count")]
     #[validate(range(min = 1))]
     pub concurrent_piece_count: u32,
+
+    /// The number of concurrent pieces to download from source.
+    #[serde(default = "default_back_to_source_concurrent_piece_count")]
+    #[validate(range(min = 1))]
+    pub back_to_source_concurrent_piece_count: u32,
 }
 
 /// Implement Default for Download.
@@ -544,6 +555,7 @@ impl Default for Download {
             piece_timeout: default_download_piece_timeout(),
             collected_piece_timeout: default_collected_download_piece_timeout(),
             concurrent_piece_count: default_download_concurrent_piece_count(),
+            back_to_source_concurrent_piece_count: default_back_to_source_concurrent_piece_count(),
         }
     }
 }
@@ -1888,7 +1900,8 @@ mod tests {
             "protocol": "quic",
             "bandwidthLimit": "50GB",
             "pieceTimeout": "30s",
-            "concurrentPieceCount": 10
+            "concurrentPieceCount": 10,
+            "backToSourceConcurrentPieceCount": 10
         }"#;
 
         let download: Download = serde_json::from_str(json_data).unwrap();
@@ -1901,6 +1914,7 @@ mod tests {
         assert_eq!(download.bandwidth_limit, ByteSize::gb(50));
         assert_eq!(download.piece_timeout, Duration::from_secs(30));
         assert_eq!(download.concurrent_piece_count, 10);
+        assert_eq!(download.back_to_source_concurrent_piece_count, 10);
     }
 
     #[test]
