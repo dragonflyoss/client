@@ -2343,7 +2343,7 @@ impl PersistentTask {
         // Download the piece from the local.
         let mut join_set = JoinSet::new();
         let semaphore = Arc::new(Semaphore::new(
-            self.config.download.concurrent_piece_count as usize,
+            self.config.download.back_to_source_concurrent_piece_count as usize,
         ));
         for interested_piece in interested_pieces {
             async fn download_from_source(
@@ -2791,7 +2791,7 @@ impl PersistentTask {
         // Download the pieces.
         let mut join_set = JoinSet::new();
         let semaphore = Arc::new(Semaphore::new(
-            self.config.download.concurrent_piece_count as usize,
+            self.config.download.back_to_source_concurrent_piece_count as usize,
         ));
         for interested_piece in interested_pieces.clone() {
             async fn download_from_source(
