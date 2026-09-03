@@ -1901,7 +1901,7 @@ mod tests {
             "bandwidthLimit": "50GB",
             "pieceTimeout": "30s",
             "concurrentPieceCount": 10,
-            "backToSourceConcurrentPieceCount": 10
+            "backToSourceConcurrentPieceCount": 4
         }"#;
 
         let download: Download = serde_json::from_str(json_data).unwrap();
@@ -1914,7 +1914,7 @@ mod tests {
         assert_eq!(download.bandwidth_limit, ByteSize::gb(50));
         assert_eq!(download.piece_timeout, Duration::from_secs(30));
         assert_eq!(download.concurrent_piece_count, 10);
-        assert_eq!(download.back_to_source_concurrent_piece_count, 10);
+        assert_eq!(download.back_to_source_concurrent_piece_count, 4);
     }
 
     #[test]
