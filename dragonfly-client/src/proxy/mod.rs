@@ -36,7 +36,7 @@ use dragonfly_client_util::{
     tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
 };
 use futures::TryStreamExt;
-use http_body_util::{combinators::BoxBody, BodyExt, Empty, StreamBody};
+use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full, StreamBody};
 use hyper::body::Frame;
 use hyper::server::conn::http1::Builder as ServerBuilder;
 use hyper::service::service_fn;
@@ -843,11 +843,11 @@ async fn proxy_via_dfdaemon(
         }
         Err(ClientError::BackendError(err)) => {
             error!("download task failed: {:?}", err);
-            return Ok(make_error_response(
-                header::ErrorType::Backend,
+            return Ok(make_backend_error_response(
                 err.status_code
                     .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
                 err.header.clone(),
+                err.body.clone(),
             ));
         }
         Err(err) => {
@@ -861,13 +861,58 @@ async fn proxy_via_dfdaemon(
     };
 
     // Handle the response from the download task.
-    let Some(Ok(message)) = out_stream.recv().await else {
-        error!("response message failed");
-        return Ok(make_error_response(
-            header::ErrorType::Dfdaemon,
-            http::StatusCode::INTERNAL_SERVER_ERROR,
-            None,
-        ));
+    let message = match out_stream.recv().await {
+        Some(Ok(message)) => message,
+        Some(Err(err)) => {
+            match serde_json::from_slice::<header::BackendErrorDetails>(err.details()) {
+                Ok(backend) => {
+                    error!(
+                        "download task failed before response initialization: {:?}",
+                        backend
+                    );
+                    return Ok(make_backend_error_response(
+                        http::StatusCode::from_u16(
+                            backend.status_code.unwrap_or_default() as u16,
+                        )
+                        .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
+                        Some(hashmap_to_headermap(&backend.header).unwrap_or_default()),
+                        Some(backend.body),
+                    ));
+                }
+                Err(_) => match serde_json::from_slice::<Backend>(err.details()) {
+                    Ok(backend) => {
+                        error!(
+                            "download task failed before response initialization: {:?}",
+                            backend
+                        );
+                        return Ok(make_backend_error_response(
+                            http::StatusCode::from_u16(
+                                backend.status_code.unwrap_or_default() as u16,
+                            )
+                            .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
+                            Some(hashmap_to_headermap(&backend.header).unwrap_or_default()),
+                            None,
+                        ));
+                    }
+                    Err(_) => {
+                        error!("response message failed: {}", err);
+                        return Ok(make_error_response(
+                            header::ErrorType::Dfdaemon,
+                            http::StatusCode::INTERNAL_SERVER_ERROR,
+                            None,
+                        ));
+                    }
+                }
+            }
+        }
+        None => {
+            error!("response message failed: stream closed");
+            return Ok(make_error_response(
+                header::ErrorType::Dfdaemon,
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                None,
+            ));
+        }
     };
 
     // Handle the download task started response.
@@ -1099,13 +1144,12 @@ async fn proxy_via_dfdaemon(
                             return;
                         }
 
-                        match serde_json::from_slice::<Backend>(err.details()) {
+                        match serde_json::from_slice::<header::BackendErrorDetails>(err.details()) {
                             Ok(backend) => {
                                 error!("download task failed: {:?}", backend);
                                 sender
                                     .send_timeout(
-                                        Some(make_error_response(
-                                            header::ErrorType::Backend,
+                                        Some(make_backend_error_response(
                                             http::StatusCode::from_u16(
                                                 backend.status_code.unwrap_or_default() as u16,
                                             )
@@ -1114,25 +1158,48 @@ async fn proxy_via_dfdaemon(
                                                 hashmap_to_headermap(&backend.header)
                                                     .unwrap_or_default(),
                                             ),
+                                            Some(backend.body),
                                         )),
                                         REQUEST_TIMEOUT,
                                     )
                                     .await
                                     .unwrap_or_default();
                             }
-                            Err(_) => {
-                                error!("download task failed: {}", err);
-                                sender
-                                    .send_timeout(
-                                        Some(make_error_response(
-                                            header::ErrorType::Dfdaemon,
-                                            http::StatusCode::INTERNAL_SERVER_ERROR,
-                                            None,
-                                        )),
-                                        REQUEST_TIMEOUT,
-                                    )
-                                    .await
-                                    .unwrap_or_default();
+                            Err(_) => match serde_json::from_slice::<Backend>(err.details()) {
+                                Ok(backend) => {
+                                    error!("download task failed: {:?}", backend);
+                                    sender
+                                        .send_timeout(
+                                            Some(make_backend_error_response(
+                                                http::StatusCode::from_u16(
+                                                    backend.status_code.unwrap_or_default() as u16,
+                                                )
+                                                .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
+                                                Some(
+                                                    hashmap_to_headermap(&backend.header)
+                                                        .unwrap_or_default(),
+                                                ),
+                                                None,
+                                            )),
+                                            REQUEST_TIMEOUT,
+                                        )
+                                        .await
+                                        .unwrap_or_default();
+                                }
+                                Err(_) => {
+                                    error!("download task failed: {}", err);
+                                    sender
+                                        .send_timeout(
+                                            Some(make_error_response(
+                                                header::ErrorType::Dfdaemon,
+                                                http::StatusCode::INTERNAL_SERVER_ERROR,
+                                                None,
+                                            )),
+                                            REQUEST_TIMEOUT,
+                                        )
+                                        .await
+                                        .unwrap_or_default();
+                                }
                             }
                         }
 
@@ -1444,6 +1511,26 @@ fn find_matching_rule(rules: Option<&[Rule]>, mut url: url::Url) -> Option<&Rule
 }
 
 /// Makes an error response with the given status and message.
+fn make_backend_error_response(
+    status: http::StatusCode,
+    header: Option<http::HeaderMap>,
+    body: Option<Vec<u8>>,
+) -> Response {
+    let mut response = match body {
+        Some(body) if !body.is_empty() => {
+            make_error_response_with_body(header::ErrorType::Backend, status, header, body)
+        }
+        _ => make_error_response(header::ErrorType::Backend, status, header),
+    };
+
+    response.headers_mut().insert(
+        header::DRAGONFLY_BACKEND_STATUS_CODE_HEADER,
+        status.as_u16().to_string().parse().unwrap(),
+    );
+    response
+}
+
+/// Makes an error response with the given status and message.
 fn make_error_response(
     error_type: header::ErrorType,
     status: http::StatusCode,
@@ -1463,12 +1550,49 @@ fn make_error_response(
         error_type.as_str().parse().unwrap(),
     );
 
+    if error_type == header::ErrorType::Backend {
+        response.headers_mut().insert(
+            header::DRAGONFLY_BACKEND_STATUS_CODE_HEADER,
+            status.as_u16().to_string().parse().unwrap(),
+        );
+    }
+    response
+}
+
+fn make_error_response_with_body(
+    error_type: header::ErrorType,
+    status: http::StatusCode,
+    header: Option<http::HeaderMap>,
+    body: Vec<u8>,
+) -> Response {
+    let content_length = body.len();
+    let mut response = Response::new(full(body));
+    *response.status_mut() = status;
+    if let Some(header) = header {
+        for (k, v) in header.iter() {
+            response.headers_mut().insert(k, v.clone());
+        }
+    }
+    response.headers_mut().insert(
+        http::header::CONTENT_LENGTH,
+        content_length.to_string().parse().unwrap(),
+    );
+    response.headers_mut().insert(
+        header::DRAGONFLY_ERROR_TYPE_HEADER,
+        error_type.as_str().parse().unwrap(),
+    );
     response
 }
 
 /// Returns an empty body.
 fn empty() -> BoxBody<Bytes, ClientError> {
     Empty::<Bytes>::new()
+        .map_err(|never| match never {})
+        .boxed()
+}
+
+fn full(body: Vec<u8>) -> BoxBody<Bytes, ClientError> {
+    Full::new(Bytes::from(body))
         .map_err(|never| match never {})
         .boxed()
 }
