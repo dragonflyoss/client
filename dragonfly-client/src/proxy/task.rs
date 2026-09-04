@@ -16,11 +16,11 @@
 
 use crate::dynconfig::block_list::DownloadBlockListCheckParams;
 use crate::dynconfig::Dynconfig;
+use crate::proxy::header::BackendErrorDetails;
 use crate::grpc::DOWNLOAD_STREAM_BUFFER_SIZE;
 use crate::resource::task::Task;
 use dragonfly_api::common::v2::TaskType;
 use dragonfly_api::dfdaemon::v2::{DownloadTaskRequest, DownloadTaskResponse};
-use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_metric::{
@@ -282,10 +282,11 @@ pub async fn download(
                         .await
                         .unwrap_or_else(|err| error!("download task failed: {}", err));
 
-                    match serde_json::to_vec::<Backend>(&Backend {
+                    match serde_json::to_vec::<BackendErrorDetails>(&BackendErrorDetails {
                         message: err.message.clone(),
                         header: headermap_to_hashmap(&err.header.clone().unwrap_or_default()),
                         status_code: err.status_code.map(|code| code.as_u16() as i32),
+                        body: err.body.clone().unwrap_or_default(),
                     }) {
                         Ok(json) => {
                             handle_backend_error(
