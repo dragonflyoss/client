@@ -596,20 +596,24 @@ impl Piece {
             );
 
             // if the status code is not OK.
-            let mut buffer = String::new();
+            let mut body = Vec::new();
             response
                 .reader
-                .read_to_string(&mut buffer)
+                .read_to_end(&mut body)
                 .await
                 .unwrap_or_default();
-
+            let body_preview = String::from_utf8_lossy(&body);
             let error_message = response.error_message.unwrap_or_default();
-            error!("backend get failed: {} {}", error_message, buffer.as_str());
+            error!(
+                "backend get failed: {} {}",
+                error_message, body_preview.as_ref()
+            );
 
             return Err(Error::BackendError(Box::new(BackendError {
                 message: error_message,
                 status_code: Some(response.http_status_code.unwrap_or_default()),
                 header: Some(response.http_header.unwrap_or_default()),
+                body: Some(body),
             })));
         }
 
@@ -971,6 +975,7 @@ impl Piece {
                 message: error_message,
                 status_code: Some(response.http_status_code.unwrap_or_default()),
                 header: Some(response.http_header.unwrap_or_default()),
+                body: None,
             })));
         }
 
