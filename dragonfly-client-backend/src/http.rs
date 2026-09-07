@@ -53,7 +53,7 @@ use async_trait::async_trait;
 use dashmap::{mapref::entry::Entry, DashMap};
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_core::{
-    error::{ErrorType, OrErr},
+    error::{BackendError, ErrorType, OrErr},
     Error, Result,
 };
 use dragonfly_client_util::{http::validate_ranged_response, tls::NoVerifier};
@@ -373,6 +373,16 @@ impl HTTP {
     }
 }
 
+fn parse_content_range_total(headers: &HeaderMap) -> Option<u64> {
+    let content_range = headers.get(CONTENT_RANGE)?.to_str().ok()?;
+    // Expected format: "bytes <start>-<end>/<total>"
+    let (_, total) = content_range.split_once('/')?;
+    if total == "*" {
+        return None;
+    }
+    total.parse::<u64>().ok()
+}
+
 /// Implements the Backend trait.
 #[async_trait]
 impl Backend for HTTP {
@@ -479,6 +489,7 @@ impl Backend for HTTP {
                                 http_status_code: None,
                                 entries: Vec::new(),
                                 error_message: Some(err.to_string()),
+                                body: None,
                             });
                         }
                     }
@@ -497,6 +508,7 @@ impl Backend for HTTP {
                         error_message: Some(
                             "got 307 Temporary Redirect without Location header".to_string(),
                         ),
+                        body: None,
                     });
                 }
             }
@@ -533,6 +545,7 @@ impl Backend for HTTP {
                             http_status_code: None,
                             entries: Vec::new(),
                             error_message: Some(err.to_string()),
+                            body: None,
                         });
                     }
                 }
@@ -570,6 +583,7 @@ impl Backend for HTTP {
                             http_status_code: None,
                             entries: Vec::new(),
                             error_message: Some(err.to_string()),
+                            body: None,
                         });
                     }
                 }
@@ -588,28 +602,21 @@ impl Backend for HTTP {
                     http_status_code: None,
                     entries: Vec::new(),
                     error_message: None,
+                    body: None,
                 });
             }
         };
 
         let response_status_code = response.status();
         let mut response_header = response.headers().clone();
-        let content_length = if response_status_code == reqwest::StatusCode::PARTIAL_CONTENT {
-            // The total length of a ranged response is in the Content-Range header,
-            // e.g. "bytes 0-0/1048576".
-            let content_length = response_header
-                .get(CONTENT_RANGE)
-                .and_then(|content_range| content_range.to_str().ok())
-                .and_then(|content_range| content_range.rsplit_once('/'))
-                .and_then(|(_, total)| total.parse::<u64>().ok());
-
+        if response_status_code == reqwest::StatusCode::PARTIAL_CONTENT {
+            let content_length = parse_content_range_total(&response_header);
             if content_length.is_none() {
                 error!(
                     "stat request got 206 Partial Content without valid Content-Range {} {}",
                     request.task_id, request_url
                 );
             }
-
             // Read the one-byte body to completion, so the connection can be reused by
             // the connection pool instead of being closed with an unread body.
             if let Err(err) = response.bytes().await {
@@ -618,7 +625,6 @@ impl Backend for HTTP {
                     request.task_id, request_url, err
                 );
             }
-
             // Rewrite the 206-shaped headers to look like the full-object response, since
             // the response header is persisted as the task response header and echoed to
             // the clients.
@@ -626,31 +632,64 @@ impl Backend for HTTP {
             if let Some(content_length) = content_length {
                 response_header.insert(CONTENT_LENGTH, HeaderValue::from(content_length));
             }
+            debug!(
+                "stat response {} {}: {:?} {:?} {:?}",
+                request.task_id, request_url, response_status_code, content_length, response_header
+            );
+            return Ok(StatResponse {
+                success: true,
+                content_length,
+                http_header: Some(response_header),
+                http_status_code: Some(response_status_code),
+                entries: Vec::new(),
+                body: None,
+                error_message: Some(response_status_code.to_string()),
+            });
+        }
 
-            content_length
-        } else {
-            let content_length = match response_header.get(CONTENT_LENGTH) {
-                Some(content_length) => content_length.to_str()?.parse::<u64>().ok(),
-                None => response.content_length(),
-            };
-
-            // Drop the response body to avoid reading it.
-            drop(response);
-            content_length
+        let content_length = match response_header.get(CONTENT_LENGTH) {
+            Some(content_length) => content_length.to_str()?.parse::<u64>().ok(),
+            None => response.content_length(),
         };
-
         debug!(
             "stat response {} {}: {:?} {:?} {:?}",
             request.task_id, request_url, response_status_code, content_length, response_header
         );
 
+        if !response_status_code.is_success() {
+            let body = response.bytes().await.map_err(|err| {
+                error!(
+                    "stat request failed to read response body {} {}: {}",
+                    request.task_id, request_url, err
+                );
+                Error::BackendError(Box::new(BackendError {
+                    message: err.to_string(),
+                    status_code: Some(response_status_code),
+                    header: Some(response_header.clone()),
+                    body: None,
+                }))
+            })?;
+
+            return Ok(StatResponse {
+                success: false,
+                content_length,
+                http_header: Some(response_header),
+                http_status_code: Some(response_status_code),
+                entries: Vec::new(),
+                body: Some(body.to_vec()),
+                error_message: Some(response_status_code.to_string()),
+            });
+        }
+
+        drop(response);
         Ok(StatResponse {
-            success: response_status_code.is_success(),
+            success: true,
             content_length,
             http_header: Some(response_header),
             http_status_code: Some(response_status_code),
-            error_message: Some(response_status_code.to_string()),
             entries: Vec::new(),
+            body: None,
+            error_message: Some(response_status_code.to_string()),
         })
     }
 
