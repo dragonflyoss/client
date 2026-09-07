@@ -436,8 +436,8 @@ pub async fn http_handler(
     if let Some(basic_auth) = config.proxy.server.basic_auth.as_ref() {
         match basic_auth.credentials().verify(request.headers()) {
             Ok(_) => {}
-            Err(ClientError::Unauthorized) => {
-                error!("basic auth failed");
+            Err(err @ ClientError::Unauthorized) => {
+                error!("basic auth failed: {}", err);
                 return Ok(make_error_response(
                     header::ErrorType::Proxy,
                     http::StatusCode::UNAUTHORIZED,
@@ -693,7 +693,8 @@ pub async fn upgraded_handler(
     if let Some(basic_auth) = config.proxy.server.basic_auth.as_ref() {
         match basic_auth.credentials().verify(request.headers()) {
             Ok(_) => {}
-            Err(ClientError::Unauthorized) => {
+            Err(err @ ClientError::Unauthorized) => {
+                error!("basic auth failed: {}", err);
                 return Ok(make_error_response(
                     header::ErrorType::Proxy,
                     http::StatusCode::UNAUTHORIZED,
@@ -817,7 +818,7 @@ async fn proxy_via_dfdaemon(
                 error!("make download task request failed: {}", err);
                 return Ok(make_error_response(
                     header::ErrorType::Proxy,
-                    http::StatusCode::INTERNAL_SERVER_ERROR,
+                    http::StatusCode::BAD_REQUEST,
                     None,
                 ));
             }
@@ -833,8 +834,8 @@ async fn proxy_via_dfdaemon(
     .await
     {
         Ok(out_stream) => out_stream,
-        Err(ClientError::PermissionDenied) => {
-            error!("download task rejected by blocklist policy");
+        Err(err @ ClientError::PermissionDenied) => {
+            error!("download task rejected by blocklist policy: {}", err);
             return Ok(make_error_response(
                 header::ErrorType::Proxy,
                 http::StatusCode::FORBIDDEN,
@@ -848,6 +849,30 @@ async fn proxy_via_dfdaemon(
                 err.status_code
                     .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
                 err.header.clone(),
+            ));
+        }
+        Err(err @ ClientError::NoSpace(_)) => {
+            error!("download task failed: {}", err);
+            return Ok(make_error_response(
+                header::ErrorType::Dfdaemon,
+                http::StatusCode::INSUFFICIENT_STORAGE,
+                None,
+            ));
+        }
+        Err(err @ (ClientError::InvalidContentLength | ClientError::InvalidPieceLength)) => {
+            error!("download task failed: {}", err);
+            return Ok(make_error_response(
+                header::ErrorType::Dfdaemon,
+                http::StatusCode::UNPROCESSABLE_ENTITY,
+                None,
+            ));
+        }
+        Err(err @ (ClientError::InvalidParameter | ClientError::InvalidURI(_))) => {
+            error!("download task failed: {}", err);
+            return Ok(make_error_response(
+                header::ErrorType::Dfdaemon,
+                http::StatusCode::BAD_REQUEST,
+                None,
             ));
         }
         Err(err) => {
@@ -924,7 +949,9 @@ async fn proxy_via_dfdaemon(
                 );
             }
             // If the task is already prefetched, ignore the error.
-            Err(ClientError::InvalidState(_)) => debug!("task is already prefetched"),
+            Err(err @ ClientError::InvalidState(_)) => {
+                debug!("task is already prefetched: {}", err)
+            }
             Err(err) => {
                 error!("prefetch task started: {}", err);
             }

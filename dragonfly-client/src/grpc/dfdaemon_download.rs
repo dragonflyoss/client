@@ -747,7 +747,9 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                     );
                 }
                 // If the task is already prefetched, ignore the error.
-                Err(ClientError::InvalidState(_)) => debug!("task is already prefetched"),
+                Err(err @ ClientError::InvalidState(_)) => {
+                    debug!("task is already prefetched: {}", err)
+                }
                 Err(err) => {
                     error!("prefetch task started: {}", err);
                 }
