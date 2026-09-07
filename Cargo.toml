@@ -130,7 +130,7 @@ tokio-util = { version = "0.7.18", features = ["full"] }
 toml = "0.8.23"
 toml_edit = "0.25.12"
 tonic = { version = "=0.14.6", features = ["tls-aws-lc"] }
-tonic-health = "=0.14.5"
+tonic-health = "=0.14.6"
 tonic-reflection = "=0.14.6"
 tracing = "0.1"
 url = "2.5.4"

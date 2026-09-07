@@ -1493,11 +1493,12 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-request"
-version = "1.6.2"
+version = "1.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe1379d1f7ea6a83a7525cef4f4c82ec9a423f13ba220b9d97a531cfcece0d29"
+checksum = "8ad5b4c0719c695a360fa1f43d9c4fb996ed17abd161ef71e0a48732ff141ad1"
 dependencies = [
  "async-trait",
+ "backon",
  "bytes",
  "dashmap",
  "dragonfly-api",
@@ -1516,7 +1517,8 @@ dependencies = [
  "reqwest-middleware",
  "reqwest-tracing",
  "rustls-pki-types",
- "sha2 0.10.8",
+ "serde_json",
+ "sha2 0.11.0",
  "thiserror 2.0.20",
  "tokio",
  "tokio-util",
@@ -5857,9 +5859,9 @@ dependencies = [
 
 [[package]]
 name = "tonic-health"
-version = "0.14.5"
+version = "0.14.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4ff0636fef47afb3ec02818f5bceb4377b8abb9d6a386aeade18bd6212f8eb7"
+checksum = "fcfab99db777fba2802f0dfa861d1628d1ae916fb199d29819941f139ae85082"
 dependencies = [
  "prost 0.14.4",
  "tokio",
