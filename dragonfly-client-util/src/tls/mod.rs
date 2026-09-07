@@ -253,7 +253,10 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    // Generate the certificate and private key by script(`scripts/generate_certs.sh`).
+    type ExpectCaCert = fn(ClientResult<Certificate>);
+    type ExpectCerts = fn(ClientResult<Vec<CertificateDer<'static>>>);
+    type ExpectKey = fn(ClientResult<PrivateKeyDer<'static>>);
+
     const SERVER_CERT: &str = r#"""
 -----BEGIN CERTIFICATE-----
 MIIDsDCCApigAwIBAgIUWuckNOpaPERz+QMACyqCqFJwYIYwDQYJKoZIhvcNAQEL
@@ -310,11 +313,26 @@ Z+yQ5jhu/fmSBNhqO/8Lp+Y=
 -----END PRIVATE KEY-----
 """#;
 
+    fn pem_file(pem: &str) -> NamedTempFile {
+        let file = NamedTempFile::new().unwrap();
+        file.as_file().write_all(pem.as_bytes()).unwrap();
+        file
+    }
+
+    fn ca_cert() -> Certificate {
+        let ca_cert_file = pem_file(SERVER_CERT);
+        let ca_key_file = pem_file(SERVER_KEY);
+        generate_ca_cert_from_pem(
+            &ca_cert_file.path().to_path_buf(),
+            &ca_key_file.path().to_path_buf(),
+        )
+        .unwrap()
+    }
+
     #[test]
-    fn test_no_verifier() {
+    fn no_verifier_accepts_any_server_cert() {
         let verifier = NoVerifier::new();
 
-        // Test verify_server_cert
         let result = verifier.verify_server_cert(
             &CertificateDer::from(vec![]),
             &[],
@@ -323,115 +341,157 @@ Z+yQ5jhu/fmSBNhqO/8Lp+Y=
             UnixTime::now(),
         );
         assert!(result.is_ok());
-
-        // Test supported_verify_schemes
-        let schemes = verifier.supported_verify_schemes();
-        assert!(!schemes.is_empty());
+        assert!(!verifier.supported_verify_schemes().is_empty());
     }
 
     #[test]
-    fn test_generate_ca_cert_from_pem() {
-        let ca_cert_file = NamedTempFile::new().unwrap();
-        let ca_key_file = NamedTempFile::new().unwrap();
+    fn generate_ca_cert_from_pem_requires_matching_pem_files() {
+        let test_cases: Vec<(&str, &str, ExpectCaCert)> = vec![
+            (SERVER_CERT, SERVER_KEY, |result| assert!(result.is_ok())),
+            (SERVER_CERT, "not a key", |result| {
+                assert!(matches!(result, Err(ClientError::ExternalError(_))));
+            }),
+            ("not a cert", SERVER_KEY, |result| {
+                assert!(matches!(result, Err(ClientError::ExternalError(_))));
+            }),
+        ];
 
-        ca_cert_file
-            .as_file()
-            .write_all(SERVER_CERT.as_bytes())
-            .unwrap();
-        ca_key_file
-            .as_file()
-            .write_all(SERVER_KEY.as_bytes())
-            .unwrap();
+        for (cert_pem, key_pem, expect) in test_cases {
+            let ca_cert_file = pem_file(cert_pem);
+            let ca_key_file = pem_file(key_pem);
+            expect(generate_ca_cert_from_pem(
+                &ca_cert_file.path().to_path_buf(),
+                &ca_key_file.path().to_path_buf(),
+            ));
+        }
+    }
+
+    #[test]
+    fn generate_ca_cert_from_pem_fails_on_a_missing_file() {
+        let ca_key_file = pem_file(SERVER_KEY);
 
         let result = generate_ca_cert_from_pem(
-            &ca_cert_file.path().to_path_buf(),
+            &PathBuf::from("/nonexistent/ca.crt"),
             &ca_key_file.path().to_path_buf(),
         );
-        assert!(result.is_ok());
+        assert!(matches!(result, Err(ClientError::IO(_))));
     }
 
     #[test]
-    fn test_generate_cert_from_pem() {
-        let cert_file = NamedTempFile::new().unwrap();
-        cert_file
-            .as_file()
-            .write_all(SERVER_CERT.as_bytes())
-            .unwrap();
+    fn generate_cert_from_pem_parses_the_certificates_in_the_file() {
+        let test_cases: Vec<(&str, ExpectCerts)> = vec![
+            (SERVER_CERT, |result| assert_eq!(result.unwrap().len(), 1)),
+            ("", |result| assert!(result.unwrap().is_empty())),
+            (
+                "-----BEGIN CERTIFICATE-----\nnot base64\n-----END CERTIFICATE-----\n",
+                |result| assert!(matches!(result, Err(ClientError::IO(_)))),
+            ),
+        ];
 
-        let result = generate_cert_from_pem(&cert_file.path().to_path_buf());
-        assert!(result.is_ok());
-        assert!(!result.unwrap().is_empty());
+        for (pem, expect) in test_cases {
+            let cert_file = pem_file(pem);
+            expect(generate_cert_from_pem(&cert_file.path().to_path_buf()));
+        }
     }
 
     #[test]
-    fn test_generate_self_signed_certs_by_ca_cert() {
-        let ca_cert_file = NamedTempFile::new().unwrap();
-        let ca_key_file = NamedTempFile::new().unwrap();
+    fn generate_self_signed_certs_by_ca_cert_caches_by_host() {
+        let ca_cert = ca_cert();
 
-        ca_cert_file
-            .as_file()
-            .write_all(SERVER_CERT.as_bytes())
-            .unwrap();
-        ca_key_file
-            .as_file()
-            .write_all(SERVER_KEY.as_bytes())
-            .unwrap();
-
-        let ca_cert = generate_ca_cert_from_pem(
-            &ca_cert_file.path().to_path_buf(),
-            &ca_key_file.path().to_path_buf(),
+        let (certs, key) = generate_self_signed_certs_by_ca_cert(
+            &ca_cert,
+            "ca.example.com",
+            vec!["ca.example.com".to_string()],
         )
         .unwrap();
-        let host = "example.com";
-        let subject_alt_names = vec![host.to_string()];
-
-        let result = generate_self_signed_certs_by_ca_cert(&ca_cert, host, subject_alt_names);
-        assert!(result.is_ok());
-        let (certs, key) = result.unwrap();
-        assert!(!certs.is_empty());
+        assert_eq!(certs.len(), 1);
         assert!(matches!(key, PrivateKeyDer::Pkcs8(_)));
+
+        let (cached_certs, cached_key) =
+            generate_self_signed_certs_by_ca_cert(&ca_cert, "ca.example.com", vec![]).unwrap();
+        assert_eq!(cached_certs, certs);
+        assert_eq!(cached_key.secret_der(), key.secret_der());
+
+        let (other_certs, _) = generate_self_signed_certs_by_ca_cert(
+            &ca_cert,
+            "other.example.com",
+            vec!["other.example.com".to_string()],
+        )
+        .unwrap();
+        assert_ne!(other_certs, certs);
     }
 
     #[test]
-    fn test_certs_to_raw_certs() {
-        let cert_file = NamedTempFile::new().unwrap();
-        cert_file
-            .as_file()
-            .write_all(SERVER_CERT.as_bytes())
-            .unwrap();
+    fn generate_simple_self_signed_certs_caches_by_host() {
+        let (certs, key) = generate_simple_self_signed_certs(
+            "simple.example.com",
+            vec!["simple.example.com".to_string()],
+        )
+        .unwrap();
+        assert_eq!(certs.len(), 1);
+        assert!(matches!(key, PrivateKeyDer::Pkcs8(_)));
 
-        let certs = generate_cert_from_pem(&cert_file.path().to_path_buf()).unwrap();
+        let (cached_certs, cached_key) =
+            generate_simple_self_signed_certs("simple.example.com", Vec::<String>::new()).unwrap();
+        assert_eq!(cached_certs, certs);
+        assert_eq!(cached_key.secret_der(), key.secret_der());
 
-        let raw_certs = certs_to_raw_certs(certs);
-        assert!(!raw_certs.is_empty());
+        let (other_certs, _) = generate_simple_self_signed_certs(
+            "other-simple.example.com",
+            vec!["other-simple.example.com".to_string()],
+        )
+        .unwrap();
+        assert_ne!(other_certs, certs);
     }
 
     #[test]
-    fn test_raw_certs_to_certs() {
-        let cert_file = NamedTempFile::new().unwrap();
-        cert_file
-            .as_file()
-            .write_all(SERVER_CERT.as_bytes())
-            .unwrap();
+    fn raw_certs_round_trip_through_der() {
+        let certs = load_certs_from_pem(SERVER_CERT).unwrap();
 
-        let certs = generate_cert_from_pem(&cert_file.path().to_path_buf()).unwrap();
-        let raw_certs = certs_to_raw_certs(certs);
-
-        let certs = raw_certs_to_certs(raw_certs);
-        assert!(!certs.is_empty());
+        let raw_certs = certs_to_raw_certs(certs.clone());
+        assert_eq!(raw_certs.len(), 1);
+        assert_eq!(raw_certs[0], certs[0].as_ref());
+        assert_eq!(raw_certs_to_certs(raw_certs), certs);
+        assert!(raw_certs_to_certs(vec![]).is_empty());
     }
 
     #[test]
-    fn test_load_certs_from_pem() {
-        let result = load_certs_from_pem(SERVER_CERT);
-        assert!(result.is_ok());
-        assert!(!result.unwrap().is_empty());
+    fn load_certs_from_pem_parses_the_certificates() {
+        let test_cases: Vec<(&str, ExpectCerts)> = vec![
+            (SERVER_CERT, |result| assert_eq!(result.unwrap().len(), 1)),
+            ("", |result| assert!(result.unwrap().is_empty())),
+            (SERVER_KEY, |result| assert!(result.unwrap().is_empty())),
+            (
+                "-----BEGIN CERTIFICATE-----\nnot base64\n-----END CERTIFICATE-----\n",
+                |result| assert!(matches!(result, Err(ClientError::IO(_)))),
+            ),
+        ];
+
+        for (pem, expect) in test_cases {
+            expect(load_certs_from_pem(pem));
+        }
     }
 
     #[test]
-    fn test_load_key_from_pem() {
-        let result = load_key_from_pem(SERVER_KEY);
-        assert!(result.is_ok());
-        assert!(matches!(result.unwrap(), PrivateKeyDer::Pkcs8(_)));
+    fn load_key_from_pem_requires_a_private_key() {
+        let test_cases: Vec<(&str, ExpectKey)> = vec![
+            (SERVER_KEY, |result| {
+                assert!(matches!(result.unwrap(), PrivateKeyDer::Pkcs8(_)));
+            }),
+            ("", |result| {
+                assert!(matches!(result, Err(ClientError::Unknown(_))));
+            }),
+            (SERVER_CERT, |result| {
+                assert!(matches!(result, Err(ClientError::Unknown(_))));
+            }),
+            (
+                "-----BEGIN PRIVATE KEY-----\nnot base64\n-----END PRIVATE KEY-----\n",
+                |result| assert!(matches!(result, Err(ClientError::IO(_)))),
+            ),
+        ];
+
+        for (pem, expect) in test_cases {
+            expect(load_key_from_pem(pem));
+        }
     }
 }

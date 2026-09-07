@@ -266,282 +266,218 @@ mod tests {
     use super::super::metadata::Piece;
     use super::*;
     use bytesize::ByteSize;
-    use dragonfly_api::common::v2::Range;
     use dragonfly_client_config::dfdaemon::Storage;
     use tokio::io::AsyncReadExt;
 
+    type ExpectDelete = fn(Result<()>);
+    type ExpectRead = fn(Result<Vec<u8>>);
+
+    fn config(cache_capacity: ByteSize) -> Config {
+        Config {
+            storage: Storage {
+                cache_capacity,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn cache(cache_capacity: ByteSize) -> Cache {
+        Cache::new(Arc::new(config(cache_capacity)))
+    }
+
+    fn piece(offset: u64, length: u64) -> Piece {
+        Piece {
+            offset,
+            length,
+            ..Default::default()
+        }
+    }
+
+    fn range(start: u64, length: u64) -> Option<Range> {
+        Some(Range { start, length })
+    }
+
+    fn pattern(bytes: std::ops::Range<u64>) -> Vec<u8> {
+        bytes.map(|i| (i % 256) as u8).collect()
+    }
+
+    async fn read(
+        cache: &Cache,
+        task_id: &str,
+        piece_id: &str,
+        piece: Piece,
+        range: Option<Range>,
+    ) -> Result<Vec<u8>> {
+        let mut reader = cache.read_piece(task_id, piece_id, piece, range).await?;
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await.unwrap();
+        Ok(buffer)
+    }
+
     #[tokio::test]
-    async fn test_new() {
+    async fn new_uses_configured_cache_capacity() {
         let test_cases = vec![
-            // Default configuration with 64MiB capacity.
-            (Config::default(), 0, ByteSize::mib(64).as_u64()),
-            // Custom configuration with 100MiB capacity.
-            (
-                Config {
-                    storage: Storage {
-                        cache_capacity: ByteSize::mib(100),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-                0,
-                ByteSize::mib(100).as_u64(),
-            ),
-            // Zero capacity configuration.
-            (
-                Config {
-                    storage: Storage {
-                        cache_capacity: ByteSize::b(0),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
-                0,
-                0,
-            ),
+            (Config::default(), ByteSize::mib(64).as_u64()),
+            (config(ByteSize::mib(100)), ByteSize::mib(100).as_u64()),
+            (config(ByteSize::b(0)), 0),
         ];
 
-        for (config, expected_size, expected_capacity) in test_cases {
+        for (config, expected_capacity) in test_cases {
             let cache = Cache::new(Arc::new(config));
-            assert_eq!(cache.size.load(Ordering::Relaxed), expected_size);
+            assert_eq!(cache.size.load(Ordering::Relaxed), 0);
             assert_eq!(cache.capacity, expected_capacity);
         }
     }
 
     #[tokio::test]
-    async fn test_contains_task() {
-        let config = Config {
-            storage: Storage {
-                cache_capacity: ByteSize::mib(10),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let cache = Cache::new(Arc::new(config));
-
+    async fn put_task_skips_empty_or_oversized_tasks() {
         let test_cases = vec![
-            // Test non-existent task.
-            ("check", "non_existent", 0, false),
-            // Add and verify task.
-            ("add", "task1", ByteSize::mib(1).as_u64(), true),
-            ("check", "task1", 0, true),
-            // Remove and verify task.
-            ("remove", "task1", 0, false),
-            ("check", "task1", 0, false),
-            // Test multiple tasks.
-            ("add", "task1", ByteSize::mib(1).as_u64(), true),
-            ("add", "task2", ByteSize::mib(2).as_u64(), true),
-            ("check", "task1", 0, true),
-            ("check", "task2", 0, true),
-            ("check", "task3", 0, false),
+            (0, 0),
+            (ByteSize::mib(1).as_u64(), ByteSize::mib(1).as_u64()),
+            (ByteSize::mib(10).as_u64(), ByteSize::mib(10).as_u64()),
+            (ByteSize::mib(10).as_u64() + 1, 0),
         ];
 
-        for (operation, task_id, content_length, expected_result) in test_cases {
-            match operation {
-                "check" => {
-                    assert_eq!(cache.contains_task(task_id).await, expected_result);
-                }
-                "add" => {
-                    let task = Task::new(content_length);
-                    cache.tasks.write().await.put(task_id.to_string(), task);
-                    assert_eq!(cache.contains_task(task_id).await, expected_result);
-                }
-                "remove" => {
-                    cache.tasks.write().await.pop_lru();
-                    assert_eq!(cache.contains_task(task_id).await, expected_result);
-                }
-                _ => panic!("Unknown operation."),
-            }
+        for (content_length, expected_size) in test_cases {
+            let mut cache = cache(ByteSize::mib(10));
+            cache.put_task("task1", content_length).await;
+            assert_eq!(cache.contains_task("task1").await, expected_size > 0);
+            assert_eq!(cache.size.load(Ordering::Relaxed), expected_size);
         }
     }
 
     #[tokio::test]
-    async fn test_put_task() {
-        let config = Config {
-            storage: Storage {
-                cache_capacity: ByteSize::mib(10),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let mut cache = Cache::new(Arc::new(config));
-
+    async fn put_task_evicts_least_recently_used_tasks_to_fit() {
         let test_cases = vec![
-            // Empty task should not be cached.
-            ("empty_task", 0, false),
-            // Task equal to capacity should not be cached.
-            ("equal_capacity", ByteSize::mib(10).as_u64(), true),
-            // Task exceeding capacity should not be cached.
-            ("exceed_capacity", ByteSize::mib(10).as_u64() + 1, false),
-            // Normal sized task should be cached.
-            ("normal_task", ByteSize::mib(1).as_u64(), true),
+            (
+                vec![("task1", 2), ("task2", 2), ("task3", 1)],
+                vec!["task1", "task2", "task3"],
+                5,
+            ),
+            (
+                vec![("task1", 2), ("task2", 2), ("task3", 2)],
+                vec!["task2", "task3"],
+                4,
+            ),
+            (
+                vec![("task1", 2), ("task2", 2), ("task3", 5)],
+                vec!["task3"],
+                5,
+            ),
         ];
 
-        for (task_id, size, should_exist) in test_cases {
-            if size > 0 {
-                cache.put_task(task_id, size).await;
+        for (tasks, expected_tasks, expected_size) in test_cases {
+            let mut cache = cache(ByteSize::mib(5));
+            for (task_id, content_length) in &tasks {
+                cache
+                    .put_task(task_id, ByteSize::mib(*content_length).as_u64())
+                    .await;
             }
 
-            assert_eq!(cache.contains_task(task_id).await, should_exist);
+            for (task_id, _) in &tasks {
+                assert_eq!(
+                    cache.contains_task(task_id).await,
+                    expected_tasks.contains(task_id)
+                );
+            }
+
+            assert_eq!(
+                cache.size.load(Ordering::Relaxed),
+                ByteSize::mib(expected_size).as_u64()
+            );
         }
     }
 
     #[tokio::test]
-    async fn test_put_task_lru() {
-        let config = Config {
-            storage: Storage {
-                cache_capacity: ByteSize::mib(5),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let mut cache = Cache::new(Arc::new(config));
-
+    async fn contains_task_finds_only_present_tasks() {
         let test_cases = vec![
-            // Add tasks until eviction triggers.
-            ("lru_task_1", ByteSize::mib(2).as_u64(), true),
-            ("lru_task_2", ByteSize::mib(2).as_u64(), true),
-            // Third task triggers eviction.
-            ("lru_task_3", ByteSize::mib(2).as_u64(), true),
-            // Verify eviction results.
-            ("lru_task_1", 0, false),
-            ("lru_task_2", 0, true),
-            ("lru_task_3", 0, true),
+            (vec![], "task1", false),
+            (vec!["task1"], "task1", true),
+            (vec!["task1", "task2"], "task2", true),
+            (vec!["task1", "task2"], "task3", false),
         ];
 
-        for (task_id, size, should_exist) in test_cases {
-            if size > 0 {
-                cache.put_task(task_id, size).await;
+        for (put_tasks, task_id, expected) in test_cases {
+            let mut cache = cache(ByteSize::mib(10));
+            for put_task in &put_tasks {
+                cache.put_task(put_task, ByteSize::mib(1).as_u64()).await;
             }
-            assert_eq!(cache.contains_task(task_id).await, should_exist);
+
+            assert_eq!(cache.contains_task(task_id).await, expected);
         }
     }
 
     #[tokio::test]
-    async fn test_delete_task() {
-        let config = Config {
-            storage: Storage {
-                cache_capacity: ByteSize::mib(10),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let mut cache = Cache::new(Arc::new(config));
-
-        cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
-        cache.put_task("task2", ByteSize::mib(1).as_u64()).await;
-        cache.put_task("task3", ByteSize::mib(1).as_u64()).await;
-
-        let test_cases = vec![
-            ("task1", true),
-            ("task2", true),
-            ("task3", true),
-            ("nonexistent", false),
-            ("", false),
-            ("large_task", false),
+    async fn delete_task_removes_present_tasks_and_releases_size() {
+        let test_cases: Vec<(&str, u64, ExpectDelete)> = vec![
+            ("task1", 2, |result| assert!(result.is_ok())),
+            ("task2", 1, |result| assert!(result.is_ok())),
+            ("task3", 0, |result| assert!(result.is_ok())),
+            ("nonexistent", 0, |result| {
+                assert!(matches!(result, Err(Error::TaskNotFound(_))));
+            }),
+            ("", 0, |result| {
+                assert!(matches!(result, Err(Error::TaskNotFound(_))));
+            }),
+            ("large_task", 0, |result| {
+                assert!(matches!(result, Err(Error::TaskNotFound(_))));
+            }),
         ];
 
-        for (task_id, exists) in test_cases {
-            assert_eq!(cache.contains_task(task_id).await, exists);
+        let mut cache = cache(ByteSize::mib(10));
+        for task_id in ["task1", "task2", "task3"] {
+            cache.put_task(task_id, ByteSize::mib(1).as_u64()).await;
+        }
 
-            let result = cache.delete_task(task_id).await;
-            if exists {
-                assert!(result.is_ok());
-            } else {
-                assert!(result.is_err());
-            }
-
+        for (task_id, expected_size, expect) in test_cases {
+            expect(cache.delete_task(task_id).await);
             assert!(!cache.contains_task(task_id).await);
+            assert_eq!(
+                cache.size.load(Ordering::Relaxed),
+                ByteSize::mib(expected_size).as_u64()
+            );
         }
-
-        assert!(!cache.contains_task("task1").await);
-        assert!(!cache.contains_task("task2").await);
-        assert!(!cache.contains_task("task3").await);
-        assert!(!cache.contains_task("nonexistent").await);
-        assert!(!cache.contains_task("").await);
-        assert!(!cache.contains_task("large_task").await);
     }
 
     #[tokio::test]
-    async fn test_contains_piece() {
-        let config = Config {
-            storage: Storage {
-                cache_capacity: ByteSize::mib(10),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let mut cache = Cache::new(Arc::new(config));
-
+    async fn contains_piece_requires_task_and_piece() {
         let test_cases = vec![
-            // Check non-existent task.
-            ("check", "non_existent", "piece1", "", false),
-            // Check empty piece ID in non-existent task.
-            ("check", "non_existent", "", "", false),
-            // Add task and verify empty task behavior.
-            ("add_task", "task1", "", "", true),
-            ("check", "task1", "piece1", "", false),
-            // Add piece and verify existence.
-            ("add_piece", "task1", "piece1", "test data", true),
-            ("check", "task1", "piece1", "", true),
-            // Check empty piece ID in existing task.
-            ("check", "task1", "", "", false),
-            // Check non-existent piece in existing task.
-            ("check", "task1", "non_existent_piece", "", false),
-            // Test piece ID with special characters.
-            ("add_piece", "task1", "piece#$%^&*", "test data", true),
-            ("check", "task1", "piece#$%^&*", "", true),
+            ("non_existent", vec![], "piece1", false),
+            ("non_existent", vec![], "", false),
+            ("task1", vec![], "piece1", false),
+            ("task1", vec!["piece1"], "piece1", true),
+            ("task1", vec!["piece1"], "", false),
+            ("task1", vec!["piece1"], "non_existent_piece", false),
+            ("task1", vec!["piece#$%^&*"], "piece#$%^&*", true),
         ];
 
-        for (operation, task_id, piece_id, content, expected_result) in test_cases {
-            match operation {
-                "check" => {
-                    assert_eq!(
-                        cache.contains_piece(task_id, piece_id).await,
-                        expected_result
-                    );
-                }
-                "add_task" => {
-                    cache.put_task(task_id, 1000).await;
-                    assert!(cache.contains_task(task_id).await);
-                }
-                "add_piece" => {
-                    cache
-                        .write_piece(task_id, piece_id, Bytes::from(content))
-                        .await
-                        .unwrap();
-                    assert_eq!(
-                        cache.contains_piece(task_id, piece_id).await,
-                        expected_result
-                    );
-                }
-                _ => panic!("Unknown operation."),
+        for (task_id, written_pieces, piece_id, expected) in test_cases {
+            let mut cache = cache(ByteSize::mib(10));
+            cache.put_task("task1", 1000).await;
+
+            for written_piece in &written_pieces {
+                cache
+                    .write_piece("task1", written_piece, Bytes::from("test data"))
+                    .await
+                    .unwrap();
             }
+
+            assert_eq!(cache.contains_piece(task_id, piece_id).await, expected);
         }
     }
 
     #[tokio::test]
-    async fn test_write_piece() {
-        let config = Config {
-            storage: Storage {
-                cache_capacity: ByteSize::mib(10),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let mut cache = Cache::new(Arc::new(config));
-
-        // Test writing to non-existent task.
-        let test_data = b"test data".to_vec();
+    async fn write_piece_fails_without_task() {
+        let cache = cache(ByteSize::mib(10));
         let result = cache
-            .write_piece("non_existent", "piece1", Bytes::from(test_data))
+            .write_piece("non_existent", "piece1", Bytes::from("test data"))
             .await;
         assert!(matches!(result, Err(Error::TaskNotFound(_))));
+    }
 
-        // Create a task for testing.
-        cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
-        assert!(cache.contains_task("task1").await);
-
+    #[tokio::test]
+    async fn write_piece_stores_content_once_per_piece() {
         let test_cases = vec![
             ("piece1", b"hello world".to_vec()),
             ("piece2", b"rust programming".to_vec()),
@@ -553,269 +489,144 @@ mod tests {
             ("piece8", vec![1u8; 2048]),
         ];
 
-        for (piece_id, content) in &test_cases {
-            let result = cache
-                .write_piece("task1", piece_id, Bytes::copy_from_slice(content))
-                .await;
-            assert!(result.is_ok());
+        let mut cache = cache(ByteSize::mib(10));
+        cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
+
+        for (piece_id, content) in test_cases {
+            let piece = piece(0, content.len() as u64);
+            cache
+                .write_piece("task1", piece_id, Bytes::copy_from_slice(&content))
+                .await
+                .unwrap();
             assert!(cache.contains_piece("task1", piece_id).await);
+            assert_eq!(
+                read(&cache, "task1", piece_id, piece.clone(), None)
+                    .await
+                    .unwrap(),
+                content
+            );
 
-            let piece = Piece {
-                number: 0,
-                offset: 0,
-                length: content.len() as u64,
-                digest: "".to_string(),
-                parent_id: None,
-                uploading_count: 0,
-                uploaded_count: 0,
-                updated_at: chrono::Utc::now().naive_utc(),
-                created_at: chrono::Utc::now().naive_utc(),
-                finished_at: None,
-            };
-
-            let mut reader = cache
-                .read_piece("task1", piece_id, piece, None)
+            cache
+                .write_piece(
+                    "task1",
+                    piece_id,
+                    Bytes::from(format!("updated content for {piece_id}")),
+                )
                 .await
                 .unwrap();
-
-            let mut buffer = Vec::new();
-            reader.read_to_end(&mut buffer).await.unwrap();
-            assert_eq!(buffer, *content);
-        }
-
-        // Test attempting to overwrite existing pieces.
-        // The write should succeed (return Ok) but content should not change.
-        for (piece_id, original_content) in &test_cases {
-            let new_content = format!("updated content for {piece_id}");
-            let result = cache
-                .write_piece("task1", piece_id, Bytes::from(new_content))
-                .await;
-            assert!(result.is_ok());
-
-            // Verify content remains unchanged.
-            let piece = Piece {
-                number: 0,
-                offset: 0,
-                length: original_content.len() as u64,
-                digest: "".to_string(),
-                parent_id: None,
-                uploading_count: 0,
-                uploaded_count: 0,
-                updated_at: chrono::Utc::now().naive_utc(),
-                created_at: chrono::Utc::now().naive_utc(),
-                finished_at: None,
-            };
-
-            let mut reader = cache
-                .read_piece("task1", piece_id, piece, None)
-                .await
-                .unwrap();
-
-            let mut buffer = Vec::new();
-            reader.read_to_end(&mut buffer).await.unwrap();
-            assert_eq!(buffer, *original_content);
+            assert_eq!(
+                read(&cache, "task1", piece_id, piece, None).await.unwrap(),
+                content
+            );
         }
     }
 
     #[tokio::test]
-    async fn test_read_piece() {
-        let config = Config {
-            storage: Storage {
-                cache_capacity: ByteSize::mib(100),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let mut cache = Cache::new(Arc::new(config));
+    async fn read_piece_returns_content_within_range() {
+        let large_piece_length = ByteSize::mib(50).as_u64();
 
-        let piece = Piece {
-            number: 0,
-            offset: 0,
-            length: 11,
-            digest: "".to_string(),
-            parent_id: None,
-            uploading_count: 0,
-            uploaded_count: 0,
-            updated_at: chrono::Utc::now().naive_utc(),
-            created_at: chrono::Utc::now().naive_utc(),
-            finished_at: None,
-        };
-
-        let result = cache
-            .read_piece("non_existent", "piece1", piece.clone(), None)
-            .await;
-        assert!(matches!(result, Err(Error::TaskNotFound(_))));
-
-        cache.put_task("task1", ByteSize::mib(50).as_u64()).await;
-        let result = cache
-            .read_piece("task1", "non_existent", piece.clone(), None)
-            .await;
-        assert!(matches!(result, Err(Error::PieceNotFound(_))));
-
-        let test_pieces = vec![
-            // Small pieces for basic functionality testing.
-            (
-                "piece1",
-                b"hello world".to_vec(),
-                Piece {
-                    number: 0,
-                    offset: 0,
-                    length: 11,
-                    digest: "".to_string(),
-                    parent_id: None,
-                    uploading_count: 0,
-                    uploaded_count: 0,
-                    updated_at: chrono::Utc::now().naive_utc(),
-                    created_at: chrono::Utc::now().naive_utc(),
-                    finished_at: None,
-                },
-                vec![
-                    (None, b"hello world".to_vec()),
-                    (
-                        Some(Range {
-                            start: 0,
-                            length: 5,
-                        }),
-                        b"hello".to_vec(),
-                    ),
-                ],
-            ),
-            (
-                "piece2",
-                b"rust lang".to_vec(),
-                Piece {
-                    number: 1,
-                    offset: 11,
-                    length: 9,
-                    digest: "".to_string(),
-                    parent_id: None,
-                    uploading_count: 0,
-                    uploaded_count: 0,
-                    updated_at: chrono::Utc::now().naive_utc(),
-                    created_at: chrono::Utc::now().naive_utc(),
-                    finished_at: None,
-                },
-                vec![
-                    (None, b"rust lang".to_vec()),
-                    (
-                        Some(Range {
-                            start: 11,
-                            length: 4,
-                        }),
-                        b"rust".to_vec(),
-                    ),
-                ],
-            ),
-            (
-                "piece3",
-                b"unit test".to_vec(),
-                Piece {
-                    number: 2,
-                    offset: 20,
-                    length: 9,
-                    digest: "".to_string(),
-                    parent_id: None,
-                    uploading_count: 0,
-                    uploaded_count: 0,
-                    updated_at: chrono::Utc::now().naive_utc(),
-                    created_at: chrono::Utc::now().naive_utc(),
-                    finished_at: None,
-                },
-                vec![
-                    (None, b"unit test".to_vec()),
-                    (
-                        Some(Range {
-                            start: 20,
-                            length: 4,
-                        }),
-                        b"unit".to_vec(),
-                    ),
-                ],
-            ),
-            // Large piece for boundary testing.
+        let test_cases = vec![
+            ("piece1", piece(0, 11), None, b"hello world".to_vec()),
+            ("piece1", piece(0, 11), range(0, 5), b"hello".to_vec()),
+            ("piece1", piece(0, 11), range(6, 100), b"world".to_vec()),
+            ("piece2", piece(11, 9), None, b"rust lang".to_vec()),
+            ("piece2", piece(11, 9), range(11, 4), b"rust".to_vec()),
+            ("piece2", piece(11, 9), range(5, 10), b"rust".to_vec()),
+            ("piece3", piece(20, 9), None, b"unit test".to_vec()),
+            ("piece3", piece(20, 9), range(20, 4), b"unit".to_vec()),
             (
                 "large_piece",
-                {
-                    let size = ByteSize::mib(50).as_u64();
-                    (0..size).map(|i| (i % 256) as u8).collect()
-                },
-                Piece {
-                    number: 2,
-                    offset: 0,
-                    length: ByteSize::mib(50).as_u64(),
-                    digest: "".to_string(),
-                    parent_id: None,
-                    uploading_count: 0,
-                    uploaded_count: 0,
-                    updated_at: chrono::Utc::now().naive_utc(),
-                    created_at: chrono::Utc::now().naive_utc(),
-                    finished_at: None,
-                },
-                vec![
-                    // Full read.
-                    (
-                        None,
-                        (0..ByteSize::mib(50).as_u64())
-                            .map(|i| (i % 256) as u8)
-                            .collect(),
-                    ),
-                    // Read first 1MiB.
-                    (
-                        Some(Range {
-                            start: 0,
-                            length: ByteSize::mib(1).as_u64(),
-                        }),
-                        (0..ByteSize::mib(1).as_u64())
-                            .map(|i| (i % 256) as u8)
-                            .collect(),
-                    ),
-                    // Read last 1MiB.
-                    (
-                        Some(Range {
-                            start: ByteSize::mib(49).as_u64(),
-                            length: ByteSize::mib(1).as_u64(),
-                        }),
-                        (ByteSize::mib(49).as_u64()..ByteSize::mib(50).as_u64())
-                            .map(|i| (i % 256) as u8)
-                            .collect(),
-                    ),
-                ],
+                piece(0, large_piece_length),
+                None,
+                pattern(0..large_piece_length),
+            ),
+            (
+                "large_piece",
+                piece(0, large_piece_length),
+                range(0, ByteSize::mib(1).as_u64()),
+                pattern(0..ByteSize::mib(1).as_u64()),
+            ),
+            (
+                "large_piece",
+                piece(0, large_piece_length),
+                range(ByteSize::mib(49).as_u64(), ByteSize::mib(1).as_u64()),
+                pattern(ByteSize::mib(49).as_u64()..large_piece_length),
             ),
         ];
 
-        // Write all pieces.
-        for (id, content, _, _) in &test_pieces {
+        let mut cache = cache(ByteSize::mib(100));
+        cache.put_task("task1", large_piece_length).await;
+        let pieces = vec![
+            ("piece1", b"hello world".to_vec()),
+            ("piece2", b"rust lang".to_vec()),
+            ("piece3", b"unit test".to_vec()),
+            ("large_piece", pattern(0..large_piece_length)),
+        ];
+        for (piece_id, content) in pieces {
             cache
-                .write_piece("task1", id, Bytes::copy_from_slice(content))
+                .write_piece("task1", piece_id, Bytes::from(content))
                 .await
                 .unwrap();
         }
 
-        // Test all pieces with their read ranges.
-        for (id, _, piece, ranges) in &test_pieces {
-            for (range, expected_content) in ranges {
-                let mut reader = cache
-                    .read_piece("task1", id, piece.clone(), *range)
-                    .await
-                    .unwrap();
-
-                let mut buffer = Vec::new();
-                reader.read_to_end(&mut buffer).await.unwrap();
-                assert_eq!(&buffer, expected_content);
-            }
+        for (piece_id, piece, range, expected) in test_cases {
+            let content = read(&cache, "task1", piece_id, piece, range).await.unwrap();
+            assert_eq!(content, expected);
         }
     }
 
     #[tokio::test]
-    async fn test_concurrent_read_same_piece() {
-        let config = Config {
-            storage: Storage {
-                cache_capacity: ByteSize::mib(10),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let mut cache = Cache::new(Arc::new(config));
+    async fn read_piece_fails_on_missing_task_piece_or_invalid_range() {
+        let test_cases: Vec<(&str, &str, Piece, Option<Range>, ExpectRead)> = vec![
+            ("non_existent", "piece1", piece(0, 11), None, |result| {
+                assert!(matches!(result, Err(Error::TaskNotFound(_))));
+            }),
+            ("task1", "non_existent", piece(0, 11), None, |result| {
+                assert!(matches!(result, Err(Error::PieceNotFound(_))));
+            }),
+            ("task1", "piece1", piece(0, 12), None, |result| {
+                assert!(matches!(result, Err(Error::InvalidParameter)));
+            }),
+            ("task1", "piece1", piece(0, 20), range(11, 5), |result| {
+                assert!(matches!(result, Err(Error::InvalidParameter)));
+            }),
+        ];
+
+        let mut cache = cache(ByteSize::mib(10));
+        cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
+        cache
+            .write_piece("task1", "piece1", Bytes::from("hello world"))
+            .await
+            .unwrap();
+
+        for (task_id, piece_id, piece, range, expect) in test_cases {
+            expect(read(&cache, task_id, piece_id, piece, range).await);
+        }
+    }
+
+    #[tokio::test]
+    async fn read_piece_marks_task_recently_used() {
+        let mut cache = cache(ByteSize::mib(5));
+        cache.put_task("task1", ByteSize::mib(2).as_u64()).await;
+        cache
+            .write_piece("task1", "piece1", Bytes::from("hello world"))
+            .await
+            .unwrap();
+        cache.put_task("task2", ByteSize::mib(2).as_u64()).await;
+
+        read(&cache, "task1", "piece1", piece(0, 11), None)
+            .await
+            .unwrap();
+        cache.put_task("task3", ByteSize::mib(2).as_u64()).await;
+
+        assert!(cache.contains_task("task1").await);
+        assert!(!cache.contains_task("task2").await);
+        assert!(cache.contains_task("task3").await);
+    }
+
+    #[tokio::test]
+    async fn concurrent_reads_of_one_piece_return_its_content() {
+        let mut cache = cache(ByteSize::mib(10));
         cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
 
         let content = b"test data for concurrent read".to_vec();
@@ -824,50 +635,28 @@ mod tests {
             .await
             .unwrap();
 
-        let cache_arc = Arc::new(cache);
+        let cache = Arc::new(cache);
         let mut join_set = tokio::task::JoinSet::new();
-
-        // Spawn concurrent readers.
         for i in 0..50 {
-            let cache_clone = cache_arc.clone();
-            let expected_content = content.clone();
-
+            let cache = cache.clone();
+            let content = content.clone();
             join_set.spawn(async move {
-                let piece = Piece {
-                    number: 0,
-                    offset: 0,
-                    length: expected_content.len() as u64,
-                    digest: "".to_string(),
-                    parent_id: None,
-                    uploading_count: 0,
-                    uploaded_count: 0,
-                    updated_at: chrono::Utc::now().naive_utc(),
-                    created_at: chrono::Utc::now().naive_utc(),
-                    finished_at: None,
+                let (read_range, expected) = if i % 2 == 0 {
+                    (None, content.clone())
+                } else {
+                    (range(0, 5), content[..5].to_vec())
                 };
 
-                let range = if i % 2 == 0 {
-                    None
-                } else {
-                    Some(Range {
-                        start: 0,
-                        length: 5,
-                    })
-                };
-
-                let mut reader = cache_clone
-                    .read_piece("task1", "piece1", piece, range)
-                    .await
-                    .unwrap_or_else(|e| panic!("Reader {i} failed: {e:?}."));
-
-                let mut buffer = Vec::new();
-                reader.read_to_end(&mut buffer).await.unwrap();
-
-                if let Some(range) = range {
-                    assert_eq!(buffer, &expected_content[..range.length as usize]);
-                } else {
-                    assert_eq!(buffer, expected_content);
-                }
+                let buffer = read(
+                    &cache,
+                    "task1",
+                    "piece1",
+                    piece(0, content.len() as u64),
+                    read_range,
+                )
+                .await
+                .unwrap();
+                assert_eq!(buffer, expected);
             });
         }
 
@@ -877,52 +666,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_concurrent_write_different_pieces() {
-        let config = Config {
-            storage: Storage {
-                cache_capacity: ByteSize::mib(10),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let mut cache = Cache::new(Arc::new(config));
+    async fn concurrent_writes_of_different_pieces_store_each() {
+        let mut cache = cache(ByteSize::mib(10));
         cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
 
-        let cache_arc = Arc::new(cache);
+        let cache = Arc::new(cache);
         let mut join_set = tokio::task::JoinSet::new();
-
-        // Spawn concurrent writers.
         for i in 0..50 {
-            let cache_clone = cache_arc.clone();
-            let content = format!("content for piece {i}").into_bytes();
-
+            let cache = cache.clone();
             join_set.spawn(async move {
                 let piece_id = format!("piece{i}");
-                let result = cache_clone
+                let content = format!("content for piece {i}").into_bytes();
+                cache
                     .write_piece("task1", &piece_id, Bytes::from(content.clone()))
-                    .await;
-                assert!(result.is_ok());
-
-                let piece = Piece {
-                    number: 0,
-                    offset: 0,
-                    length: content.len() as u64,
-                    digest: "".to_string(),
-                    parent_id: None,
-                    uploading_count: 0,
-                    uploaded_count: 0,
-                    updated_at: chrono::Utc::now().naive_utc(),
-                    created_at: chrono::Utc::now().naive_utc(),
-                    finished_at: None,
-                };
-
-                let mut reader = cache_clone
-                    .read_piece("task1", &piece_id, piece, None)
                     .await
                     .unwrap();
 
-                let mut buffer = Vec::new();
-                reader.read_to_end(&mut buffer).await.unwrap();
+                let buffer = read(
+                    &cache,
+                    "task1",
+                    &piece_id,
+                    piece(0, content.len() as u64),
+                    None,
+                )
+                .await
+                .unwrap();
                 assert_eq!(buffer, content);
             });
         }
@@ -933,15 +701,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_concurrent_write_same_piece() {
-        let config = Config {
-            storage: Storage {
-                cache_capacity: ByteSize::mib(10),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let mut cache = Cache::new(Arc::new(config));
+    async fn concurrent_writes_of_one_piece_keep_first_content() {
+        let mut cache = cache(ByteSize::mib(10));
         cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
 
         let original_content = b"original content".to_vec();
@@ -950,19 +711,16 @@ mod tests {
             .await
             .unwrap();
 
-        let cache_arc = Arc::new(cache);
+        let cache = Arc::new(cache);
         let mut join_set = tokio::task::JoinSet::new();
-
-        // Spawn concurrent writers.
         for i in 0..50 {
-            let cache_clone = cache_arc.clone();
-            let new_content = format!("new content from writer {i}").into_bytes();
-
+            let cache = cache.clone();
             join_set.spawn(async move {
-                let result = cache_clone
+                let new_content = format!("new content from writer {i}").into_bytes();
+                cache
                     .write_piece("task1", "piece1", Bytes::from(new_content))
-                    .await;
-                assert!(result.is_ok());
+                    .await
+                    .unwrap();
             });
         }
 
@@ -970,26 +728,15 @@ mod tests {
             assert!(result.is_ok());
         }
 
-        let piece = Piece {
-            number: 0,
-            offset: 0,
-            length: original_content.len() as u64,
-            digest: "".to_string(),
-            parent_id: None,
-            uploading_count: 0,
-            uploaded_count: 0,
-            updated_at: chrono::Utc::now().naive_utc(),
-            created_at: chrono::Utc::now().naive_utc(),
-            finished_at: None,
-        };
-
-        let mut reader = cache_arc
-            .read_piece("task1", "piece1", piece, None)
-            .await
-            .unwrap();
-
-        let mut buffer = Vec::new();
-        reader.read_to_end(&mut buffer).await.unwrap();
+        let buffer = read(
+            &cache,
+            "task1",
+            "piece1",
+            piece(0, original_content.len() as u64),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(buffer, original_content);
     }
 }

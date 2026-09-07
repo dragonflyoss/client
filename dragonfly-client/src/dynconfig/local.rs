@@ -287,14 +287,31 @@ impl Local {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dragonfly_client_core::error::ExternalError;
+    use std::path::Path;
     use tokio_stream::wrappers::TcpListenerStream;
 
-    /// Creates a new local backend with the default dfdaemon configuration.
+    type ExpectConfig = fn(Config);
+    type ExpectData = fn(&Data, i32, i32);
+    type ExpectError = fn(Option<Error>);
+
     fn new_local(path: PathBuf) -> Local {
         Local::new(Arc::new(DfdaemonConfig::default()), path)
     }
 
-    /// Spawns a grpc health server with serving status on a random local port.
+    fn ports(schedulers: &[ManagerScheduler]) -> Vec<i32> {
+        schedulers.iter().map(|scheduler| scheduler.port).collect()
+    }
+
+    async fn dynconfig(dir: &Path, content: Option<&str>) -> PathBuf {
+        let path = dir.join("dynconfig.yaml");
+        if let Some(content) = content {
+            fs::write(&path, content).await.unwrap();
+        }
+
+        path
+    }
+
     async fn spawn_health_server() -> SocketAddr {
         let (health_reporter, health_service) = tonic_health::server::health_reporter();
         health_reporter
@@ -314,9 +331,17 @@ mod tests {
         addr
     }
 
+    async fn refresh(content: Option<&str>) -> Result<Data> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dynconfig(dir.path(), content).await;
+        new_local(path).refresh().await
+    }
+
     #[test]
-    fn deserialize_local_config_correctly() {
-        let yaml = r#"
+    fn config_deserializes_block_lists_and_defaults() {
+        let test_cases: Vec<(&str, ExpectConfig)> = vec![
+            (
+                r#"
 scheduler:
   addr: 'scheduler-headless.default.svc:8002'
 clientConfig:
@@ -355,63 +380,162 @@ seedClientConfig:
         urls: []
         tags: []
         priorities: []
-"#;
+"#,
+                |config| {
+                    assert_eq!(config.scheduler.addr, "scheduler-headless.default.svc:8002");
+                    let block_list = config.client_config.unwrap().block_list.unwrap();
+                    assert_eq!(
+                        block_list
+                            .task
+                            .unwrap()
+                            .download
+                            .unwrap()
+                            .applications
+                            .unwrap(),
+                        vec!["blocked-app".to_string()]
+                    );
+                    assert!(block_list.persistent_task.is_some());
+                    assert!(block_list.persistent_cache_task.is_some());
+                    assert!(config.seed_client_config.unwrap().block_list.is_some());
+                },
+            ),
+            (
+                "scheduler:\n  addr: 'scheduler-headless.default.svc:8002'\n",
+                |config| {
+                    assert_eq!(config.scheduler.addr, "scheduler-headless.default.svc:8002");
+                    assert!(config.scheduler.addrs.is_none());
+                    assert!(config.client_config.is_none());
+                    assert!(config.seed_client_config.is_none());
+                },
+            ),
+            ("scheduler:\n  addrs: ['192.168.1.10:8002']\n", |config| {
+                assert_eq!(
+                    config.scheduler.addr,
+                    default_local_dynconfig_scheduler_addr()
+                );
+                assert_eq!(
+                    config.scheduler.addrs,
+                    Some(vec!["192.168.1.10:8002".to_string()])
+                );
+            }),
+        ];
 
-        let config: Config = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(config.scheduler.addr, "scheduler-headless.default.svc:8002");
-
-        let block_list = config.client_config.unwrap().block_list.unwrap();
-        assert_eq!(
-            block_list
-                .task
-                .unwrap()
-                .download
-                .unwrap()
-                .applications
-                .unwrap(),
-            vec!["blocked-app".to_string()]
-        );
-        assert!(block_list.persistent_task.is_some());
-        assert!(block_list.persistent_cache_task.is_some());
-        assert!(config.seed_client_config.unwrap().block_list.is_some());
-    }
-
-    #[test]
-    fn deserialize_local_config_with_defaults() {
-        let yaml = r#"
-scheduler:
-  addr: 'scheduler-headless.default.svc:8002'
-"#;
-
-        let config: Config = serde_yaml::from_str(yaml).unwrap();
-        assert!(config.client_config.is_none());
-        assert!(config.seed_client_config.is_none());
-    }
-
-    #[tokio::test]
-    async fn refresh_should_resolve_schedulers() {
-        let health_addr = spawn_health_server().await;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("dynconfig.yaml");
-        tokio::fs::write(
-            &path,
-            format!("scheduler:\n  addr: 'localhost:{}'\n", health_addr.port()),
-        )
-        .await
-        .unwrap();
-
-        let local = new_local(path);
-        let data = local.refresh().await.unwrap();
-        assert!(!data.available_schedulers.is_empty());
-        assert!(data
-            .available_schedulers
-            .iter()
-            .all(|scheduler| scheduler.port == health_addr.port() as i32));
-        assert!(data.available_scheduler_cluster_id.is_none());
+        for (yaml, expect) in test_cases {
+            let config: Config = serde_yaml::from_str(yaml).unwrap();
+            expect(config);
+        }
     }
 
     #[tokio::test]
-    async fn resolve_schedulers_should_prefer_ipv4() {
+    async fn generate_default_writes_the_file_only_when_missing() {
+        let existing = "scheduler:\n  addr: 'scheduler-headless.default.svc:8002'\n";
+
+        let test_cases = vec![
+            (None, serde_yaml::to_string(&Config::default()).unwrap()),
+            (Some(existing), existing.to_string()),
+        ];
+
+        for (existing, expected) in test_cases {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dynconfig(dir.path(), existing).await;
+            new_local(path.clone()).generate_default().await.unwrap();
+
+            let content = fs::read_to_string(&path).await.unwrap();
+            assert_eq!(content, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_discovers_healthy_schedulers() {
+        let health_addr_a = spawn_health_server().await;
+        let health_addr_b = spawn_health_server().await;
+        let port_a = health_addr_a.port() as i32;
+        let port_b = health_addr_b.port() as i32;
+
+        let test_cases: Vec<(String, ExpectData)> = vec![
+            (
+                format!("scheduler:\n  addr: 'localhost:{port_a}'\n"),
+                |data, port_a, _| {
+                    assert!(!data.available_schedulers.is_empty());
+                    assert!(ports(&data.available_schedulers)
+                        .iter()
+                        .all(|port| *port == port_a));
+                    assert!(data.available_scheduler_cluster_id.is_none());
+                },
+            ),
+            (
+                format!(
+                    "scheduler:\n  addrs:\n    - '{health_addr_b}'\n    - '{health_addr_a}'\n    - '{health_addr_a}'\n"
+                ),
+                |data, port_a, port_b| {
+                    let mut expected_ports = vec![port_a, port_b];
+                    expected_ports.sort();
+                    assert_eq!(data.schedulers.schedulers.len(), 2);
+                    assert_eq!(ports(&data.available_schedulers), expected_ports);
+                },
+            ),
+            (
+                format!("scheduler:\n  addrs:\n    - '{health_addr_a}'\n    - '127.0.0.1:1'\n"),
+                |data, port_a, _| {
+                    assert_eq!(data.schedulers.schedulers.len(), 2);
+                    assert_eq!(ports(&data.available_schedulers), vec![port_a]);
+                },
+            ),
+            (
+                format!("scheduler:\n  addr: 'localhost:1'\n  addrs:\n    - '{health_addr_a}'\n"),
+                |data, port_a, _| {
+                    assert_eq!(data.available_schedulers.len(), 1);
+                    assert_eq!(data.available_schedulers[0].ip, "127.0.0.1");
+                    assert_eq!(data.available_schedulers[0].port, port_a);
+                },
+            ),
+        ];
+
+        for (content, expect) in test_cases {
+            let data = refresh(Some(&content)).await.unwrap();
+            expect(&data, port_a, port_b);
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_fails_on_invalid_config_or_unhealthy_schedulers() {
+        let test_cases: Vec<(Option<&str>, ExpectError)> = vec![
+            (None, |err| {
+                assert!(matches!(err, Some(Error::IO(_))));
+            }),
+            (Some("scheduler: ["), |err| {
+                assert!(matches!(
+                    err,
+                    Some(Error::ExternalError(ExternalError {
+                        etype: ErrorType::ConfigError,
+                        ..
+                    }))
+                ));
+            }),
+            (Some("scheduler:\n  addr: ''\n"), |err| {
+                assert!(matches!(err, Some(Error::InvalidParameter)));
+            }),
+            (Some("scheduler:\n  addr: ''\n  addrs: []\n"), |err| {
+                assert!(matches!(err, Some(Error::InvalidParameter)));
+            }),
+            (
+                Some("scheduler:\n  addrs:\n    - '192.168.1.10'\n"),
+                |err| {
+                    assert!(matches!(err, Some(Error::NetAddrParseError(_))));
+                },
+            ),
+            (Some("scheduler:\n  addrs:\n    - '127.0.0.1:1'\n"), |err| {
+                assert!(matches!(err, Some(Error::AvailableSchedulersNotFound)));
+            }),
+        ];
+
+        for (content, expect) in test_cases {
+            expect(refresh(content).await.err());
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_schedulers_prefers_ipv4() {
         let dir = tempfile::tempdir().unwrap();
         let local = new_local(dir.path().join("dynconfig.yaml"));
 
@@ -422,150 +546,32 @@ scheduler:
             .all(|scheduler| IpAddr::from_str(&scheduler.ip).unwrap().is_ipv4()));
     }
 
-    #[tokio::test]
-    async fn generate_default_should_create_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("dynconfig.yaml");
+    #[test]
+    fn parse_schedulers_sorts_and_dedups_addrs() {
+        let addrs: Vec<String> = [
+            "[::1]:8002",
+            "127.0.0.2:8002",
+            "127.0.0.1:8003",
+            "127.0.0.1:8002",
+            "127.0.0.1:8002",
+        ]
+        .iter()
+        .map(|addr| addr.to_string())
+        .collect();
 
-        let local = new_local(path.clone());
-        local.generate_default().await.unwrap();
-
-        let content = tokio::fs::read_to_string(&path).await.unwrap();
-        let config: Config = serde_yaml::from_str(&content).unwrap();
-        assert_eq!(
-            config.scheduler.addr,
-            default_local_dynconfig_scheduler_addr()
-        );
-    }
-
-    #[tokio::test]
-    async fn generate_default_should_keep_existing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("dynconfig.yaml");
-        let existing = "scheduler:\n  addr: 'scheduler-headless.default.svc:8002'\n";
-        tokio::fs::write(&path, existing).await.unwrap();
-
-        let local = new_local(path.clone());
-        local.generate_default().await.unwrap();
-
-        let content = tokio::fs::read_to_string(&path).await.unwrap();
-        assert_eq!(content, existing);
-    }
-
-    #[tokio::test]
-    async fn refresh_should_use_static_scheduler_addrs() {
-        let health_addr_a = spawn_health_server().await;
-        let health_addr_b = spawn_health_server().await;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("dynconfig.yaml");
-        tokio::fs::write(
-            &path,
-            format!(
-                "scheduler:\n  addrs:\n    - '{health_addr_b}'\n    - '{health_addr_a}'\n    - '{health_addr_a}'\n"
-            ),
-        )
-        .await
-        .unwrap();
-
-        let local = new_local(path);
-        let data = local.refresh().await.unwrap();
-        let mut expected_ports = vec![health_addr_a.port() as i32, health_addr_b.port() as i32];
-        expected_ports.sort();
-
-        let ports: Vec<i32> = data
-            .available_schedulers
+        let schedulers = Local::parse_schedulers(&addrs).unwrap();
+        let schedulers: Vec<(&str, i32)> = schedulers
             .iter()
-            .map(|scheduler| scheduler.port)
+            .map(|scheduler| (scheduler.ip.as_str(), scheduler.port))
             .collect();
-        assert_eq!(ports, expected_ports);
-        assert_eq!(data.schedulers.schedulers.len(), 2);
-    }
-
-    #[tokio::test]
-    async fn refresh_should_filter_unhealthy_schedulers() {
-        let health_addr = spawn_health_server().await;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("dynconfig.yaml");
-        tokio::fs::write(
-            &path,
-            format!("scheduler:\n  addrs:\n    - '{health_addr}'\n    - '127.0.0.1:1'\n"),
-        )
-        .await
-        .unwrap();
-
-        let local = new_local(path);
-        let data = local.refresh().await.unwrap();
-        assert_eq!(data.schedulers.schedulers.len(), 2);
-        assert_eq!(data.available_schedulers.len(), 1);
-        assert_eq!(data.available_schedulers[0].port, health_addr.port() as i32);
-    }
-
-    #[tokio::test]
-    async fn refresh_should_fail_when_schedulers_unhealthy() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("dynconfig.yaml");
-        tokio::fs::write(&path, "scheduler:\n  addrs:\n    - '127.0.0.1:1'\n")
-            .await
-            .unwrap();
-
-        let local = new_local(path);
-        assert!(local.refresh().await.is_err());
-    }
-
-    #[tokio::test]
-    async fn refresh_should_prefer_static_scheduler_addrs_over_addr() {
-        let health_addr = spawn_health_server().await;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("dynconfig.yaml");
-        tokio::fs::write(
-            &path,
-            format!("scheduler:\n  addr: 'localhost:1'\n  addrs:\n    - '{health_addr}'\n"),
-        )
-        .await
-        .unwrap();
-
-        let local = new_local(path);
-        let data = local.refresh().await.unwrap();
-        assert_eq!(data.available_schedulers.len(), 1);
-        assert_eq!(data.available_schedulers[0].ip, "127.0.0.1");
-        assert_eq!(data.available_schedulers[0].port, health_addr.port() as i32);
-    }
-
-    #[tokio::test]
-    async fn refresh_should_fail_when_static_scheduler_addr_is_invalid() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("dynconfig.yaml");
-        tokio::fs::write(
-            &path,
-            r#"
-scheduler:
-  addrs:
-    - '192.168.1.10'
-"#,
-        )
-        .await
-        .unwrap();
-
-        let local = new_local(path);
-        assert!(local.refresh().await.is_err());
-    }
-
-    #[tokio::test]
-    async fn refresh_should_fail_when_file_not_found() {
-        let dir = tempfile::tempdir().unwrap();
-        let local = new_local(dir.path().join("dynconfig.yaml"));
-        assert!(local.refresh().await.is_err());
-    }
-
-    #[tokio::test]
-    async fn refresh_should_fail_when_scheduler_addr_is_empty() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("dynconfig.yaml");
-        tokio::fs::write(&path, "scheduler:\n  addr: ''")
-            .await
-            .unwrap();
-
-        let local = new_local(path);
-        assert!(local.refresh().await.is_err());
+        assert_eq!(
+            schedulers,
+            vec![
+                ("127.0.0.1", 8002),
+                ("127.0.0.1", 8003),
+                ("127.0.0.2", 8002),
+                ("::1", 8002),
+            ]
+        );
     }
 }

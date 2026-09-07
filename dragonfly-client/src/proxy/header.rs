@@ -353,239 +353,209 @@ pub fn get_scheduling_policy(header: &HeaderMap, default: SchedulingPolicy) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reqwest::header::{HeaderMap, HeaderValue};
+    use reqwest::header::HeaderValue;
 
-    #[test]
-    fn test_get_tag() {
+    type StringGetter = fn(&HeaderMap) -> Option<String>;
+    type BoolGetter = fn(&HeaderMap) -> bool;
+
+    fn headers(name: &'static str, value: Option<&str>) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        headers.insert(DRAGONFLY_TAG_HEADER, HeaderValue::from_static("test-tag"));
-        assert_eq!(get_tag(&headers), Some("test-tag".to_string()));
+        if let Some(value) = value {
+            headers.insert(name, HeaderValue::from_str(value).unwrap());
+        }
 
-        let empty_headers = HeaderMap::new();
-        assert_eq!(get_tag(&empty_headers), None);
+        headers
     }
 
     #[test]
-    fn test_get_application() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            DRAGONFLY_APPLICATION_HEADER,
-            HeaderValue::from_static("test-app"),
-        );
-        assert_eq!(get_application(&headers), Some("test-app".to_string()));
+    fn error_type_parses_and_formats_its_name() {
+        let test_cases = vec![
+            ("backend", Ok(ErrorType::Backend), Some("backend")),
+            ("proxy", Ok(ErrorType::Proxy), Some("proxy")),
+            ("dfdaemon", Ok(ErrorType::Dfdaemon), Some("dfdaemon")),
+            (
+                "Backend",
+                Err("invalid error type: Backend".to_string()),
+                None,
+            ),
+        ];
 
-        let empty_headers = HeaderMap::new();
-        assert_eq!(get_application(&empty_headers), None);
+        for (name, expected, expected_display) in test_cases {
+            let error_type = name.parse::<ErrorType>();
+            assert_eq!(error_type, expected);
+            assert_eq!(
+                error_type.ok().map(|error_type| error_type.to_string()),
+                expected_display.map(str::to_string)
+            );
+        }
     }
 
     #[test]
-    fn test_get_priority() {
-        let mut headers = HeaderMap::new();
-        headers.insert(DRAGONFLY_PRIORITY_HEADER, HeaderValue::from_static("5"));
-        assert_eq!(get_priority(&headers), 5);
+    fn string_getters_return_the_header_value() {
+        let test_cases: Vec<(&'static str, StringGetter)> = vec![
+            (DRAGONFLY_TAG_HEADER, get_tag),
+            (DRAGONFLY_APPLICATION_HEADER, get_application),
+            (DRAGONFLY_REGISTRY_HEADER, get_registry),
+            (DRAGONFLY_OUTPUT_PATH_HEADER, get_output_path),
+            (
+                DRAGONFLY_CONTENT_FOR_CALCULATING_TASK_ID_HEADER,
+                get_content_for_calculating_task_id,
+            ),
+        ];
 
-        let empty_headers = HeaderMap::new();
-        assert_eq!(get_priority(&empty_headers), Priority::Level6 as i32);
-
-        headers.insert(
-            DRAGONFLY_PRIORITY_HEADER,
-            HeaderValue::from_static("invalid"),
-        );
-        assert_eq!(get_priority(&headers), Priority::Level6 as i32);
+        for (name, getter) in test_cases {
+            assert_eq!(
+                getter(&headers(name, Some("value"))),
+                Some("value".to_string())
+            );
+            assert_eq!(getter(&headers(name, None)), None);
+            assert_eq!(getter(&headers(name, Some("é"))), None);
+        }
     }
 
     #[test]
-    fn test_get_registry() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            DRAGONFLY_REGISTRY_HEADER,
-            HeaderValue::from_static("test-registry"),
-        );
-        assert_eq!(get_registry(&headers), Some("test-registry".to_string()));
+    fn get_priority_parses_the_header_or_falls_back_to_level6() {
+        let test_cases = vec![
+            (Some("5"), 5),
+            (Some("invalid"), Priority::Level6 as i32),
+            (Some("é"), Priority::Level6 as i32),
+            (None, Priority::Level6 as i32),
+        ];
 
-        let empty_headers = HeaderMap::new();
-        assert_eq!(get_registry(&empty_headers), None);
+        for (value, expected) in test_cases {
+            assert_eq!(
+                get_priority(&headers(DRAGONFLY_PRIORITY_HEADER, value)),
+                expected
+            );
+        }
     }
 
     #[test]
-    fn test_get_filtered_query_params() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            DRAGONFLY_FILTERED_QUERY_PARAMS_HEADER,
-            HeaderValue::from_static("param1,param2"),
-        );
-        assert_eq!(
-            get_filtered_query_params(&headers, &["default".to_string()]),
-            vec!["param1".to_string(), "param2".to_string()]
-        );
+    fn get_filtered_query_params_splits_the_header_or_uses_defaults() {
+        let default_filtered_query_params = vec!["default".to_string()];
 
-        let empty_headers = HeaderMap::new();
-        assert_eq!(
-            get_filtered_query_params(&empty_headers, &["default".to_string()]),
-            vec!["default".to_string()]
-        );
+        let test_cases = vec![
+            (Some("param1,param2"), vec!["param1", "param2"]),
+            (
+                Some("param1, param2 ,param3"),
+                vec!["param1", "param2", "param3"],
+            ),
+            (Some("é"), vec!["default"]),
+            (None, vec!["default"]),
+        ];
+
+        for (value, expected) in test_cases {
+            let expected: Vec<String> = expected.iter().map(|param| param.to_string()).collect();
+            assert_eq!(
+                get_filtered_query_params(
+                    &headers(DRAGONFLY_FILTERED_QUERY_PARAMS_HEADER, value),
+                    &default_filtered_query_params
+                ),
+                expected
+            );
+        }
     }
 
     #[test]
-    fn test_get_use_p2p() {
-        let mut headers = HeaderMap::new();
-        headers.insert(DRAGONFLY_USE_P2P_HEADER, HeaderValue::from_static("true"));
-        assert!(get_use_p2p(&headers));
+    fn bool_getters_are_true_only_for_a_true_header() {
+        let test_cases: Vec<(&'static str, BoolGetter)> = vec![
+            (DRAGONFLY_USE_P2P_HEADER, get_use_p2p),
+            (DRAGONFLY_FORCE_HARD_LINK_HEADER, get_force_hard_link),
+        ];
 
-        headers.insert(DRAGONFLY_USE_P2P_HEADER, HeaderValue::from_static("false"));
-        assert!(!get_use_p2p(&headers));
-
-        let empty_headers = HeaderMap::new();
-        assert!(!get_use_p2p(&empty_headers));
+        for (name, getter) in test_cases {
+            assert!(getter(&headers(name, Some("true"))));
+            assert!(getter(&headers(name, Some("TRUE"))));
+            assert!(!getter(&headers(name, Some("false"))));
+            assert!(!getter(&headers(name, Some("é"))));
+            assert!(!getter(&headers(name, None)));
+        }
     }
 
     #[test]
-    fn test_get_prefetch() {
-        let mut headers = HeaderMap::new();
-        headers.insert(DRAGONFLY_PREFETCH_HEADER, HeaderValue::from_static("true"));
-        assert_eq!(get_prefetch(&headers), Some(true));
+    fn get_prefetch_returns_the_flag_or_none() {
+        let test_cases = vec![
+            (Some("true"), Some(true)),
+            (Some("false"), Some(false)),
+            (Some("é"), None),
+            (None, None),
+        ];
 
-        headers.insert(DRAGONFLY_PREFETCH_HEADER, HeaderValue::from_static("false"));
-        assert_eq!(get_prefetch(&headers), Some(false));
-
-        let empty_headers = HeaderMap::new();
-        assert_eq!(get_prefetch(&empty_headers), None);
+        for (value, expected) in test_cases {
+            assert_eq!(
+                get_prefetch(&headers(DRAGONFLY_PREFETCH_HEADER, value)),
+                expected
+            );
+        }
     }
 
     #[test]
-    fn test_get_output_path() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            DRAGONFLY_OUTPUT_PATH_HEADER,
-            HeaderValue::from_static("/path/to/output"),
-        );
-        assert_eq!(
-            get_output_path(&headers),
-            Some("/path/to/output".to_string())
-        );
+    fn get_piece_length_parses_human_readable_sizes() {
+        let test_cases = vec![
+            (Some("4mib"), Some(ByteSize::mib(4))),
+            (Some("0"), Some(ByteSize::b(0))),
+            (Some("invalid"), None),
+            (Some("é"), None),
+            (None, None),
+        ];
 
-        let empty_headers = HeaderMap::new();
-        assert_eq!(get_output_path(&empty_headers), None);
+        for (value, expected) in test_cases {
+            assert_eq!(
+                get_piece_length(&headers(DRAGONFLY_PIECE_LENGTH_HEADER, value)),
+                expected
+            );
+        }
     }
 
     #[test]
-    fn test_get_force_hard_link() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            DRAGONFLY_FORCE_HARD_LINK_HEADER,
-            HeaderValue::from_static("true"),
-        );
-        assert!(get_force_hard_link(&headers));
+    fn get_enable_task_id_based_blob_digest_falls_back_to_default() {
+        let test_cases = vec![
+            (Some("true"), false, true),
+            (Some("false"), true, false),
+            (Some("é"), true, true),
+            (None, true, true),
+            (None, false, false),
+        ];
 
-        headers.insert(
-            DRAGONFLY_FORCE_HARD_LINK_HEADER,
-            HeaderValue::from_static("false"),
-        );
-        assert!(!get_force_hard_link(&headers));
-
-        let empty_headers = HeaderMap::new();
-        assert!(!get_force_hard_link(&empty_headers));
+        for (value, default, expected) in test_cases {
+            assert_eq!(
+                get_enable_task_id_based_blob_digest(
+                    &headers(DRAGONFLY_ENABLE_TASK_ID_BASED_BLOB_DIGEST, value),
+                    default
+                ),
+                expected
+            );
+        }
     }
 
     #[test]
-    fn test_get_piece_length() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            DRAGONFLY_PIECE_LENGTH_HEADER,
-            HeaderValue::from_static("4mib"),
-        );
-        assert_eq!(get_piece_length(&headers), Some(ByteSize::mib(4)));
+    fn get_scheduling_policy_parses_case_insensitively_or_uses_default() {
+        let test_cases = vec![
+            (
+                Some("always"),
+                SchedulingPolicy::Auto,
+                SchedulingPolicy::Always,
+            ),
+            (
+                Some("AUTO"),
+                SchedulingPolicy::Always,
+                SchedulingPolicy::Auto,
+            ),
+            (
+                Some("invalid"),
+                SchedulingPolicy::Always,
+                SchedulingPolicy::Always,
+            ),
+            (Some("é"), SchedulingPolicy::Auto, SchedulingPolicy::Auto),
+            (None, SchedulingPolicy::Always, SchedulingPolicy::Always),
+            (None, SchedulingPolicy::Auto, SchedulingPolicy::Auto),
+        ];
 
-        let empty_headers = HeaderMap::new();
-        assert_eq!(get_piece_length(&empty_headers), None);
-
-        headers.insert(
-            DRAGONFLY_PIECE_LENGTH_HEADER,
-            HeaderValue::from_static("invalid"),
-        );
-        assert_eq!(get_piece_length(&headers), None);
-
-        headers.insert(DRAGONFLY_PIECE_LENGTH_HEADER, HeaderValue::from_static("0"));
-        assert_eq!(get_piece_length(&headers), Some(ByteSize::b(0)));
-    }
-
-    #[test]
-    fn test_get_content_for_calculating_task_id() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            DRAGONFLY_CONTENT_FOR_CALCULATING_TASK_ID_HEADER,
-            HeaderValue::from_static("test-content"),
-        );
-        assert_eq!(
-            get_content_for_calculating_task_id(&headers),
-            Some("test-content".to_string())
-        );
-
-        let empty_headers = HeaderMap::new();
-        assert_eq!(get_registry(&empty_headers), None);
-    }
-
-    #[test]
-    fn test_get_enable_task_id_based_blob_digest() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            DRAGONFLY_ENABLE_TASK_ID_BASED_BLOB_DIGEST,
-            HeaderValue::from_static("true"),
-        );
-        assert!(get_enable_task_id_based_blob_digest(&headers, false));
-
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            DRAGONFLY_ENABLE_TASK_ID_BASED_BLOB_DIGEST,
-            HeaderValue::from_static("false"),
-        );
-        assert!(!get_enable_task_id_based_blob_digest(&headers, true));
-
-        let empty_headers = HeaderMap::new();
-        assert!(get_enable_task_id_based_blob_digest(&empty_headers, true));
-        assert!(!get_enable_task_id_based_blob_digest(&empty_headers, false));
-    }
-
-    #[test]
-    fn test_get_scheduling_policy() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            DRAGONFLY_SCHEDULING_POLICY_HEADER,
-            HeaderValue::from_static("always"),
-        );
-        assert_eq!(
-            get_scheduling_policy(&headers, SchedulingPolicy::Auto),
-            SchedulingPolicy::Always
-        );
-
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            DRAGONFLY_SCHEDULING_POLICY_HEADER,
-            HeaderValue::from_static("AUTO"),
-        );
-        assert_eq!(
-            get_scheduling_policy(&headers, SchedulingPolicy::Always),
-            SchedulingPolicy::Auto
-        );
-
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            DRAGONFLY_SCHEDULING_POLICY_HEADER,
-            HeaderValue::from_static("invalid"),
-        );
-        assert_eq!(
-            get_scheduling_policy(&headers, SchedulingPolicy::Always),
-            SchedulingPolicy::Always
-        );
-
-        let empty_headers = HeaderMap::new();
-        assert_eq!(
-            get_scheduling_policy(&empty_headers, SchedulingPolicy::Always),
-            SchedulingPolicy::Always
-        );
-        assert_eq!(
-            get_scheduling_policy(&empty_headers, SchedulingPolicy::Auto),
-            SchedulingPolicy::Auto
-        );
+        for (value, default, expected) in test_cases {
+            assert_eq!(
+                get_scheduling_policy(&headers(DRAGONFLY_SCHEDULING_POLICY_HEADER, value), default),
+                expected
+            );
+        }
     }
 }

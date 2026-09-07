@@ -1972,6 +1972,21 @@ impl Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
+
+    type ExpectPiece = fn(Result<metadata::Piece>, Option<metadata::Piece>);
+
+    const TASK_ID: &str = "d3add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14a";
+    const CONTENT: &[u8] = b"piece content";
+    const CONTENT_DIGEST: &str = "crc32:2533597436";
+
+    async fn storage(dir: &Path) -> Arc<Storage> {
+        Arc::new(
+            Storage::new(Arc::new(Config::default()), dir, dir.to_path_buf())
+                .await
+                .unwrap(),
+        )
+    }
 
     fn content_stream(
         content: &'static [u8],
@@ -1980,17 +1995,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_wait_for_piece_finished_wakes_on_notification() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = Arc::new(Config::default());
-        let storage = Arc::new(
-            Storage::new(config, dir.path(), dir.path().to_path_buf())
-                .await
-                .unwrap(),
-        );
-
-        const TASK_ID: &str = "d3add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14a";
-        const CONTENT: &[u8] = b"piece content";
+    async fn wait_for_piece_finished_wakes_on_notification() {
+        let dir = tempdir().unwrap();
+        let storage = storage(dir.path()).await;
         storage
             .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
             .await
@@ -2032,27 +2039,16 @@ mod tests {
             .unwrap();
 
         let elapsed = waiter.await.unwrap();
-        assert!(
-            elapsed < Duration::from_millis(800),
-            "waiter took {elapsed:?}, expected a notification-driven wake"
-        );
-
+        assert!(elapsed < Duration::from_millis(800));
         assert!(storage
             .in_flight_piece_notifier(piece_id.as_str())
             .is_none());
     }
 
     #[tokio::test]
-    async fn test_download_piece_failed_wakes_waiters_with_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = Arc::new(Config::default());
-        let storage = Arc::new(
-            Storage::new(config, dir.path(), dir.path().to_path_buf())
-                .await
-                .unwrap(),
-        );
-
-        const TASK_ID: &str = "e4add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14b";
+    async fn download_piece_failed_wakes_waiters_with_error() {
+        let dir = tempdir().unwrap();
+        let storage = storage(dir.path()).await;
         storage
             .download_task_started(TASK_ID, 1024, 1024, None)
             .await
@@ -2079,27 +2075,16 @@ mod tests {
 
         let (elapsed, result) = waiter.await.unwrap();
         assert!(result.is_err());
-        assert!(
-            elapsed < Duration::from_millis(800),
-            "waiter took {elapsed:?}, expected a notification-driven wake"
-        );
+        assert!(elapsed < Duration::from_millis(800));
         assert!(storage
             .in_flight_piece_notifier(piece_id.as_str())
             .is_none());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_download_piece_started_elects_single_downloader() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = Arc::new(Config::default());
-        let storage = Arc::new(
-            Storage::new(config, dir.path(), dir.path().to_path_buf())
-                .await
-                .unwrap(),
-        );
-
-        const TASK_ID: &str = "f5add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14c";
-        const CONTENT: &[u8] = b"piece content";
+    async fn download_piece_started_elects_a_single_downloader() {
+        let dir = tempdir().unwrap();
+        let storage = storage(dir.path()).await;
         storage
             .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
             .await
@@ -2141,24 +2126,16 @@ mod tests {
             .into_iter()
             .filter(|downloader| *downloader)
             .count();
-        assert_eq!(downloaders, 1, "expected exactly one downloader");
+        assert_eq!(downloaders, 1);
         assert!(storage
             .in_flight_piece_notifier(piece_id.as_str())
             .is_none());
     }
 
     #[tokio::test]
-    async fn test_wait_for_persistent_piece_finished_wakes_on_notification() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = Arc::new(Config::default());
-        let storage = Arc::new(
-            Storage::new(config, dir.path(), dir.path().to_path_buf())
-                .await
-                .unwrap(),
-        );
-
-        const TASK_ID: &str = "f5add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14c";
-        const CONTENT: &[u8] = b"piece content";
+    async fn wait_for_persistent_piece_finished_wakes_on_notification() {
+        let dir = tempdir().unwrap();
+        let storage = storage(dir.path()).await;
         storage
             .create_persistent_task(TASK_ID, CONTENT.len() as u64)
             .await
@@ -2206,27 +2183,16 @@ mod tests {
 
         let (elapsed, piece) = waiter.await.unwrap();
         assert!(piece.is_finished());
-        assert!(
-            elapsed < Duration::from_millis(800),
-            "waiter took {elapsed:?}, expected a notification-driven wake"
-        );
-
+        assert!(elapsed < Duration::from_millis(800));
         assert!(storage
             .in_flight_piece_notifier(piece_id.as_str())
             .is_none());
     }
 
     #[tokio::test]
-    async fn test_wait_for_piece_finished_fails_fast_on_stale_piece() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = Arc::new(Config::default());
-        let storage = Arc::new(
-            Storage::new(config, dir.path(), dir.path().to_path_buf())
-                .await
-                .unwrap(),
-        );
-
-        const TASK_ID: &str = "a6add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14d";
+    async fn wait_for_piece_finished_fails_fast_on_stale_piece() {
+        let dir = tempdir().unwrap();
+        let storage = storage(dir.path()).await;
         storage
             .download_task_started(TASK_ID, 1024, 1024, None)
             .await
@@ -2244,32 +2210,19 @@ mod tests {
         let started_at = std::time::Instant::now();
         let result = storage.upload_piece(piece_id.as_str(), TASK_ID, None).await;
         assert!(matches!(result, Err(Error::PieceNotFound(_))));
-        assert!(
-            started_at.elapsed() < Duration::from_millis(100),
-            "waiter took {:?}, expected an immediate fail-fast",
-            started_at.elapsed()
-        );
+        assert!(started_at.elapsed() < Duration::from_millis(100));
         assert!(storage.get_piece(piece_id.as_str()).unwrap().is_none());
     }
 
     #[tokio::test]
-    async fn test_download_piece_failed_keeps_finished_piece_serving() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = Arc::new(Config::default());
-        let storage = Arc::new(
-            Storage::new(config, dir.path(), dir.path().to_path_buf())
-                .await
-                .unwrap(),
-        );
-
-        const TASK_ID: &str = "b7add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14e";
-        const CONTENT: &[u8] = b"piece content";
+    async fn download_piece_failed_keeps_finished_piece_serving() {
+        let dir = tempdir().unwrap();
+        let storage = storage(dir.path()).await;
         storage
             .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
             .await
             .unwrap();
 
-        // The winner downloads and finishes the piece.
         let piece_id = storage.piece_id(TASK_ID, 0);
         storage
             .download_piece_started(piece_id.as_str(), 0, 0, CONTENT.len() as u64)
@@ -2288,14 +2241,107 @@ mod tests {
             .await
             .unwrap();
 
-        // A duplicate downloader failing afterwards must not erase the finished
-        // piece, and serving keeps working.
         storage.download_piece_failed(piece_id.as_str()).unwrap();
         let piece = storage.get_piece(piece_id.as_str()).unwrap().unwrap();
         assert!(piece.is_finished());
+
         storage
             .upload_piece(piece_id.as_str(), TASK_ID, None)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn download_piece_from_parent_finished_checks_the_digest() {
+        let test_cases: Vec<(&str, ExpectPiece)> = vec![
+            ("", |result, stored| {
+                let piece = result.unwrap();
+                assert!(piece.is_finished());
+                assert_eq!(piece.digest, CONTENT_DIGEST);
+                assert_eq!(piece.parent_id.as_deref(), Some("parent-1"));
+                assert_eq!(stored, Some(piece));
+            }),
+            (CONTENT_DIGEST, |result, stored| {
+                let piece = result.unwrap();
+                assert!(piece.is_finished());
+                assert_eq!(piece.digest, CONTENT_DIGEST);
+                assert_eq!(piece.parent_id.as_deref(), Some("parent-1"));
+                assert_eq!(stored, Some(piece));
+            }),
+            ("crc32:1", |result, stored| {
+                assert!(matches!(
+                    result,
+                    Err(Error::DigestMismatch(ref expected, ref actual))
+                        if expected == "crc32:1" && actual == CONTENT_DIGEST
+                ));
+                assert!(!stored.unwrap().is_finished());
+            }),
+        ];
+
+        for (expected_digest, expect) in test_cases {
+            let dir = tempdir().unwrap();
+            let storage = storage(dir.path()).await;
+            storage
+                .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
+                .await
+                .unwrap();
+
+            let piece_id = storage.piece_id(TASK_ID, 0);
+            storage
+                .download_piece_started(piece_id.as_str(), 0, 0, CONTENT.len() as u64)
+                .await
+                .unwrap();
+            let mut stream = content_stream(CONTENT);
+            let result = storage
+                .download_piece_from_parent_finished(
+                    piece_id.as_str(),
+                    TASK_ID,
+                    0,
+                    CONTENT.len() as u64,
+                    expected_digest,
+                    "parent-1",
+                    &mut stream,
+                    Duration::from_secs(5),
+                )
+                .await;
+            let stored = storage.get_piece(piece_id.as_str()).unwrap();
+            expect(result, stored);
+        }
+    }
+
+    #[tokio::test]
+    async fn download_piece_from_source_finished_times_out() {
+        let dir = tempdir().unwrap();
+        let storage = storage(dir.path()).await;
+        storage
+            .download_task_started(TASK_ID, 1024, 1024, None)
+            .await
+            .unwrap();
+
+        let piece_id = storage.piece_id(TASK_ID, 0);
+        storage
+            .download_piece_started(piece_id.as_str(), 0, 0, 1024)
+            .await
+            .unwrap();
+
+        let mut stream = futures::stream::pending::<std::io::Result<Bytes>>();
+        let result = storage
+            .download_piece_from_source_finished(
+                piece_id.as_str(),
+                TASK_ID,
+                0,
+                1024,
+                &mut stream,
+                Duration::from_millis(50),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(Error::DownloadPieceFinishedTimeout(ref id)) if id == &piece_id)
+        );
+        assert!(!storage
+            .get_piece(piece_id.as_str())
+            .unwrap()
+            .unwrap()
+            .is_finished());
     }
 }

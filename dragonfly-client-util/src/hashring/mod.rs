@@ -110,139 +110,100 @@ impl VNodeHashRing {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
 
-    #[test]
-    fn test_vnode_new() {
-        let vnode = VNode::new(1, "default-pod-1".to_string());
-        assert_eq!(vnode.id, 1);
-        assert_eq!(vnode.name, "default-pod-1");
+    type ExpectVNode = fn(Option<&VNode>);
+    type ExpectVNodes = fn(Option<Vec<VNode>>);
+
+    fn ring(replica_count: usize, names: &[&str]) -> VNodeHashRing {
+        let mut ring = VNodeHashRing::new(replica_count);
+        for name in names {
+            ring.add(name.to_string());
+        }
+        ring
+    }
+
+    fn is_known_vnode(vnode: &VNode) -> bool {
+        ["default-pod-1", "default-pod-2"].contains(&vnode.name()) && vnode.id < 2
     }
 
     #[test]
-    fn test_vnode_to_string() {
+    fn vnode_formats_as_name_and_id() {
         let vnode = VNode::new(1, "default-pod-1".to_string());
+        assert_eq!(vnode.id, 1);
+        assert_eq!(vnode.name(), "default-pod-1");
         assert_eq!(vnode.to_string(), "default-pod-1|1");
     }
 
     #[test]
-    fn test_hashring_new() {
-        let ring = VNodeHashRing::new(3);
-        assert_eq!(ring.replica_count, 3);
-        assert!(ring.is_empty());
-        assert_eq!(ring.len(), 0);
-    }
-
-    #[test]
-    fn test_add_and_len() {
-        let mut ring = VNodeHashRing::new(2);
-        ring.add("default-pod-1".to_string());
-        assert_eq!(ring.len(), 2); // 1 node * 2 virtual nodes
-        ring.add("default-pod-2".to_string());
-        assert_eq!(ring.len(), 4); // 2 nodes * 2 virtual nodes
-        assert!(!ring.is_empty());
-    }
-
-    #[test]
-    fn test_get_empty_ring() {
-        let ring = VNodeHashRing::new(2);
-        let key = "test_key";
-        assert!(ring.get(&key).is_none());
-    }
-
-    #[test]
-    fn test_get_with_nodes() {
-        let mut ring = VNodeHashRing::new(2);
-        ring.add("default-pod-1".to_string());
-        ring.add("default-pod-2".to_string());
-
-        let key = "test_key";
-        let node = ring.get(&key);
-        assert!(node.is_some());
-        let node = node.unwrap();
-        assert!(node.name() == "default-pod-1" || node.name() == "default-pod-2");
-        assert!(node.id == 0 || node.id == 1);
-    }
-
-    #[test]
-    fn test_get_with_replicas_empty() {
-        let ring = VNodeHashRing::new(2);
-        let key = "test_key";
-        assert!(ring.get_with_replicas(&key, 2).is_none());
-    }
-
-    #[test]
-    fn test_get_with_replicas() {
-        let mut ring = VNodeHashRing::new(2);
-        ring.add("default-pod-1".to_string());
-        ring.add("default-pod-2".to_string());
-
-        let key = "test_key";
-        let replicas = ring.get_with_replicas(&key, 3).unwrap();
-        assert_eq!(replicas.len(), 4);
-        assert!(replicas.iter().all(|vnode| {
-            (vnode.name() == "default-pod-1" || vnode.name() == "default-pod-2")
-                && (vnode.id == 0 || vnode.id == 1)
-        }));
-    }
-
-    #[test]
-    fn test_get_with_replicas_exact_size() {
-        let mut ring = VNodeHashRing::new(2);
-        ring.add("default-pod-1".to_string());
-        ring.add("default-pod-2".to_string());
-
-        let key = "test_key";
-        let replicas = ring.get_with_replicas(&key, 4).unwrap();
-        assert_eq!(replicas.len(), 5);
-    }
-
-    #[test]
-    fn test_get_with_replicas_smaller_size() {
-        let mut ring = VNodeHashRing::new(2);
-        ring.add("default-pod-1".to_string());
-        ring.add("default-pod-2".to_string());
-
-        let key = "test_key";
-        let replicas = ring.get_with_replicas(&key, 2).unwrap();
-        assert_eq!(replicas.len(), 3);
-        assert!(replicas.iter().all(|vnode| {
-            (vnode.name() == "default-pod-1" || vnode.name() == "default-pod-2")
-                && (vnode.id == 0 || vnode.id == 1)
-        }));
-    }
-
-    #[test]
-    fn test_add_order_does_not_affect_get_result_many_keys() {
-        use uuid::Uuid;
-
-        let nodes_a = vec![
-            "default-pod-1".to_string(),
-            "default-pod-2".to_string(),
-            "default-pod-3".to_string(),
-        ];
-        let nodes_b = vec![
-            "default-pod-3".to_string(),
-            "default-pod-1".to_string(),
-            "default-pod-2".to_string(),
+    fn add_inserts_replica_count_vnodes_per_node() {
+        let test_cases = vec![
+            (3, vec![], 0),
+            (2, vec!["default-pod-1"], 2),
+            (2, vec!["default-pod-1", "default-pod-2"], 4),
+            (0, vec!["default-pod-1"], 0),
         ];
 
-        let mut ring_a = VNodeHashRing::new(150);
-        for n in nodes_a {
-            ring_a.add(n);
+        for (replica_count, names, expected_len) in test_cases {
+            let ring = ring(replica_count, &names);
+            assert_eq!(ring.replica_count, replica_count);
+            assert_eq!(ring.len(), expected_len);
+            assert_eq!(ring.is_empty(), expected_len == 0);
         }
+    }
 
-        let mut ring_b = VNodeHashRing::new(150);
-        for n in nodes_b {
-            ring_b.add(n);
+    #[test]
+    fn get_returns_a_vnode_of_an_added_node() {
+        let test_cases: Vec<(Vec<&str>, ExpectVNode)> = vec![
+            (vec![], |vnode| assert!(vnode.is_none())),
+            (vec!["default-pod-1", "default-pod-2"], |vnode| {
+                assert!(is_known_vnode(vnode.unwrap()));
+            }),
+        ];
+
+        for (names, expect) in test_cases {
+            let ring = ring(2, &names);
+            expect(ring.get(&"test_key"));
         }
+    }
+
+    #[test]
+    fn get_with_replicas_spans_the_nodes() {
+        let test_cases: Vec<(Vec<&str>, usize, ExpectVNodes)> = vec![
+            (vec![], 2, |vnodes| assert!(vnodes.is_none())),
+            (vec!["default-pod-1", "default-pod-2"], 2, |vnodes| {
+                let vnodes = vnodes.unwrap();
+                assert_eq!(vnodes.len(), 3);
+                assert!(vnodes.iter().all(is_known_vnode));
+            }),
+            (vec!["default-pod-1", "default-pod-2"], 3, |vnodes| {
+                let vnodes = vnodes.unwrap();
+                assert_eq!(vnodes.len(), 4);
+                assert!(vnodes.iter().all(is_known_vnode));
+            }),
+            (vec!["default-pod-1", "default-pod-2"], 4, |vnodes| {
+                let vnodes = vnodes.unwrap();
+                assert_eq!(vnodes.len(), 5);
+                assert!(vnodes.iter().all(is_known_vnode));
+            }),
+        ];
+
+        for (names, replicas, expect) in test_cases {
+            let ring = ring(2, &names);
+            expect(ring.get_with_replicas(&"test_key", replicas));
+        }
+    }
+
+    #[test]
+    fn add_order_does_not_affect_get_result() {
+        let ring_a = ring(150, &["default-pod-1", "default-pod-2", "default-pod-3"]);
+        let ring_b = ring(150, &["default-pod-3", "default-pod-1", "default-pod-2"]);
 
         for _ in 0..200 {
             let key = Uuid::new_v4().to_string();
-
-            let va = ring_a.get(&key).unwrap();
-            let vb = ring_b.get(&key).unwrap();
-
-            assert_eq!(va.to_string(), vb.to_string(), "key={key}");
+            let vnode_a = ring_a.get(&key).unwrap();
+            let vnode_b = ring_b.get(&key).unwrap();
+            assert_eq!(vnode_a.to_string(), vnode_b.to_string());
         }
     }
 }

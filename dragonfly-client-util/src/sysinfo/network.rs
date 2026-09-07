@@ -267,8 +267,10 @@ mod tests {
     use std::time::Instant;
     use tokio::task::JoinSet;
 
+    type ExpectInterface = fn(Option<NetworkInterface>);
+
     #[tokio::test]
-    async fn test_get_stats() {
+    async fn get_stats_shares_one_collector_across_clones() {
         let mut network = Network::new(IpAddr::V4(Ipv4Addr::LOCALHOST), ByteSize::mb(100));
 
         let start = Instant::now();
@@ -277,9 +279,11 @@ mod tests {
             let mut network = network.clone();
             join_set.spawn(async move { network.get_stats().await });
         }
+
         while let Some(stats) = join_set.join_next().await {
             assert!(stats.unwrap().is_some());
         }
+
         assert!(start.elapsed() < StatsCollector::DEFAULT_NETWORK_REFRESH_INTERVAL * 2);
 
         let start = Instant::now();
@@ -292,42 +296,63 @@ mod tests {
         assert!(start.elapsed() < StatsCollector::DEFAULT_NETWORK_REFRESH_INTERVAL * 2);
     }
 
+    #[tokio::test]
+    async fn new_falls_back_to_the_rate_limit_for_an_unknown_interface() {
+        let mut network =
+            Network::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)), ByteSize::mb(100));
+
+        let stats = network.get_stats().await.unwrap();
+        assert_eq!(stats.max_rx_bandwidth, 800_000_000);
+        assert_eq!(stats.max_tx_bandwidth, 800_000_000);
+        assert_eq!(stats.rx_bandwidth, None);
+        assert_eq!(stats.tx_bandwidth, None);
+    }
+
     #[test]
-    fn test_byte_size_to_bits() {
-        let test_cases = vec![
-            (ByteSize::kb(1), 8_000u64),
-            (ByteSize::mb(1), 8_000_000u64),
-            (ByteSize::gb(1), 8_000_000_000u64),
-            (ByteSize::b(0), 0u64),
+    fn get_network_interface_by_ip_finds_only_bound_addresses() {
+        let test_cases: Vec<(IpAddr, ExpectInterface)> = vec![
+            (IpAddr::V4(Ipv4Addr::LOCALHOST), |interface| {
+                assert!(interface.unwrap().is_loopback());
+            }),
+            (IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)), |interface| {
+                assert!(interface.is_none());
+            }),
         ];
 
-        for (input, expected) in test_cases {
-            let result = Network::byte_size_to_bits(input);
-            assert_eq!(result, expected);
+        for (ip, expect) in test_cases {
+            expect(Network::get_network_interface_by_ip(ip));
         }
     }
 
     #[test]
-    fn test_megabits_to_bits() {
+    fn byte_size_to_bits_multiplies_by_eight() {
         let test_cases = vec![
-            (1u64, 1_000_000u64),
-            (1000u64, 1_000_000_000u64),
-            (0u64, 0u64),
+            (ByteSize::kb(1), 8_000),
+            (ByteSize::mb(1), 8_000_000),
+            (ByteSize::gb(1), 8_000_000_000),
+            (ByteSize::b(0), 0),
         ];
 
-        for (input, expected) in test_cases {
-            let result = Network::megabits_to_bits(input);
-            assert_eq!(result, expected);
+        for (size, expected) in test_cases {
+            assert_eq!(Network::byte_size_to_bits(size), expected);
         }
     }
 
     #[test]
-    fn test_bytes_to_bits() {
-        let test_cases = vec![(1u64, 8u64), (1000u64, 8_000u64), (0u64, 0u64)];
+    fn megabits_to_bits_multiplies_by_a_million() {
+        let test_cases = vec![(1, 1_000_000), (1000, 1_000_000_000), (0, 0)];
 
-        for (input, expected) in test_cases {
-            let result = Network::bytes_to_bits(input);
-            assert_eq!(result, expected);
+        for (size, expected) in test_cases {
+            assert_eq!(Network::megabits_to_bits(size), expected);
+        }
+    }
+
+    #[test]
+    fn bytes_to_bits_multiplies_by_eight() {
+        let test_cases = vec![(1, 8), (1000, 8_000), (0, 0)];
+
+        for (size, expected) in test_cases {
+            assert_eq!(Network::bytes_to_bits(size), expected);
         }
     }
 }

@@ -301,22 +301,46 @@ impl<T> From<tokio::sync::mpsc::error::SendTimeoutError<T>> for DFError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::PoisonError;
+    use tokio::sync::mpsc::error::{SendError, SendTimeoutError};
+
+    type ExpectDFError = fn(DFError);
 
     #[test]
-    fn should_convert_externalerror_to_dferror() {
-        fn function_return_inner_error() -> Result<(), std::io::Error> {
-            let inner_error = std::io::Error::other("inner error");
-            Err(inner_error)
-        }
+    fn from_conversions_map_source_errors_to_variants() {
+        let test_cases: Vec<(DFError, ExpectDFError)> = vec![
+            (
+                ExternalError::new(ErrorType::StorageError)
+                    .with_cause(Box::new(std::io::Error::other("inner error")))
+                    .into(),
+                |err| {
+                    assert!(matches!(err, DFError::ExternalError(_)));
+                    assert_eq!(err.to_string(), "StorageError cause: inner error");
+                },
+            ),
+            (SendError(()).into(), |err| {
+                assert!(matches!(err, DFError::MpscSend(_)));
+                assert_eq!(err.to_string(), "mpsc send: channel closed");
+            }),
+            (PoisonError::new(()).into(), |err| {
+                assert!(matches!(err, DFError::MutexPoisoned(_)));
+                assert_eq!(
+                    err.to_string(),
+                    "mutex poisoned: poisoned lock: another task failed inside"
+                );
+            }),
+            (SendTimeoutError::Timeout(()).into(), |err| {
+                assert!(matches!(err, DFError::SendTimeout));
+                assert_eq!(err.to_string(), "send timeout");
+            }),
+            (SendTimeoutError::Closed(()).into(), |err| {
+                assert!(matches!(err, DFError::SendTimeout));
+                assert_eq!(err.to_string(), "send timeout");
+            }),
+        ];
 
-        fn do_sth_with_error() -> Result<(), DFError> {
-            function_return_inner_error().map_err(|err| {
-                ExternalError::new(crate::error::ErrorType::StorageError).with_cause(err.into())
-            })?;
-            Ok(())
+        for (err, expect) in test_cases {
+            expect(err);
         }
-
-        let err = do_sth_with_error().err().unwrap();
-        assert_eq!(format!("{err}"), "StorageError cause: inner error");
     }
 }

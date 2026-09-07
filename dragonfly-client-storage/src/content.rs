@@ -129,9 +129,9 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_calculate_piece_range() {
+    async fn calculate_piece_range_clips_to_the_request_range() {
         let test_cases = vec![
-            (1, 4, None, 1, 4),
+            (1, 4, None, (1, 4)),
             (
                 1,
                 4,
@@ -139,8 +139,7 @@ mod tests {
                     start: 1,
                     length: 4,
                 }),
-                1,
-                4,
+                (1, 4),
             ),
             (
                 1,
@@ -149,8 +148,7 @@ mod tests {
                     start: 2,
                     length: 1,
                 }),
-                2,
-                1,
+                (2, 1),
             ),
             (
                 1,
@@ -159,8 +157,7 @@ mod tests {
                     start: 1,
                     length: 1,
                 }),
-                1,
-                1,
+                (1, 1),
             ),
             (
                 1,
@@ -169,8 +166,7 @@ mod tests {
                     start: 4,
                     length: 1,
                 }),
-                4,
-                1,
+                (4, 1),
             ),
             (
                 1,
@@ -179,8 +175,7 @@ mod tests {
                     start: 0,
                     length: 2,
                 }),
-                1,
-                1,
+                (1, 1),
             ),
             (
                 1,
@@ -189,16 +184,21 @@ mod tests {
                     start: 4,
                     length: 3,
                 }),
-                4,
+                (4, 1),
+            ),
+            (
                 1,
+                4,
+                Some(Range {
+                    start: 0,
+                    length: 10,
+                }),
+                (1, 4),
             ),
         ];
 
-        for (piece_offset, piece_length, range, expected_offset, expected_length) in test_cases {
-            let (target_offset, target_length) =
-                calculate_piece_range(piece_offset, piece_length, range);
-            assert_eq!(target_offset, expected_offset);
-            assert_eq!(target_length, expected_length);
+        for (offset, length, range, expected) in test_cases {
+            assert_eq!(calculate_piece_range(offset, length, range), expected);
         }
     }
 }

@@ -112,142 +112,109 @@ impl Docker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
-    use tokio::fs;
+    use std::path::{Path, PathBuf};
+    use tempfile::TempDir;
 
-    #[tokio::test]
-    async fn test_docker_config_empty() {
-        let docker_config_file = NamedTempFile::new().unwrap();
-        let docker = Docker::new(
-            dfinit::Docker {
-                config_path: docker_config_file.path().to_path_buf(),
-            },
-            dfinit::Proxy {
-                addr: "http://127.0.0.1:5000".into(),
-            },
-        );
-
-        let result = docker.run().await;
-        println!("{result:?}");
-        assert!(result.is_ok());
-
-        // Read and verify configuration.
-        let contents = fs::read_to_string(docker_config_file.path()).await.unwrap();
-        let config: serde_json::Value = serde_json::from_str(&contents).unwrap();
-
-        // Verify proxies configuration.
-        assert_eq!(config["proxies"]["http-proxy"], "http://127.0.0.1:5000");
-        assert_eq!(config["proxies"]["https-proxy"], "http://127.0.0.1:5000");
-    }
-
-    #[tokio::test]
-    async fn test_docker_config_existing() {
-        let docker_config_file = NamedTempFile::new().unwrap();
-        let initial_config = r#"
-        {
-            "log-driver": "json-file",
-            "experimental": true
-        }
-        "#;
-        fs::write(docker_config_file.path(), initial_config)
-            .await
-            .unwrap();
-
-        let docker = Docker::new(
-            dfinit::Docker {
-                config_path: docker_config_file.path().to_path_buf(),
-            },
-            dfinit::Proxy {
-                addr: "http://127.0.0.1:5000".into(),
-            },
-        );
-
-        let result = docker.run().await;
-        assert!(result.is_ok());
-
-        // Read and verify configuration.
-        let contents = fs::read_to_string(docker_config_file.path()).await.unwrap();
-        let config: serde_json::Value = serde_json::from_str(&contents).unwrap();
-
-        // Verify existing configurations.
-        assert_eq!(config["log-driver"], "json-file");
-        assert_eq!(config["experimental"], true);
-
-        // Verify proxies configuration.
-        assert_eq!(config["proxies"]["http-proxy"], "http://127.0.0.1:5000");
-        assert_eq!(config["proxies"]["https-proxy"], "http://127.0.0.1:5000");
-    }
-
-    #[tokio::test]
-    async fn test_docker_config_invalid_json() {
-        let docker_config_file = NamedTempFile::new().unwrap();
-        let invalid_config = r#"
+    const INVALID_DAEMON_JSON: &str = r#"
         {
             "log-driver": "json-file",
             "experimental": true,
         }
         "#;
-        fs::write(docker_config_file.path(), invalid_config)
-            .await
-            .unwrap();
 
-        let docker = Docker::new(
+    fn docker(config_path: &Path, proxy_addr: &str) -> Docker {
+        Docker::new(
             dfinit::Docker {
-                config_path: docker_config_file.path().to_path_buf(),
+                config_path: config_path.to_path_buf(),
             },
             dfinit::Proxy {
-                addr: "http://127.0.0.1:5000".into(),
+                addr: proxy_addr.into(),
             },
-        );
+        )
+    }
 
-        let result = docker.run().await;
-        assert!(result.is_err());
-        if let Err(e) = result {
-            assert_eq!(
-                format!("{e}"),
-                "ParseError cause: trailing comma at line 5 column 9"
-            );
+    async fn write_daemon_json(temp_dir: &TempDir, contents: Option<&str>) -> PathBuf {
+        let config_path = temp_dir.path().join("docker").join("daemon.json");
+        if let Some(contents) = contents {
+            fs::create_dir_all(config_path.parent().unwrap())
+                .await
+                .unwrap();
+            fs::write(&config_path, contents).await.unwrap();
+        }
+        config_path
+    }
+
+    #[tokio::test]
+    async fn run_writes_proxies_into_daemon_json() {
+        let proxies = json!({
+            "http-proxy": "http://127.0.0.1:5000",
+            "https-proxy": "http://127.0.0.1:5000",
+        });
+
+        let test_cases = vec![
+            (None, json!({ "proxies": proxies })),
+            (Some(""), json!({ "proxies": proxies })),
+            (
+                Some(r#"{ "log-driver": "json-file", "experimental": true }"#),
+                json!({
+                    "log-driver": "json-file",
+                    "experimental": true,
+                    "proxies": proxies,
+                }),
+            ),
+            (
+                Some(
+                    r#"{
+                        "proxies": {
+                            "http-proxy": "http://old-proxy:3128",
+                            "https-proxy": "https://old-proxy:3129",
+                            "no-proxy": "old-no-proxy"
+                        },
+                        "log-driver": "json-file"
+                    }"#,
+                ),
+                json!({ "log-driver": "json-file", "proxies": proxies }),
+            ),
+        ];
+
+        for (initial_config, expected) in test_cases {
+            let temp_dir = TempDir::new().unwrap();
+            let config_path = write_daemon_json(&temp_dir, initial_config).await;
+            let result = docker(&config_path, "http://127.0.0.1:5000").run().await;
+            assert!(result.is_ok());
+
+            let contents = fs::read_to_string(&config_path).await.unwrap();
+            let config: Value = serde_json::from_str(&contents).unwrap();
+            assert_eq!(config, expected);
         }
     }
 
     #[tokio::test]
-    async fn test_docker_config_proxies_existing() {
-        let docker_config_file = NamedTempFile::new().unwrap();
-        let existing_proxies = r#"
-        {
-            "proxies": {
-                "http-proxy": "http://old-proxy:3128",
-                "https-proxy": "https://old-proxy:3129",
-                "no-proxy": "old-no-proxy"
-            },
-            "log-driver": "json-file"
+    async fn run_fails_on_invalid_daemon_json_or_proxy_addr() {
+        let test_cases = vec![
+            (
+                Some(INVALID_DAEMON_JSON),
+                "http://127.0.0.1:5000",
+                "ParseError cause: trailing comma at line 5 column 9",
+            ),
+            (
+                None,
+                "127.0.0.1:5000",
+                "ParseError cause: relative URL without a base",
+            ),
+            (
+                None,
+                "unix:/var/run/dfdaemon.sock",
+                "unknown host not found",
+            ),
+            (None, "dfdaemon://127.0.0.1", "unknown port not found"),
+        ];
+
+        for (initial_config, proxy_addr, expected) in test_cases {
+            let temp_dir = TempDir::new().unwrap();
+            let config_path = write_daemon_json(&temp_dir, initial_config).await;
+            let result = docker(&config_path, proxy_addr).run().await;
+            assert_eq!(result.unwrap_err().to_string(), expected);
         }
-        "#;
-        fs::write(docker_config_file.path(), existing_proxies)
-            .await
-            .unwrap();
-
-        let docker = Docker::new(
-            dfinit::Docker {
-                config_path: docker_config_file.path().to_path_buf(),
-            },
-            dfinit::Proxy {
-                addr: "http://127.0.0.1:5000".into(),
-            },
-        );
-
-        let result = docker.run().await;
-        assert!(result.is_ok());
-
-        // Read and verify configuration.
-        let contents = fs::read_to_string(docker_config_file.path()).await.unwrap();
-        let config: serde_json::Value = serde_json::from_str(&contents).unwrap();
-
-        // Verify existing configurations.
-        assert_eq!(config["log-driver"], "json-file");
-
-        // Verify proxies configuration.
-        assert_eq!(config["proxies"]["http-proxy"], "http://127.0.0.1:5000");
-        assert_eq!(config["proxies"]["https-proxy"], "http://127.0.0.1:5000");
     }
 }

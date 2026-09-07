@@ -115,35 +115,42 @@ impl CRIO {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+    use tempfile::NamedTempFile;
 
-    #[tokio::test]
-    async fn test_crio_config() {
-        use tempfile::NamedTempFile;
+    fn registry(prefix: &str, location: &str) -> dfinit::CRIORegistry {
+        dfinit::CRIORegistry {
+            prefix: prefix.into(),
+            location: location.into(),
+        }
+    }
 
-        let crio_config_file = NamedTempFile::new().unwrap();
-
-        let crio = CRIO::new(
+    fn crio(
+        config_path: &Path,
+        registries: Vec<dfinit::CRIORegistry>,
+        unqualified_search_registries: Vec<String>,
+        proxy_addr: &str,
+    ) -> CRIO {
+        CRIO::new(
             dfinit::CRIO {
-                config_path: crio_config_file.path().to_path_buf(),
-                registries: vec![dfinit::CRIORegistry {
-                    prefix: "registry.example.com".into(),
-                    location: "registry.example.com".into(),
-                }],
-                unqualified_search_registries: vec!["registry.example.com".into()],
+                config_path: config_path.to_path_buf(),
+                registries,
+                unqualified_search_registries,
             },
             dfinit::Proxy {
-                addr: "http://127.0.0.1:65001".into(),
+                addr: proxy_addr.into(),
             },
-        );
-        let result = crio.run().await;
+        )
+    }
 
-        assert!(result.is_ok());
-
-        // get the contents of the file
-        let contents = fs::read_to_string(crio_config_file.path().to_path_buf())
-            .await
-            .unwrap();
-        let expected_contents = r#"unqualified-search-registries = ["registry.example.com"]
+    #[tokio::test]
+    async fn run_writes_registries_conf() {
+        let test_cases = vec![
+            (
+                vec![registry("registry.example.com", "registry.example.com")],
+                vec!["registry.example.com".to_string()],
+                "http://127.0.0.1:65001",
+                r#"unqualified-search-registries = ["registry.example.com"]
 
 [[registry]]
 prefix = "registry.example.com"
@@ -152,13 +159,76 @@ location = "registry.example.com"
 [[registry.mirror]]
 insecure = true
 location = "127.0.0.1:65001"
-"#;
-        // assert that the contents of the file are as expected
-        assert_eq!(contents, expected_contents);
+"#,
+            ),
+            (
+                vec![
+                    registry("registry.example.com", "registry.example.com"),
+                    registry("docker.io", "registry-1.docker.io"),
+                ],
+                vec!["registry.example.com".to_string(), "docker.io".to_string()],
+                "https://proxy.example.com",
+                r#"unqualified-search-registries = ["registry.example.com", "docker.io"]
 
-        // clean up
-        fs::remove_file(crio_config_file.path().to_path_buf())
-            .await
-            .unwrap();
+[[registry]]
+prefix = "registry.example.com"
+location = "registry.example.com"
+
+[[registry.mirror]]
+insecure = true
+location = "proxy.example.com:443"
+
+[[registry]]
+prefix = "docker.io"
+location = "registry-1.docker.io"
+
+[[registry.mirror]]
+insecure = true
+location = "proxy.example.com:443"
+"#,
+            ),
+            (
+                vec![],
+                vec![],
+                "http://127.0.0.1:65001",
+                "unqualified-search-registries = []\n",
+            ),
+        ];
+
+        for (registries, unqualified_search_registries, proxy_addr, expected) in test_cases {
+            let config_file = NamedTempFile::new().unwrap();
+            let result = crio(
+                config_file.path(),
+                registries.clone(),
+                unqualified_search_registries,
+                proxy_addr,
+            )
+            .run()
+            .await;
+            assert!(result.is_ok());
+
+            let contents = fs::read_to_string(config_file.path()).await.unwrap();
+            assert_eq!(contents, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn run_fails_on_invalid_proxy_addr() {
+        let test_cases = vec![
+            (
+                "127.0.0.1:65001",
+                "ParseError cause: relative URL without a base",
+            ),
+            ("unix:/var/run/dfdaemon.sock", "unknown host not found"),
+            ("dfdaemon://127.0.0.1", "unknown port not found"),
+        ];
+
+        for (proxy_addr, expected) in test_cases {
+            let config_file = NamedTempFile::new().unwrap();
+            let result = crio(config_file.path(), vec![], vec![], proxy_addr)
+                .run()
+                .await;
+            assert_eq!(result.unwrap_err().to_string(), expected);
+        }
     }
 }

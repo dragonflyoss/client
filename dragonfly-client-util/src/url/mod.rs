@@ -84,18 +84,25 @@ pub fn filter_query_params(url: &str, filtered_query_params: &[String]) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dragonfly_client_core::Error;
 
     #[test]
-    fn should_escape_query() {
-        assert_eq!(query_escape("a b"), "a+b");
-        assert_eq!(query_escape("x*y"), "x%2Ay");
-        assert_eq!(query_escape("c~d"), "c~d");
-        assert_eq!(query_escape("1+1"), "1%2B1");
-        assert_eq!(query_escape("中"), "%E4%B8%AD");
+    fn query_escape_encodes_like_go_query_escape() {
+        let test_cases = vec![
+            ("a b", "a+b"),
+            ("x*y", "x%2Ay"),
+            ("c~d", "c~d"),
+            ("1+1", "1%2B1"),
+            ("中", "%E4%B8%AD"),
+        ];
+
+        for (query, expected) in test_cases {
+            assert_eq!(query_escape(query), expected);
+        }
     }
 
     #[test]
-    fn should_filter_query_params() {
+    fn filter_query_params_drops_filtered_keys_and_sorts_the_rest() {
         let test_cases = vec![
             (
                 "https://example.com/file.txt?z=9&b=2&a=1",
@@ -140,7 +147,11 @@ mod tests {
                 expected
             );
         }
+    }
 
-        assert!(filter_query_params(":error_url", &["x".to_string()]).is_err());
+    #[test]
+    fn filter_query_params_fails_on_invalid_url() {
+        let result = filter_query_params(":error_url", &["x".to_string()]);
+        assert!(matches!(result, Err(Error::ExternalError(_))));
     }
 }

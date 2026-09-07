@@ -927,25 +927,25 @@ fn remove_sensitive_headers(headers: &mut HeaderMap, next: &Url, previous: &Url)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        http::{HTTP, HTTPS_SCHEME, HTTP_SCHEME},
-        Backend, ExistsRequest, GetRequest, StatRequest, DEFAULT_USER_AGENT,
+    use dragonfly_client_util::tls::{
+        install_crypto_provider, load_certs_from_pem, load_key_from_pem,
     };
-    use dragonfly_client_util::tls::{load_certs_from_pem, load_key_from_pem};
-    use http::header::{HeaderValue, USER_AGENT};
     use hyper_util::rt::{TokioExecutor, TokioIo};
-    use reqwest::{header::HeaderMap, StatusCode};
-    use std::collections::HashMap;
-    use std::{sync::Arc, time::Duration};
+    use reqwest::StatusCode;
     use tokio::net::TcpListener;
     use tokio_rustls::rustls::ServerConfig;
     use tokio_rustls::TlsAcceptor;
     use wiremock::{
         matchers::{header, method, path},
-        Mock, ResponseTemplate,
+        Mock, MockBuilder, MockServer, ResponseTemplate,
     };
 
-    // Generate the certificate and private key by script(`scripts/generate_certs.sh`).
+    type ExpectStat = fn(StatResponse);
+    type ExpectGet = fn(GetResponse<Body>, &str);
+    type ExpectHeaders = fn(Result<()>, &HeaderMap);
+    type RedirectLocation = fn(&str) -> String;
+    type CustomHeaders = Vec<(&'static str, &'static str)>;
+
     const SERVER_CERT: &str = r#"""
 -----BEGIN CERTIFICATE-----
 MIIDsjCCApqgAwIBAgIUCGVh9Btth+ucS6niZsWZb+q6m6UwDQYJKoZIhvcNAQEL
@@ -1052,12 +1052,82 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
 -----END CERTIFICATE-----
 """#;
 
-    /// Start a https server with given public key and private key.
+    fn http(scheme: &str) -> HTTP {
+        HTTP::new(scheme, None, 1, true, Duration::from_secs(600), true).unwrap()
+    }
+
+    fn stat_request(url: &str, client_cert: Option<Vec<CertificateDer<'static>>>) -> StatRequest {
+        StatRequest {
+            task_id: "test".to_string(),
+            url: url.to_string(),
+            http_header: Some(HeaderMap::new()),
+            timeout: Duration::from_secs(5),
+            client_cert,
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+            open_csg: None,
+        }
+    }
+
+    fn get_request(
+        url: &str,
+        range: Option<Range>,
+        client_cert: Option<Vec<CertificateDer<'static>>>,
+    ) -> GetRequest {
+        GetRequest {
+            task_id: "test".to_string(),
+            piece_id: "test".to_string(),
+            url: url.to_string(),
+            range,
+            http_header: Some(HeaderMap::new()),
+            timeout: Duration::from_secs(5),
+            client_cert,
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+            open_csg: None,
+        }
+    }
+
+    fn exists_request(url: &str) -> ExistsRequest {
+        ExistsRequest {
+            task_id: "test".to_string(),
+            url: url.to_string(),
+            http_header: Some(HeaderMap::new()),
+            timeout: Duration::from_secs(5),
+            client_cert: None,
+            object_storage: None,
+            hdfs: None,
+            hugging_face: None,
+            model_scope: None,
+            open_csg: None,
+        }
+    }
+
+    fn header_map(entries: &[(&'static str, &'static str)]) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for &(name, value) in entries {
+            headers.insert(name, HeaderValue::from_static(value));
+        }
+        headers
+    }
+
+    fn mock_get(url_path: &str) -> MockBuilder {
+        Mock::given(method("GET")).and(path(url_path))
+    }
+
+    async fn mount(server: &MockServer, mocks: Vec<Mock>) {
+        for mock in mocks {
+            mock.mount(server).await;
+        }
+    }
+
     async fn start_https_server(cert_pem: &str, key_pem: &str) -> String {
         let server_certs = load_certs_from_pem(cert_pem).unwrap();
         let server_key = load_key_from_pem(key_pem).unwrap();
-
-        // Setup the server.
         let config = ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(server_certs, server_key.clone_key())
@@ -1066,15 +1136,12 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
         let acceptor = TlsAcceptor::from(Arc::new(config));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-
         tokio::spawn(async move {
             loop {
                 let (stream, _) = listener.accept().await.unwrap();
                 let acceptor = acceptor.clone();
                 tokio::spawn(async move {
                     let stream = acceptor.accept(stream).await.unwrap();
-
-                    // Always return 200 OK with OK as its body for any requests.
                     let service = hyper::service::service_fn(|_| async {
                         Ok::<_, hyper::Error>(hyper::Response::new("OK".to_string()))
                     });
@@ -1089,871 +1156,630 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
         format!("https://localhost:{}", addr.port())
     }
 
-    #[tokio::test]
-    async fn should_stat_response() {
-        let server = wiremock::MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/stat"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("Content-Type", "text/html; charset=UTF-8"),
-            )
-            .mount(&server)
-            .await;
+    async fn start_closing_server() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                drop(stream);
+            }
+        });
 
-        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .stat(StatRequest {
-                task_id: "test".to_string(),
-                url: format!("{}/stat", server.uri()),
-                http_header: Some(HeaderMap::new()),
-                timeout: std::time::Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(resp.http_status_code, Some(StatusCode::OK))
+        format!("http://{addr}")
     }
 
     #[tokio::test]
-    async fn should_stat_response_with_partial_content() {
-        let server = wiremock::MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/stat"))
-            .and(header("range", "bytes=0-0"))
-            .respond_with(
-                ResponseTemplate::new(206)
-                    .insert_header("Content-Range", "bytes 0-0/1048576")
-                    .set_body_bytes(vec![0u8]),
-            )
-            .mount(&server)
-            .await;
+    async fn stat_reports_status_and_content_length() {
+        install_crypto_provider();
 
-        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .stat(StatRequest {
-                task_id: "test".to_string(),
-                url: format!("{}/stat", server.uri()),
-                http_header: Some(HeaderMap::new()),
-                timeout: std::time::Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
-            })
-            .await
-            .unwrap();
+        let test_cases: Vec<(Vec<Mock>, ExpectStat)> = vec![
+            (
+                vec![mock_get("/stat").respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header("Content-Type", "text/html; charset=UTF-8"),
+                )],
+                |response| {
+                    assert_eq!(response.http_status_code, Some(StatusCode::OK));
+                },
+            ),
+            (
+                vec![mock_get("/stat")
+                    .and(header("range", "bytes=0-0"))
+                    .respond_with(
+                        ResponseTemplate::new(206)
+                            .insert_header("Content-Range", "bytes 0-0/1048576")
+                            .set_body_bytes(vec![0u8]),
+                    )],
+                |response| {
+                    assert!(response.success);
+                    assert_eq!(response.http_status_code, Some(StatusCode::PARTIAL_CONTENT));
+                    assert_eq!(response.content_length, Some(1048576));
+                    let response_header = response.http_header.unwrap();
+                    assert!(response_header.get("content-range").is_none());
+                    assert_eq!(response_header.get("content-length").unwrap(), "1048576");
+                },
+            ),
+            (
+                vec![mock_get("/stat")
+                    .and(header("range", "bytes=0-0"))
+                    .respond_with(
+                        ResponseTemplate::new(206)
+                            .insert_header("Content-Range", "bytes 0-0/*")
+                            .set_body_bytes(vec![0u8]),
+                    )],
+                |response| {
+                    assert!(response.success);
+                    assert_eq!(response.http_status_code, Some(StatusCode::PARTIAL_CONTENT));
+                    assert_eq!(response.content_length, None);
+                    assert!(response.http_header.unwrap().get("content-range").is_none());
+                },
+            ),
+            (
+                vec![
+                    mock_get("/stat")
+                        .and(header("range", "bytes=0-0"))
+                        .respond_with(ResponseTemplate::new(416)),
+                    mock_get("/stat").respond_with(
+                        ResponseTemplate::new(200).insert_header("Content-Length", "0"),
+                    ),
+                ],
+                |response| {
+                    assert!(response.success);
+                    assert_eq!(response.http_status_code, Some(StatusCode::OK));
+                    assert_eq!(response.content_length, Some(0));
+                },
+            ),
+            (
+                vec![
+                    mock_get("/stat").respond_with(
+                        ResponseTemplate::new(200)
+                            .insert_header("Transfer-Encoding", "chunked")
+                            .set_body_string("chunked body"),
+                    ),
+                    Mock::given(method("HEAD")).and(path("/stat")).respond_with(
+                        ResponseTemplate::new(200).insert_header("Content-Length", "42"),
+                    ),
+                ],
+                |response| {
+                    assert!(response.success);
+                    assert_eq!(response.http_status_code, Some(StatusCode::OK));
+                    assert_eq!(response.content_length, Some(42));
+                },
+            ),
+            (
+                vec![
+                    mock_get("/stat").respond_with(
+                        ResponseTemplate::new(307).insert_header("Location", "/target"),
+                    ),
+                    mock_get("/target")
+                        .respond_with(ResponseTemplate::new(200).set_body_string("target content")),
+                ],
+                |response| {
+                    assert!(response.success);
+                    assert_eq!(response.http_status_code, Some(StatusCode::OK));
+                    assert_eq!(response.content_length, Some(14));
+                },
+            ),
+            (
+                vec![mock_get("/stat").respond_with(ResponseTemplate::new(307))],
+                |response| {
+                    assert!(!response.success);
+                    assert_eq!(response.http_status_code, None);
+                    assert_eq!(
+                        response.error_message.as_deref(),
+                        Some("got 307 Temporary Redirect without Location header")
+                    );
+                },
+            ),
+            (
+                vec![mock_get("/stat").respond_with(ResponseTemplate::new(404))],
+                |response| {
+                    assert!(!response.success);
+                    assert_eq!(response.http_status_code, Some(StatusCode::NOT_FOUND));
+                },
+            ),
+        ];
 
-        assert!(resp.success);
-        assert_eq!(resp.http_status_code, Some(StatusCode::PARTIAL_CONTENT));
-        assert_eq!(resp.content_length, Some(1048576));
-
-        // The 206-shaped headers should be rewritten to look like the full-object
-        // response.
-        let response_header = resp.http_header.unwrap();
-        assert!(response_header.get("content-range").is_none());
-        assert_eq!(response_header.get("content-length").unwrap(), "1048576");
+        let http = http(HTTP_SCHEME);
+        for (mocks, expect) in test_cases {
+            let server = MockServer::start().await;
+            mount(&server, mocks).await;
+            let response = http
+                .stat(stat_request(&format!("{}/stat", server.uri()), None))
+                .await
+                .unwrap();
+            expect(response);
+        }
     }
 
     #[tokio::test]
-    async fn should_stat_response_when_range_not_satisfiable() {
-        let server = wiremock::MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/stat"))
-            .and(header("range", "bytes=0-0"))
-            .respond_with(ResponseTemplate::new(416))
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/stat"))
-            .respond_with(ResponseTemplate::new(200).insert_header("Content-Length", "0"))
-            .mount(&server)
-            .await;
+    async fn get_reports_status_and_body() {
+        install_crypto_provider();
 
-        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .stat(StatRequest {
-                task_id: "test".to_string(),
-                url: format!("{}/stat", server.uri()),
-                http_header: Some(HeaderMap::new()),
-                timeout: std::time::Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
-            })
-            .await
-            .unwrap();
+        let test_cases: Vec<(Vec<Mock>, Option<Range>, ExpectGet)> = vec![
+            (
+                vec![mock_get("/get").respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header("Content-Type", "text/html; charset=UTF-8")
+                        .set_body_string("OK"),
+                )],
+                None,
+                |response, body| {
+                    assert_eq!(response.http_status_code, Some(StatusCode::OK));
+                    assert_eq!(body, "OK");
+                },
+            ),
+            (
+                vec![mock_get("/get")
+                    .and(header("range", "bytes=10-29"))
+                    .respond_with(
+                        ResponseTemplate::new(206)
+                            .insert_header("Content-Range", "bytes 10-29/100")
+                            .set_body_string("partial content"),
+                    )],
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                |response, body| {
+                    assert!(response.success);
+                    assert_eq!(response.http_status_code, Some(StatusCode::PARTIAL_CONTENT));
+                    assert_eq!(body, "partial content");
+                },
+            ),
+            (
+                vec![mock_get("/get")
+                    .and(header("range", "bytes=0-19"))
+                    .respond_with(ResponseTemplate::new(200).set_body_string("full body content"))],
+                Some(Range {
+                    start: 0,
+                    length: 20,
+                }),
+                |response, body| {
+                    assert!(response.success);
+                    assert_eq!(response.http_status_code, Some(StatusCode::OK));
+                    assert_eq!(body, "full body content");
+                },
+            ),
+            (
+                vec![mock_get("/get")
+                    .and(header("range", "bytes=10-29"))
+                    .respond_with(ResponseTemplate::new(200).set_body_string("full body content"))],
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                |response, body| {
+                    assert!(!response.success);
+                    assert_eq!(response.http_status_code, Some(StatusCode::OK));
+                    assert!(response
+                        .error_message
+                        .unwrap()
+                        .contains("expected 206 Partial Content"));
+                    assert_eq!(body, "");
+                },
+            ),
+            (
+                vec![mock_get("/get")
+                    .and(header("range", "bytes=10-29"))
+                    .respond_with(
+                        ResponseTemplate::new(206)
+                            .insert_header("Content-Range", "bytes 0-19/100")
+                            .set_body_string("partial content"),
+                    )],
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                |response, _| {
+                    assert!(!response.success);
+                    assert_eq!(response.http_status_code, Some(StatusCode::PARTIAL_CONTENT));
+                    assert!(response
+                        .error_message
+                        .unwrap()
+                        .contains("mismatches requested range"));
+                },
+            ),
+            (
+                vec![mock_get("/get")
+                    .and(header("range", "bytes=10-29"))
+                    .respond_with(ResponseTemplate::new(206).set_body_string("partial content"))],
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                |response, _| {
+                    assert!(!response.success);
+                    assert_eq!(response.http_status_code, Some(StatusCode::PARTIAL_CONTENT));
+                    assert!(response
+                        .error_message
+                        .unwrap()
+                        .contains("missing Content-Range"));
+                },
+            ),
+            (
+                vec![mock_get("/get").respond_with(ResponseTemplate::new(307))],
+                None,
+                |response, _| {
+                    assert!(!response.success);
+                    assert_eq!(
+                        response.http_status_code,
+                        Some(StatusCode::TEMPORARY_REDIRECT)
+                    );
+                },
+            ),
+            (
+                vec![mock_get("/get").respond_with(ResponseTemplate::new(404))],
+                None,
+                |response, _| {
+                    assert!(!response.success);
+                    assert_eq!(response.http_status_code, Some(StatusCode::NOT_FOUND));
+                },
+            ),
+        ];
 
-        assert!(resp.success);
-        assert_eq!(resp.http_status_code, Some(StatusCode::OK));
-        assert_eq!(resp.content_length, Some(0));
+        let http = http(HTTP_SCHEME);
+        for (mocks, range, expect) in test_cases {
+            let server = MockServer::start().await;
+            mount(&server, mocks).await;
+            let mut response = http
+                .get(get_request(&format!("{}/get", server.uri()), range, None))
+                .await
+                .unwrap();
+            let body = response.text().await.unwrap();
+            expect(response, &body);
+        }
     }
 
     #[tokio::test]
-    async fn should_return_error_response_when_stat_notexists() {
-        let server = wiremock::MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/stat"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("Content-Type", "text/html; charset=UTF-8"),
-            )
-            .mount(&server)
-            .await;
+    async fn exists_reports_whether_the_file_exists() {
+        install_crypto_provider();
 
-        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
+        let test_cases = vec![
+            (vec![(None, 200)], true),
+            (vec![(None, 404)], false),
+            (vec![(Some("bytes=0-"), 416), (None, 200)], true),
+        ];
+
+        let http = http(HTTP_SCHEME);
+        for (responses, expected) in test_cases {
+            let server = MockServer::start().await;
+            for &(range, status) in &responses {
+                let mut mock = mock_get("/exists");
+                if let Some(range) = range {
+                    mock = mock.and(header("range", range));
+                }
+                mock.respond_with(ResponseTemplate::new(status))
+                    .mount(&server)
+                    .await;
+            }
+
+            let exists = http
+                .exists(exists_request(&format!("{}/exists", server.uri())))
+                .await
+                .unwrap();
+            assert_eq!(exists, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn requests_without_header_are_rejected() {
+        install_crypto_provider();
+        let http = http(HTTP_SCHEME);
+        let url = "http://127.0.0.1/missing";
+
+        let stat = http
             .stat(StatRequest {
-                task_id: "test".to_string(),
-                url: format!("{}/stat", server.uri()),
                 http_header: None,
-                timeout: std::time::Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
+                ..stat_request(url, None)
             })
             .await;
+        assert!(matches!(stat, Err(Error::InvalidParameter)));
 
-        assert!(resp.is_err());
-    }
-
-    #[tokio::test]
-    async fn should_get_response() {
-        let server = wiremock::MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/get"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("Content-Type", "text/html; charset=UTF-8")
-                    .set_body_string("OK"),
-            )
-            .mount(&server)
-            .await;
-
-        let mut resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
+        let get = http
             .get(GetRequest {
-                task_id: "test".to_string(),
-                piece_id: "test".to_string(),
-                url: format!("{}/get", server.uri()),
-                range: None,
-                http_header: Some(HeaderMap::new()),
-                timeout: std::time::Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(resp.http_status_code, Some(StatusCode::OK));
-        assert_eq!(resp.text().await.unwrap(), "OK");
-    }
-
-    #[tokio::test]
-    async fn should_get_response_with_partial_content() {
-        let server = wiremock::MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/get"))
-            .and(header("range", "bytes=10-29"))
-            .respond_with(
-                ResponseTemplate::new(206)
-                    .insert_header("Content-Range", "bytes 10-29/100")
-                    .set_body_string("partial content"),
-            )
-            .mount(&server)
-            .await;
-
-        let mut resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .get(GetRequest {
-                task_id: "test".to_string(),
-                piece_id: "test".to_string(),
-                url: format!("{}/get", server.uri()),
-                range: Some(Range {
-                    start: 10,
-                    length: 20,
-                }),
-                http_header: Some(HeaderMap::new()),
-                timeout: std::time::Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
-            })
-            .await
-            .unwrap();
-
-        assert!(resp.success);
-        assert_eq!(resp.http_status_code, Some(StatusCode::PARTIAL_CONTENT));
-        assert_eq!(resp.text().await.unwrap(), "partial content");
-    }
-
-    #[tokio::test]
-    async fn should_return_error_response_when_range_ignored() {
-        let server = wiremock::MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/get"))
-            .and(header("range", "bytes=10-29"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("full body content"))
-            .mount(&server)
-            .await;
-
-        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .get(GetRequest {
-                task_id: "test".to_string(),
-                piece_id: "test".to_string(),
-                url: format!("{}/get", server.uri()),
-                range: Some(Range {
-                    start: 10,
-                    length: 20,
-                }),
-                http_header: Some(HeaderMap::new()),
-                timeout: std::time::Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
-            })
-            .await
-            .unwrap();
-
-        assert!(!resp.success);
-        assert_eq!(resp.http_status_code, Some(StatusCode::OK));
-        assert!(resp
-            .error_message
-            .unwrap()
-            .contains("expected 206 Partial Content"));
-    }
-
-    #[tokio::test]
-    async fn should_return_error_response_when_content_range_mismatched() {
-        let server = wiremock::MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/get"))
-            .and(header("range", "bytes=10-29"))
-            .respond_with(
-                ResponseTemplate::new(206)
-                    .insert_header("Content-Range", "bytes 0-19/100")
-                    .set_body_string("partial content"),
-            )
-            .mount(&server)
-            .await;
-
-        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .get(GetRequest {
-                task_id: "test".to_string(),
-                piece_id: "test".to_string(),
-                url: format!("{}/get", server.uri()),
-                range: Some(Range {
-                    start: 10,
-                    length: 20,
-                }),
-                http_header: Some(HeaderMap::new()),
-                timeout: std::time::Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
-            })
-            .await
-            .unwrap();
-
-        assert!(!resp.success);
-        assert_eq!(resp.http_status_code, Some(StatusCode::PARTIAL_CONTENT));
-        assert!(resp
-            .error_message
-            .unwrap()
-            .contains("mismatches requested range"));
-    }
-
-    #[tokio::test]
-    async fn should_stat_response_with_self_signed_cert() {
-        let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .stat(StatRequest {
-                task_id: "test".to_string(),
-                url: server_addr,
-                http_header: Some(HeaderMap::new()),
-                timeout: Duration::from_secs(5),
-                client_cert: Some(load_certs_from_pem(CA_CERT).unwrap()),
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(resp.http_status_code, Some(StatusCode::OK));
-    }
-
-    #[tokio::test]
-    async fn should_return_error_response_when_stat_with_wrong_cert() {
-        let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .stat(StatRequest {
-                task_id: "test".to_string(),
-                url: server_addr,
-                http_header: Some(HeaderMap::new()),
-                timeout: Duration::from_secs(5),
-                client_cert: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
-            })
-            .await;
-
-        assert!(!resp.unwrap().success);
-    }
-
-    #[tokio::test]
-    async fn should_get_response_with_self_signed_cert() {
-        let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let mut resp = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .get(GetRequest {
-                task_id: "test".to_string(),
-                piece_id: "test".to_string(),
-                url: server_addr,
-                range: None,
-                http_header: Some(HeaderMap::new()),
-                timeout: std::time::Duration::from_secs(5),
-                client_cert: Some(load_certs_from_pem(CA_CERT).unwrap()),
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(resp.http_status_code, Some(StatusCode::OK));
-        assert_eq!(resp.text().await.unwrap(), "OK");
-    }
-
-    #[tokio::test]
-    async fn should_return_error_response_when_get_with_wrong_cert() {
-        let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .get(GetRequest {
-                task_id: "test".to_string(),
-                piece_id: "test".to_string(),
-                url: server_addr,
-                range: None,
-                http_header: Some(HeaderMap::new()),
-                timeout: std::time::Duration::from_secs(5),
-                client_cert: Some(load_certs_from_pem(WRONG_CA_CERT).unwrap()),
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
-            })
-            .await;
-
-        assert!(!resp.unwrap().success);
-    }
-
-    #[tokio::test]
-    async fn should_stat_response_with_no_verifier() {
-        let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let resp = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .stat(StatRequest {
-                task_id: "test".to_string(),
-                url: server_addr,
-                http_header: Some(HeaderMap::new()),
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(resp.http_status_code, Some(StatusCode::OK));
-    }
-
-    #[tokio::test]
-    async fn should_get_response_with_no_verifier() {
-        let server_addr = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let http_backend = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true);
-        let mut resp = http_backend
-            .unwrap()
-            .get(GetRequest {
-                task_id: "test".to_string(),
-                piece_id: "test".to_string(),
-                url: server_addr,
-                range: None,
-                http_header: Some(HeaderMap::new()),
-                timeout: std::time::Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(resp.http_status_code, Some(StatusCode::OK));
-        assert_eq!(resp.text().await.unwrap(), "OK");
-    }
-
-    #[tokio::test]
-    async fn should_exists_response() {
-        let server = wiremock::MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/exists"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("Content-Type", "text/html; charset=UTF-8"),
-            )
-            .mount(&server)
-            .await;
-
-        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .exists(ExistsRequest {
-                task_id: "test".to_string(),
-                url: format!("{}/exists", server.uri()),
-                http_header: Some(HeaderMap::new()),
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
-            })
-            .await
-            .unwrap();
-
-        assert!(resp);
-    }
-
-    #[tokio::test]
-    async fn should_return_false_when_notexists() {
-        let server = wiremock::MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/exists"))
-            .respond_with(
-                ResponseTemplate::new(404)
-                    .insert_header("Content-Type", "text/html; charset=UTF-8"),
-            )
-            .mount(&server)
-            .await;
-
-        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .exists(ExistsRequest {
-                task_id: "test".to_string(),
-                url: format!("{}/exists", server.uri()),
-                http_header: Some(HeaderMap::new()),
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
-            })
-            .await
-            .unwrap();
-
-        assert!(!resp);
-    }
-
-    #[tokio::test]
-    async fn should_return_error_when_exists_header_missing() {
-        let server = wiremock::MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/exists"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("Content-Type", "text/html; charset=UTF-8"),
-            )
-            .mount(&server)
-            .await;
-
-        let resp = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
-            .unwrap()
-            .exists(ExistsRequest {
-                task_id: "test".to_string(),
-                url: format!("{}/exists", server.uri()),
                 http_header: None,
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
+                ..get_request(url, None, None)
             })
             .await;
+        assert!(matches!(get, Err(Error::InvalidParameter)));
 
-        assert!(resp.is_err());
+        let exists = http
+            .exists(ExistsRequest {
+                http_header: None,
+                ..exists_request(url)
+            })
+            .await;
+        assert!(matches!(exists, Err(Error::InvalidParameter)));
+    }
+
+    #[tokio::test]
+    async fn connection_failures_are_reported_per_operation() {
+        install_crypto_provider();
+        let url = format!("{}/file", start_closing_server().await);
+        let http = HTTP::new(HTTP_SCHEME, None, 0, true, Duration::from_secs(600), true).unwrap();
+
+        let stat = http.stat(stat_request(&url, None)).await.unwrap();
+        assert!(!stat.success);
+        assert_eq!(stat.http_status_code, None);
+        assert_eq!(stat.content_length, None);
+
+        let get = http.get(get_request(&url, None, None)).await.unwrap();
+        assert!(!get.success);
+        assert_eq!(get.http_status_code, None);
+        assert!(get.error_message.is_some());
+
+        let exists = http.exists(exists_request(&url)).await;
+        assert!(matches!(exists, Err(Error::ReqwestMiddlewareError(_))));
+    }
+
+    #[tokio::test]
+    async fn https_requests_trust_the_given_ca_or_skip_verification() {
+        install_crypto_provider();
+
+        let test_cases: Vec<(Option<&str>, ExpectStat, ExpectGet)> = vec![
+            (
+                Some(CA_CERT),
+                |response| assert_eq!(response.http_status_code, Some(StatusCode::OK)),
+                |response, body| {
+                    assert_eq!(response.http_status_code, Some(StatusCode::OK));
+                    assert_eq!(body, "OK");
+                },
+            ),
+            (
+                Some(WRONG_CA_CERT),
+                |response| assert!(!response.success),
+                |response, _| assert!(!response.success),
+            ),
+            (
+                None,
+                |response| assert_eq!(response.http_status_code, Some(StatusCode::OK)),
+                |response, body| {
+                    assert_eq!(response.http_status_code, Some(StatusCode::OK));
+                    assert_eq!(body, "OK");
+                },
+            ),
+        ];
+
+        let server_url = start_https_server(SERVER_CERT, SERVER_KEY).await;
+        let http = http(HTTPS_SCHEME);
+        for (ca_pem, expect_stat, expect_get) in test_cases {
+            let client_cert = ca_pem.map(|pem| load_certs_from_pem(pem).unwrap());
+            let response = http
+                .stat(stat_request(&server_url, client_cert.clone()))
+                .await
+                .unwrap();
+            expect_stat(response);
+
+            let mut response = http
+                .get(get_request(&server_url, None, client_cert))
+                .await
+                .unwrap();
+            let body = response.text().await.unwrap();
+            expect_get(response, &body);
+        }
     }
 
     #[test]
-    fn should_make_request_headers() {
-        // Apply default user-agent when not specified.
-        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
-        let mut headers = HeaderMap::new();
-        http.make_request_headers(&mut headers, None).unwrap();
-        assert_eq!(
-            headers.get(USER_AGENT).unwrap(),
-            HeaderValue::from_static(DEFAULT_USER_AGENT)
-        );
+    fn make_request_headers_fills_defaults_without_overriding() {
+        install_crypto_provider();
 
-        // Should not override existing user-agent.
-        let mut headers = HeaderMap::new();
-        headers.insert(USER_AGENT, HeaderValue::from_static("custom-agent/1.0"));
-        http.make_request_headers(&mut headers, None).unwrap();
-        assert_eq!(
-            headers.get(USER_AGENT).unwrap(),
-            HeaderValue::from_static("custom-agent/1.0")
-        );
-
-        // Apply range header when specified.
-        let mut headers = HeaderMap::new();
-        http.make_request_headers(
-            &mut headers,
-            Some(Range {
-                start: 1,
-                length: 100,
+        let test_cases: Vec<(
+            Option<CustomHeaders>,
+            HeaderMap,
+            Option<Range>,
+            ExpectHeaders,
+        )> = vec![
+            (None, HeaderMap::new(), None, |result, headers| {
+                assert!(result.is_ok());
+                assert_eq!(
+                    headers.get(USER_AGENT).unwrap(),
+                    HeaderValue::from_static(DEFAULT_USER_AGENT)
+                );
             }),
-        )
-        .unwrap();
-        assert_eq!(
-            headers.get(RANGE).unwrap(),
-            HeaderValue::from_static("bytes=1-100")
-        );
+            (
+                None,
+                header_map(&[("user-agent", "custom-agent/1.0")]),
+                None,
+                |result, headers| {
+                    assert!(result.is_ok());
+                    assert_eq!(
+                        headers.get(USER_AGENT).unwrap(),
+                        HeaderValue::from_static("custom-agent/1.0")
+                    );
+                },
+            ),
+            (
+                None,
+                HeaderMap::new(),
+                Some(Range {
+                    start: 1,
+                    length: 100,
+                }),
+                |result, headers| {
+                    assert!(result.is_ok());
+                    assert_eq!(
+                        headers.get(RANGE).unwrap(),
+                        HeaderValue::from_static("bytes=1-100")
+                    );
+                },
+            ),
+            (
+                Some(vec![
+                    ("X-Custom-Header", "custom-value"),
+                    ("Authorization", "Bearer token123"),
+                ]),
+                HeaderMap::new(),
+                None,
+                |result, headers| {
+                    assert!(result.is_ok());
+                    assert_eq!(
+                        headers.get("X-Custom-Header").unwrap(),
+                        HeaderValue::from_static("custom-value")
+                    );
+                    assert_eq!(
+                        headers.get("Authorization").unwrap(),
+                        HeaderValue::from_static("Bearer token123")
+                    );
+                    assert_eq!(
+                        headers.get(USER_AGENT).unwrap(),
+                        HeaderValue::from_static(DEFAULT_USER_AGENT)
+                    );
+                },
+            ),
+            (
+                Some(vec![
+                    ("X-Custom-Header", "custom-value"),
+                    ("Authorization", "Bearer token123"),
+                ]),
+                header_map(&[
+                    ("x-custom-header", "original-value"),
+                    ("authorization", "Bearer original"),
+                ]),
+                None,
+                |result, headers| {
+                    assert!(result.is_ok());
+                    assert_eq!(
+                        headers.get("X-Custom-Header").unwrap(),
+                        HeaderValue::from_static("original-value")
+                    );
+                    assert_eq!(
+                        headers.get("Authorization").unwrap(),
+                        HeaderValue::from_static("Bearer original")
+                    );
+                },
+            ),
+            (
+                Some(vec![("Invalid Header Name", "value")]),
+                HeaderMap::new(),
+                None,
+                |result, _| assert!(result.is_err()),
+            ),
+            (
+                Some(vec![("X-Custom-Header", "value\nwith\nnewlines")]),
+                HeaderMap::new(),
+                None,
+                |result, _| assert!(result.is_err()),
+            ),
+        ];
 
-        // Apply custom request headers.
-        let mut custom_headers = HashMap::new();
-        custom_headers.insert("X-Custom-Header".to_string(), "custom-value".to_string());
-        custom_headers.insert("Authorization".to_string(), "Bearer token123".to_string());
+        for (custom_headers, mut headers, range, expect) in test_cases {
+            let request_header = custom_headers.map(|custom_headers| {
+                custom_headers
+                    .into_iter()
+                    .map(|(name, value)| (name.to_string(), value.to_string()))
+                    .collect()
+            });
+            let http = HTTP::new(
+                HTTP_SCHEME,
+                request_header,
+                1,
+                true,
+                Duration::from_secs(600),
+                true,
+            )
+            .unwrap();
 
-        let http = HTTP::new(
-            HTTP_SCHEME,
-            Some(custom_headers),
-            1,
-            true,
-            Duration::from_secs(600),
-            true,
-        )
-        .unwrap();
-        let mut headers = HeaderMap::new();
-        http.make_request_headers(&mut headers, None).unwrap();
-        assert_eq!(
-            headers.get("X-Custom-Header").unwrap(),
-            HeaderValue::from_static("custom-value")
-        );
-        assert_eq!(
-            headers.get("Authorization").unwrap(),
-            HeaderValue::from_static("Bearer token123")
-        );
-        assert_eq!(
-            headers.get(USER_AGENT).unwrap(),
-            HeaderValue::from_static(DEFAULT_USER_AGENT)
-        );
-
-        // Should not override existing custom headers.
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "X-Custom-Header",
-            HeaderValue::from_static("original-value"),
-        );
-        headers.insert("Authorization", HeaderValue::from_static("Bearer original"));
-        http.make_request_headers(&mut headers, None).unwrap();
-        assert_eq!(
-            headers.get("X-Custom-Header").unwrap(),
-            HeaderValue::from_static("original-value")
-        );
-        assert_eq!(
-            headers.get("Authorization").unwrap(),
-            HeaderValue::from_static("Bearer original")
-        );
-
-        // Return error for invalid header name.
-        let mut custom_headers = HashMap::new();
-        custom_headers.insert("Invalid Header Name".to_string(), "value".to_string());
-        let http = HTTP::new(
-            HTTP_SCHEME,
-            Some(custom_headers),
-            1,
-            true,
-            Duration::from_secs(600),
-            true,
-        )
-        .unwrap();
-        let mut headers = HeaderMap::new();
-        assert!(http.make_request_headers(&mut headers, None).is_err());
-
-        // Return error for invalid header value.
-        let mut custom_headers = HashMap::new();
-        custom_headers.insert(
-            "X-Custom-Header".to_string(),
-            "value\nwith\nnewlines".to_string(),
-        );
-        let http = HTTP::new(
-            HTTP_SCHEME,
-            Some(custom_headers),
-            1,
-            true,
-            Duration::from_secs(600),
-            true,
-        )
-        .unwrap();
-        let mut headers = HeaderMap::new();
-        assert!(http.make_request_headers(&mut headers, None).is_err());
+            let result = http.make_request_headers(&mut headers, range);
+            expect(result, &headers);
+        }
     }
 
     #[tokio::test]
-    async fn should_cache_307_redirect_with_default_ttl() {
-        let server = wiremock::MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/target"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string("target content")
-                    .insert_header("Content-Type", "text/plain"),
-            )
-            .mount(&server)
-            .await;
+    async fn get_caches_absolute_307_locations_until_ttl_expires() {
+        install_crypto_provider();
 
-        Mock::given(method("GET"))
-            .and(path("/redirect"))
-            .respond_with(
-                ResponseTemplate::new(307)
-                    .insert_header("Location", format!("{}/target", server.uri())),
-            )
-            .expect(1)
-            .mount(&server)
-            .await;
+        let test_cases: Vec<(bool, Duration, RedirectLocation, Duration, u64)> = vec![
+            (
+                true,
+                Duration::from_secs(600),
+                |uri| format!("{uri}/target"),
+                Duration::ZERO,
+                1,
+            ),
+            (
+                true,
+                Duration::from_secs(600),
+                |_| "/target".to_string(),
+                Duration::ZERO,
+                2,
+            ),
+            (
+                true,
+                Duration::from_secs(1),
+                |uri| format!("{uri}/target"),
+                Duration::from_secs(2),
+                2,
+            ),
+            (
+                false,
+                Duration::from_secs(600),
+                |uri| format!("{uri}/target"),
+                Duration::ZERO,
+                2,
+            ),
+        ];
 
-        // First request - should store redirect url.
-        let backend =
-            HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
-        let mut response = backend
-            .get(GetRequest {
-                task_id: "025a7b4c4615f86617acb34c7ec3404a0a475c2cfaf847ecead944c0bae6277d"
-                    .to_string(),
-                piece_id: "1".to_string(),
-                url: format!("{}/redirect", server.uri()),
-                range: None,
-                http_header: Some(HeaderMap::new()),
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
-            })
-            .await
-            .unwrap();
-        assert_eq!(response.http_status_code, Some(StatusCode::OK));
-        assert_eq!(response.text().await.unwrap(), "target content");
+        for (enable_cache, ttl, location, wait, expected_redirect_requests) in test_cases {
+            let server = MockServer::start().await;
+            let location = location(&server.uri());
+            mock_get("/target")
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_string("target content")
+                        .insert_header("Content-Type", "text/plain"),
+                )
+                .mount(&server)
+                .await;
+            mock_get("/redirect")
+                .respond_with(
+                    ResponseTemplate::new(307).insert_header("Location", location.as_str()),
+                )
+                .expect(expected_redirect_requests)
+                .mount(&server)
+                .await;
 
-        // Second request - should use cached redirect with default TTL.
-        let mut response = backend
-            .get(GetRequest {
-                task_id: "025a7b4c4615f86617acb34c7ec3404a0a475c2cfaf847ecead944c0bae6277d"
-                    .to_string(),
-                piece_id: "1".to_string(),
-                url: format!("{}/redirect", server.uri()),
-                range: None,
-                http_header: Some(HeaderMap::new()),
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
-            })
-            .await
-            .unwrap();
-        assert_eq!(response.http_status_code, Some(StatusCode::OK));
-        assert_eq!(response.text().await.unwrap(), "target content");
+            let http = HTTP::new(HTTP_SCHEME, None, 1, enable_cache, ttl, true).unwrap();
+            let url = format!("{}/redirect", server.uri());
+            for _ in 0..2 {
+                let mut response = http.get(get_request(&url, None, None)).await.unwrap();
+                assert_eq!(response.http_status_code, Some(StatusCode::OK));
+                assert_eq!(response.text().await.unwrap(), "target content");
+
+                tokio::time::sleep(wait).await;
+            }
+
+            server.verify().await;
+        }
     }
 
-    #[tokio::test]
-    async fn should_not_cache_relative_307_redirect_location() {
-        let server = wiremock::MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/target"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string("target content")
-                    .insert_header("Content-Type", "text/plain"),
-            )
-            .mount(&server)
-            .await;
+    #[test]
+    fn remove_sensitive_headers_strips_credentials_across_origins() {
+        let test_cases = vec![
+            ("http://example.com/a", "http://example.com/b", 6),
+            ("http://example.com:80/a", "http://example.com/b", 6),
+            ("http://other.example.com/a", "http://example.com/b", 1),
+            ("http://example.com:8080/a", "http://example.com/b", 1),
+            ("https://example.com/a", "http://example.com/b", 1),
+        ];
 
-        // Return a 307 with a relative Location path each time it is called.
-        Mock::given(method("GET"))
-            .and(path("/redirect"))
-            .respond_with(ResponseTemplate::new(307).insert_header("Location", "/target"))
-            .expect(2)
-            .mount(&server)
-            .await;
-
-        let backend =
-            HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
-
-        // First request - relative Location should NOT be cached.
-        let mut response = backend
-            .get(GetRequest {
-                task_id: "test".to_string(),
-                piece_id: "1".to_string(),
-                url: format!("{}/redirect", server.uri()),
-                range: None,
-                http_header: Some(HeaderMap::new()),
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
-            })
-            .await
-            .unwrap();
-        assert_eq!(response.http_status_code, Some(StatusCode::OK));
-        assert_eq!(response.text().await.unwrap(), "target content");
-
-        // Second request - because the relative URL was not cached, the origin server
-        // must be contacted again (wiremock expects exactly 2 calls to /redirect).
-        let mut response = backend
-            .get(GetRequest {
-                task_id: "test".to_string(),
-                piece_id: "1".to_string(),
-                url: format!("{}/redirect", server.uri()),
-                range: None,
-                http_header: Some(HeaderMap::new()),
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
-            })
-            .await
-            .unwrap();
-        assert_eq!(response.http_status_code, Some(StatusCode::OK));
-        assert_eq!(response.text().await.unwrap(), "target content");
-    }
-
-    #[tokio::test]
-    async fn should_expire_cached_redirect_after_ttl() {
-        let server = wiremock::MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/target"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string("target content")
-                    .insert_header("Content-Type", "text/plain"),
-            )
-            .mount(&server)
-            .await;
-
-        Mock::given(method("GET"))
-            .and(path("/redirect"))
-            .respond_with(
-                ResponseTemplate::new(307)
-                    .insert_header("Location", format!("{}/target", server.uri())),
-            )
-            .expect(2)
-            .mount(&server)
-            .await;
-
-        // Use a very short TTL for this test (1 second).
-        let backend = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(1), true).unwrap();
-
-        // First request - should store redirect url.
-        let mut response = backend
-            .get(GetRequest {
-                task_id: "test".to_string(),
-                piece_id: "1".to_string(),
-                url: format!("{}/redirect", server.uri()),
-                range: None,
-                http_header: Some(HeaderMap::new()),
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
-            })
-            .await
-            .unwrap();
-        assert_eq!(response.http_status_code, Some(StatusCode::OK));
-        assert_eq!(response.text().await.unwrap(), "target content");
-
-        // Wait for cache to expire.
-        tokio::time::sleep(Duration::from_secs(2)).await;
-
-        // Second request after TTL expiry - should store redirect url again.
-        let mut response = backend
-            .get(GetRequest {
-                task_id: "test".to_string(),
-                piece_id: "1".to_string(),
-                url: format!("{}/redirect", server.uri()),
-                range: None,
-                http_header: Some(HeaderMap::new()),
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: None,
-                open_csg: None,
-            })
-            .await
-            .unwrap();
-        assert_eq!(response.http_status_code, Some(StatusCode::OK));
-        assert_eq!(response.text().await.unwrap(), "target content");
+        for (next, previous, expected_len) in test_cases {
+            let mut headers = header_map(&[
+                ("authorization", "Bearer token"),
+                ("cookie", "session=1"),
+                ("cookie2", "legacy=1"),
+                ("proxy-authorization", "Basic abc"),
+                ("www-authenticate", "Basic"),
+                ("x-custom", "kept"),
+            ]);
+            remove_sensitive_headers(
+                &mut headers,
+                &Url::parse(next).unwrap(),
+                &Url::parse(previous).unwrap(),
+            );
+            assert_eq!(headers.len(), expected_len);
+            assert_eq!(headers.get("x-custom").unwrap(), "kept");
+        }
     }
 }
