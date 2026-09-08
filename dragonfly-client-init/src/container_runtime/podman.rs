@@ -115,39 +115,16 @@ impl Podman {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
     use tempfile::NamedTempFile;
-
-    fn registry(prefix: &str, location: &str) -> dfinit::PodmanRegistry {
-        dfinit::PodmanRegistry {
-            prefix: prefix.into(),
-            location: location.into(),
-        }
-    }
-
-    fn podman(
-        config_path: &Path,
-        registries: Vec<dfinit::PodmanRegistry>,
-        unqualified_search_registries: Vec<String>,
-        proxy_addr: &str,
-    ) -> Podman {
-        Podman::new(
-            dfinit::Podman {
-                config_path: config_path.to_path_buf(),
-                registries,
-                unqualified_search_registries,
-            },
-            dfinit::Proxy {
-                addr: proxy_addr.into(),
-            },
-        )
-    }
 
     #[tokio::test]
     async fn run_writes_registries_conf() {
         let test_cases = vec![
             (
-                vec![registry("registry.example.com", "registry.example.com")],
+                vec![dfinit::PodmanRegistry {
+                    prefix: "registry.example.com".into(),
+                    location: "registry.example.com".into(),
+                }],
                 vec!["registry.example.com".to_string()],
                 "http://127.0.0.1:5000",
                 r#"unqualified-search-registries = ["registry.example.com"]
@@ -163,8 +140,14 @@ location = "127.0.0.1:5000"
             ),
             (
                 vec![
-                    registry("registry.example.com", "registry.example.com"),
-                    registry("docker.io", "registry-1.docker.io"),
+                    dfinit::PodmanRegistry {
+                        prefix: "registry.example.com".into(),
+                        location: "registry.example.com".into(),
+                    },
+                    dfinit::PodmanRegistry {
+                        prefix: "docker.io".into(),
+                        location: "registry-1.docker.io".into(),
+                    },
                 ],
                 vec!["registry.example.com".to_string(), "docker.io".to_string()],
                 "https://proxy.example.com",
@@ -197,11 +180,15 @@ location = "proxy.example.com:443"
 
         for (registries, unqualified_search_registries, proxy_addr, expected) in test_cases {
             let config_file = NamedTempFile::new().unwrap();
-            let result = podman(
-                config_file.path(),
-                registries.clone(),
-                unqualified_search_registries,
-                proxy_addr,
+            let result = Podman::new(
+                dfinit::Podman {
+                    config_path: config_file.path().to_path_buf(),
+                    registries,
+                    unqualified_search_registries,
+                },
+                dfinit::Proxy {
+                    addr: proxy_addr.into(),
+                },
             )
             .run()
             .await;
@@ -225,9 +212,18 @@ location = "proxy.example.com:443"
 
         for (proxy_addr, expected) in test_cases {
             let config_file = NamedTempFile::new().unwrap();
-            let result = podman(config_file.path(), vec![], vec![], proxy_addr)
-                .run()
-                .await;
+            let result = Podman::new(
+                dfinit::Podman {
+                    config_path: config_file.path().to_path_buf(),
+                    registries: vec![],
+                    unqualified_search_registries: vec![],
+                },
+                dfinit::Proxy {
+                    addr: proxy_addr.into(),
+                },
+            )
+            .run()
+            .await;
             assert_eq!(result.unwrap_err().to_string(), expected);
         }
     }

@@ -1380,52 +1380,13 @@ fn is_normal_relative_path(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use dragonfly_api::dfdaemon::v2::{Entry, ListTaskEntriesResponse};
     use mocktail::prelude::*;
     use std::collections::HashMap;
     use tempfile::tempdir;
-
-    type ExpectArgs = fn(&Args);
-    type ExpectOutput = fn(Result<PathBuf>, &Path);
-
-    fn args(argv: &[&str]) -> Args {
-        Args::parse_from(std::iter::once("dfget").chain(argv.iter().copied()))
-    }
-
-    fn validation_error(message: String) -> Result<()> {
-        Err(Error::ValidationError(message))
-    }
-
-    fn include_file_error(include_file: &str) -> Result<()> {
-        validation_error(format!(
-            "path is not a normal relative path in include_files: '{include_file}'. It must not contain '..', '.', or start with '/'."
-        ))
-    }
-
-    fn entry(url: &str, content_length: u64) -> Entry {
-        Entry {
-            url: url.to_string(),
-            content_length,
-            is_dir: false,
-        }
-    }
-
-    fn file(url: &str, content_length: usize) -> DirEntry {
-        DirEntry {
-            url: url.to_string(),
-            content_length,
-            is_dir: false,
-        }
-    }
-
-    fn dir(url: &str) -> DirEntry {
-        DirEntry {
-            url: url.to_string(),
-            content_length: 0,
-            is_dir: true,
-        }
-    }
 
     async fn mock_server(entries: Vec<Entry>) -> MockServer {
         let mut mocks = MockSet::new();
@@ -1455,7 +1416,7 @@ mod tests {
 
     #[test]
     fn args_parse_hub_options_with_default_revisions() {
-        let test_cases: Vec<(Vec<&str>, ExpectArgs)> = vec![
+        let test_cases: Vec<(Vec<&str>, fn(&Args))> = vec![
             (
                 vec![
                     "hf://owner/repo/model.bin",
@@ -1543,7 +1504,7 @@ mod tests {
         ];
 
         for (argv, expect) in test_cases {
-            expect(&args(&argv));
+            expect(&Args::parse_from(std::iter::once("dfget").chain(argv)));
         }
     }
 
@@ -1579,7 +1540,7 @@ mod tests {
         ];
 
         for (argv, expected) in test_cases {
-            let args = convert_args(args(&argv));
+            let args = convert_args(Args::parse_from(std::iter::once("dfget").chain(argv)));
             assert_eq!(args.url.as_str(), expected);
         }
     }
@@ -1634,23 +1595,31 @@ mod tests {
             ),
             (
                 vec!["http://test.local/test-dir/", "--output", existing_file.as_str()],
-                validation_error(format!("output path {existing_file} is not a directory")),
+                Err(Error::ValidationError(format!(
+                    "output path {existing_file} is not a directory"
+                ))),
             ),
             (
                 vec!["http://test.local/test-dir/", "--output", missing_dir.as_str()],
-                validation_error(format!("output path {missing_dir} is not a directory")),
+                Err(Error::ValidationError(format!(
+                    "output path {missing_dir} is not a directory"
+                ))),
             ),
             (
                 vec!["http://test.local/test.txt", "--output", existing_file.as_str()],
-                validation_error(format!("output path {existing_file} is already exist")),
+                Err(Error::ValidationError(format!(
+                    "output path {existing_file} is already exist"
+                ))),
             ),
             (
                 vec!["http://test.local/test.txt", "--output", file_in_missing_dir.as_str()],
-                validation_error(format!("output path {missing_dir} is not a directory")),
+                Err(Error::ValidationError(format!(
+                    "output path {missing_dir} is not a directory"
+                ))),
             ),
             (
                 vec!["http://test.local/test.txt", "--output", "/"],
-                validation_error("output path / is not exist".to_string()),
+                Err(Error::ValidationError("output path / is not exist".to_string())),
             ),
             (
                 vec![
@@ -1660,9 +1629,9 @@ mod tests {
                     "--piece-length",
                     "1mib",
                 ],
-                validation_error(format!(
+                Err(Error::ValidationError(format!(
                     "piece length 1048576 bytes is less than the minimum piece length {MIN_PIECE_LENGTH} bytes"
-                )),
+                ))),
             ),
             (
                 vec![
@@ -1672,7 +1641,9 @@ mod tests {
                     "--include-files",
                     "[invalid",
                 ],
-                validation_error("invalid glob pattern in include_files: '[invalid'".to_string()),
+                Err(Error::ValidationError(
+                    "invalid glob pattern in include_files: '[invalid'".to_string(),
+                )),
             ),
             (
                 vec![
@@ -1682,7 +1653,9 @@ mod tests {
                     "--include-files",
                     "../file.txt",
                 ],
-                include_file_error("../file.txt"),
+                Err(Error::ValidationError(
+                    "path is not a normal relative path in include_files: '../file.txt'. It must not contain '..', '.', or start with '/'.".to_string(),
+                )),
             ),
             (
                 vec![
@@ -1692,7 +1665,9 @@ mod tests {
                     "--include-files",
                     "./file.txt",
                 ],
-                include_file_error("./file.txt"),
+                Err(Error::ValidationError(
+                    "path is not a normal relative path in include_files: './file.txt'. It must not contain '..', '.', or start with '/'.".to_string(),
+                )),
             ),
             (
                 vec![
@@ -1702,12 +1677,14 @@ mod tests {
                     "--include-files",
                     "/file.txt",
                 ],
-                include_file_error("/file.txt"),
+                Err(Error::ValidationError(
+                    "path is not a normal relative path in include_files: '/file.txt'. It must not contain '..', '.', or start with '/'.".to_string(),
+                )),
             ),
         ];
 
         for (argv, expected) in test_cases {
-            let result = validate_args(&args(&argv));
+            let result = validate_args(&Args::parse_from(std::iter::once("dfget").chain(argv)));
             assert_eq!(
                 result.map_err(|err| err.to_string()),
                 expected.map_err(|err| err.to_string())
@@ -1721,7 +1698,7 @@ mod tests {
         let output_dir = tempdir.path();
         let output_dir_with_slash = PathBuf::from(format!("{}/", output_dir.display()));
 
-        let test_cases: Vec<(&str, &Path, &str, ExpectOutput)> = vec![
+        let test_cases: Vec<(&str, &Path, &str, fn(Result<PathBuf>, &Path))> = vec![
             (
                 "http://example.com/root/",
                 output_dir,
@@ -1787,7 +1764,11 @@ mod tests {
                 make_output_by_entry(
                     Url::parse(root_url).unwrap(),
                     output_dir,
-                    file(entry_url, 100),
+                    DirEntry {
+                        url: entry_url.to_string(),
+                        content_length: 100,
+                        is_dir: false,
+                    },
                 ),
                 output_dir,
             );
@@ -1803,73 +1784,89 @@ mod tests {
             (
                 None,
                 vec![
-                    entry("http://example.com/root/file1.txt", 100),
-                    entry("http://example.com/root/file2.txt", 200),
+                    ("http://example.com/root/file1.txt", 100),
+                    ("http://example.com/root/file2.txt", 200),
                 ],
                 vec![
-                    file("http://example.com/root/file1.txt", 100),
-                    file("http://example.com/root/file2.txt", 200),
-                ],
-            ),
-            (
-                None,
-                vec![
-                    entry("http://example.com/root/dir1/file1.txt", 100),
-                    entry("http://example.com/root/dir1/file2.txt", 100),
-                    entry("http://example.com/root/dir2/file1.txt", 200),
-                    entry("http://example.com/root/dir2/file2.txt", 200),
-                ],
-                vec![
-                    dir("http://example.com/root/dir1/"),
-                    file("http://example.com/root/dir1/file1.txt", 100),
-                    file("http://example.com/root/dir1/file2.txt", 100),
-                    dir("http://example.com/root/dir2/"),
-                    file("http://example.com/root/dir2/file1.txt", 200),
-                    file("http://example.com/root/dir2/file2.txt", 200),
+                    ("http://example.com/root/file1.txt", 100, false),
+                    ("http://example.com/root/file2.txt", 200, false),
                 ],
             ),
             (
                 None,
                 vec![
-                    entry("http://example.com/root/file1.txt", 100),
-                    entry("http://example.com/root/file2.txt", 200),
-                    entry("http://example.com/root/dir1/file1.txt", 100),
-                    entry("http://example.com/root/dir1/file2.txt", 100),
-                    entry("http://example.com/root/dir2/file1.txt", 200),
-                    entry("http://example.com/root/dir2/file2.txt", 200),
+                    ("http://example.com/root/dir1/file1.txt", 100),
+                    ("http://example.com/root/dir1/file2.txt", 100),
+                    ("http://example.com/root/dir2/file1.txt", 200),
+                    ("http://example.com/root/dir2/file2.txt", 200),
                 ],
                 vec![
-                    file("http://example.com/root/file1.txt", 100),
-                    file("http://example.com/root/file2.txt", 200),
-                    dir("http://example.com/root/dir1/"),
-                    file("http://example.com/root/dir1/file1.txt", 100),
-                    file("http://example.com/root/dir1/file2.txt", 100),
-                    dir("http://example.com/root/dir2/"),
-                    file("http://example.com/root/dir2/file1.txt", 200),
-                    file("http://example.com/root/dir2/file2.txt", 200),
+                    ("http://example.com/root/dir1/", 0, true),
+                    ("http://example.com/root/dir1/file1.txt", 100, false),
+                    ("http://example.com/root/dir1/file2.txt", 100, false),
+                    ("http://example.com/root/dir2/", 0, true),
+                    ("http://example.com/root/dir2/file1.txt", 200, false),
+                    ("http://example.com/root/dir2/file2.txt", 200, false),
+                ],
+            ),
+            (
+                None,
+                vec![
+                    ("http://example.com/root/file1.txt", 100),
+                    ("http://example.com/root/file2.txt", 200),
+                    ("http://example.com/root/dir1/file1.txt", 100),
+                    ("http://example.com/root/dir1/file2.txt", 100),
+                    ("http://example.com/root/dir2/file1.txt", 200),
+                    ("http://example.com/root/dir2/file2.txt", 200),
+                ],
+                vec![
+                    ("http://example.com/root/file1.txt", 100, false),
+                    ("http://example.com/root/file2.txt", 200, false),
+                    ("http://example.com/root/dir1/", 0, true),
+                    ("http://example.com/root/dir1/file1.txt", 100, false),
+                    ("http://example.com/root/dir1/file2.txt", 100, false),
+                    ("http://example.com/root/dir2/", 0, true),
+                    ("http://example.com/root/dir2/file1.txt", 200, false),
+                    ("http://example.com/root/dir2/file2.txt", 200, false),
                 ],
             ),
             (
                 Some(vec!["file1.txt", "dir1/file1.txt"]),
                 vec![],
                 vec![
-                    file("http://example.com/root/file1.txt", 0),
-                    dir("http://example.com/root/dir1/"),
-                    file("http://example.com/root/dir1/file1.txt", 0),
+                    ("http://example.com/root/file1.txt", 0, false),
+                    ("http://example.com/root/dir1/", 0, true),
+                    ("http://example.com/root/dir1/file1.txt", 0, false),
                 ],
             ),
             (
                 Some(vec!["dir1/"]),
-                vec![entry("http://example.com/root/dir1/file1.txt", 100)],
+                vec![("http://example.com/root/dir1/file1.txt", 100)],
                 vec![
-                    dir("http://example.com/root/dir1/"),
-                    file("http://example.com/root/dir1/file1.txt", 100),
+                    ("http://example.com/root/dir1/", 0, true),
+                    ("http://example.com/root/dir1/file1.txt", 100, false),
                 ],
             ),
         ];
 
         for (include_files, listed_entries, expected) in test_cases {
-            let server = mock_server(listed_entries.clone()).await;
+            let listed_entries = listed_entries
+                .into_iter()
+                .map(|(url, content_length)| Entry {
+                    url: url.to_string(),
+                    content_length,
+                    is_dir: false,
+                })
+                .collect();
+            let expected: Vec<DirEntry> = expected
+                .into_iter()
+                .map(|(url, content_length, is_dir)| DirEntry {
+                    url: url.to_string(),
+                    content_length,
+                    is_dir,
+                })
+                .collect();
+            let server = mock_server(listed_entries).await;
             let download_client = download_client(&server).await;
             let entries = get_all_entries(
                 &base_url,

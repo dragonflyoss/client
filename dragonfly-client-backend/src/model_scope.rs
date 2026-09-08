@@ -764,6 +764,8 @@ impl Backend for ModelScope {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use dragonfly_api::common::v2::ModelScope as ModelScopeOptions;
     use reqwest::StatusCode;
@@ -772,72 +774,6 @@ mod tests {
         matchers::{header, method, path, query_param},
         Mock, MockServer, ResponseTemplate,
     };
-
-    type ExpectStat = fn(Result<StatResponse>);
-    type ExpectGet = fn(&GetResponse<Body>, &str);
-
-    fn backend() -> ModelScope {
-        ModelScope::new(Arc::new(Config::default())).unwrap()
-    }
-
-    fn options(server: &MockServer, token: Option<&str>) -> Option<ModelScopeOptions> {
-        Some(ModelScopeOptions {
-            revision: "master".to_string(),
-            token: token.map(str::to_string),
-            base_url: Some(server.uri()),
-        })
-    }
-
-    fn stat_request(url: &str, model_scope: Option<ModelScopeOptions>) -> StatRequest {
-        StatRequest {
-            task_id: "task".to_string(),
-            url: url.to_string(),
-            http_header: None,
-            timeout: Duration::from_secs(5),
-            client_cert: None,
-            object_storage: None,
-            hdfs: None,
-            hugging_face: None,
-            model_scope,
-            open_csg: None,
-        }
-    }
-
-    fn get_request(
-        url: &str,
-        range: Option<Range>,
-        model_scope: Option<ModelScopeOptions>,
-    ) -> GetRequest {
-        GetRequest {
-            task_id: "task".to_string(),
-            piece_id: "piece".to_string(),
-            url: url.to_string(),
-            range,
-            http_header: None,
-            timeout: Duration::from_secs(5),
-            client_cert: None,
-            object_storage: None,
-            hdfs: None,
-            hugging_face: None,
-            model_scope,
-            open_csg: None,
-        }
-    }
-
-    fn exists_request(url: &str, model_scope: Option<ModelScopeOptions>) -> ExistsRequest {
-        ExistsRequest {
-            task_id: "task".to_string(),
-            url: url.to_string(),
-            http_header: None,
-            timeout: Duration::from_secs(5),
-            client_cert: None,
-            object_storage: None,
-            hdfs: None,
-            hugging_face: None,
-            model_scope,
-            open_csg: None,
-        }
-    }
 
     #[test]
     fn parse_url_extracts_type_id_and_path() {
@@ -1071,7 +1007,7 @@ mod tests {
 
     #[tokio::test]
     async fn stat_maps_file_and_repository_responses() {
-        let test_cases: Vec<(&str, Mock, ExpectStat)> = vec![
+        let test_cases: Vec<(&str, Mock, fn(Result<StatResponse>))> = vec![
             (
                 "modelscope://owner/repo/config.json",
                 Mock::given(method("GET"))
@@ -1212,13 +1148,28 @@ mod tests {
             ),
         ];
 
-        let backend = backend();
+        let backend = ModelScope::new(Arc::new(Config::default())).unwrap();
         for (url, mock, expect) in test_cases {
             let server = MockServer::start().await;
             mock.mount(&server).await;
             expect(
                 backend
-                    .stat(stat_request(url, options(&server, Some("secret"))))
+                    .stat(StatRequest {
+                        task_id: "task".to_string(),
+                        url: url.to_string(),
+                        http_header: None,
+                        timeout: Duration::from_secs(5),
+                        client_cert: None,
+                        object_storage: None,
+                        hdfs: None,
+                        hugging_face: None,
+                        model_scope: Some(ModelScopeOptions {
+                            revision: "master".to_string(),
+                            token: Some("secret".to_string()),
+                            base_url: Some(server.uri()),
+                        }),
+                        open_csg: None,
+                    })
                     .await,
             );
         }
@@ -1226,7 +1177,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_streams_body_and_validates_ranged_responses() {
-        let test_cases: Vec<(Option<Range>, Mock, ExpectGet)> = vec![
+        let test_cases: Vec<(Option<Range>, Mock, fn(&GetResponse<Body>, &str))> = vec![
             (
                 None,
                 Mock::given(method("GET"))
@@ -1290,16 +1241,29 @@ mod tests {
             ),
         ];
 
-        let backend = backend();
+        let backend = ModelScope::new(Arc::new(Config::default())).unwrap();
         for (range, mock, expect) in test_cases {
             let server = MockServer::start().await;
             mock.mount(&server).await;
             let mut response = backend
-                .get(get_request(
-                    "modelscope://owner/repo/config.json",
+                .get(GetRequest {
+                    task_id: "task".to_string(),
+                    piece_id: "piece".to_string(),
+                    url: "modelscope://owner/repo/config.json".to_string(),
                     range,
-                    options(&server, None),
-                ))
+                    http_header: None,
+                    timeout: Duration::from_secs(5),
+                    client_cert: None,
+                    object_storage: None,
+                    hdfs: None,
+                    hugging_face: None,
+                    model_scope: Some(ModelScopeOptions {
+                        revision: "master".to_string(),
+                        token: None,
+                        base_url: Some(server.uri()),
+                    }),
+                    open_csg: None,
+                })
                 .await
                 .unwrap();
             let text = response.text().await.unwrap();
@@ -1331,15 +1295,29 @@ mod tests {
             .mount(&object_server)
             .await;
 
-        let mut response = backend()
-            .get(get_request(
-                "modelscope://owner/repo/config.json",
-                Some(Range {
+        let mut response = ModelScope::new(Arc::new(Config::default()))
+            .unwrap()
+            .get(GetRequest {
+                task_id: "task".to_string(),
+                piece_id: "piece".to_string(),
+                url: "modelscope://owner/repo/config.json".to_string(),
+                range: Some(Range {
                     start: 10,
                     length: 20,
                 }),
-                options(&server, Some("secret")),
-            ))
+                http_header: None,
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: Some(ModelScopeOptions {
+                    revision: "master".to_string(),
+                    token: Some("secret".to_string()),
+                    base_url: Some(server.uri()),
+                }),
+                open_csg: None,
+            })
             .await
             .unwrap();
 
@@ -1361,9 +1339,24 @@ mod tests {
             ),
         ];
 
-        let backend = backend();
+        let backend = ModelScope::new(Arc::new(Config::default())).unwrap();
         for (url, model_scope) in test_cases {
-            let result = backend.get(get_request(url, None, model_scope)).await;
+            let result = backend
+                .get(GetRequest {
+                    task_id: "task".to_string(),
+                    piece_id: "piece".to_string(),
+                    url: url.to_string(),
+                    range: None,
+                    http_header: None,
+                    timeout: Duration::from_secs(5),
+                    client_cert: None,
+                    object_storage: None,
+                    hdfs: None,
+                    hugging_face: None,
+                    model_scope,
+                    open_csg: None,
+                })
+                .await;
             assert!(matches!(result, Err(Error::InvalidParameter)));
         }
     }
@@ -1382,7 +1375,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let backend = backend();
+        let backend = ModelScope::new(Arc::new(Config::default())).unwrap();
 
         let test_cases = vec![
             ("modelscope://owner/repo/config.json", true),
@@ -1393,7 +1386,22 @@ mod tests {
 
         for (url, expected) in test_cases {
             let exists = backend
-                .exists(exists_request(url, options(&server, None)))
+                .exists(ExistsRequest {
+                    task_id: "task".to_string(),
+                    url: url.to_string(),
+                    http_header: None,
+                    timeout: Duration::from_secs(5),
+                    client_cert: None,
+                    object_storage: None,
+                    hdfs: None,
+                    hugging_face: None,
+                    model_scope: Some(ModelScopeOptions {
+                        revision: "master".to_string(),
+                        token: None,
+                        base_url: Some(server.uri()),
+                    }),
+                    open_csg: None,
+                })
                 .await
                 .unwrap();
             assert_eq!(exists, expected);

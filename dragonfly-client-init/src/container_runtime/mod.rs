@@ -89,23 +89,14 @@ impl ContainerRuntime {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use dragonfly_client_config::dfinit;
 
-    type ExpectEngine = fn(Option<&Engine>);
-
-    fn config(container_runtime_config: Option<ContainerRuntimeConfig>) -> Config {
-        Config {
-            container_runtime: dfinit::ContainerRuntime {
-                config: container_runtime_config,
-            },
-            ..Default::default()
-        }
-    }
-
     #[test]
     fn new_picks_engine_matching_config() {
-        let test_cases: Vec<(Option<ContainerRuntimeConfig>, ExpectEngine)> = vec![
+        let test_cases: Vec<(Option<ContainerRuntimeConfig>, fn(Option<&Engine>))> = vec![
             (None, |engine| assert!(engine.is_none())),
             (
                 Some(ContainerRuntimeConfig::Containerd(Default::default())),
@@ -126,14 +117,19 @@ mod tests {
         ];
 
         for (container_runtime_config, expect) in test_cases {
-            let runtime = ContainerRuntime::new(&config(container_runtime_config));
+            let runtime = ContainerRuntime::new(&Config {
+                container_runtime: dfinit::ContainerRuntime {
+                    config: container_runtime_config,
+                },
+                ..Default::default()
+            });
             expect(runtime.engine.as_ref());
         }
     }
 
     #[tokio::test]
     async fn run_returns_ok_without_engine() {
-        let runtime = ContainerRuntime::new(&config(None));
+        let runtime = ContainerRuntime::new(&Config::default());
         assert!(runtime.run().await.is_ok());
     }
 }

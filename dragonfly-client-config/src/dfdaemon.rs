@@ -1871,28 +1871,13 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use dragonfly_api::common::v2::SchedulingPolicy as ApiSchedulingPolicy;
     use dragonfly_client_core::Error;
     use tempfile::NamedTempFile;
     use validator::ValidationErrors;
-
-    type ExpectServer = fn(&Server);
-    type ExpectDownload = fn(&Download);
-    type ExpectUpload = fn(&Upload);
-    type ExpectScheduler = fn(&Scheduler);
-    type ExpectSeedPeer = fn(&SeedPeer);
-    type ExpectStorage = fn(&Storage);
-    type ExpectGc = fn(&GC);
-    type ExpectRule = fn(serde_yaml::Result<Rule>);
-    type ExpectProxy = fn(&Proxy);
-    type ExpectTracing = fn(&Tracing);
-    type ExpectBackend = fn(&Backend);
-    type ExpectServerTls = fn(Result<Option<ServerTlsConfig>>);
-    type ExpectClientTls = fn(Result<Option<ClientTlsConfig>>);
-    type ExpectValidation = fn(std::result::Result<(), ValidationErrors>);
-    type ExpectLoad = fn(Result<Config>);
-    type PemPaths = (Option<PathBuf>, Option<PathBuf>, Option<PathBuf>);
 
     async fn temp_certs() -> (NamedTempFile, NamedTempFile, NamedTempFile) {
         let ca_cert = NamedTempFile::new().unwrap();
@@ -1919,14 +1904,6 @@ mod tests {
         (ca_cert, cert, key)
     }
 
-    fn policy(disk_high_threshold_percent: u8, disk_low_threshold_percent: u8) -> Policy {
-        Policy {
-            disk_high_threshold_percent,
-            disk_low_threshold_percent,
-            ..Default::default()
-        }
-    }
-
     #[test]
     fn host_deserializes_fields() {
         let json = r#"{
@@ -1947,7 +1924,7 @@ mod tests {
 
     #[test]
     fn server_deserializes_fields_and_defaults() {
-        let test_cases: Vec<(&str, ExpectServer)> = vec![
+        let test_cases: Vec<(&str, fn(&Server))> = vec![
             (
                 r#"{
                     "pluginDir": "/custom/plugin/dir",
@@ -1979,7 +1956,7 @@ mod tests {
 
     #[test]
     fn download_deserializes_fields_and_defaults() {
-        let test_cases: Vec<(&str, ExpectDownload)> = vec![
+        let test_cases: Vec<(&str, fn(&Download))> = vec![
             (
                 r#"{
                     "server": {
@@ -2036,7 +2013,7 @@ mod tests {
 
     #[test]
     fn upload_deserializes_fields_and_defaults() {
-        let test_cases: Vec<(&str, ExpectUpload)> = vec![
+        let test_cases: Vec<(&str, fn(&Upload))> = vec![
             (
                 r#"{
                     "server": {
@@ -2115,7 +2092,10 @@ mod tests {
     async fn load_server_tls_config_requires_all_pem_paths() {
         let (ca_file, cert_file, key_file) = temp_certs().await;
 
-        let test_cases: Vec<(PemPaths, ExpectServerTls)> = vec![
+        let test_cases: Vec<(
+            (Option<PathBuf>, Option<PathBuf>, Option<PathBuf>),
+            fn(Result<Option<ServerTlsConfig>>),
+        )> = vec![
             (
                 (
                     Some(ca_file.path().to_path_buf()),
@@ -2155,7 +2135,10 @@ mod tests {
     async fn load_client_tls_config_requires_all_pem_paths() {
         let (ca_file, cert_file, key_file) = temp_certs().await;
 
-        let test_cases: Vec<(PemPaths, ExpectClientTls)> = vec![
+        let test_cases: Vec<(
+            (Option<PathBuf>, Option<PathBuf>, Option<PathBuf>),
+            fn(Result<Option<ClientTlsConfig>>),
+        )> = vec![
             (
                 (
                     Some(ca_file.path().to_path_buf()),
@@ -2241,7 +2224,7 @@ mod tests {
 
     #[test]
     fn scheduler_deserializes_fields_and_defaults() {
-        let test_cases: Vec<(&str, ExpectScheduler)> = vec![
+        let test_cases: Vec<(&str, fn(&Scheduler))> = vec![
             (
                 r#"{
                     "announceInterval": "30s",
@@ -2304,7 +2287,7 @@ mod tests {
 
     #[test]
     fn seed_peer_deserializes_fields_and_defaults() {
-        let test_cases: Vec<(&str, ExpectSeedPeer)> = vec![
+        let test_cases: Vec<(&str, fn(&SeedPeer))> = vec![
             (
                 r#"{
                     "enable": true,
@@ -2364,7 +2347,7 @@ mod tests {
 
     #[test]
     fn storage_deserializes_fields_and_defaults() {
-        let test_cases: Vec<(&str, ExpectStorage)> = vec![
+        let test_cases: Vec<(&str, fn(&Storage))> = vec![
             (
                 r#"{
                     "server": {
@@ -2418,7 +2401,10 @@ mod tests {
 
     #[test]
     fn validate_rejects_out_of_range_fields() {
-        let test_cases: Vec<(Box<dyn Validate>, ExpectValidation)> = vec![
+        let test_cases: Vec<(
+            Box<dyn Validate>,
+            fn(std::result::Result<(), ValidationErrors>),
+        )> = vec![
             (
                 Box::new(SeedPeer {
                     enable: true,
@@ -2426,17 +2412,38 @@ mod tests {
                 }),
                 |result| assert!(result.is_ok()),
             ),
-            (Box::new(policy(90, 70)), |result| {
-                assert!(result.is_ok());
-            }),
-            (Box::new(policy(100, 70)), |result| {
-                let err = result.unwrap_err().to_string();
-                assert!(err.starts_with("disk_high_threshold_percent: Validation error: range"));
-            }),
-            (Box::new(policy(90, 0)), |result| {
-                let err = result.unwrap_err().to_string();
-                assert!(err.starts_with("disk_low_threshold_percent: Validation error: range"));
-            }),
+            (
+                Box::new(Policy {
+                    disk_high_threshold_percent: 90,
+                    disk_low_threshold_percent: 70,
+                    ..Default::default()
+                }),
+                |result| {
+                    assert!(result.is_ok());
+                },
+            ),
+            (
+                Box::new(Policy {
+                    disk_high_threshold_percent: 100,
+                    disk_low_threshold_percent: 70,
+                    ..Default::default()
+                }),
+                |result| {
+                    let err = result.unwrap_err().to_string();
+                    assert!(err.starts_with("disk_high_threshold_percent: Validation error: range"));
+                },
+            ),
+            (
+                Box::new(Policy {
+                    disk_high_threshold_percent: 90,
+                    disk_low_threshold_percent: 0,
+                    ..Default::default()
+                }),
+                |result| {
+                    let err = result.unwrap_err().to_string();
+                    assert!(err.starts_with("disk_low_threshold_percent: Validation error: range"));
+                },
+            ),
             (
                 Box::new(Download {
                     concurrent_piece_count: 0,
@@ -2505,7 +2512,7 @@ mod tests {
 
     #[test]
     fn gc_deserializes_fields_and_defaults() {
-        let test_cases: Vec<(&str, ExpectGc)> = vec![
+        let test_cases: Vec<(&str, fn(&GC))> = vec![
             (
                 r#"{
                     "interval": "1h",
@@ -2562,7 +2569,7 @@ mod tests {
 
     #[test]
     fn rule_deserializes_fields_and_defaults() {
-        let test_cases: Vec<(&str, ExpectRule)> = vec![
+        let test_cases: Vec<(&str, fn(serde_yaml::Result<Rule>))> = vec![
             (
                 "regex: 'manifests/sha256.*'\nschedulingPolicy: always\n",
                 |result| {
@@ -2619,7 +2626,7 @@ mod tests {
 
     #[test]
     fn proxy_deserializes_fields_and_defaults() {
-        let test_cases: Vec<(&str, ExpectProxy)> = vec![
+        let test_cases: Vec<(&str, fn(&Proxy))> = vec![
             (
                 r#"{
                     "server": {
@@ -2714,7 +2721,7 @@ mod tests {
 
     #[test]
     fn tracing_deserializes_fields_and_defaults() {
-        let test_cases: Vec<(&str, ExpectTracing)> = vec![
+        let test_cases: Vec<(&str, fn(&Tracing))> = vec![
             (
                 r#"{
                     "protocol": "http",
@@ -2773,7 +2780,7 @@ mod tests {
 
     #[test]
     fn backend_deserializes_fields_and_defaults() {
-        let test_cases: Vec<(&str, ExpectBackend)> = vec![
+        let test_cases: Vec<(&str, fn(&Backend))> = vec![
             (
                 r#"{
                     "requestHeader": {
@@ -2871,7 +2878,7 @@ mod tests {
 
     #[tokio::test]
     async fn load_reads_converts_and_validates_file() {
-        let test_cases: Vec<(&str, ExpectLoad)> = vec![
+        let test_cases: Vec<(&str, fn(Result<Config>))> = vec![
             (
                 "host:\n  ip: 127.0.0.1\ndownload:\n  concurrentPieceCount: 2\n",
                 |result| {

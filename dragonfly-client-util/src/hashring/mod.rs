@@ -109,23 +109,10 @@ impl VNodeHashRing {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use uuid::Uuid;
-
-    type ExpectVNode = fn(Option<&VNode>);
-    type ExpectVNodes = fn(Option<Vec<VNode>>);
-
-    fn ring(replica_count: usize, names: &[&str]) -> VNodeHashRing {
-        let mut ring = VNodeHashRing::new(replica_count);
-        for name in names {
-            ring.add(name.to_string());
-        }
-        ring
-    }
-
-    fn is_known_vnode(vnode: &VNode) -> bool {
-        ["default-pod-1", "default-pod-2"].contains(&vnode.name()) && vnode.id < 2
-    }
 
     #[test]
     fn vnode_formats_as_name_and_id() {
@@ -145,7 +132,11 @@ mod tests {
         ];
 
         for (replica_count, names, expected_len) in test_cases {
-            let ring = ring(replica_count, &names);
+            let mut ring = VNodeHashRing::new(replica_count);
+            for name in names {
+                ring.add(name.to_string());
+            }
+
             assert_eq!(ring.replica_count, replica_count);
             assert_eq!(ring.len(), expected_len);
             assert_eq!(ring.is_empty(), expected_len == 0);
@@ -154,50 +145,72 @@ mod tests {
 
     #[test]
     fn get_returns_a_vnode_of_an_added_node() {
-        let test_cases: Vec<(Vec<&str>, ExpectVNode)> = vec![
+        let test_cases: Vec<(Vec<&str>, fn(Option<&VNode>))> = vec![
             (vec![], |vnode| assert!(vnode.is_none())),
             (vec!["default-pod-1", "default-pod-2"], |vnode| {
-                assert!(is_known_vnode(vnode.unwrap()));
+                let vnode = vnode.unwrap();
+                assert!(["default-pod-1", "default-pod-2"].contains(&vnode.name()) && vnode.id < 2);
             }),
         ];
 
         for (names, expect) in test_cases {
-            let ring = ring(2, &names);
+            let mut ring = VNodeHashRing::new(2);
+            for name in names {
+                ring.add(name.to_string());
+            }
+
             expect(ring.get(&"test_key"));
         }
     }
 
     #[test]
     fn get_with_replicas_spans_the_nodes() {
-        let test_cases: Vec<(Vec<&str>, usize, ExpectVNodes)> = vec![
+        let test_cases: Vec<(Vec<&str>, usize, fn(Option<Vec<VNode>>))> = vec![
             (vec![], 2, |vnodes| assert!(vnodes.is_none())),
             (vec!["default-pod-1", "default-pod-2"], 2, |vnodes| {
                 let vnodes = vnodes.unwrap();
                 assert_eq!(vnodes.len(), 3);
-                assert!(vnodes.iter().all(is_known_vnode));
+                assert!(vnodes.iter().all(|vnode| ["default-pod-1", "default-pod-2"]
+                    .contains(&vnode.name())
+                    && vnode.id < 2));
             }),
             (vec!["default-pod-1", "default-pod-2"], 3, |vnodes| {
                 let vnodes = vnodes.unwrap();
                 assert_eq!(vnodes.len(), 4);
-                assert!(vnodes.iter().all(is_known_vnode));
+                assert!(vnodes.iter().all(|vnode| ["default-pod-1", "default-pod-2"]
+                    .contains(&vnode.name())
+                    && vnode.id < 2));
             }),
             (vec!["default-pod-1", "default-pod-2"], 4, |vnodes| {
                 let vnodes = vnodes.unwrap();
                 assert_eq!(vnodes.len(), 5);
-                assert!(vnodes.iter().all(is_known_vnode));
+                assert!(vnodes.iter().all(|vnode| ["default-pod-1", "default-pod-2"]
+                    .contains(&vnode.name())
+                    && vnode.id < 2));
             }),
         ];
 
         for (names, replicas, expect) in test_cases {
-            let ring = ring(2, &names);
+            let mut ring = VNodeHashRing::new(2);
+            for name in names {
+                ring.add(name.to_string());
+            }
+
             expect(ring.get_with_replicas(&"test_key", replicas));
         }
     }
 
     #[test]
     fn add_order_does_not_affect_get_result() {
-        let ring_a = ring(150, &["default-pod-1", "default-pod-2", "default-pod-3"]);
-        let ring_b = ring(150, &["default-pod-3", "default-pod-1", "default-pod-2"]);
+        let mut ring_a = VNodeHashRing::new(150);
+        for name in ["default-pod-1", "default-pod-2", "default-pod-3"] {
+            ring_a.add(name.to_string());
+        }
+
+        let mut ring_b = VNodeHashRing::new(150);
+        for name in ["default-pod-3", "default-pod-1", "default-pod-2"] {
+            ring_b.add(name.to_string());
+        }
 
         for _ in 0..200 {
             let key = Uuid::new_v4().to_string();

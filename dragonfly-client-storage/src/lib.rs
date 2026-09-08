@@ -1971,10 +1971,10 @@ impl Storage {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use tempfile::tempdir;
-
-    type ExpectPiece = fn(Result<metadata::Piece>, Option<metadata::Piece>);
 
     const TASK_ID: &str = "d3add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14a";
     const CONTENT: &[u8] = b"piece content";
@@ -1986,12 +1986,6 @@ mod tests {
                 .await
                 .unwrap(),
         )
-    }
-
-    fn content_stream(
-        content: &'static [u8],
-    ) -> impl Stream<Item = std::io::Result<Bytes>> + Unpin {
-        futures::stream::iter([Ok(Bytes::from_static(content))])
     }
 
     #[tokio::test]
@@ -2025,7 +2019,7 @@ mod tests {
         });
 
         sleep(Duration::from_millis(100)).await;
-        let mut stream = content_stream(CONTENT);
+        let mut stream = futures::stream::iter([Ok(Bytes::from_static(CONTENT))]);
         storage
             .download_piece_from_source_finished(
                 piece_id.as_str(),
@@ -2104,7 +2098,7 @@ mod tests {
                     return false;
                 }
 
-                let mut stream = content_stream(CONTENT);
+                let mut stream = futures::stream::iter([Ok(Bytes::from_static(CONTENT))]);
                 storage
                     .download_piece_from_source_finished(
                         piece_id.as_str(),
@@ -2168,7 +2162,7 @@ mod tests {
         });
 
         sleep(Duration::from_millis(100)).await;
-        let mut stream = content_stream(CONTENT);
+        let mut stream = futures::stream::iter([Ok(Bytes::from_static(CONTENT))]);
         storage
             .download_persistent_piece_from_source_finished(
                 piece_id.as_str(),
@@ -2228,7 +2222,7 @@ mod tests {
             .download_piece_started(piece_id.as_str(), 0, 0, CONTENT.len() as u64)
             .await
             .unwrap();
-        let mut stream = content_stream(CONTENT);
+        let mut stream = futures::stream::iter([Ok(Bytes::from_static(CONTENT))]);
         storage
             .download_piece_from_source_finished(
                 piece_id.as_str(),
@@ -2253,7 +2247,7 @@ mod tests {
 
     #[tokio::test]
     async fn download_piece_from_parent_finished_checks_the_digest() {
-        let test_cases: Vec<(&str, ExpectPiece)> = vec![
+        let test_cases: Vec<(&str, fn(Result<metadata::Piece>, Option<metadata::Piece>))> = vec![
             ("", |result, stored| {
                 let piece = result.unwrap();
                 assert!(piece.is_finished());
@@ -2291,7 +2285,7 @@ mod tests {
                 .download_piece_started(piece_id.as_str(), 0, 0, CONTENT.len() as u64)
                 .await
                 .unwrap();
-            let mut stream = content_stream(CONTENT);
+            let mut stream = futures::stream::iter([Ok(Bytes::from_static(CONTENT))]);
             let result = storage
                 .download_piece_from_parent_finished(
                     piece_id.as_str(),

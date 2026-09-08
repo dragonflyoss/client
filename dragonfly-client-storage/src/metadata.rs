@@ -1687,48 +1687,16 @@ impl Metadata<RocksdbStorageEngine> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use tempfile::tempdir;
-
-    type TaskTransition = fn(&Metadata, &str) -> Result<()>;
-    type PrepareTask = fn(&Metadata, &str);
-    type ExpectPreparedTask = fn(&Task, bool);
-    type PersistentTaskTransition = fn(&Metadata, &str) -> Result<PersistentTask>;
-    type ExpectPersistentTask = fn(&PersistentTask);
-    type PersistentCacheTaskTransition = fn(&Metadata, &str) -> Result<PersistentCacheTask>;
-    type ExpectPersistentCacheTask = fn(&PersistentCacheTask);
-    type PieceSetup = fn(&Metadata, &str) -> Result<Piece>;
-    type PieceFailure = fn(&Metadata, &str) -> Result<()>;
-    type ExpectFailedPiece = fn(Piece, Option<Piece>);
 
     const TASK_ID: &str = "d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c";
     const OTHER_TASK_ID: &str = "a535b115f18d96870f0422ac891f91dd162f2f391e4778fb84279701fcd02dd1";
 
     fn metadata(dir: &Path) -> Metadata {
         Metadata::new(Arc::new(Config::default()), dir, &dir.join("log")).unwrap()
-    }
-
-    fn response_header() -> HeaderMap {
-        let mut header = HeaderMap::new();
-        header.insert("content-type", "text/plain".parse().unwrap());
-        header
-    }
-
-    fn started_piece(metadata: &Metadata, piece_id: &str) -> Result<Piece> {
-        metadata.download_piece_started(piece_id, 1, 0, 1024)
-    }
-
-    fn finished_piece(metadata: &Metadata, piece_id: &str) -> Result<Piece> {
-        started_piece(metadata, piece_id)?;
-        metadata.download_piece_finished(piece_id, 0, 1024, "crc32:1", None)
-    }
-
-    fn persistent_piece(metadata: &Metadata, piece_id: &str) -> Result<Piece> {
-        metadata.create_persistent_piece(piece_id, 1, 0, 1024, "crc32:1")
-    }
-
-    fn persistent_cache_piece(metadata: &Metadata, piece_id: &str) -> Result<Piece> {
-        metadata.create_persistent_cache_piece(piece_id, 1, 0, 1024, "crc32:1")
     }
 
     #[test]
@@ -1899,7 +1867,7 @@ mod tests {
 
     #[test]
     fn prepare_download_task_reuses_only_complete_unfailed_tasks() {
-        let test_cases: Vec<(PrepareTask, ExpectPreparedTask)> = vec![
+        let test_cases: Vec<(fn(&Metadata, &str), fn(&Task, bool))> = vec![
             (
                 |_, _| {},
                 |task, reused| {
@@ -1977,8 +1945,10 @@ mod tests {
         let task = metadata.download_task_failed(TASK_ID).unwrap();
         assert!(task.is_failed());
 
+        let mut response_header = HeaderMap::new();
+        response_header.insert("content-type", "text/plain".parse().unwrap());
         let task = metadata
-            .download_task_started(TASK_ID, 2048, 4096, Some(response_header()))
+            .download_task_started(TASK_ID, 2048, 4096, Some(response_header))
             .unwrap();
         assert!(!task.is_failed());
         assert_eq!(task.piece_length(), Some(2048));
@@ -2054,7 +2024,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let metadata = metadata(dir.path());
 
-        let test_cases: Vec<TaskTransition> = vec![
+        let test_cases: Vec<fn(&Metadata, &str) -> Result<()>> = vec![
             |metadata, id| metadata.download_task_finished(id).map(|_| ()),
             |metadata, id| metadata.download_task_failed(id).map(|_| ()),
             |metadata, id| metadata.prefetch_task_started(id).map(|_| ()),
@@ -2094,7 +2064,10 @@ mod tests {
 
     #[test]
     fn persistent_task_transitions_update_the_stored_task() {
-        let test_cases: Vec<(PersistentTaskTransition, ExpectPersistentTask)> = vec![
+        let test_cases: Vec<(
+            fn(&Metadata, &str) -> Result<PersistentTask>,
+            fn(&PersistentTask),
+        )> = vec![
             (
                 |metadata, id| metadata.create_persistent_task_finished(id),
                 |task| {
@@ -2230,7 +2203,10 @@ mod tests {
 
     #[test]
     fn persistent_cache_task_transitions_update_the_stored_task() {
-        let test_cases: Vec<(PersistentCacheTaskTransition, ExpectPersistentCacheTask)> = vec![
+        let test_cases: Vec<(
+            fn(&Metadata, &str) -> Result<PersistentCacheTask>,
+            fn(&PersistentCacheTask),
+        )> = vec![
             (
                 |metadata, id| metadata.create_persistent_cache_task_finished(id),
                 |task| {
@@ -2403,8 +2379,10 @@ mod tests {
         let task = metadata.download_cache_task_failed(TASK_ID).unwrap();
         assert!(task.is_failed());
 
+        let mut response_header = HeaderMap::new();
+        response_header.insert("content-type", "text/plain".parse().unwrap());
         let task = metadata
-            .download_cache_task_started(TASK_ID, 2048, 4096, Some(response_header()))
+            .download_cache_task_started(TASK_ID, 2048, 4096, Some(response_header))
             .unwrap();
         assert!(!task.is_failed());
         assert_eq!(task.piece_length(), Some(2048));
@@ -2502,9 +2480,13 @@ mod tests {
 
     #[test]
     fn piece_failures_delete_only_unfinished_pieces() {
-        let test_cases: Vec<(PieceSetup, PieceFailure, ExpectFailedPiece)> = vec![
+        let test_cases: Vec<(
+            fn(&Metadata, &str) -> Result<Piece>,
+            fn(&Metadata, &str) -> Result<()>,
+            fn(Piece, Option<Piece>),
+        )> = vec![
             (
-                started_piece,
+                |metadata, id| metadata.download_piece_started(id, 1, 0, 1024),
                 Metadata::download_piece_failed,
                 |piece, stored| {
                     assert!(!piece.is_finished());
@@ -2512,7 +2494,10 @@ mod tests {
                 },
             ),
             (
-                finished_piece,
+                |metadata, id| {
+                    metadata.download_piece_started(id, 1, 0, 1024)?;
+                    metadata.download_piece_finished(id, 0, 1024, "crc32:1", None)
+                },
                 Metadata::download_piece_failed,
                 |piece, stored| {
                     assert!(piece.is_finished());
@@ -2520,7 +2505,7 @@ mod tests {
                 },
             ),
             (
-                persistent_piece,
+                |metadata, id| metadata.create_persistent_piece(id, 1, 0, 1024, "crc32:1"),
                 Metadata::download_piece_failed,
                 |piece, stored| {
                     assert!(piece.is_finished());
@@ -2528,7 +2513,7 @@ mod tests {
                 },
             ),
             (
-                persistent_cache_piece,
+                |metadata, id| metadata.create_persistent_cache_piece(id, 1, 0, 1024, "crc32:1"),
                 Metadata::download_piece_failed,
                 |piece, stored| {
                     assert!(piece.is_finished());
@@ -2536,7 +2521,7 @@ mod tests {
                 },
             ),
             (
-                started_piece,
+                |metadata, id| metadata.download_piece_started(id, 1, 0, 1024),
                 Metadata::wait_for_piece_finished_failed,
                 |piece, stored| {
                     assert!(!piece.is_finished());
@@ -2544,7 +2529,10 @@ mod tests {
                 },
             ),
             (
-                finished_piece,
+                |metadata, id| {
+                    metadata.download_piece_started(id, 1, 0, 1024)?;
+                    metadata.download_piece_finished(id, 0, 1024, "crc32:1", None)
+                },
                 Metadata::wait_for_piece_finished_failed,
                 |piece, stored| {
                     assert!(piece.is_finished());
@@ -2552,7 +2540,7 @@ mod tests {
                 },
             ),
             (
-                persistent_piece,
+                |metadata, id| metadata.create_persistent_piece(id, 1, 0, 1024, "crc32:1"),
                 Metadata::wait_for_piece_finished_failed,
                 |piece, stored| {
                     assert!(piece.is_finished());
@@ -2560,7 +2548,7 @@ mod tests {
                 },
             ),
             (
-                persistent_cache_piece,
+                |metadata, id| metadata.create_persistent_cache_piece(id, 1, 0, 1024, "crc32:1"),
                 Metadata::wait_for_piece_finished_failed,
                 |piece, stored| {
                     assert!(piece.is_finished());

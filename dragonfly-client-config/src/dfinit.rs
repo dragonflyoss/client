@@ -380,52 +380,11 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use dragonfly_client_core::Error;
     use std::path::Path;
-
-    type ExpectConfig = fn(&Config);
-    type ExpectLoad = fn(Result<Config>);
-
-    fn config(runtime_config: Option<ContainerRuntimeConfig>) -> Config {
-        Config {
-            proxy: Proxy {
-                addr: "hello".to_string(),
-            },
-            container_runtime: ContainerRuntime {
-                config: runtime_config,
-            },
-        }
-    }
-
-    fn containerd(config: &Config) -> &Containerd {
-        let Some(ContainerRuntimeConfig::Containerd(containerd)) = &config.container_runtime.config
-        else {
-            unreachable!()
-        };
-        containerd
-    }
-
-    fn docker(config: &Config) -> &Docker {
-        let Some(ContainerRuntimeConfig::Docker(docker)) = &config.container_runtime.config else {
-            unreachable!()
-        };
-        docker
-    }
-
-    fn crio(config: &Config) -> &CRIO {
-        let Some(ContainerRuntimeConfig::CRIO(crio)) = &config.container_runtime.config else {
-            unreachable!()
-        };
-        crio
-    }
-
-    fn podman(config: &Config) -> &Podman {
-        let Some(ContainerRuntimeConfig::Podman(podman)) = &config.container_runtime.config else {
-            unreachable!()
-        };
-        podman
-    }
 
     #[test]
     fn default_dfinit_config_path_joins_config_dir() {
@@ -506,7 +465,14 @@ containerRuntime:
         ];
 
         for (runtime_config, expected) in test_cases {
-            let config = config(runtime_config);
+            let config = Config {
+                proxy: Proxy {
+                    addr: "hello".to_string(),
+                },
+                container_runtime: ContainerRuntime {
+                    config: runtime_config,
+                },
+            };
             let yaml = serde_yaml::to_string(&config).unwrap();
             assert_eq!(yaml.trim(), expected.trim());
         }
@@ -514,7 +480,7 @@ containerRuntime:
 
     #[test]
     fn config_deserializes_container_runtime_variant() {
-        let test_cases: Vec<(&str, ExpectConfig)> = vec![
+        let test_cases: Vec<(&str, fn(&Config))> = vec![
             ("{}", |config| {
                 assert_eq!(config.proxy.addr, "http://127.0.0.1:4001");
                 assert!(config.container_runtime.config.is_none());
@@ -548,7 +514,11 @@ containerRuntime:
                 "#,
                 |config| {
                     assert_eq!(config.proxy.addr, "hello");
-                    let containerd = containerd(config);
+                    let Some(ContainerRuntimeConfig::Containerd(containerd)) =
+                        &config.container_runtime.config
+                    else {
+                        unreachable!()
+                    };
                     assert_eq!(containerd.config_path, PathBuf::from("test_path"));
                     assert_eq!(
                         containerd.cri_plugin_id,
@@ -576,7 +546,11 @@ containerRuntime:
                 },
             ),
             ("containerRuntime:\n  containerd: {}\n", |config| {
-                let containerd = containerd(config);
+                let Some(ContainerRuntimeConfig::Containerd(containerd)) =
+                    &config.container_runtime.config
+                else {
+                    unreachable!()
+                };
                 assert_eq!(
                     containerd.config_path,
                     Path::new("/etc/containerd/config.toml")
@@ -588,14 +562,20 @@ containerRuntime:
             (
                 "containerRuntime:\n  docker:\n    configPath: test_path\n",
                 |config| {
-                    assert_eq!(docker(config).config_path, PathBuf::from("test_path"));
+                    let Some(ContainerRuntimeConfig::Docker(docker)) =
+                        &config.container_runtime.config
+                    else {
+                        unreachable!()
+                    };
+                    assert_eq!(docker.config_path, PathBuf::from("test_path"));
                 },
             ),
             ("containerRuntime:\n  docker: {}\n", |config| {
-                assert_eq!(
-                    docker(config).config_path,
-                    Path::new("/etc/docker/daemon.json")
-                );
+                let Some(ContainerRuntimeConfig::Docker(docker)) = &config.container_runtime.config
+                else {
+                    unreachable!()
+                };
+                assert_eq!(docker.config_path, Path::new("/etc/docker/daemon.json"));
             }),
             (
                 r#"
@@ -612,7 +592,10 @@ containerRuntime:
                         location: location2
                 "#,
                 |config| {
-                    let crio = crio(config);
+                    let Some(ContainerRuntimeConfig::CRIO(crio)) = &config.container_runtime.config
+                    else {
+                        unreachable!()
+                    };
                     assert_eq!(crio.config_path, PathBuf::from("test_path"));
                     assert_eq!(crio.unqualified_search_registries, vec!["reg1", "reg2"]);
                     assert_eq!(
@@ -631,7 +614,10 @@ containerRuntime:
                 },
             ),
             ("containerRuntime:\n  crio: {}\n", |config| {
-                let crio = crio(config);
+                let Some(ContainerRuntimeConfig::CRIO(crio)) = &config.container_runtime.config
+                else {
+                    unreachable!()
+                };
                 assert_eq!(
                     crio.config_path,
                     Path::new("/etc/containers/registries.conf")
@@ -661,7 +647,11 @@ containerRuntime:
                         location: location2
                 "#,
                 |config| {
-                    let podman = podman(config);
+                    let Some(ContainerRuntimeConfig::Podman(podman)) =
+                        &config.container_runtime.config
+                    else {
+                        unreachable!()
+                    };
                     assert_eq!(podman.config_path, PathBuf::from("test_path"));
                     assert_eq!(podman.unqualified_search_registries, vec!["reg1", "reg2"]);
                     assert_eq!(
@@ -680,7 +670,10 @@ containerRuntime:
                 },
             ),
             ("containerRuntime:\n  podman: {}\n", |config| {
-                let podman = podman(config);
+                let Some(ContainerRuntimeConfig::Podman(podman)) = &config.container_runtime.config
+                else {
+                    unreachable!()
+                };
                 assert_eq!(
                     podman.config_path,
                     Path::new("/etc/containers/registries.conf")
@@ -705,12 +698,17 @@ containerRuntime:
 
     #[test]
     fn load_reads_file_and_wraps_parse_errors() {
-        let test_cases: Vec<(&str, ExpectLoad)> = vec![
+        let test_cases: Vec<(&str, fn(Result<Config>))> = vec![
             (
                 "containerRuntime:\n  docker:\n    configPath: test_path\n",
                 |result| {
                     let config = result.unwrap();
-                    assert_eq!(docker(&config).config_path, PathBuf::from("test_path"));
+                    let Some(ContainerRuntimeConfig::Docker(docker)) =
+                        &config.container_runtime.config
+                    else {
+                        unreachable!()
+                    };
+                    assert_eq!(docker.config_path, PathBuf::from("test_path"));
                 },
             ),
             ("containerRuntime: [", |result| {

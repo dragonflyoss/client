@@ -304,18 +304,9 @@ impl<K, V> Drop for LruCache<K, V> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
-
-    type Access = fn(&mut LruCache<String, i32>, &str);
-    type Entries = Vec<(&'static str, Option<i32>)>;
-
-    fn cache(capacity: usize, entries: &[(&str, i32)]) -> LruCache<String, i32> {
-        let mut cache = LruCache::new(capacity);
-        for (key, value) in entries {
-            cache.put(key.to_string(), *value);
-        }
-        cache
-    }
 
     #[test]
     fn new_sets_capacity_and_starts_empty() {
@@ -340,7 +331,7 @@ mod tests {
             ("key4", 44, Some(4)),
         ];
 
-        let mut cache = cache(3, &[]);
+        let mut cache = LruCache::new(3);
         for (key, value, expected) in test_cases {
             let replaced = cache.put(key.to_string(), value);
             assert_eq!(replaced, expected);
@@ -373,7 +364,11 @@ mod tests {
         ];
 
         for (entries, key, expected) in test_cases {
-            let mut cache = cache(3, &entries);
+            let mut cache = LruCache::new(3);
+            for (put_key, value) in entries {
+                cache.put(put_key.to_string(), value);
+            }
+
             assert_eq!(cache.peek(key).copied(), expected);
             assert_eq!(cache.contains(key), expected.is_some());
             assert_eq!(cache.get(key).copied(), expected);
@@ -382,7 +377,10 @@ mod tests {
 
     #[test]
     fn get_and_put_promote_key_peek_and_contains_do_not() {
-        let test_cases: Vec<(Access, Entries)> = vec![
+        let test_cases: Vec<(
+            fn(&mut LruCache<String, i32>, &str),
+            Vec<(&'static str, Option<i32>)>,
+        )> = vec![
             (
                 |cache, key| {
                     cache.get(key);
@@ -430,7 +428,11 @@ mod tests {
         ];
 
         for (access, expected_entries) in test_cases {
-            let mut cache = cache(3, &[("key1", 1), ("key2", 2), ("key3", 3)]);
+            let mut cache = LruCache::new(3);
+            for (key, value) in [("key1", 1), ("key2", 2), ("key3", 3)] {
+                cache.put(key.to_string(), value);
+            }
+
             access(&mut cache, "key1");
             cache.put("key4".to_string(), 4);
 
@@ -455,7 +457,11 @@ mod tests {
         ];
 
         for (entries, expected_order) in test_cases {
-            let mut cache = cache(3, &entries);
+            let mut cache = LruCache::new(3);
+            for (key, value) in entries {
+                cache.put(key.to_string(), value);
+            }
+
             for (key, value) in expected_order {
                 assert_eq!(cache.pop_lru(), Some((key.to_string(), value)));
             }
@@ -475,7 +481,11 @@ mod tests {
             ("key2", Some(("key2".to_string(), 2))),
         ];
 
-        let mut cache = cache(3, &[("key1", 1), ("key2", 2), ("key3", 3)]);
+        let mut cache = LruCache::new(3);
+        for (key, value) in [("key1", 1), ("key2", 2), ("key3", 3)] {
+            cache.put(key.to_string(), value);
+        }
+
         for (key, expected) in test_cases {
             assert_eq!(cache.pop(key), expected);
             assert!(!cache.contains(key));

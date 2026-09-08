@@ -112,7 +112,7 @@ impl Docker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     const INVALID_DAEMON_JSON: &str = r#"
@@ -121,17 +121,6 @@ mod tests {
             "experimental": true,
         }
         "#;
-
-    fn docker(config_path: &Path, proxy_addr: &str) -> Docker {
-        Docker::new(
-            dfinit::Docker {
-                config_path: config_path.to_path_buf(),
-            },
-            dfinit::Proxy {
-                addr: proxy_addr.into(),
-            },
-        )
-    }
 
     async fn write_daemon_json(temp_dir: &TempDir, contents: Option<&str>) -> PathBuf {
         let config_path = temp_dir.path().join("docker").join("daemon.json");
@@ -180,7 +169,16 @@ mod tests {
         for (initial_config, expected) in test_cases {
             let temp_dir = TempDir::new().unwrap();
             let config_path = write_daemon_json(&temp_dir, initial_config).await;
-            let result = docker(&config_path, "http://127.0.0.1:5000").run().await;
+            let result = Docker::new(
+                dfinit::Docker {
+                    config_path: config_path.clone(),
+                },
+                dfinit::Proxy {
+                    addr: "http://127.0.0.1:5000".into(),
+                },
+            )
+            .run()
+            .await;
             assert!(result.is_ok());
 
             let contents = fs::read_to_string(&config_path).await.unwrap();
@@ -213,7 +211,14 @@ mod tests {
         for (initial_config, proxy_addr, expected) in test_cases {
             let temp_dir = TempDir::new().unwrap();
             let config_path = write_daemon_json(&temp_dir, initial_config).await;
-            let result = docker(&config_path, proxy_addr).run().await;
+            let result = Docker::new(
+                dfinit::Docker { config_path },
+                dfinit::Proxy {
+                    addr: proxy_addr.into(),
+                },
+            )
+            .run()
+            .await;
             assert_eq!(result.unwrap_err().to_string(), expected);
         }
     }

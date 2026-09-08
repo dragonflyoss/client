@@ -306,8 +306,6 @@ mod tests {
     use serde::{Deserialize, Serialize};
     use tempfile::tempdir;
 
-    type Operation = fn(&RocksdbStorageEngine) -> Result<()>;
-
     #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
     struct Object {
         id: String,
@@ -332,55 +330,6 @@ mod tests {
             .unwrap()
     }
 
-    fn object(id: &str, value: i32) -> Object {
-        Object {
-            id: id.to_string(),
-            value,
-        }
-    }
-
-    fn put_all(engine: &RocksdbStorageEngine, objects: &[Object]) {
-        for object in objects {
-            engine.put(object.id.as_bytes(), object).unwrap();
-        }
-    }
-
-    fn entries(objects: &[Object]) -> Vec<(Box<[u8]>, Object)> {
-        objects
-            .iter()
-            .map(|object| (object.id.as_bytes().into(), object.clone()))
-            .collect()
-    }
-
-    fn collect<I>(iter: I) -> Vec<(Box<[u8]>, Object)>
-    where
-        I: Iterator<Item = Result<(Box<[u8]>, Object)>>,
-    {
-        iter.collect::<Result<Vec<_>>>().unwrap()
-    }
-
-    fn collect_raw<I>(iter: I) -> Vec<(Box<[u8]>, Object)>
-    where
-        I: Iterator<Item = Result<(Box<[u8]>, Box<[u8]>)>>,
-    {
-        iter.map(|ele| {
-            let (key, value) = ele.unwrap();
-            (key, Object::deserialize_from(&value).unwrap())
-        })
-        .collect()
-    }
-
-    fn stored_ids(engine: &RocksdbStorageEngine) -> Vec<String> {
-        collect(engine.iter::<Object>().unwrap())
-            .into_iter()
-            .map(|(_, object)| object.id)
-            .collect()
-    }
-
-    fn prefixed_key(prefix_char: &str, suffix: &str) -> Vec<u8> {
-        format!("{}{suffix}", prefix_char.repeat(64)).into_bytes()
-    }
-
     #[test]
     fn get_and_exists_follow_put_and_delete() {
         let dir = tempdir().unwrap();
@@ -389,12 +338,20 @@ mod tests {
         assert_eq!(engine.get::<Object>(key).unwrap(), None);
         assert!(!engine.exists::<Object>(key).unwrap());
 
-        engine.put(key, &object("1", 42)).unwrap();
-        assert_eq!(engine.get::<Object>(key).unwrap(), Some(object("1", 42)));
+        let object = Object {
+            id: "1".to_string(),
+            value: 42,
+        };
+        engine.put(key, &object).unwrap();
+        assert_eq!(engine.get::<Object>(key).unwrap(), Some(object));
         assert!(engine.exists::<Object>(key).unwrap());
 
-        engine.put(key, &object("1", 43)).unwrap();
-        assert_eq!(engine.get::<Object>(key).unwrap(), Some(object("1", 43)));
+        let object = Object {
+            id: "1".to_string(),
+            value: 43,
+        };
+        engine.put(key, &object).unwrap();
+        assert_eq!(engine.get::<Object>(key).unwrap(), Some(object));
 
         engine.delete::<Object>(key).unwrap();
         assert_eq!(engine.get::<Object>(key).unwrap(), None);
@@ -408,13 +365,33 @@ mod tests {
     fn multi_get_returns_values_in_key_order() {
         let dir = tempdir().unwrap();
         let engine = open(dir.path(), false);
-        put_all(&engine, &[object("1", 1), object("2", 2)]);
+        for (id, value) in [("1", 1), ("2", 2)] {
+            engine
+                .put(
+                    id.as_bytes(),
+                    &Object {
+                        id: id.to_string(),
+                        value,
+                    },
+                )
+                .unwrap();
+        }
 
         let test_cases = vec![
             (vec![], vec![]),
             (
                 vec!["2", "missing", "1"],
-                vec![Some(object("2", 2)), None, Some(object("1", 1))],
+                vec![
+                    Some(Object {
+                        id: "2".to_string(),
+                        value: 2,
+                    }),
+                    None,
+                    Some(Object {
+                        id: "1".to_string(),
+                        value: 1,
+                    }),
+                ],
             ),
         ];
 
@@ -436,10 +413,30 @@ mod tests {
         for (deleted_ids, expected_ids) in test_cases {
             let dir = tempdir().unwrap();
             let engine = open(dir.path(), false);
-            put_all(&engine, &[object("1", 1), object("2", 2), object("3", 3)]);
+            for (id, value) in [("1", 1), ("2", 2), ("3", 3)] {
+                engine
+                    .put(
+                        id.as_bytes(),
+                        &Object {
+                            id: id.to_string(),
+                            value,
+                        },
+                    )
+                    .unwrap();
+            }
+
             let keys: Vec<&[u8]> = deleted_ids.iter().map(|id| id.as_bytes()).collect();
             engine.batch_delete::<Object>(keys).unwrap();
-            assert_eq!(stored_ids(&engine), expected_ids);
+
+            let stored_ids: Vec<String> = engine
+                .iter::<Object>()
+                .unwrap()
+                .map(|ele| {
+                    let (_, object) = ele.unwrap();
+                    object.id
+                })
+                .collect();
+            assert_eq!(stored_ids, expected_ids);
         }
     }
 
@@ -448,19 +445,63 @@ mod tests {
         let test_cases = vec![
             (vec![], vec![]),
             (
-                vec![object("3", 30), object("1", 10), object("2", 20)],
-                vec![object("1", 10), object("2", 20), object("3", 30)],
+                vec![
+                    Object {
+                        id: "3".to_string(),
+                        value: 30,
+                    },
+                    Object {
+                        id: "1".to_string(),
+                        value: 10,
+                    },
+                    Object {
+                        id: "2".to_string(),
+                        value: 20,
+                    },
+                ],
+                vec![
+                    Object {
+                        id: "1".to_string(),
+                        value: 10,
+                    },
+                    Object {
+                        id: "2".to_string(),
+                        value: 20,
+                    },
+                    Object {
+                        id: "3".to_string(),
+                        value: 30,
+                    },
+                ],
             ),
         ];
 
         for (objects, expected) in test_cases {
             let dir = tempdir().unwrap();
             let engine = open(dir.path(), false);
-            put_all(&engine, &objects);
-            let iterated = collect(engine.iter::<Object>().unwrap());
-            let raw_iterated = collect_raw(engine.iter_raw::<Object>().unwrap());
-            assert_eq!(iterated, entries(&expected));
-            assert_eq!(raw_iterated, entries(&expected));
+            for object in &objects {
+                engine.put(object.id.as_bytes(), object).unwrap();
+            }
+
+            let expected: Vec<(Box<[u8]>, Object)> = expected
+                .iter()
+                .map(|object| (object.id.as_bytes().into(), object.clone()))
+                .collect();
+            let iterated = engine
+                .iter::<Object>()
+                .unwrap()
+                .collect::<Result<Vec<_>>>()
+                .unwrap();
+            let raw_iterated: Vec<(Box<[u8]>, Object)> = engine
+                .iter_raw::<Object>()
+                .unwrap()
+                .map(|ele| {
+                    let (key, value) = ele.unwrap();
+                    (key, Object::deserialize_from(&value).unwrap())
+                })
+                .collect();
+            assert_eq!(iterated, expected);
+            assert_eq!(raw_iterated, expected);
         }
     }
 
@@ -468,27 +509,68 @@ mod tests {
     fn prefix_iter_yields_only_objects_under_the_prefix() {
         let dir = tempdir().unwrap();
         let engine = open(dir.path(), false);
-        let prefixed_entries = vec![
-            (prefixed_key("a", "_suffix1"), object("a1", 100)),
-            (prefixed_key("a", "_suffix2"), object("a2", 200)),
-            (prefixed_key("b", "_suffix1"), object("b1", 300)),
-            (prefixed_key("b", "_suffix2"), object("b2", 400)),
-        ];
-        for (key, object) in &prefixed_entries {
-            engine.put(key, object).unwrap();
+        for (prefix_char, suffix, id, value) in [
+            ("a", "_suffix1", "a1", 100),
+            ("a", "_suffix2", "a2", 200),
+            ("b", "_suffix1", "b1", 300),
+            ("b", "_suffix2", "b2", 400),
+        ] {
+            engine
+                .put(
+                    format!("{}{suffix}", prefix_char.repeat(64)).as_bytes(),
+                    &Object {
+                        id: id.to_string(),
+                        value,
+                    },
+                )
+                .unwrap();
         }
 
         let test_cases = vec![
-            ("a", vec![object("a1", 100), object("a2", 200)]),
-            ("b", vec![object("b1", 300), object("b2", 400)]),
+            (
+                "a",
+                vec![
+                    Object {
+                        id: "a1".to_string(),
+                        value: 100,
+                    },
+                    Object {
+                        id: "a2".to_string(),
+                        value: 200,
+                    },
+                ],
+            ),
+            (
+                "b",
+                vec![
+                    Object {
+                        id: "b1".to_string(),
+                        value: 300,
+                    },
+                    Object {
+                        id: "b2".to_string(),
+                        value: 400,
+                    },
+                ],
+            ),
             ("0", vec![]),
         ];
 
         for (prefix_char, expected) in test_cases {
             let prefix = prefix_char.repeat(64);
-            let iterated = collect(engine.prefix_iter::<Object>(prefix.as_bytes()).unwrap());
-            let raw_iterated =
-                collect_raw(engine.prefix_iter_raw::<Object>(prefix.as_bytes()).unwrap());
+            let iterated = engine
+                .prefix_iter::<Object>(prefix.as_bytes())
+                .unwrap()
+                .collect::<Result<Vec<_>>>()
+                .unwrap();
+            let raw_iterated: Vec<(Box<[u8]>, Object)> = engine
+                .prefix_iter_raw::<Object>(prefix.as_bytes())
+                .unwrap()
+                .map(|ele| {
+                    let (key, value) = ele.unwrap();
+                    (key, Object::deserialize_from(&value).unwrap())
+                })
+                .collect();
             assert_eq!(raw_iterated, iterated);
             assert!(iterated
                 .iter()
@@ -504,7 +586,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let engine = open(dir.path(), false);
 
-        let test_cases: Vec<Operation> = vec![
+        let test_cases: Vec<fn(&RocksdbStorageEngine) -> Result<()>> = vec![
             |engine| engine.get::<UnregisteredObject>(b"1").map(|_| ()),
             |engine| {
                 engine
@@ -543,12 +625,29 @@ mod tests {
 
     #[test]
     fn open_keeps_or_destroys_the_existing_data() {
-        let test_cases = vec![(true, Some(object("1", 42))), (false, None)];
+        let test_cases = vec![
+            (
+                true,
+                Some(Object {
+                    id: "1".to_string(),
+                    value: 42,
+                }),
+            ),
+            (false, None),
+        ];
 
         for (keep, expected) in test_cases {
             let dir = tempdir().unwrap();
             let engine = open(dir.path(), false);
-            engine.put(b"1", &object("1", 42)).unwrap();
+            engine
+                .put(
+                    b"1",
+                    &Object {
+                        id: "1".to_string(),
+                        value: 42,
+                    },
+                )
+                .unwrap();
             drop(engine);
 
             let engine = open(dir.path(), keep);

@@ -164,33 +164,10 @@ pub fn validate_ranged_response(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use reqwest::header::RANGE;
-
-    type ExpectHeaderMap = fn(Result<HeaderMap>);
-    type ExpectRange = fn(Result<Option<Range>>);
-    type ExpectParsedRange = fn(Result<Range>);
-    type ExpectValidated = fn(Result<()>);
-
-    fn header(name: HeaderName, value: Option<&str>) -> HeaderMap {
-        let mut header = HeaderMap::new();
-        if let Some(value) = value {
-            header.insert(name, HeaderValue::from_str(value).unwrap());
-        }
-        header
-    }
-
-    fn range(start: u64, length: u64) -> Option<Range> {
-        Some(Range { start, length })
-    }
-
-    fn expect_ok(result: Result<()>) {
-        assert!(result.is_ok());
-    }
-
-    fn expect_backend_error(result: Result<()>) {
-        assert!(matches!(result, Err(Error::BackendError(_))));
-    }
 
     #[test]
     fn headermap_to_hashmap_keeps_visible_ascii_values() {
@@ -207,7 +184,7 @@ mod tests {
 
     #[test]
     fn hashmap_to_headermap_rejects_invalid_names_and_values() {
-        let test_cases: Vec<(Vec<(&str, &str)>, ExpectHeaderMap)> = vec![
+        let test_cases: Vec<(Vec<(&str, &str)>, fn(Result<HeaderMap>))> = vec![
             (
                 vec![
                     ("Content-Type", "application/json"),
@@ -286,10 +263,16 @@ mod tests {
 
     #[test]
     fn get_range_parses_the_range_header_when_present() {
-        let test_cases: Vec<(Option<&str>, ExpectRange)> = vec![
+        let test_cases: Vec<(Option<&str>, fn(Result<Option<Range>>))> = vec![
             (None, |result| assert_eq!(result.unwrap(), None)),
             (Some("bytes=0-100"), |result| {
-                assert_eq!(result.unwrap(), range(0, 101))
+                assert_eq!(
+                    result.unwrap(),
+                    Some(Range {
+                        start: 0,
+                        length: 101
+                    })
+                )
             }),
             (Some("invalid"), |result| {
                 assert!(matches!(result, Err(Error::ExternalError(_))))
@@ -297,13 +280,18 @@ mod tests {
         ];
 
         for (range_header, expect) in test_cases {
-            expect(get_range(&header(RANGE, range_header), 200));
+            let mut header = HeaderMap::new();
+            if let Some(range_header) = range_header {
+                header.insert(RANGE, HeaderValue::from_str(range_header).unwrap());
+            }
+
+            expect(get_range(&header, 200));
         }
     }
 
     #[test]
     fn parse_range_header_returns_the_first_satisfiable_range() {
-        let test_cases: Vec<(&str, ExpectParsedRange)> = vec![
+        let test_cases: Vec<(&str, fn(Result<Range>))> = vec![
             ("bytes=0-100", |result| {
                 assert_eq!(
                     result.unwrap(),
@@ -364,73 +352,125 @@ mod tests {
 
     #[test]
     fn validate_ranged_response_requires_a_matching_content_range() {
-        let test_cases: Vec<(Option<Range>, StatusCode, Option<&str>, ExpectValidated)> = vec![
-            (None, StatusCode::OK, None, expect_ok),
-            (range(10, 20), StatusCode::NOT_FOUND, None, expect_ok),
-            (range(0, 20), StatusCode::OK, None, expect_ok),
-            (range(10, 20), StatusCode::OK, None, expect_backend_error),
+        let test_cases: Vec<(Option<Range>, StatusCode, Option<&str>, fn(Result<()>))> = vec![
+            (None, StatusCode::OK, None, |result| assert!(result.is_ok())),
             (
-                range(10, 20),
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                StatusCode::NOT_FOUND,
+                None,
+                |result| assert!(result.is_ok()),
+            ),
+            (
+                Some(Range {
+                    start: 0,
+                    length: 20,
+                }),
+                StatusCode::OK,
+                None,
+                |result| assert!(result.is_ok()),
+            ),
+            (
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                StatusCode::OK,
+                None,
+                |result| assert!(matches!(result, Err(Error::BackendError(_)))),
+            ),
+            (
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
                 StatusCode::PARTIAL_CONTENT,
                 Some("bytes 10-29/100"),
-                expect_ok,
+                |result| assert!(result.is_ok()),
             ),
             (
-                range(10, 20),
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
                 StatusCode::PARTIAL_CONTENT,
                 None,
-                expect_backend_error,
+                |result| assert!(matches!(result, Err(Error::BackendError(_)))),
             ),
             (
-                range(10, 20),
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
                 StatusCode::PARTIAL_CONTENT,
                 Some("bytes */100"),
-                expect_backend_error,
+                |result| assert!(matches!(result, Err(Error::BackendError(_)))),
             ),
             (
-                range(10, 20),
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
                 StatusCode::PARTIAL_CONTENT,
                 Some("bytes 10-/100"),
-                expect_backend_error,
+                |result| assert!(matches!(result, Err(Error::BackendError(_)))),
             ),
             (
-                range(10, 20),
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
                 StatusCode::PARTIAL_CONTENT,
                 Some("10-29/100"),
-                expect_backend_error,
+                |result| assert!(matches!(result, Err(Error::BackendError(_)))),
             ),
             (
-                range(10, 20),
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
                 StatusCode::PARTIAL_CONTENT,
                 Some("bytes 10-29"),
-                expect_backend_error,
+                |result| assert!(matches!(result, Err(Error::BackendError(_)))),
             ),
             (
-                range(10, 20),
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
                 StatusCode::PARTIAL_CONTENT,
                 Some("bytes 0-29/100"),
-                expect_backend_error,
+                |result| assert!(matches!(result, Err(Error::BackendError(_)))),
             ),
             (
-                range(10, 20),
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
                 StatusCode::PARTIAL_CONTENT,
                 Some("bytes 10-30/100"),
-                expect_backend_error,
+                |result| assert!(matches!(result, Err(Error::BackendError(_)))),
             ),
             (
-                range(10, 20),
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
                 StatusCode::PARTIAL_CONTENT,
                 Some("bytes 0-99/100"),
-                expect_backend_error,
+                |result| assert!(matches!(result, Err(Error::BackendError(_)))),
             ),
         ];
 
         for (range, status_code, content_range, expect) in test_cases {
-            expect(validate_ranged_response(
-                range,
-                status_code,
-                &header(CONTENT_RANGE, content_range),
-            ));
+            let mut header = HeaderMap::new();
+            if let Some(content_range) = content_range {
+                header.insert(CONTENT_RANGE, HeaderValue::from_str(content_range).unwrap());
+            }
+
+            expect(validate_ranged_response(range, status_code, &header));
         }
     }
 }

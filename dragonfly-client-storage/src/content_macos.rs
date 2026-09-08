@@ -956,7 +956,6 @@ impl Content {
 mod tests {
     use super::*;
     use crate::content::DEFAULT_TASK_DIR;
-    use crate::io::RangeReader;
     use dragonfly_client_config::dfdaemon::WritebackMode;
     use std::io::Cursor;
     use tempfile::tempdir;
@@ -964,16 +963,6 @@ mod tests {
 
     async fn content(config: Config, dir: &Path) -> Content {
         Content::new(Arc::new(config), dir).await.unwrap()
-    }
-
-    fn stream(data: &'static [u8]) -> impl Stream<Item = std::io::Result<Bytes>> + Unpin {
-        futures::stream::iter([Ok(Bytes::from_static(data))])
-    }
-
-    async fn read_all(mut reader: RangeReader) -> Vec<u8> {
-        let mut buffer = Vec::new();
-        reader.read_to_end(&mut buffer).await.unwrap();
-        buffer
     }
 
     #[tokio::test]
@@ -1079,7 +1068,12 @@ mod tests {
 
             let data = b"hello, world!";
             let response = content
-                .write_piece_from_stream(task_id, 0, 13, &mut stream(data))
+                .write_piece_from_stream(
+                    task_id,
+                    0,
+                    13,
+                    &mut futures::stream::iter([Ok(Bytes::from_static(data))]),
+                )
                 .await
                 .unwrap();
             assert_eq!(response.length, 13);
@@ -1088,8 +1082,10 @@ mod tests {
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
 
-            let reader = content.read_piece(task_id, 0, 13, None).await.unwrap();
-            assert_eq!(read_all(reader).await, data);
+            let mut reader = content.read_piece(task_id, 0, 13, None).await.unwrap();
+            let mut buffer = Vec::new();
+            reader.read_to_end(&mut buffer).await.unwrap();
+            assert_eq!(buffer, data);
         }
     }
 
@@ -1103,7 +1099,12 @@ mod tests {
 
         let data = b"hello, world!";
         content
-            .write_piece_from_stream(task_id, 0, 13, &mut stream(data))
+            .write_piece_from_stream(
+                task_id,
+                0,
+                13,
+                &mut futures::stream::iter([Ok(Bytes::from_static(data))]),
+            )
             .await
             .unwrap();
 
@@ -1122,8 +1123,10 @@ mod tests {
             );
         }
 
-        let reader = content.read_piece(task_id, 0, 13, None).await.unwrap();
-        assert_eq!(read_all(reader).await, data);
+        let mut reader = content.read_piece(task_id, 0, 13, None).await.unwrap();
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await.unwrap();
+        assert_eq!(buffer, data);
     }
 
     #[tokio::test]
@@ -1191,7 +1194,12 @@ mod tests {
         let task_id = "c794a3bbae81e06d1c8d362509bdd42a7c105b0fb28d80ffe27f94b8f04fc845";
         content.create_task(task_id, 13).await.unwrap();
         content
-            .write_piece_from_stream(task_id, 0, 13, &mut stream(b"hello, world!"))
+            .write_piece_from_stream(
+                task_id,
+                0,
+                13,
+                &mut futures::stream::iter([Ok(Bytes::from_static(b"hello, world!"))]),
+            )
             .await
             .unwrap();
 
@@ -1214,8 +1222,10 @@ mod tests {
         ];
 
         for (range, expected) in test_cases {
-            let reader = content.read_piece(task_id, 0, 13, range).await.unwrap();
-            assert_eq!(read_all(reader).await, expected);
+            let mut reader = content.read_piece(task_id, 0, 13, range).await.unwrap();
+            let mut buffer = Vec::new();
+            reader.read_to_end(&mut buffer).await.unwrap();
+            assert_eq!(buffer, expected);
         }
     }
 
@@ -1228,7 +1238,12 @@ mod tests {
         content.create_task(task_id, 4).await.unwrap();
 
         let response = content
-            .write_piece_from_stream(task_id, 0, 4, &mut stream(b"test"))
+            .write_piece_from_stream(
+                task_id,
+                0,
+                4,
+                &mut futures::stream::iter([Ok(Bytes::from_static(b"test"))]),
+            )
             .await
             .unwrap();
         assert_eq!(response.length, 4);
@@ -1371,11 +1386,13 @@ mod tests {
         ];
 
         for (range, expected) in test_cases {
-            let reader = content
+            let mut reader = content
                 .read_persistent_piece(task_id, 0, 13, range)
                 .await
                 .unwrap();
-            assert_eq!(read_all(reader).await, expected);
+            let mut buffer = Vec::new();
+            reader.read_to_end(&mut buffer).await.unwrap();
+            assert_eq!(buffer, expected);
         }
     }
 
@@ -1395,7 +1412,12 @@ mod tests {
         assert_eq!(response.hash, "3632233996");
 
         let response = content
-            .write_persistent_piece_from_stream(task_id, 0, 4, &mut stream(b"test"))
+            .write_persistent_piece_from_stream(
+                task_id,
+                0,
+                4,
+                &mut futures::stream::iter([Ok(Bytes::from_static(b"test"))]),
+            )
             .await
             .unwrap();
         assert_eq!(response.length, 4);
@@ -1562,11 +1584,13 @@ mod tests {
         ];
 
         for (range, expected) in test_cases {
-            let reader = content
+            let mut reader = content
                 .read_persistent_cache_piece(task_id, 0, 13, range)
                 .await
                 .unwrap();
-            assert_eq!(read_all(reader).await, expected);
+            let mut buffer = Vec::new();
+            reader.read_to_end(&mut buffer).await.unwrap();
+            assert_eq!(buffer, expected);
         }
     }
 
@@ -1589,7 +1613,12 @@ mod tests {
         assert_eq!(response.hash, "3632233996");
 
         let response = content
-            .write_persistent_cache_piece_from_stream(task_id, 0, 4, &mut stream(b"test"))
+            .write_persistent_cache_piece_from_stream(
+                task_id,
+                0,
+                4,
+                &mut futures::stream::iter([Ok(Bytes::from_static(b"test"))]),
+            )
             .await
             .unwrap();
         assert_eq!(response.length, 4);

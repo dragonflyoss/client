@@ -926,6 +926,8 @@ fn remove_sensitive_headers(headers: &mut HeaderMap, next: &Url, previous: &Url)
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use dragonfly_client_util::tls::{
         install_crypto_provider, load_certs_from_pem, load_key_from_pem,
@@ -937,14 +939,8 @@ mod tests {
     use tokio_rustls::TlsAcceptor;
     use wiremock::{
         matchers::{header, method, path},
-        Mock, MockBuilder, MockServer, ResponseTemplate,
+        Mock, MockServer, ResponseTemplate,
     };
-
-    type ExpectStat = fn(StatResponse);
-    type ExpectGet = fn(GetResponse<Body>, &str);
-    type ExpectHeaders = fn(Result<()>, &HeaderMap);
-    type RedirectLocation = fn(&str) -> String;
-    type CustomHeaders = Vec<(&'static str, &'static str)>;
 
     const SERVER_CERT: &str = r#"""
 -----BEGIN CERTIFICATE-----
@@ -1052,79 +1048,6 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
 -----END CERTIFICATE-----
 """#;
 
-    fn http(scheme: &str) -> HTTP {
-        HTTP::new(scheme, None, 1, true, Duration::from_secs(600), true).unwrap()
-    }
-
-    fn stat_request(url: &str, client_cert: Option<Vec<CertificateDer<'static>>>) -> StatRequest {
-        StatRequest {
-            task_id: "test".to_string(),
-            url: url.to_string(),
-            http_header: Some(HeaderMap::new()),
-            timeout: Duration::from_secs(5),
-            client_cert,
-            object_storage: None,
-            hdfs: None,
-            hugging_face: None,
-            model_scope: None,
-            open_csg: None,
-        }
-    }
-
-    fn get_request(
-        url: &str,
-        range: Option<Range>,
-        client_cert: Option<Vec<CertificateDer<'static>>>,
-    ) -> GetRequest {
-        GetRequest {
-            task_id: "test".to_string(),
-            piece_id: "test".to_string(),
-            url: url.to_string(),
-            range,
-            http_header: Some(HeaderMap::new()),
-            timeout: Duration::from_secs(5),
-            client_cert,
-            object_storage: None,
-            hdfs: None,
-            hugging_face: None,
-            model_scope: None,
-            open_csg: None,
-        }
-    }
-
-    fn exists_request(url: &str) -> ExistsRequest {
-        ExistsRequest {
-            task_id: "test".to_string(),
-            url: url.to_string(),
-            http_header: Some(HeaderMap::new()),
-            timeout: Duration::from_secs(5),
-            client_cert: None,
-            object_storage: None,
-            hdfs: None,
-            hugging_face: None,
-            model_scope: None,
-            open_csg: None,
-        }
-    }
-
-    fn header_map(entries: &[(&'static str, &'static str)]) -> HeaderMap {
-        let mut headers = HeaderMap::new();
-        for &(name, value) in entries {
-            headers.insert(name, HeaderValue::from_static(value));
-        }
-        headers
-    }
-
-    fn mock_get(url_path: &str) -> MockBuilder {
-        Mock::given(method("GET")).and(path(url_path))
-    }
-
-    async fn mount(server: &MockServer, mocks: Vec<Mock>) {
-        for mock in mocks {
-            mock.mount(server).await;
-        }
-    }
-
     async fn start_https_server(cert_pem: &str, key_pem: &str) -> String {
         let server_certs = load_certs_from_pem(cert_pem).unwrap();
         let server_key = load_key_from_pem(key_pem).unwrap();
@@ -1173,9 +1096,9 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     async fn stat_reports_status_and_content_length() {
         install_crypto_provider();
 
-        let test_cases: Vec<(Vec<Mock>, ExpectStat)> = vec![
+        let test_cases: Vec<(Vec<Mock>, fn(StatResponse))> = vec![
             (
-                vec![mock_get("/stat").respond_with(
+                vec![Mock::given(method("GET")).and(path("/stat")).respond_with(
                     ResponseTemplate::new(200)
                         .insert_header("Content-Type", "text/html; charset=UTF-8"),
                 )],
@@ -1184,7 +1107,8 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 },
             ),
             (
-                vec![mock_get("/stat")
+                vec![Mock::given(method("GET"))
+                    .and(path("/stat"))
                     .and(header("range", "bytes=0-0"))
                     .respond_with(
                         ResponseTemplate::new(206)
@@ -1201,7 +1125,8 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 },
             ),
             (
-                vec![mock_get("/stat")
+                vec![Mock::given(method("GET"))
+                    .and(path("/stat"))
                     .and(header("range", "bytes=0-0"))
                     .respond_with(
                         ResponseTemplate::new(206)
@@ -1217,10 +1142,11 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             ),
             (
                 vec![
-                    mock_get("/stat")
+                    Mock::given(method("GET"))
+                        .and(path("/stat"))
                         .and(header("range", "bytes=0-0"))
                         .respond_with(ResponseTemplate::new(416)),
-                    mock_get("/stat").respond_with(
+                    Mock::given(method("GET")).and(path("/stat")).respond_with(
                         ResponseTemplate::new(200).insert_header("Content-Length", "0"),
                     ),
                 ],
@@ -1232,7 +1158,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             ),
             (
                 vec![
-                    mock_get("/stat").respond_with(
+                    Mock::given(method("GET")).and(path("/stat")).respond_with(
                         ResponseTemplate::new(200)
                             .insert_header("Transfer-Encoding", "chunked")
                             .set_body_string("chunked body"),
@@ -1249,10 +1175,11 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             ),
             (
                 vec![
-                    mock_get("/stat").respond_with(
+                    Mock::given(method("GET")).and(path("/stat")).respond_with(
                         ResponseTemplate::new(307).insert_header("Location", "/target"),
                     ),
-                    mock_get("/target")
+                    Mock::given(method("GET"))
+                        .and(path("/target"))
                         .respond_with(ResponseTemplate::new(200).set_body_string("target content")),
                 ],
                 |response| {
@@ -1262,7 +1189,9 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 },
             ),
             (
-                vec![mock_get("/stat").respond_with(ResponseTemplate::new(307))],
+                vec![Mock::given(method("GET"))
+                    .and(path("/stat"))
+                    .respond_with(ResponseTemplate::new(307))],
                 |response| {
                     assert!(!response.success);
                     assert_eq!(response.http_status_code, None);
@@ -1273,7 +1202,9 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 },
             ),
             (
-                vec![mock_get("/stat").respond_with(ResponseTemplate::new(404))],
+                vec![Mock::given(method("GET"))
+                    .and(path("/stat"))
+                    .respond_with(ResponseTemplate::new(404))],
                 |response| {
                     assert!(!response.success);
                     assert_eq!(response.http_status_code, Some(StatusCode::NOT_FOUND));
@@ -1281,12 +1212,25 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             ),
         ];
 
-        let http = http(HTTP_SCHEME);
+        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
         for (mocks, expect) in test_cases {
             let server = MockServer::start().await;
-            mount(&server, mocks).await;
+            for mock in mocks {
+                mock.mount(&server).await;
+            }
             let response = http
-                .stat(stat_request(&format!("{}/stat", server.uri()), None))
+                .stat(StatRequest {
+                    task_id: "test".to_string(),
+                    url: format!("{}/stat", server.uri()),
+                    http_header: Some(HeaderMap::new()),
+                    timeout: Duration::from_secs(5),
+                    client_cert: None,
+                    object_storage: None,
+                    hdfs: None,
+                    hugging_face: None,
+                    model_scope: None,
+                    open_csg: None,
+                })
                 .await
                 .unwrap();
             expect(response);
@@ -1297,9 +1241,9 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     async fn get_reports_status_and_body() {
         install_crypto_provider();
 
-        let test_cases: Vec<(Vec<Mock>, Option<Range>, ExpectGet)> = vec![
+        let test_cases: Vec<(Vec<Mock>, Option<Range>, fn(GetResponse<Body>, &str))> = vec![
             (
-                vec![mock_get("/get").respond_with(
+                vec![Mock::given(method("GET")).and(path("/get")).respond_with(
                     ResponseTemplate::new(200)
                         .insert_header("Content-Type", "text/html; charset=UTF-8")
                         .set_body_string("OK"),
@@ -1311,7 +1255,8 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 },
             ),
             (
-                vec![mock_get("/get")
+                vec![Mock::given(method("GET"))
+                    .and(path("/get"))
                     .and(header("range", "bytes=10-29"))
                     .respond_with(
                         ResponseTemplate::new(206)
@@ -1329,7 +1274,8 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 },
             ),
             (
-                vec![mock_get("/get")
+                vec![Mock::given(method("GET"))
+                    .and(path("/get"))
                     .and(header("range", "bytes=0-19"))
                     .respond_with(ResponseTemplate::new(200).set_body_string("full body content"))],
                 Some(Range {
@@ -1343,7 +1289,8 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 },
             ),
             (
-                vec![mock_get("/get")
+                vec![Mock::given(method("GET"))
+                    .and(path("/get"))
                     .and(header("range", "bytes=10-29"))
                     .respond_with(ResponseTemplate::new(200).set_body_string("full body content"))],
                 Some(Range {
@@ -1361,7 +1308,8 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 },
             ),
             (
-                vec![mock_get("/get")
+                vec![Mock::given(method("GET"))
+                    .and(path("/get"))
                     .and(header("range", "bytes=10-29"))
                     .respond_with(
                         ResponseTemplate::new(206)
@@ -1382,7 +1330,8 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 },
             ),
             (
-                vec![mock_get("/get")
+                vec![Mock::given(method("GET"))
+                    .and(path("/get"))
                     .and(header("range", "bytes=10-29"))
                     .respond_with(ResponseTemplate::new(206).set_body_string("partial content"))],
                 Some(Range {
@@ -1399,7 +1348,9 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 },
             ),
             (
-                vec![mock_get("/get").respond_with(ResponseTemplate::new(307))],
+                vec![Mock::given(method("GET"))
+                    .and(path("/get"))
+                    .respond_with(ResponseTemplate::new(307))],
                 None,
                 |response, _| {
                     assert!(!response.success);
@@ -1410,7 +1361,9 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 },
             ),
             (
-                vec![mock_get("/get").respond_with(ResponseTemplate::new(404))],
+                vec![Mock::given(method("GET"))
+                    .and(path("/get"))
+                    .respond_with(ResponseTemplate::new(404))],
                 None,
                 |response, _| {
                     assert!(!response.success);
@@ -1419,12 +1372,27 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             ),
         ];
 
-        let http = http(HTTP_SCHEME);
+        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
         for (mocks, range, expect) in test_cases {
             let server = MockServer::start().await;
-            mount(&server, mocks).await;
+            for mock in mocks {
+                mock.mount(&server).await;
+            }
             let mut response = http
-                .get(get_request(&format!("{}/get", server.uri()), range, None))
+                .get(GetRequest {
+                    task_id: "test".to_string(),
+                    piece_id: "test".to_string(),
+                    url: format!("{}/get", server.uri()),
+                    range,
+                    http_header: Some(HeaderMap::new()),
+                    timeout: Duration::from_secs(5),
+                    client_cert: None,
+                    object_storage: None,
+                    hdfs: None,
+                    hugging_face: None,
+                    model_scope: None,
+                    open_csg: None,
+                })
                 .await
                 .unwrap();
             let body = response.text().await.unwrap();
@@ -1442,11 +1410,11 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             (vec![(Some("bytes=0-"), 416), (None, 200)], true),
         ];
 
-        let http = http(HTTP_SCHEME);
+        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
         for (responses, expected) in test_cases {
             let server = MockServer::start().await;
             for &(range, status) in &responses {
-                let mut mock = mock_get("/exists");
+                let mut mock = Mock::given(method("GET")).and(path("/exists"));
                 if let Some(range) = range {
                     mock = mock.and(header("range", range));
                 }
@@ -1456,7 +1424,18 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             }
 
             let exists = http
-                .exists(exists_request(&format!("{}/exists", server.uri())))
+                .exists(ExistsRequest {
+                    task_id: "test".to_string(),
+                    url: format!("{}/exists", server.uri()),
+                    http_header: Some(HeaderMap::new()),
+                    timeout: Duration::from_secs(5),
+                    client_cert: None,
+                    object_storage: None,
+                    hdfs: None,
+                    hugging_face: None,
+                    model_scope: None,
+                    open_csg: None,
+                })
                 .await
                 .unwrap();
             assert_eq!(exists, expected);
@@ -1466,29 +1445,55 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[tokio::test]
     async fn requests_without_header_are_rejected() {
         install_crypto_provider();
-        let http = http(HTTP_SCHEME);
+        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
         let url = "http://127.0.0.1/missing";
 
         let stat = http
             .stat(StatRequest {
+                task_id: "test".to_string(),
+                url: url.to_string(),
                 http_header: None,
-                ..stat_request(url, None)
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+                open_csg: None,
             })
             .await;
         assert!(matches!(stat, Err(Error::InvalidParameter)));
 
         let get = http
             .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "test".to_string(),
+                url: url.to_string(),
+                range: None,
                 http_header: None,
-                ..get_request(url, None, None)
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+                open_csg: None,
             })
             .await;
         assert!(matches!(get, Err(Error::InvalidParameter)));
 
         let exists = http
             .exists(ExistsRequest {
+                task_id: "test".to_string(),
+                url: url.to_string(),
                 http_header: None,
-                ..exists_request(url)
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+                open_csg: None,
             })
             .await;
         assert!(matches!(exists, Err(Error::InvalidParameter)));
@@ -1500,17 +1505,60 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
         let url = format!("{}/file", start_closing_server().await);
         let http = HTTP::new(HTTP_SCHEME, None, 0, true, Duration::from_secs(600), true).unwrap();
 
-        let stat = http.stat(stat_request(&url, None)).await.unwrap();
+        let stat = http
+            .stat(StatRequest {
+                task_id: "test".to_string(),
+                url: url.clone(),
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+                open_csg: None,
+            })
+            .await
+            .unwrap();
         assert!(!stat.success);
         assert_eq!(stat.http_status_code, None);
         assert_eq!(stat.content_length, None);
 
-        let get = http.get(get_request(&url, None, None)).await.unwrap();
+        let get = http
+            .get(GetRequest {
+                task_id: "test".to_string(),
+                piece_id: "test".to_string(),
+                url: url.clone(),
+                range: None,
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+                open_csg: None,
+            })
+            .await
+            .unwrap();
         assert!(!get.success);
         assert_eq!(get.http_status_code, None);
         assert!(get.error_message.is_some());
 
-        let exists = http.exists(exists_request(&url)).await;
+        let exists = http
+            .exists(ExistsRequest {
+                task_id: "test".to_string(),
+                url,
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+                open_csg: None,
+            })
+            .await;
         assert!(matches!(exists, Err(Error::ReqwestMiddlewareError(_))));
     }
 
@@ -1518,7 +1566,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     async fn https_requests_trust_the_given_ca_or_skip_verification() {
         install_crypto_provider();
 
-        let test_cases: Vec<(Option<&str>, ExpectStat, ExpectGet)> = vec![
+        let test_cases: Vec<(Option<&str>, fn(StatResponse), fn(GetResponse<Body>, &str))> = vec![
             (
                 Some(CA_CERT),
                 |response| assert_eq!(response.http_status_code, Some(StatusCode::OK)),
@@ -1543,17 +1591,41 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
         ];
 
         let server_url = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let http = http(HTTPS_SCHEME);
+        let http = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
         for (ca_pem, expect_stat, expect_get) in test_cases {
             let client_cert = ca_pem.map(|pem| load_certs_from_pem(pem).unwrap());
             let response = http
-                .stat(stat_request(&server_url, client_cert.clone()))
+                .stat(StatRequest {
+                    task_id: "test".to_string(),
+                    url: server_url.clone(),
+                    http_header: Some(HeaderMap::new()),
+                    timeout: Duration::from_secs(5),
+                    client_cert: client_cert.clone(),
+                    object_storage: None,
+                    hdfs: None,
+                    hugging_face: None,
+                    model_scope: None,
+                    open_csg: None,
+                })
                 .await
                 .unwrap();
             expect_stat(response);
 
             let mut response = http
-                .get(get_request(&server_url, None, client_cert))
+                .get(GetRequest {
+                    task_id: "test".to_string(),
+                    piece_id: "test".to_string(),
+                    url: server_url.clone(),
+                    range: None,
+                    http_header: Some(HeaderMap::new()),
+                    timeout: Duration::from_secs(5),
+                    client_cert,
+                    object_storage: None,
+                    hdfs: None,
+                    hugging_face: None,
+                    model_scope: None,
+                    open_csg: None,
+                })
                 .await
                 .unwrap();
             let body = response.text().await.unwrap();
@@ -1566,10 +1638,10 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
         install_crypto_provider();
 
         let test_cases: Vec<(
-            Option<CustomHeaders>,
+            Option<Vec<(&'static str, &'static str)>>,
             HeaderMap,
             Option<Range>,
-            ExpectHeaders,
+            fn(Result<()>, &HeaderMap),
         )> = vec![
             (None, HeaderMap::new(), None, |result, headers| {
                 assert!(result.is_ok());
@@ -1580,7 +1652,10 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             }),
             (
                 None,
-                header_map(&[("user-agent", "custom-agent/1.0")]),
+                HeaderMap::from_iter([(
+                    HeaderName::from_static("user-agent"),
+                    HeaderValue::from_static("custom-agent/1.0"),
+                )]),
                 None,
                 |result, headers| {
                     assert!(result.is_ok());
@@ -1633,9 +1708,15 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                     ("X-Custom-Header", "custom-value"),
                     ("Authorization", "Bearer token123"),
                 ]),
-                header_map(&[
-                    ("x-custom-header", "original-value"),
-                    ("authorization", "Bearer original"),
+                HeaderMap::from_iter([
+                    (
+                        HeaderName::from_static("x-custom-header"),
+                        HeaderValue::from_static("original-value"),
+                    ),
+                    (
+                        HeaderName::from_static("authorization"),
+                        HeaderValue::from_static("Bearer original"),
+                    ),
                 ]),
                 None,
                 |result, headers| {
@@ -1690,7 +1771,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     async fn get_caches_absolute_307_locations_until_ttl_expires() {
         install_crypto_provider();
 
-        let test_cases: Vec<(bool, Duration, RedirectLocation, Duration, u64)> = vec![
+        let test_cases: Vec<(bool, Duration, fn(&str) -> String, Duration, u64)> = vec![
             (
                 true,
                 Duration::from_secs(600),
@@ -1724,7 +1805,8 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
         for (enable_cache, ttl, location, wait, expected_redirect_requests) in test_cases {
             let server = MockServer::start().await;
             let location = location(&server.uri());
-            mock_get("/target")
+            Mock::given(method("GET"))
+                .and(path("/target"))
                 .respond_with(
                     ResponseTemplate::new(200)
                         .set_body_string("target content")
@@ -1732,7 +1814,8 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 )
                 .mount(&server)
                 .await;
-            mock_get("/redirect")
+            Mock::given(method("GET"))
+                .and(path("/redirect"))
                 .respond_with(
                     ResponseTemplate::new(307).insert_header("Location", location.as_str()),
                 )
@@ -1743,7 +1826,23 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             let http = HTTP::new(HTTP_SCHEME, None, 1, enable_cache, ttl, true).unwrap();
             let url = format!("{}/redirect", server.uri());
             for _ in 0..2 {
-                let mut response = http.get(get_request(&url, None, None)).await.unwrap();
+                let mut response = http
+                    .get(GetRequest {
+                        task_id: "test".to_string(),
+                        piece_id: "test".to_string(),
+                        url: url.clone(),
+                        range: None,
+                        http_header: Some(HeaderMap::new()),
+                        timeout: Duration::from_secs(5),
+                        client_cert: None,
+                        object_storage: None,
+                        hdfs: None,
+                        hugging_face: None,
+                        model_scope: None,
+                        open_csg: None,
+                    })
+                    .await
+                    .unwrap();
                 assert_eq!(response.http_status_code, Some(StatusCode::OK));
                 assert_eq!(response.text().await.unwrap(), "target content");
 
@@ -1765,13 +1864,31 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
         ];
 
         for (next, previous, expected_len) in test_cases {
-            let mut headers = header_map(&[
-                ("authorization", "Bearer token"),
-                ("cookie", "session=1"),
-                ("cookie2", "legacy=1"),
-                ("proxy-authorization", "Basic abc"),
-                ("www-authenticate", "Basic"),
-                ("x-custom", "kept"),
+            let mut headers = HeaderMap::from_iter([
+                (
+                    HeaderName::from_static("authorization"),
+                    HeaderValue::from_static("Bearer token"),
+                ),
+                (
+                    HeaderName::from_static("cookie"),
+                    HeaderValue::from_static("session=1"),
+                ),
+                (
+                    HeaderName::from_static("cookie2"),
+                    HeaderValue::from_static("legacy=1"),
+                ),
+                (
+                    HeaderName::from_static("proxy-authorization"),
+                    HeaderValue::from_static("Basic abc"),
+                ),
+                (
+                    HeaderName::from_static("www-authenticate"),
+                    HeaderValue::from_static("Basic"),
+                ),
+                (
+                    HeaderName::from_static("x-custom"),
+                    HeaderValue::from_static("kept"),
+                ),
             ]);
             remove_sensitive_headers(
                 &mut headers,

@@ -242,12 +242,10 @@ pub fn verify_file_digest(expected_digest: Digest, file_path: &Path) -> ClientRe
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use tempfile::NamedTempFile;
-
-    type ExpectDigest = fn(Option<Digest>);
-    type ExpectParsedDigest = fn(Result<Digest, String>);
-    type ExpectVerify = fn(ClientResult<()>);
 
     #[test]
     fn is_blob_url_matches_oci_blob_urls() {
@@ -275,7 +273,7 @@ mod tests {
 
     #[test]
     fn extract_from_blob_url_parses_oci_blob_digests() {
-        let test_cases: Vec<(&str, ExpectDigest)> = vec![
+        let test_cases: Vec<(&str, fn(Option<Digest>))> = vec![
             (
                 "http://registry.example.com/v2/library/ubuntu/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e",
                 |digest| {
@@ -405,7 +403,7 @@ mod tests {
 
     #[test]
     fn extract_from_manifest_url_parses_oci_manifest_digests() {
-        let test_cases: Vec<(&str, ExpectDigest)> = vec![
+        let test_cases: Vec<(&str, fn(Option<Digest>))> = vec![
             (
                 "http://registry.example.com/v2/library/ubuntu/manifests/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e",
                 |digest| {
@@ -502,7 +500,7 @@ mod tests {
 
     #[test]
     fn digest_from_str_validates_algorithm_and_encoded_length() {
-        let test_cases: Vec<(&str, ExpectParsedDigest)> = vec![
+        let test_cases: Vec<(&str, fn(Result<Digest, String>))> = vec![
             ("crc32:1475635037", |digest| {
                 let digest = digest.unwrap();
                 assert_eq!(digest.algorithm(), Algorithm::Crc32);
@@ -564,7 +562,7 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         std::fs::write(temp_file.path(), b"test content").unwrap();
 
-        let test_cases: Vec<(Algorithm, &str, ExpectVerify)> = vec![
+        let test_cases: Vec<(Algorithm, &str, fn(ClientResult<()>))> = vec![
             (Algorithm::Crc32, "1475635037", |result| {
                 assert!(result.is_ok())
             }),

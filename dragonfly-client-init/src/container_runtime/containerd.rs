@@ -275,11 +275,10 @@ impl Containerd {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::path::Path;
-    use tempfile::TempDir;
+    #![allow(clippy::type_complexity)]
 
-    type ExpectRun = fn(Result<()>);
+    use super::*;
+    use tempfile::TempDir;
 
     const GRPC_CRI: &str = "io.containerd.grpc.v1.cri";
     const CRI_IMAGES: &str = "io.containerd.cri.v1.images";
@@ -311,61 +310,12 @@ ca = ["test-ca-cert"]
 X-Dragonfly-Registry = "https://registry.example.com"
 "#;
 
-    fn plugins_config(plugin_ids: &[&str]) -> DocumentMut {
-        plugin_ids
-            .iter()
-            .map(|plugin_id| format!("[plugins.\"{plugin_id}\"]\n"))
-            .collect::<String>()
-            .parse()
-            .unwrap()
-    }
-
-    fn registry(skip_verify: Option<bool>, ca: Option<Vec<String>>) -> ContainerdRegistry {
-        ContainerdRegistry {
-            host_namespace: "docker.io".into(),
-            server_addr: "https://registry.example.com".into(),
-            skip_verify,
-            ca,
-            capabilities: vec!["pull".into(), "resolve".into()],
-        }
-    }
-
-    fn containerd(
-        config_path: &Path,
-        cri_plugin_id: Option<&str>,
-        registries: Vec<ContainerdRegistry>,
-        proxy_all_registries: bool,
-    ) -> Containerd {
-        Containerd::new(
-            dfinit::Containerd {
-                config_path: config_path.to_path_buf(),
-                cri_plugin_id: cri_plugin_id.map(str::to_string),
-                registries,
-                proxy_all_registries,
-            },
-            dfinit::Proxy {
-                addr: "http://127.0.0.1:65001".into(),
-            },
-        )
-    }
-
     async fn write_config(temp_dir: &TempDir, config: &str) -> (PathBuf, PathBuf) {
         let config_path = temp_dir.path().join("config.toml");
         let certs_dir = temp_dir.path().join("certs.d");
         let config = config.replace("{certs_dir}", certs_dir.to_str().unwrap());
         fs::write(&config_path, config).await.unwrap();
         (config_path, certs_dir)
-    }
-
-    fn registry_config_path(config: &str, plugin_id: &str) -> Option<String> {
-        let containerd_config = config.parse::<DocumentMut>().unwrap();
-        containerd_config
-            .get("plugins")?
-            .get(plugin_id)?
-            .get("registry")?
-            .get("config_path")?
-            .as_str()
-            .map(str::to_string)
     }
 
     #[test]
@@ -380,7 +330,12 @@ X-Dragonfly-Registry = "https://registry.example.com"
         ];
 
         for (plugin_ids, version, expected) in test_cases {
-            let containerd_config = plugins_config(&plugin_ids);
+            let containerd_config: DocumentMut = plugin_ids
+                .iter()
+                .map(|plugin_id| format!("[plugins.\"{plugin_id}\"]\n"))
+                .collect::<String>()
+                .parse()
+                .unwrap();
             assert_eq!(
                 Containerd::get_cri_plugin_id(&containerd_config, version),
                 expected
@@ -394,7 +349,8 @@ X-Dragonfly-Registry = "https://registry.example.com"
             (
                 GRPC_CRI_CONFIG,
                 None,
-                registry(Some(true), Some(vec!["test-ca-cert".into()])),
+                Some(true),
+                Some(vec!["test-ca-cert".into()]),
                 TLS_HOSTS_TOML,
             ),
             (
@@ -407,7 +363,8 @@ version = 2
       config_path = "{certs_dir}"
 "#,
                 None,
-                registry(None, None),
+                None,
+                None,
                 HOSTS_TOML,
             ),
             (
@@ -421,7 +378,8 @@ version = 2
       config_path = "{certs_dir}"
 "#,
                 Some(CRI_IMAGES),
-                registry(None, None),
+                None,
+                None,
                 HOSTS_TOML,
             ),
             (
@@ -434,7 +392,8 @@ version = 3
       config_path = "{certs_dir}"
 "#,
                 None,
-                registry(Some(true), Some(vec!["test-ca-cert".into()])),
+                Some(true),
+                Some(vec!["test-ca-cert".into()]),
                 TLS_HOSTS_TOML,
             ),
             (
@@ -445,17 +404,34 @@ version = 3
       config_path = "{certs_dir}:/etc/containerd/certs.d"
 "#,
                 None,
-                registry(None, None),
+                None,
+                None,
                 HOSTS_TOML,
             ),
         ];
 
-        for (config, cri_plugin_id, registry, expected) in test_cases {
+        for (config, cri_plugin_id, skip_verify, ca, expected) in test_cases {
             let temp_dir = TempDir::new().unwrap();
             let (config_path, certs_dir) = write_config(&temp_dir, config).await;
             let initial_config = fs::read_to_string(&config_path).await.unwrap();
 
-            let containerd = containerd(&config_path, cri_plugin_id, vec![registry], false);
+            let containerd = Containerd::new(
+                dfinit::Containerd {
+                    config_path: config_path.clone(),
+                    cri_plugin_id: cri_plugin_id.map(str::to_string),
+                    registries: vec![ContainerdRegistry {
+                        host_namespace: "docker.io".into(),
+                        server_addr: "https://registry.example.com".into(),
+                        skip_verify,
+                        ca,
+                        capabilities: vec!["pull".into(), "resolve".into()],
+                    }],
+                    proxy_all_registries: false,
+                },
+                dfinit::Proxy {
+                    addr: "http://127.0.0.1:65001".into(),
+                },
+            );
             let result = containerd.run().await;
             assert!(result.is_ok());
 
@@ -487,11 +463,22 @@ capabilities = ["pull", "resolve"]
         for (proxy_all_registries, expected) in test_cases {
             let temp_dir = TempDir::new().unwrap();
             let (config_path, certs_dir) = write_config(&temp_dir, GRPC_CRI_CONFIG).await;
-            let containerd = containerd(
-                &config_path,
-                None,
-                vec![registry(None, None)],
-                proxy_all_registries,
+            let containerd = Containerd::new(
+                dfinit::Containerd {
+                    config_path,
+                    cri_plugin_id: None,
+                    registries: vec![ContainerdRegistry {
+                        host_namespace: "docker.io".into(),
+                        server_addr: "https://registry.example.com".into(),
+                        skip_verify: None,
+                        ca: None,
+                        capabilities: vec!["pull".into(), "resolve".into()],
+                    }],
+                    proxy_all_registries,
+                },
+                dfinit::Proxy {
+                    addr: "http://127.0.0.1:65001".into(),
+                },
             );
             let result = containerd.run().await;
             assert!(result.is_ok());
@@ -534,13 +521,32 @@ version = 3
         for (config, plugin_id) in test_cases {
             let temp_dir = TempDir::new().unwrap();
             let (config_path, _) = write_config(&temp_dir, config).await;
-            let containerd = containerd(&config_path, None, vec![], false);
+            let containerd = Containerd::new(
+                dfinit::Containerd {
+                    config_path: config_path.clone(),
+                    cri_plugin_id: None,
+                    registries: vec![],
+                    proxy_all_registries: false,
+                },
+                dfinit::Proxy {
+                    addr: "http://127.0.0.1:65001".into(),
+                },
+            );
             let result = containerd.run().await;
             assert!(result.is_ok());
 
-            let rewritten_config = fs::read_to_string(&config_path).await.unwrap();
+            let rewritten_config = fs::read_to_string(&config_path)
+                .await
+                .unwrap()
+                .parse::<DocumentMut>()
+                .unwrap();
             assert_eq!(
-                registry_config_path(&rewritten_config, plugin_id).as_deref(),
+                rewritten_config
+                    .get("plugins")
+                    .and_then(|plugins| plugins.get(plugin_id))
+                    .and_then(|cri| cri.get("registry"))
+                    .and_then(|registry| registry.get("config_path"))
+                    .and_then(|config_path| config_path.as_str()),
                 Some("/etc/containerd/certs.d")
             );
         }
@@ -548,7 +554,7 @@ version = 3
 
     #[tokio::test]
     async fn run_fails_on_invalid_config_or_missing_cri_plugin() {
-        let test_cases: Vec<(&str, ExpectRun)> = vec![
+        let test_cases: Vec<(&str, fn(Result<()>))> = vec![
             ("version = [", |result| {
                 assert!(
                     matches!(result, Err(Error::ExternalError(ref err)) if err.etype == ErrorType::ParseError)
@@ -564,7 +570,18 @@ version = 3
         for (config, expect) in test_cases {
             let temp_dir = TempDir::new().unwrap();
             let (config_path, _) = write_config(&temp_dir, config).await;
-            expect(containerd(&config_path, None, vec![], false).run().await);
+            let containerd = Containerd::new(
+                dfinit::Containerd {
+                    config_path,
+                    cri_plugin_id: None,
+                    registries: vec![],
+                    proxy_all_registries: false,
+                },
+                dfinit::Proxy {
+                    addr: "http://127.0.0.1:65001".into(),
+                },
+            );
+            expect(containerd.run().await);
         }
     }
 }

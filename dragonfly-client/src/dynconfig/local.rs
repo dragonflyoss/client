@@ -286,22 +286,12 @@ impl Local {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use dragonfly_client_core::error::ExternalError;
     use std::path::Path;
     use tokio_stream::wrappers::TcpListenerStream;
-
-    type ExpectConfig = fn(Config);
-    type ExpectData = fn(&Data, i32, i32);
-    type ExpectError = fn(Option<Error>);
-
-    fn new_local(path: PathBuf) -> Local {
-        Local::new(Arc::new(DfdaemonConfig::default()), path)
-    }
-
-    fn ports(schedulers: &[ManagerScheduler]) -> Vec<i32> {
-        schedulers.iter().map(|scheduler| scheduler.port).collect()
-    }
 
     async fn dynconfig(dir: &Path, content: Option<&str>) -> PathBuf {
         let path = dir.join("dynconfig.yaml");
@@ -331,15 +321,9 @@ mod tests {
         addr
     }
 
-    async fn refresh(content: Option<&str>) -> Result<Data> {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dynconfig(dir.path(), content).await;
-        new_local(path).refresh().await
-    }
-
     #[test]
     fn config_deserializes_block_lists_and_defaults() {
-        let test_cases: Vec<(&str, ExpectConfig)> = vec![
+        let test_cases: Vec<(&str, fn(Config))> = vec![
             (
                 r#"
 scheduler:
@@ -438,7 +422,10 @@ seedClientConfig:
         for (existing, expected) in test_cases {
             let dir = tempfile::tempdir().unwrap();
             let path = dynconfig(dir.path(), existing).await;
-            new_local(path.clone()).generate_default().await.unwrap();
+            Local::new(Arc::new(DfdaemonConfig::default()), path.clone())
+                .generate_default()
+                .await
+                .unwrap();
 
             let content = fs::read_to_string(&path).await.unwrap();
             assert_eq!(content, expected);
@@ -452,14 +439,15 @@ seedClientConfig:
         let port_a = health_addr_a.port() as i32;
         let port_b = health_addr_b.port() as i32;
 
-        let test_cases: Vec<(String, ExpectData)> = vec![
+        let test_cases: Vec<(String, fn(&Data, i32, i32))> = vec![
             (
                 format!("scheduler:\n  addr: 'localhost:{port_a}'\n"),
                 |data, port_a, _| {
                     assert!(!data.available_schedulers.is_empty());
-                    assert!(ports(&data.available_schedulers)
+                    assert!(data
+                        .available_schedulers
                         .iter()
-                        .all(|port| *port == port_a));
+                        .all(|scheduler| scheduler.port == port_a));
                     assert!(data.available_scheduler_cluster_id.is_none());
                 },
             ),
@@ -470,15 +458,25 @@ seedClientConfig:
                 |data, port_a, port_b| {
                     let mut expected_ports = vec![port_a, port_b];
                     expected_ports.sort();
+                    let ports: Vec<i32> = data
+                        .available_schedulers
+                        .iter()
+                        .map(|scheduler| scheduler.port)
+                        .collect();
                     assert_eq!(data.schedulers.schedulers.len(), 2);
-                    assert_eq!(ports(&data.available_schedulers), expected_ports);
+                    assert_eq!(ports, expected_ports);
                 },
             ),
             (
                 format!("scheduler:\n  addrs:\n    - '{health_addr_a}'\n    - '127.0.0.1:1'\n"),
                 |data, port_a, _| {
+                    let ports: Vec<i32> = data
+                        .available_schedulers
+                        .iter()
+                        .map(|scheduler| scheduler.port)
+                        .collect();
                     assert_eq!(data.schedulers.schedulers.len(), 2);
-                    assert_eq!(ports(&data.available_schedulers), vec![port_a]);
+                    assert_eq!(ports, vec![port_a]);
                 },
             ),
             (
@@ -492,14 +490,19 @@ seedClientConfig:
         ];
 
         for (content, expect) in test_cases {
-            let data = refresh(Some(&content)).await.unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let path = dynconfig(dir.path(), Some(&content)).await;
+            let data = Local::new(Arc::new(DfdaemonConfig::default()), path)
+                .refresh()
+                .await
+                .unwrap();
             expect(&data, port_a, port_b);
         }
     }
 
     #[tokio::test]
     async fn refresh_fails_on_invalid_config_or_unhealthy_schedulers() {
-        let test_cases: Vec<(Option<&str>, ExpectError)> = vec![
+        let test_cases: Vec<(Option<&str>, fn(Option<Error>))> = vec![
             (None, |err| {
                 assert!(matches!(err, Some(Error::IO(_))));
             }),
@@ -530,14 +533,22 @@ seedClientConfig:
         ];
 
         for (content, expect) in test_cases {
-            expect(refresh(content).await.err());
+            let dir = tempfile::tempdir().unwrap();
+            let path = dynconfig(dir.path(), content).await;
+            let result = Local::new(Arc::new(DfdaemonConfig::default()), path)
+                .refresh()
+                .await;
+            expect(result.err());
         }
     }
 
     #[tokio::test]
     async fn resolve_schedulers_prefers_ipv4() {
         let dir = tempfile::tempdir().unwrap();
-        let local = new_local(dir.path().join("dynconfig.yaml"));
+        let local = Local::new(
+            Arc::new(DfdaemonConfig::default()),
+            dir.path().join("dynconfig.yaml"),
+        );
 
         let schedulers = local.resolve_schedulers("localhost:8002").await.unwrap();
         assert!(!schedulers.is_empty());

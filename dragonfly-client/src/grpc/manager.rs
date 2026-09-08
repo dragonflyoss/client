@@ -137,13 +137,13 @@ impl ManagerClient {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    #![allow(clippy::type_complexity)]
 
-    type ExpectError = fn(Option<Error>);
+    use super::*;
 
     #[tokio::test]
     async fn new_fails_on_an_invalid_addr() {
-        let test_cases: Vec<(&str, ExpectError)> = vec![
+        let test_cases: Vec<(&str, fn(Option<Error>))> = vec![
             ("htt:/xxx", |err| {
                 assert!(matches!(err, Some(Error::InvalidParameter)));
             }),

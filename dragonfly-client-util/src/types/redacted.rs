@@ -273,42 +273,36 @@ fn scrub_open_csg(csg: &mut Option<OpenCsg>) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    #![allow(clippy::type_complexity)]
 
-    type ExpectObjectStorage = fn(Option<ObjectStorage>);
-    type ScrubToken = fn() -> Option<String>;
+    use super::*;
 
     const ACCESS_KEY_SECRET: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
 
-    fn object_storage() -> ObjectStorage {
-        ObjectStorage {
-            access_key_id: Some("AKIAIOSFODNN7EXAMPLE".to_string()),
-            access_key_secret: Some(ACCESS_KEY_SECRET.to_string()),
-            session_token: Some("FQoGZXIvYXdzEJr...".to_string()),
-            security_token: Some("sec-token-xyz".to_string()),
-            credential_path: Some("/etc/gcp/creds.json".to_string()),
-            ..Default::default()
-        }
-    }
-
-    fn header(name: &str, value: &str) -> HashMap<String, String> {
-        HashMap::from([(name.to_string(), value.to_string())])
-    }
-
     #[test]
     fn scrub_object_storage_redacts_only_present_secrets() {
-        let test_cases: Vec<(Option<ObjectStorage>, ExpectObjectStorage)> = vec![
-            (Some(object_storage()), |object_storage| {
-                let object_storage = object_storage.unwrap();
-                assert_eq!(object_storage.access_key_secret.as_deref(), Some(REDACTED));
-                assert_eq!(object_storage.session_token.as_deref(), Some(REDACTED));
-                assert_eq!(object_storage.security_token.as_deref(), Some(REDACTED));
-                assert_eq!(object_storage.credential_path.as_deref(), Some(REDACTED));
-                assert_eq!(
-                    object_storage.access_key_id.as_deref(),
-                    Some("AKIAIOSFODNN7EXAMPLE")
-                );
-            }),
+        let test_cases: Vec<(Option<ObjectStorage>, fn(Option<ObjectStorage>))> = vec![
+            (
+                Some(ObjectStorage {
+                    access_key_id: Some("AKIAIOSFODNN7EXAMPLE".to_string()),
+                    access_key_secret: Some(ACCESS_KEY_SECRET.to_string()),
+                    session_token: Some("FQoGZXIvYXdzEJr...".to_string()),
+                    security_token: Some("sec-token-xyz".to_string()),
+                    credential_path: Some("/etc/gcp/creds.json".to_string()),
+                    ..Default::default()
+                }),
+                |object_storage| {
+                    let object_storage = object_storage.unwrap();
+                    assert_eq!(object_storage.access_key_secret.as_deref(), Some(REDACTED));
+                    assert_eq!(object_storage.session_token.as_deref(), Some(REDACTED));
+                    assert_eq!(object_storage.security_token.as_deref(), Some(REDACTED));
+                    assert_eq!(object_storage.credential_path.as_deref(), Some(REDACTED));
+                    assert_eq!(
+                        object_storage.access_key_id.as_deref(),
+                        Some("AKIAIOSFODNN7EXAMPLE")
+                    );
+                },
+            ),
             (
                 Some(ObjectStorage {
                     access_key_id: Some("AKIA...".to_string()),
@@ -334,7 +328,7 @@ mod tests {
 
     #[test]
     fn scrub_backends_redact_only_present_tokens() {
-        let test_cases: Vec<(ScrubToken, Option<&str>)> = vec![
+        let test_cases: Vec<(fn() -> Option<String>, Option<&str>)> = vec![
             (
                 || {
                     let mut hdfs = Some(Hdfs {
@@ -441,7 +435,14 @@ mod tests {
     #[test]
     fn redacted_download_debug_does_not_leak_secrets() {
         let download = Download {
-            object_storage: Some(object_storage()),
+            object_storage: Some(ObjectStorage {
+                access_key_id: Some("AKIAIOSFODNN7EXAMPLE".to_string()),
+                access_key_secret: Some(ACCESS_KEY_SECRET.to_string()),
+                session_token: Some("FQoGZXIvYXdzEJr...".to_string()),
+                security_token: Some("sec-token-xyz".to_string()),
+                credential_path: Some("/etc/gcp/creds.json".to_string()),
+                ..Default::default()
+            }),
             hdfs: Some(Hdfs {
                 delegation_token: Some("HDFS_SECRET".to_string()),
             }),
@@ -501,7 +502,7 @@ mod tests {
 
         for (name, value, expected) in test_cases {
             let download = Download {
-                request_header: header(name, value),
+                request_header: HashMap::from([(name.to_string(), value.to_string())]),
                 ..Default::default()
             };
 
@@ -514,7 +515,14 @@ mod tests {
     #[test]
     fn redacted_download_debug_does_not_mutate_the_original() {
         let download = Download {
-            object_storage: Some(object_storage()),
+            object_storage: Some(ObjectStorage {
+                access_key_id: Some("AKIAIOSFODNN7EXAMPLE".to_string()),
+                access_key_secret: Some(ACCESS_KEY_SECRET.to_string()),
+                session_token: Some("FQoGZXIvYXdzEJr...".to_string()),
+                security_token: Some("sec-token-xyz".to_string()),
+                credential_path: Some("/etc/gcp/creds.json".to_string()),
+                ..Default::default()
+            }),
             hugging_face: Some(HuggingFace {
                 token: Some("HF_SECRET".to_string()),
                 ..Default::default()
@@ -543,7 +551,14 @@ mod tests {
     #[test]
     fn redacted_persistent_task_request_debug_redacts_object_storage_only() {
         let request = DownloadPersistentTaskRequest {
-            object_storage: Some(object_storage()),
+            object_storage: Some(ObjectStorage {
+                access_key_id: Some("AKIAIOSFODNN7EXAMPLE".to_string()),
+                access_key_secret: Some(ACCESS_KEY_SECRET.to_string()),
+                session_token: Some("FQoGZXIvYXdzEJr...".to_string()),
+                security_token: Some("sec-token-xyz".to_string()),
+                credential_path: Some("/etc/gcp/creds.json".to_string()),
+                ..Default::default()
+            }),
             ..Default::default()
         };
 

@@ -254,184 +254,172 @@ mod tests {
     use dragonfly_client_config::dfdaemon::SeedPeer;
     use regex::Regex;
 
-    fn strings(values: &[&str]) -> Option<Vec<String>> {
-        (!values.is_empty()).then(|| values.iter().map(|value| value.to_string()).collect())
-    }
-
-    fn regexes(patterns: &[&str]) -> Vec<Regex> {
-        patterns
-            .iter()
-            .map(|pattern| Regex::new(pattern).unwrap())
-            .collect()
-    }
-
-    fn download_block_list(
-        urls: &[&str],
-        applications: &[&str],
-        tags: &[&str],
-        priorities: &[i32],
-    ) -> SchedulerClusterConfigDownloadBlockList {
-        SchedulerClusterConfigDownloadBlockList {
-            applications: strings(applications),
-            urls: regexes(urls),
-            tags: strings(tags),
-            priorities: (!priorities.is_empty()).then(|| priorities.to_vec()),
-        }
-    }
-
-    fn upload_block_list(
-        urls: &[&str],
-        applications: &[&str],
-        tags: &[&str],
-    ) -> SchedulerClusterConfigUploadBlockList {
-        SchedulerClusterConfigUploadBlockList {
-            applications: strings(applications),
-            urls: regexes(urls),
-            tags: strings(tags),
-        }
-    }
-
-    fn download_params(
-        url: Option<&str>,
-        application: Option<&str>,
-        tag: Option<&str>,
-        priority: Option<i32>,
-    ) -> DownloadBlockListCheckParams {
-        DownloadBlockListCheckParams {
-            url: url.map(str::to_string),
-            application: application.map(str::to_string),
-            tag: tag.map(str::to_string),
-            priority,
-        }
-    }
-
-    fn upload_params(
-        url: Option<&str>,
-        application: Option<&str>,
-        tag: Option<&str>,
-    ) -> UploadBlockListCheckParams {
-        UploadBlockListCheckParams {
-            url: url.map(str::to_string),
-            application: application.map(str::to_string),
-            tag: tag.map(str::to_string),
-        }
-    }
-
-    fn task_download_block_list(applications: &[&str]) -> SchedulerClusterConfigBlockList {
-        SchedulerClusterConfigBlockList {
-            task: Some(SchedulerClusterConfigTaskBlockList {
-                download: Some(download_block_list(&[], applications, &[], &[])),
-            }),
-            ..Default::default()
-        }
-    }
-
     #[test]
     fn is_download_blocked_matches_url_application_tag_or_priority() {
         let test_cases = vec![
             (
-                download_block_list(&[], &["blocked-app"], &[], &[]),
-                download_params(None, Some("blocked-app"), None, None),
+                SchedulerClusterConfigDownloadBlockList {
+                    applications: Some(vec!["blocked-app".to_string()]),
+                    ..Default::default()
+                },
+                None,
+                Some("blocked-app"),
+                None,
+                None,
                 true,
             ),
             (
-                download_block_list(&[], &["blocked-app"], &[], &[]),
-                download_params(None, Some("allowed-app"), None, None),
+                SchedulerClusterConfigDownloadBlockList {
+                    applications: Some(vec!["blocked-app".to_string()]),
+                    ..Default::default()
+                },
+                None,
+                Some("allowed-app"),
+                None,
+                None,
                 false,
             ),
             (
-                download_block_list(&[], &["blocked-app"], &[], &[]),
-                download_params(None, None, None, None),
+                SchedulerClusterConfigDownloadBlockList {
+                    applications: Some(vec!["blocked-app".to_string()]),
+                    ..Default::default()
+                },
+                None,
+                None,
+                None,
+                None,
                 false,
             ),
             (
-                download_block_list(
-                    &[r".*\.blocked\.com.*", r"^https://forbidden\."],
-                    &[],
-                    &[],
-                    &[],
-                ),
-                download_params(Some("https://example.blocked.com/file"), None, None, None),
+                SchedulerClusterConfigDownloadBlockList {
+                    urls: vec![
+                        Regex::new(r".*\.blocked\.com.*").unwrap(),
+                        Regex::new(r"^https://forbidden\.").unwrap(),
+                    ],
+                    ..Default::default()
+                },
+                Some("https://example.blocked.com/file"),
+                None,
+                None,
+                None,
                 true,
             ),
             (
-                download_block_list(
-                    &[r".*\.blocked\.com.*", r"^https://forbidden\."],
-                    &[],
-                    &[],
-                    &[],
-                ),
-                download_params(Some("https://forbidden.example.com/file"), None, None, None),
+                SchedulerClusterConfigDownloadBlockList {
+                    urls: vec![
+                        Regex::new(r".*\.blocked\.com.*").unwrap(),
+                        Regex::new(r"^https://forbidden\.").unwrap(),
+                    ],
+                    ..Default::default()
+                },
+                Some("https://forbidden.example.com/file"),
+                None,
+                None,
+                None,
                 true,
             ),
             (
-                download_block_list(
-                    &[r".*\.blocked\.com.*", r"^https://forbidden\."],
-                    &[],
-                    &[],
-                    &[],
-                ),
-                download_params(Some("https://allowed.com/file"), None, None, None),
+                SchedulerClusterConfigDownloadBlockList {
+                    urls: vec![
+                        Regex::new(r".*\.blocked\.com.*").unwrap(),
+                        Regex::new(r"^https://forbidden\.").unwrap(),
+                    ],
+                    ..Default::default()
+                },
+                Some("https://allowed.com/file"),
+                None,
+                None,
+                None,
                 false,
             ),
             (
-                download_block_list(
-                    &[r".*\.blocked\.com.*", r"^https://forbidden\."],
-                    &[],
-                    &[],
-                    &[],
-                ),
-                download_params(None, None, None, None),
+                SchedulerClusterConfigDownloadBlockList {
+                    urls: vec![
+                        Regex::new(r".*\.blocked\.com.*").unwrap(),
+                        Regex::new(r"^https://forbidden\.").unwrap(),
+                    ],
+                    ..Default::default()
+                },
+                None,
+                None,
+                None,
+                None,
                 false,
             ),
             (
-                download_block_list(&[], &[], &["blocked-tag"], &[]),
-                download_params(None, None, Some("blocked-tag"), None),
+                SchedulerClusterConfigDownloadBlockList {
+                    tags: Some(vec!["blocked-tag".to_string()]),
+                    ..Default::default()
+                },
+                None,
+                None,
+                Some("blocked-tag"),
+                None,
                 true,
             ),
             (
-                download_block_list(&[], &[], &["blocked-tag"], &[]),
-                download_params(None, None, Some("allowed-tag"), None),
+                SchedulerClusterConfigDownloadBlockList {
+                    tags: Some(vec!["blocked-tag".to_string()]),
+                    ..Default::default()
+                },
+                None,
+                None,
+                Some("allowed-tag"),
+                None,
                 false,
             ),
             (
-                download_block_list(&[], &[], &[], &[0]),
-                download_params(None, None, None, Some(0)),
+                SchedulerClusterConfigDownloadBlockList {
+                    priorities: Some(vec![0]),
+                    ..Default::default()
+                },
+                None,
+                None,
+                None,
+                Some(0),
                 true,
             ),
             (
-                download_block_list(&[], &[], &[], &[0]),
-                download_params(None, None, None, Some(5)),
+                SchedulerClusterConfigDownloadBlockList {
+                    priorities: Some(vec![0]),
+                    ..Default::default()
+                },
+                None,
+                None,
+                None,
+                Some(5),
                 false,
             ),
             (
-                download_block_list(&[], &[], &[], &[]),
-                download_params(
-                    Some("https://any.url.com"),
-                    Some("any-app"),
-                    Some("any-tag"),
-                    Some(1),
-                ),
+                SchedulerClusterConfigDownloadBlockList::default(),
+                Some("https://any.url.com"),
+                Some("any-app"),
+                Some("any-tag"),
+                Some(1),
                 false,
             ),
             (
-                download_block_list(
-                    &[r"^https://forbidden\."],
-                    &["blocked-app"],
-                    &["blocked-tag"],
-                    &[0],
-                ),
-                download_params(
-                    Some("https://allowed.com/file"),
-                    Some("allowed-app"),
-                    Some("allowed-tag"),
-                    Some(0),
-                ),
+                SchedulerClusterConfigDownloadBlockList {
+                    applications: Some(vec!["blocked-app".to_string()]),
+                    urls: vec![Regex::new(r"^https://forbidden\.").unwrap()],
+                    tags: Some(vec!["blocked-tag".to_string()]),
+                    priorities: Some(vec![0]),
+                },
+                Some("https://allowed.com/file"),
+                Some("allowed-app"),
+                Some("allowed-tag"),
+                Some(0),
                 true,
             ),
         ];
 
-        for (block_list, params, expected) in test_cases {
+        for (block_list, url, application, tag, priority, expected) in test_cases {
+            let params = DownloadBlockListCheckParams {
+                url: url.map(str::to_string),
+                application: application.map(str::to_string),
+                tag: tag.map(str::to_string),
+                priority,
+            };
             assert_eq!(
                 BlockList::is_download_blocked(&block_list, &params),
                 expected
@@ -443,67 +431,118 @@ mod tests {
     fn is_upload_blocked_matches_url_application_or_tag() {
         let test_cases = vec![
             (
-                upload_block_list(&[], &["blocked-app"], &[]),
-                upload_params(None, Some("blocked-app"), None),
+                SchedulerClusterConfigUploadBlockList {
+                    applications: Some(vec!["blocked-app".to_string()]),
+                    ..Default::default()
+                },
+                None,
+                Some("blocked-app"),
+                None,
                 true,
             ),
             (
-                upload_block_list(&[], &["blocked-app"], &[]),
-                upload_params(None, Some("allowed-app"), None),
+                SchedulerClusterConfigUploadBlockList {
+                    applications: Some(vec!["blocked-app".to_string()]),
+                    ..Default::default()
+                },
+                None,
+                Some("allowed-app"),
+                None,
                 false,
             ),
             (
-                upload_block_list(&[r".*blocked.*"], &[], &[]),
-                upload_params(Some("https://blocked.com/upload"), None, None),
+                SchedulerClusterConfigUploadBlockList {
+                    urls: vec![Regex::new(r".*blocked.*").unwrap()],
+                    ..Default::default()
+                },
+                Some("https://blocked.com/upload"),
+                None,
+                None,
                 true,
             ),
             (
-                upload_block_list(&[r".*blocked.*"], &[], &[]),
-                upload_params(Some("https://allowed.com/upload"), None, None),
+                SchedulerClusterConfigUploadBlockList {
+                    urls: vec![Regex::new(r".*blocked.*").unwrap()],
+                    ..Default::default()
+                },
+                Some("https://allowed.com/upload"),
+                None,
+                None,
                 false,
             ),
             (
-                upload_block_list(&[], &[], &["blocked-tag"]),
-                upload_params(None, None, Some("blocked-tag")),
+                SchedulerClusterConfigUploadBlockList {
+                    tags: Some(vec!["blocked-tag".to_string()]),
+                    ..Default::default()
+                },
+                None,
+                None,
+                Some("blocked-tag"),
                 true,
             ),
             (
-                upload_block_list(&[], &[], &["blocked-tag"]),
-                upload_params(None, None, Some("allowed-tag")),
+                SchedulerClusterConfigUploadBlockList {
+                    tags: Some(vec!["blocked-tag".to_string()]),
+                    ..Default::default()
+                },
+                None,
+                None,
+                Some("allowed-tag"),
                 false,
             ),
             (
-                upload_block_list(&[], &[], &[]),
-                upload_params(
-                    Some("https://any.url.com"),
-                    Some("any-app"),
-                    Some("any-tag"),
-                ),
+                SchedulerClusterConfigUploadBlockList::default(),
+                Some("https://any.url.com"),
+                Some("any-app"),
+                Some("any-tag"),
                 false,
             ),
             (
-                upload_block_list(&[r".*blocked.*"], &["blocked-app"], &["blocked-tag"]),
-                upload_params(
-                    Some("https://allowed.com/upload"),
-                    Some("allowed-app"),
-                    Some("blocked-tag"),
-                ),
+                SchedulerClusterConfigUploadBlockList {
+                    applications: Some(vec!["blocked-app".to_string()]),
+                    urls: vec![Regex::new(r".*blocked.*").unwrap()],
+                    tags: Some(vec!["blocked-tag".to_string()]),
+                },
+                Some("https://allowed.com/upload"),
+                Some("allowed-app"),
+                Some("blocked-tag"),
                 true,
             ),
         ];
 
-        for (block_list, params, expected) in test_cases {
+        for (block_list, url, application, tag, expected) in test_cases {
+            let params = UploadBlockListCheckParams {
+                url: url.map(str::to_string),
+                application: application.map(str::to_string),
+                tag: tag.map(str::to_string),
+            };
             assert_eq!(BlockList::is_upload_blocked(&block_list, &params), expected);
         }
     }
 
     #[tokio::test]
     async fn is_task_download_blocked_reads_client_or_seed_client_config() {
+        let task_block_list = SchedulerClusterConfigBlockList {
+            task: Some(SchedulerClusterConfigTaskBlockList {
+                download: Some(SchedulerClusterConfigDownloadBlockList {
+                    applications: Some(vec!["blocked-app".to_string()]),
+                    ..Default::default()
+                }),
+            }),
+            ..Default::default()
+        };
+        let params = DownloadBlockListCheckParams {
+            url: None,
+            application: Some("blocked-app".to_string()),
+            tag: None,
+            priority: None,
+        };
+
         let test_cases = vec![
             (
                 false,
                 Some(SchedulerClusterClientConfig {
-                    block_list: Some(task_download_block_list(&["blocked-app"])),
+                    block_list: Some(task_block_list.clone()),
                 }),
                 None,
                 true,
@@ -511,7 +550,7 @@ mod tests {
             (
                 true,
                 Some(SchedulerClusterClientConfig {
-                    block_list: Some(task_download_block_list(&["blocked-app"])),
+                    block_list: Some(task_block_list.clone()),
                 }),
                 None,
                 false,
@@ -520,7 +559,7 @@ mod tests {
                 true,
                 None,
                 Some(SchedulerClusterSeedClientConfig {
-                    block_list: Some(task_download_block_list(&["blocked-app"])),
+                    block_list: Some(task_block_list.clone()),
                 }),
                 true,
             ),
@@ -528,7 +567,7 @@ mod tests {
                 false,
                 None,
                 Some(SchedulerClusterSeedClientConfig {
-                    block_list: Some(task_download_block_list(&["blocked-app"])),
+                    block_list: Some(task_block_list.clone()),
                 }),
                 false,
             ),
@@ -555,7 +594,6 @@ mod tests {
                 ..Default::default()
             };
             let block_list = BlockList::new(Arc::new(config), Arc::new(RwLock::new(data)));
-            let params = download_params(None, Some("blocked-app"), None, None);
             assert_eq!(block_list.is_task_download_blocked(&params).await, expected);
         }
     }

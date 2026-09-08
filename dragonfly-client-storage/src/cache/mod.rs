@@ -263,64 +263,38 @@ impl Cache {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::super::metadata::Piece;
     use super::*;
     use bytesize::ByteSize;
     use dragonfly_client_config::dfdaemon::Storage;
     use tokio::io::AsyncReadExt;
 
-    type ExpectDelete = fn(Result<()>);
-    type ExpectRead = fn(Result<Vec<u8>>);
-
-    fn config(cache_capacity: ByteSize) -> Config {
-        Config {
-            storage: Storage {
-                cache_capacity,
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    }
-
-    fn cache(cache_capacity: ByteSize) -> Cache {
-        Cache::new(Arc::new(config(cache_capacity)))
-    }
-
-    fn piece(offset: u64, length: u64) -> Piece {
-        Piece {
-            offset,
-            length,
-            ..Default::default()
-        }
-    }
-
-    fn range(start: u64, length: u64) -> Option<Range> {
-        Some(Range { start, length })
-    }
-
-    fn pattern(bytes: std::ops::Range<u64>) -> Vec<u8> {
-        bytes.map(|i| (i % 256) as u8).collect()
-    }
-
-    async fn read(
-        cache: &Cache,
-        task_id: &str,
-        piece_id: &str,
-        piece: Piece,
-        range: Option<Range>,
-    ) -> Result<Vec<u8>> {
-        let mut reader = cache.read_piece(task_id, piece_id, piece, range).await?;
-        let mut buffer = Vec::new();
-        reader.read_to_end(&mut buffer).await.unwrap();
-        Ok(buffer)
-    }
-
     #[tokio::test]
     async fn new_uses_configured_cache_capacity() {
         let test_cases = vec![
             (Config::default(), ByteSize::mib(64).as_u64()),
-            (config(ByteSize::mib(100)), ByteSize::mib(100).as_u64()),
-            (config(ByteSize::b(0)), 0),
+            (
+                Config {
+                    storage: Storage {
+                        cache_capacity: ByteSize::mib(100),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ByteSize::mib(100).as_u64(),
+            ),
+            (
+                Config {
+                    storage: Storage {
+                        cache_capacity: ByteSize::b(0),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                0,
+            ),
         ];
 
         for (config, expected_capacity) in test_cases {
@@ -340,7 +314,13 @@ mod tests {
         ];
 
         for (content_length, expected_size) in test_cases {
-            let mut cache = cache(ByteSize::mib(10));
+            let mut cache = Cache::new(Arc::new(Config {
+                storage: Storage {
+                    cache_capacity: ByteSize::mib(10),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }));
             cache.put_task("task1", content_length).await;
             assert_eq!(cache.contains_task("task1").await, expected_size > 0);
             assert_eq!(cache.size.load(Ordering::Relaxed), expected_size);
@@ -368,7 +348,13 @@ mod tests {
         ];
 
         for (tasks, expected_tasks, expected_size) in test_cases {
-            let mut cache = cache(ByteSize::mib(5));
+            let mut cache = Cache::new(Arc::new(Config {
+                storage: Storage {
+                    cache_capacity: ByteSize::mib(5),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }));
             for (task_id, content_length) in &tasks {
                 cache
                     .put_task(task_id, ByteSize::mib(*content_length).as_u64())
@@ -399,7 +385,13 @@ mod tests {
         ];
 
         for (put_tasks, task_id, expected) in test_cases {
-            let mut cache = cache(ByteSize::mib(10));
+            let mut cache = Cache::new(Arc::new(Config {
+                storage: Storage {
+                    cache_capacity: ByteSize::mib(10),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }));
             for put_task in &put_tasks {
                 cache.put_task(put_task, ByteSize::mib(1).as_u64()).await;
             }
@@ -410,7 +402,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_task_removes_present_tasks_and_releases_size() {
-        let test_cases: Vec<(&str, u64, ExpectDelete)> = vec![
+        let test_cases: Vec<(&str, u64, fn(Result<()>))> = vec![
             ("task1", 2, |result| assert!(result.is_ok())),
             ("task2", 1, |result| assert!(result.is_ok())),
             ("task3", 0, |result| assert!(result.is_ok())),
@@ -425,7 +417,13 @@ mod tests {
             }),
         ];
 
-        let mut cache = cache(ByteSize::mib(10));
+        let mut cache = Cache::new(Arc::new(Config {
+            storage: Storage {
+                cache_capacity: ByteSize::mib(10),
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
         for task_id in ["task1", "task2", "task3"] {
             cache.put_task(task_id, ByteSize::mib(1).as_u64()).await;
         }
@@ -453,7 +451,13 @@ mod tests {
         ];
 
         for (task_id, written_pieces, piece_id, expected) in test_cases {
-            let mut cache = cache(ByteSize::mib(10));
+            let mut cache = Cache::new(Arc::new(Config {
+                storage: Storage {
+                    cache_capacity: ByteSize::mib(10),
+                    ..Default::default()
+                },
+                ..Default::default()
+            }));
             cache.put_task("task1", 1000).await;
 
             for written_piece in &written_pieces {
@@ -469,7 +473,13 @@ mod tests {
 
     #[tokio::test]
     async fn write_piece_fails_without_task() {
-        let cache = cache(ByteSize::mib(10));
+        let cache = Cache::new(Arc::new(Config {
+            storage: Storage {
+                cache_capacity: ByteSize::mib(10),
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
         let result = cache
             .write_piece("non_existent", "piece1", Bytes::from("test data"))
             .await;
@@ -489,22 +499,34 @@ mod tests {
             ("piece8", vec![1u8; 2048]),
         ];
 
-        let mut cache = cache(ByteSize::mib(10));
+        let mut cache = Cache::new(Arc::new(Config {
+            storage: Storage {
+                cache_capacity: ByteSize::mib(10),
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
         cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
 
         for (piece_id, content) in test_cases {
-            let piece = piece(0, content.len() as u64);
+            let piece = Piece {
+                offset: 0,
+                length: content.len() as u64,
+                ..Default::default()
+            };
             cache
                 .write_piece("task1", piece_id, Bytes::copy_from_slice(&content))
                 .await
                 .unwrap();
             assert!(cache.contains_piece("task1", piece_id).await);
-            assert_eq!(
-                read(&cache, "task1", piece_id, piece.clone(), None)
-                    .await
-                    .unwrap(),
-                content
-            );
+
+            let mut reader = cache
+                .read_piece("task1", piece_id, piece.clone(), None)
+                .await
+                .unwrap();
+            let mut buffer = Vec::new();
+            reader.read_to_end(&mut buffer).await.unwrap();
+            assert_eq!(buffer, content);
 
             cache
                 .write_piece(
@@ -514,53 +536,118 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            assert_eq!(
-                read(&cache, "task1", piece_id, piece, None).await.unwrap(),
-                content
-            );
+            let mut reader = cache
+                .read_piece("task1", piece_id, piece, None)
+                .await
+                .unwrap();
+            let mut buffer = Vec::new();
+            reader.read_to_end(&mut buffer).await.unwrap();
+            assert_eq!(buffer, content);
         }
     }
 
     #[tokio::test]
     async fn read_piece_returns_content_within_range() {
         let large_piece_length = ByteSize::mib(50).as_u64();
+        let large_piece_content: Vec<u8> =
+            (0..large_piece_length).map(|i| (i % 256) as u8).collect();
 
         let test_cases = vec![
-            ("piece1", piece(0, 11), None, b"hello world".to_vec()),
-            ("piece1", piece(0, 11), range(0, 5), b"hello".to_vec()),
-            ("piece1", piece(0, 11), range(6, 100), b"world".to_vec()),
-            ("piece2", piece(11, 9), None, b"rust lang".to_vec()),
-            ("piece2", piece(11, 9), range(11, 4), b"rust".to_vec()),
-            ("piece2", piece(11, 9), range(5, 10), b"rust".to_vec()),
-            ("piece3", piece(20, 9), None, b"unit test".to_vec()),
-            ("piece3", piece(20, 9), range(20, 4), b"unit".to_vec()),
+            ("piece1", 0, 11, None, b"hello world".to_vec()),
+            (
+                "piece1",
+                0,
+                11,
+                Some(Range {
+                    start: 0,
+                    length: 5,
+                }),
+                b"hello".to_vec(),
+            ),
+            (
+                "piece1",
+                0,
+                11,
+                Some(Range {
+                    start: 6,
+                    length: 100,
+                }),
+                b"world".to_vec(),
+            ),
+            ("piece2", 11, 9, None, b"rust lang".to_vec()),
+            (
+                "piece2",
+                11,
+                9,
+                Some(Range {
+                    start: 11,
+                    length: 4,
+                }),
+                b"rust".to_vec(),
+            ),
+            (
+                "piece2",
+                11,
+                9,
+                Some(Range {
+                    start: 5,
+                    length: 10,
+                }),
+                b"rust".to_vec(),
+            ),
+            ("piece3", 20, 9, None, b"unit test".to_vec()),
+            (
+                "piece3",
+                20,
+                9,
+                Some(Range {
+                    start: 20,
+                    length: 4,
+                }),
+                b"unit".to_vec(),
+            ),
             (
                 "large_piece",
-                piece(0, large_piece_length),
+                0,
+                large_piece_length,
                 None,
-                pattern(0..large_piece_length),
+                large_piece_content.clone(),
             ),
             (
                 "large_piece",
-                piece(0, large_piece_length),
-                range(0, ByteSize::mib(1).as_u64()),
-                pattern(0..ByteSize::mib(1).as_u64()),
+                0,
+                large_piece_length,
+                Some(Range {
+                    start: 0,
+                    length: ByteSize::mib(1).as_u64(),
+                }),
+                large_piece_content[..ByteSize::mib(1).as_u64() as usize].to_vec(),
             ),
             (
                 "large_piece",
-                piece(0, large_piece_length),
-                range(ByteSize::mib(49).as_u64(), ByteSize::mib(1).as_u64()),
-                pattern(ByteSize::mib(49).as_u64()..large_piece_length),
+                0,
+                large_piece_length,
+                Some(Range {
+                    start: ByteSize::mib(49).as_u64(),
+                    length: ByteSize::mib(1).as_u64(),
+                }),
+                large_piece_content[ByteSize::mib(49).as_u64() as usize..].to_vec(),
             ),
         ];
 
-        let mut cache = cache(ByteSize::mib(100));
+        let mut cache = Cache::new(Arc::new(Config {
+            storage: Storage {
+                cache_capacity: ByteSize::mib(100),
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
         cache.put_task("task1", large_piece_length).await;
         let pieces = vec![
             ("piece1", b"hello world".to_vec()),
             ("piece2", b"rust lang".to_vec()),
             ("piece3", b"unit test".to_vec()),
-            ("large_piece", pattern(0..large_piece_length)),
+            ("large_piece", large_piece_content),
         ];
         for (piece_id, content) in pieces {
             cache
@@ -569,44 +656,86 @@ mod tests {
                 .unwrap();
         }
 
-        for (piece_id, piece, range, expected) in test_cases {
-            let content = read(&cache, "task1", piece_id, piece, range).await.unwrap();
-            assert_eq!(content, expected);
+        for (piece_id, offset, length, range, expected) in test_cases {
+            let piece = Piece {
+                offset,
+                length,
+                ..Default::default()
+            };
+            let mut reader = cache
+                .read_piece("task1", piece_id, piece, range)
+                .await
+                .unwrap();
+            let mut buffer = Vec::new();
+            reader.read_to_end(&mut buffer).await.unwrap();
+            assert_eq!(buffer, expected);
         }
     }
 
     #[tokio::test]
     async fn read_piece_fails_on_missing_task_piece_or_invalid_range() {
-        let test_cases: Vec<(&str, &str, Piece, Option<Range>, ExpectRead)> = vec![
-            ("non_existent", "piece1", piece(0, 11), None, |result| {
+        let test_cases: Vec<(&str, &str, u64, u64, Option<Range>, fn(Result<()>))> = vec![
+            ("non_existent", "piece1", 0, 11, None, |result| {
                 assert!(matches!(result, Err(Error::TaskNotFound(_))));
             }),
-            ("task1", "non_existent", piece(0, 11), None, |result| {
+            ("task1", "non_existent", 0, 11, None, |result| {
                 assert!(matches!(result, Err(Error::PieceNotFound(_))));
             }),
-            ("task1", "piece1", piece(0, 12), None, |result| {
+            ("task1", "piece1", 0, 12, None, |result| {
                 assert!(matches!(result, Err(Error::InvalidParameter)));
             }),
-            ("task1", "piece1", piece(0, 20), range(11, 5), |result| {
-                assert!(matches!(result, Err(Error::InvalidParameter)));
-            }),
+            (
+                "task1",
+                "piece1",
+                0,
+                20,
+                Some(Range {
+                    start: 11,
+                    length: 5,
+                }),
+                |result| {
+                    assert!(matches!(result, Err(Error::InvalidParameter)));
+                },
+            ),
         ];
 
-        let mut cache = cache(ByteSize::mib(10));
+        let mut cache = Cache::new(Arc::new(Config {
+            storage: Storage {
+                cache_capacity: ByteSize::mib(10),
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
         cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
         cache
             .write_piece("task1", "piece1", Bytes::from("hello world"))
             .await
             .unwrap();
 
-        for (task_id, piece_id, piece, range, expect) in test_cases {
-            expect(read(&cache, task_id, piece_id, piece, range).await);
+        for (task_id, piece_id, offset, length, range, expect) in test_cases {
+            let piece = Piece {
+                offset,
+                length,
+                ..Default::default()
+            };
+            expect(
+                cache
+                    .read_piece(task_id, piece_id, piece, range)
+                    .await
+                    .map(|_| ()),
+            );
         }
     }
 
     #[tokio::test]
     async fn read_piece_marks_task_recently_used() {
-        let mut cache = cache(ByteSize::mib(5));
+        let mut cache = Cache::new(Arc::new(Config {
+            storage: Storage {
+                cache_capacity: ByteSize::mib(5),
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
         cache.put_task("task1", ByteSize::mib(2).as_u64()).await;
         cache
             .write_piece("task1", "piece1", Bytes::from("hello world"))
@@ -614,9 +743,21 @@ mod tests {
             .unwrap();
         cache.put_task("task2", ByteSize::mib(2).as_u64()).await;
 
-        read(&cache, "task1", "piece1", piece(0, 11), None)
+        let mut reader = cache
+            .read_piece(
+                "task1",
+                "piece1",
+                Piece {
+                    offset: 0,
+                    length: 11,
+                    ..Default::default()
+                },
+                None,
+            )
             .await
             .unwrap();
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await.unwrap();
         cache.put_task("task3", ByteSize::mib(2).as_u64()).await;
 
         assert!(cache.contains_task("task1").await);
@@ -626,7 +767,13 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_reads_of_one_piece_return_its_content() {
-        let mut cache = cache(ByteSize::mib(10));
+        let mut cache = Cache::new(Arc::new(Config {
+            storage: Storage {
+                cache_capacity: ByteSize::mib(10),
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
         cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
 
         let content = b"test data for concurrent read".to_vec();
@@ -644,18 +791,30 @@ mod tests {
                 let (read_range, expected) = if i % 2 == 0 {
                     (None, content.clone())
                 } else {
-                    (range(0, 5), content[..5].to_vec())
+                    (
+                        Some(Range {
+                            start: 0,
+                            length: 5,
+                        }),
+                        content[..5].to_vec(),
+                    )
                 };
 
-                let buffer = read(
-                    &cache,
-                    "task1",
-                    "piece1",
-                    piece(0, content.len() as u64),
-                    read_range,
-                )
-                .await
-                .unwrap();
+                let mut reader = cache
+                    .read_piece(
+                        "task1",
+                        "piece1",
+                        Piece {
+                            offset: 0,
+                            length: content.len() as u64,
+                            ..Default::default()
+                        },
+                        read_range,
+                    )
+                    .await
+                    .unwrap();
+                let mut buffer = Vec::new();
+                reader.read_to_end(&mut buffer).await.unwrap();
                 assert_eq!(buffer, expected);
             });
         }
@@ -667,7 +826,13 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_writes_of_different_pieces_store_each() {
-        let mut cache = cache(ByteSize::mib(10));
+        let mut cache = Cache::new(Arc::new(Config {
+            storage: Storage {
+                cache_capacity: ByteSize::mib(10),
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
         cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
 
         let cache = Arc::new(cache);
@@ -682,15 +847,21 @@ mod tests {
                     .await
                     .unwrap();
 
-                let buffer = read(
-                    &cache,
-                    "task1",
-                    &piece_id,
-                    piece(0, content.len() as u64),
-                    None,
-                )
-                .await
-                .unwrap();
+                let mut reader = cache
+                    .read_piece(
+                        "task1",
+                        &piece_id,
+                        Piece {
+                            offset: 0,
+                            length: content.len() as u64,
+                            ..Default::default()
+                        },
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                let mut buffer = Vec::new();
+                reader.read_to_end(&mut buffer).await.unwrap();
                 assert_eq!(buffer, content);
             });
         }
@@ -702,7 +873,13 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_writes_of_one_piece_keep_first_content() {
-        let mut cache = cache(ByteSize::mib(10));
+        let mut cache = Cache::new(Arc::new(Config {
+            storage: Storage {
+                cache_capacity: ByteSize::mib(10),
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
         cache.put_task("task1", ByteSize::mib(1).as_u64()).await;
 
         let original_content = b"original content".to_vec();
@@ -728,15 +905,21 @@ mod tests {
             assert!(result.is_ok());
         }
 
-        let buffer = read(
-            &cache,
-            "task1",
-            "piece1",
-            piece(0, original_content.len() as u64),
-            None,
-        )
-        .await
-        .unwrap();
+        let mut reader = cache
+            .read_piece(
+                "task1",
+                "piece1",
+                Piece {
+                    offset: 0,
+                    length: original_content.len() as u64,
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await.unwrap();
         assert_eq!(buffer, original_content);
     }
 }

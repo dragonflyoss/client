@@ -261,13 +261,13 @@ impl StatsCollector {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use bytesize::ByteSize;
     use std::net::Ipv4Addr;
     use std::time::Instant;
     use tokio::task::JoinSet;
-
-    type ExpectInterface = fn(Option<NetworkInterface>);
 
     #[tokio::test]
     async fn get_stats_shares_one_collector_across_clones() {
@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn get_network_interface_by_ip_finds_only_bound_addresses() {
-        let test_cases: Vec<(IpAddr, ExpectInterface)> = vec![
+        let test_cases: Vec<(IpAddr, fn(Option<NetworkInterface>))> = vec![
             (IpAddr::V4(Ipv4Addr::LOCALHOST), |interface| {
                 assert!(interface.unwrap().is_loopback());
             }),

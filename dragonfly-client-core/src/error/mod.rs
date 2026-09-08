@@ -304,11 +304,9 @@ mod tests {
     use std::sync::PoisonError;
     use tokio::sync::mpsc::error::{SendError, SendTimeoutError};
 
-    type ExpectDFError = fn(DFError);
-
     #[test]
     fn from_conversions_map_source_errors_to_variants() {
-        let test_cases: Vec<(DFError, ExpectDFError)> = vec![
+        let test_cases: Vec<(DFError, fn(DFError))> = vec![
             (
                 ExternalError::new(ErrorType::StorageError)
                     .with_cause(Box::new(std::io::Error::other("inner error")))

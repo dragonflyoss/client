@@ -1328,4 +1328,19 @@ mod tests {
             assert_eq!(piece_length, expected);
         }
     }
+
+    #[tokio::test]
+    async fn calculate_piece_count_rounds_up_to_whole_pieces() {
+        let temp_dir = tempdir().unwrap();
+        let piece = piece(temp_dir.path()).await;
+
+        let test_cases = vec![(1000, 5000, 5), (1000, 5001, 6), (1000, 1, 1), (1000, 0, 0)];
+
+        for (piece_length, content_length, expected) in test_cases {
+            assert_eq!(
+                piece.calculate_piece_count(piece_length, content_length),
+                expected
+            );
+        }
+    }
 }

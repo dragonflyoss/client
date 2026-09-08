@@ -810,10 +810,6 @@ mod tests {
 
     const DATA_LENGTH: u64 = 8 * 1024 * 1024;
 
-    fn pattern(length: u64) -> Vec<u8> {
-        (0..length).map(|i| (i % 251) as u8).collect()
-    }
-
     async fn tcp_pair() -> (TcpStream, TcpStream) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -829,7 +825,7 @@ mod tests {
     async fn sendfile_range_sends_the_range_until_eof() {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().join("task");
-        let data = pattern(DATA_LENGTH);
+        let data: Vec<u8> = (0..DATA_LENGTH).map(|i| (i % 251) as u8).collect();
         tokio::fs::write(&path, &data).await.unwrap();
 
         let test_cases: Vec<(u64, u64, &[u8])> = vec![
@@ -863,7 +859,7 @@ mod tests {
     async fn sendfile_range_fails_when_the_peer_closed() {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().join("task");
-        let data = pattern(DATA_LENGTH);
+        let data: Vec<u8> = (0..DATA_LENGTH).map(|i| (i % 251) as u8).collect();
         tokio::fs::write(&path, &data).await.unwrap();
         let fd = std::fs::File::open(&path).unwrap();
 

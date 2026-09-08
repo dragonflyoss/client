@@ -572,28 +572,10 @@ impl RollingWindow {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use std::thread;
-
-    type ExpectBucket = fn((u64, u64));
-    type InFlightOp = fn(&RollingWindow);
-
-    fn window() -> RollingWindow {
-        RollingWindow::new(10, Duration::from_millis(100))
-    }
-
-    fn current_bucket(window: &RollingWindow) -> (u64, u64) {
-        let current_bucket = window.current_bucket.lock();
-        (current_bucket.1, current_bucket.2)
-    }
-
-    fn config(cpu_threshold: u8, memory_threshold: u8) -> BBRConfig {
-        BBRConfig {
-            cpu_threshold,
-            memory_threshold,
-            ..Default::default()
-        }
-    }
 
     #[test]
     fn default_config_uses_the_default_fns() {
@@ -617,7 +599,7 @@ mod tests {
 
     #[test]
     fn add_counts_passes_and_tracks_the_min_rt_within_a_bucket() {
-        let test_cases: Vec<(Vec<u64>, ExpectBucket)> = vec![
+        let test_cases: Vec<(Vec<u64>, fn((u64, u64)))> = vec![
             (vec![100], |bucket| assert_eq!(bucket, (1, 100))),
             (vec![100, 50, 200], |bucket| assert_eq!(bucket, (3, 50))),
             (vec![0], |bucket| assert_eq!(bucket, (1, 0))),
@@ -627,19 +609,20 @@ mod tests {
         ];
 
         for (rts, expect) in test_cases {
-            let window = window();
+            let window = RollingWindow::new(10, Duration::from_millis(100));
             for rt in rts {
                 window.add(rt);
             }
 
             assert_eq!(window.ring.lock().occupied_len(), 0);
-            expect(current_bucket(&window));
+            let current_bucket = window.current_bucket.lock();
+            expect((current_bucket.1, current_bucket.2));
         }
     }
 
     #[test]
     fn add_flushes_the_expired_bucket_into_the_ring() {
-        let window = window();
+        let window = RollingWindow::new(10, Duration::from_millis(100));
         window.add(100);
         window.add(80);
         thread::sleep(Duration::from_millis(150));
@@ -653,17 +636,19 @@ mod tests {
         assert_eq!(sample.min_rt, 80);
 
         drop(ring);
-        assert_eq!(current_bucket(&window), (1, 150));
+        let current_bucket = window.current_bucket.lock();
+        assert_eq!((current_bucket.1, current_bucket.2), (1, 150));
     }
 
     #[test]
     fn add_skips_flushing_an_empty_bucket() {
-        let window = window();
+        let window = RollingWindow::new(10, Duration::from_millis(100));
         thread::sleep(Duration::from_millis(120));
 
         window.add(100);
         assert_eq!(window.ring.lock().occupied_len(), 0);
-        assert_eq!(current_bucket(&window), (1, 100));
+        let current_bucket = window.current_bucket.lock();
+        assert_eq!((current_bucket.1, current_bucket.2), (1, 100));
     }
 
     #[test]
@@ -683,7 +668,7 @@ mod tests {
 
     #[test]
     fn in_flight_follows_add_and_sub() {
-        let test_cases: Vec<(Vec<InFlightOp>, u64)> = vec![
+        let test_cases: Vec<(Vec<fn(&RollingWindow)>, u64)> = vec![
             (vec![], 0),
             (
                 vec![
@@ -713,7 +698,7 @@ mod tests {
         ];
 
         for (ops, expected) in test_cases {
-            let window = window();
+            let window = RollingWindow::new(10, Duration::from_millis(100));
             for op in ops {
                 op(&window);
             }
@@ -725,7 +710,7 @@ mod tests {
 
     #[test]
     fn get_stats_aggregates_the_flushed_buckets() {
-        let window = window();
+        let window = RollingWindow::new(10, Duration::from_millis(100));
         window.add(100);
         window.add(50);
         thread::sleep(Duration::from_millis(120));
@@ -757,7 +742,7 @@ mod tests {
 
     #[test]
     fn concurrent_adds_land_in_the_current_bucket() {
-        let window = Arc::new(window());
+        let window = Arc::new(RollingWindow::new(10, Duration::from_millis(100)));
         let mut handles = vec![];
         for _ in 0..4 {
             let window = window.clone();
@@ -772,14 +757,14 @@ mod tests {
             handle.join().unwrap();
         }
 
-        let (pass, min_rt) = current_bucket(&window);
-        assert!(pass > 0);
-        assert!(min_rt <= 99);
+        let current_bucket = window.current_bucket.lock();
+        assert!(current_bucket.1 > 0);
+        assert!(current_bucket.2 <= 99);
     }
 
     #[tokio::test]
     async fn concurrent_adds_and_stats_stay_consistent() {
-        let window = Arc::new(window());
+        let window = Arc::new(RollingWindow::new(10, Duration::from_millis(100)));
         let mut handles = vec![];
         for _ in 0..2 {
             let window = window.clone();
@@ -810,7 +795,12 @@ mod tests {
 
     #[tokio::test]
     async fn acquire_admits_requests_when_not_overloaded() {
-        let bbr = BBR::new(config(100, 100)).await;
+        let bbr = BBR::new(BBRConfig {
+            cpu_threshold: 100,
+            memory_threshold: 100,
+            ..Default::default()
+        })
+        .await;
         assert!(!bbr.overload_collector.is_overloaded());
 
         let guard = bbr.acquire().await.unwrap();
@@ -818,13 +808,18 @@ mod tests {
 
         drop(guard);
         assert_eq!(bbr.rolling_window.in_flight(), 0);
-        assert_eq!(current_bucket(&bbr.rolling_window).0, 1);
+        assert_eq!(bbr.rolling_window.current_bucket.lock().1, 1);
         assert!(bbr.shed_at.lock().is_none());
     }
 
     #[tokio::test]
     async fn acquire_sheds_only_when_in_flight_exceeds_the_estimated_limit() {
-        let bbr = BBR::new(config(100, 100)).await;
+        let bbr = BBR::new(BBRConfig {
+            cpu_threshold: 100,
+            memory_threshold: 100,
+            ..Default::default()
+        })
+        .await;
         bbr.overload_collector
             .is_overloaded
             .store(true, Ordering::Relaxed);
@@ -851,8 +846,10 @@ mod tests {
     #[tokio::test]
     async fn acquire_keeps_shedding_during_the_cooldown() {
         let bbr = BBR::new(BBRConfig {
+            cpu_threshold: 100,
+            memory_threshold: 100,
             shed_cooldown: Duration::from_millis(50),
-            ..config(100, 100)
+            ..Default::default()
         })
         .await;
 
@@ -868,7 +865,11 @@ mod tests {
 
     #[tokio::test]
     async fn collector_ignores_resources_at_the_full_threshold() {
-        let collector = OverloadCollector::new(config(100, 100));
+        let collector = OverloadCollector::new(BBRConfig {
+            cpu_threshold: 100,
+            memory_threshold: 100,
+            ..Default::default()
+        });
 
         collector.collect_overloaded().await;
         assert!(!collector.is_overloaded());
@@ -880,7 +881,11 @@ mod tests {
 
     #[tokio::test]
     async fn collector_flags_overload_at_a_zero_threshold() {
-        let collector = OverloadCollector::new(config(0, 0));
+        let collector = OverloadCollector::new(BBRConfig {
+            cpu_threshold: 0,
+            memory_threshold: 0,
+            ..Default::default()
+        });
 
         collector.collect_overloaded().await;
         assert!(collector.is_overloaded());

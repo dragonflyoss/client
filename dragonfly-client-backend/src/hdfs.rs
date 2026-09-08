@@ -298,15 +298,15 @@ impl Backend for Hdfs {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    #![allow(clippy::type_complexity)]
 
-    type ExpectOperator = fn(ClientResult<Operator>);
+    use super::*;
 
     #[tokio::test]
     async fn operator_requires_a_host() {
         dragonfly_client_util::tls::install_crypto_provider();
 
-        let test_cases: Vec<(&str, Option<common::v2::Hdfs>, ExpectOperator)> = vec![
+        let test_cases: Vec<(&str, Option<common::v2::Hdfs>, fn(ClientResult<Operator>))> = vec![
             ("hdfs://127.0.0.1:9870/file", None, |result| {
                 assert_eq!(result.unwrap().info().scheme(), "webhdfs");
             }),

@@ -482,6 +482,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use dragonfly_client_util::fs::fd::{FDCache, DEFAULT_FD_CACHE_CAPACITY};
     use std::fs::OpenOptions;
@@ -491,20 +493,9 @@ mod tests {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt};
     use tokio_util::io::StreamReader;
 
-    type Chunks = Vec<io::Result<Bytes>>;
-    type ExpectWriteRange = fn(Result<u64>);
-
     const DATA_LENGTH: u64 = 256 * 1024;
     const FILE_LENGTH: usize = 64;
     const MAX_WRITE_IOVECS: u64 = 1024;
-
-    fn pattern(length: u64) -> Vec<u8> {
-        (0..length).map(|i| (i % 251) as u8).collect()
-    }
-
-    fn buffer_pool() -> BufferPool {
-        BufferPool::new(64 * 1024 * 1024)
-    }
 
     fn open_rw(path: &Path) -> Arc<File> {
         Arc::new(
@@ -526,43 +517,11 @@ mod tests {
         )
     }
 
-    fn chunks_of(data: &[u8], chunk_size: usize) -> Chunks {
-        data.chunks(chunk_size)
-            .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
-            .collect()
-    }
-
-    fn failing_chunks() -> Chunks {
-        vec![
-            Ok(Bytes::from_static(b"hello")),
-            Err(io::Error::other("stream failed")),
-        ]
-    }
-
-    fn written_file(offset: u64, written: &[u8]) -> Vec<u8> {
-        let end = offset as usize + written.len();
-        let mut content = vec![0u8; max(FILE_LENGTH, end)];
-        content[offset as usize..end].copy_from_slice(written);
-        content
-    }
-
-    async fn read_chunks(reader: &mut RangeReader) -> Vec<u8> {
-        let mut buffer = Vec::new();
-        loop {
-            let chunk = reader.read_chunk().await.unwrap();
-            if chunk.is_empty() {
-                break;
-            }
-            buffer.extend_from_slice(&chunk);
-        }
-        buffer
-    }
-
     #[tokio::test]
     async fn range_reader_reads_the_range_until_eof() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("task");
-        let data = pattern(DATA_LENGTH);
+        let data: Vec<u8> = (0..DATA_LENGTH).map(|i| (i % 251) as u8).collect();
         tokio::fs::write(&path, &data).await.unwrap();
         let fd = Arc::new(File::open(&path).unwrap());
 
@@ -581,15 +540,34 @@ mod tests {
         ];
 
         for (offset, length, buffer_size, expected) in test_cases {
-            let mut reader =
-                RangeReader::new(fd.clone(), offset, length, buffer_size, buffer_pool());
+            let mut reader = RangeReader::new(
+                fd.clone(),
+                offset,
+                length,
+                buffer_size,
+                BufferPool::new(64 * 1024 * 1024),
+            );
             let mut buffer = Vec::new();
             reader.read_to_end(&mut buffer).await.unwrap();
             assert_eq!(buffer, expected);
 
-            let mut reader =
-                RangeReader::new(fd.clone(), offset, length, buffer_size, buffer_pool());
-            assert_eq!(read_chunks(&mut reader).await, expected);
+            let mut reader = RangeReader::new(
+                fd.clone(),
+                offset,
+                length,
+                buffer_size,
+                BufferPool::new(64 * 1024 * 1024),
+            );
+            let mut buffer = Vec::new();
+            loop {
+                let chunk = reader.read_chunk().await.unwrap();
+                if chunk.is_empty() {
+                    break;
+                }
+                buffer.extend_from_slice(&chunk);
+            }
+
+            assert_eq!(buffer, expected);
         }
     }
 
@@ -599,7 +577,13 @@ mod tests {
         let path = temp_dir.path().join("task");
         tokio::fs::write(&path, b"hello, world!").await.unwrap();
 
-        let mut reader = RangeReader::new(open_write_only(&path), 0, 13, 4, buffer_pool());
+        let mut reader = RangeReader::new(
+            open_write_only(&path),
+            0,
+            13,
+            4,
+            BufferPool::new(64 * 1024 * 1024),
+        );
         let mut buffer = Vec::new();
         assert!(reader.read_to_end(&mut buffer).await.is_err());
 
@@ -613,7 +597,13 @@ mod tests {
         let path = temp_dir.path().join("task");
         tokio::fs::write(&path, b"hello, world!").await.unwrap();
 
-        let mut reader = RangeReader::new(open_write_only(&path), 0, 13, 4, buffer_pool());
+        let mut reader = RangeReader::new(
+            open_write_only(&path),
+            0,
+            13,
+            4,
+            BufferPool::new(64 * 1024 * 1024),
+        );
         assert!(matches!(reader.read_chunk().await, Err(Error::IO(_))));
     }
 
@@ -632,7 +622,8 @@ mod tests {
         ];
 
         for (consumed, expected_offset, expected_remaining) in test_cases {
-            let mut reader = RangeReader::new(fd.clone(), 2, 11, 5, buffer_pool());
+            let mut reader =
+                RangeReader::new(fd.clone(), 2, 11, 5, BufferPool::new(64 * 1024 * 1024));
             if let Some(consumed) = consumed {
                 assert_eq!(reader.fill_buf().await.unwrap(), b"llo, ");
 
@@ -653,7 +644,7 @@ mod tests {
         tokio::fs::write(&path, b"hello, world!").await.unwrap();
         let fd = Arc::new(File::open(&path).unwrap());
 
-        let mut reader = RangeReader::new(fd, 0, 13, 5, buffer_pool());
+        let mut reader = RangeReader::new(fd, 0, 13, 5, BufferPool::new(64 * 1024 * 1024));
         assert_eq!(reader.fill_buf().await.unwrap(), b"hello");
 
         reader.consume(2);
@@ -670,7 +661,7 @@ mod tests {
         tokio::fs::write(&path, b"hello, world!").await.unwrap();
         let fd = Arc::new(File::open(&path).unwrap());
 
-        let mut reader = RangeReader::new(fd, 0, 13, 5, buffer_pool());
+        let mut reader = RangeReader::new(fd, 0, 13, 5, BufferPool::new(64 * 1024 * 1024));
         assert_eq!(reader.fill_buf().await.unwrap(), b"hello");
 
         reader.consume(2);
@@ -690,11 +681,17 @@ mod tests {
     async fn range_reader_copy_buf_copies_the_range() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("task");
-        let data = pattern(64 * 1024);
+        let data: Vec<u8> = (0..64 * 1024).map(|i| (i % 251) as u8).collect();
         tokio::fs::write(&path, &data).await.unwrap();
         let fd = Arc::new(File::open(&path).unwrap());
 
-        let mut reader = RangeReader::new(fd, 1_000, 50_000, 8 * 1024, buffer_pool());
+        let mut reader = RangeReader::new(
+            fd,
+            1_000,
+            50_000,
+            8 * 1024,
+            BufferPool::new(64 * 1024 * 1024),
+        );
         let mut writer = Cursor::new(Vec::new());
         let copied = tokio::io::copy_buf(&mut reader, &mut writer).await.unwrap();
         assert_eq!(copied, 50_000);
@@ -708,7 +705,7 @@ mod tests {
         tokio::fs::write(&path, b"hello, world!").await.unwrap();
         let fd = Arc::new(File::open(&path).unwrap());
 
-        let mut reader = RangeReader::new(fd, 0, 13, 512, buffer_pool());
+        let mut reader = RangeReader::new(fd, 0, 13, 512, BufferPool::new(64 * 1024 * 1024));
         let mut buffer = Vec::new();
         let mut chunk = [0u8; 3];
         loop {
@@ -726,7 +723,7 @@ mod tests {
     async fn concurrent_range_readers_read_disjoint_ranges() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("task");
-        let data = pattern(64 * 1024);
+        let data: Vec<u8> = (0..64 * 1024).map(|i| (i % 251) as u8).collect();
         tokio::fs::write(&path, &data).await.unwrap();
         let fd = Arc::new(File::open(&path).unwrap());
 
@@ -735,8 +732,13 @@ mod tests {
             .map(|i| {
                 let fd = fd.clone();
                 tokio::spawn(async move {
-                    let mut reader =
-                        RangeReader::new(fd, i * range_length, range_length, 1024, buffer_pool());
+                    let mut reader = RangeReader::new(
+                        fd,
+                        i * range_length,
+                        range_length,
+                        1024,
+                        BufferPool::new(64 * 1024 * 1024),
+                    );
                     let mut buffer = Vec::new();
                     reader.read_to_end(&mut buffer).await.unwrap();
                     (i, buffer)
@@ -759,14 +761,14 @@ mod tests {
 
         let cache = FDCache::new(DEFAULT_FD_CACHE_CAPACITY);
 
-        let data = pattern(16 * 1024);
+        let data: Vec<u8> = (0..16 * 1024).map(|i| (i % 251) as u8).collect();
         write_range(
             cache.open_write(&path).await.unwrap(),
             0,
             data.len() as u64,
             4 * 1024,
             &mut data.as_slice(),
-            &buffer_pool(),
+            &BufferPool::new(64 * 1024 * 1024),
         )
         .await
         .unwrap();
@@ -776,7 +778,7 @@ mod tests {
             0,
             data.len() as u64,
             4 * 1024,
-            buffer_pool(),
+            BufferPool::new(64 * 1024 * 1024),
         );
         let mut buffer = Vec::new();
         reader.read_to_end(&mut buffer).await.unwrap();
@@ -787,7 +789,7 @@ mod tests {
     async fn write_range_writes_and_hashes_the_range() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("task");
-        let data = pattern(DATA_LENGTH);
+        let data: Vec<u8> = (0..DATA_LENGTH).map(|i| (i % 251) as u8).collect();
 
         let test_cases = vec![
             (0, 13, 512),
@@ -810,7 +812,7 @@ mod tests {
                 expected_length,
                 buffer_size,
                 &mut data.as_slice(),
-                &buffer_pool(),
+                &BufferPool::new(64 * 1024 * 1024),
             )
             .await
             .unwrap();
@@ -818,10 +820,11 @@ mod tests {
             let written = &data[..expected_length as usize];
             assert_eq!(response.length, expected_length);
             assert_eq!(response.hash, crc32fast::hash(written).to_string());
-            assert_eq!(
-                tokio::fs::read(&path).await.unwrap(),
-                written_file(offset, written)
-            );
+
+            let end = offset as usize + written.len();
+            let mut expected_file = vec![0u8; max(FILE_LENGTH, end)];
+            expected_file[offset as usize..end].copy_from_slice(written);
+            assert_eq!(tokio::fs::read(&path).await.unwrap(), expected_file);
         }
     }
 
@@ -832,35 +835,68 @@ mod tests {
         tokio::fs::write(&path, b"").await.unwrap();
         let fd = open_rw(&path);
         let read_only_fd = Arc::new(File::open(&path).unwrap());
+        let data: Vec<u8> = (0..16 * 1024).map(|i| (i % 251) as u8).collect();
 
-        let test_cases: Vec<(Arc<File>, u64, usize, Chunks, ExpectWriteRange)> = vec![
+        let test_cases: Vec<(
+            Arc<File>,
+            u64,
+            usize,
+            Vec<io::Result<Bytes>>,
+            fn(Result<u64>),
+        )> = vec![
             (
                 fd.clone(),
                 2048,
                 512,
-                chunks_of(&pattern(1024), 100),
+                data[..1024]
+                    .chunks(100)
+                    .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
+                    .collect(),
                 |result| {
                     assert!(matches!(result, Err(Error::Unknown(_))));
                 },
             ),
-            (fd.clone(), 10, 512, failing_chunks(), |result| {
-                assert!(matches!(result, Err(Error::IO(_))));
-            }),
-            (fd.clone(), 10, 4, failing_chunks(), |result| {
-                assert!(matches!(result, Err(Error::IO(_))));
-            }),
+            (
+                fd.clone(),
+                10,
+                512,
+                vec![
+                    Ok(Bytes::from_static(b"hello")),
+                    Err(io::Error::other("stream failed")),
+                ],
+                |result| {
+                    assert!(matches!(result, Err(Error::IO(_))));
+                },
+            ),
+            (
+                fd.clone(),
+                10,
+                4,
+                vec![
+                    Ok(Bytes::from_static(b"hello")),
+                    Err(io::Error::other("stream failed")),
+                ],
+                |result| {
+                    assert!(matches!(result, Err(Error::IO(_))));
+                },
+            ),
             (
                 read_only_fd.clone(),
                 16 * 1024,
                 4,
-                chunks_of(&pattern(16 * 1024), 512),
+                data.chunks(512)
+                    .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
+                    .collect(),
                 |result| assert!(matches!(result, Err(Error::IO(_)))),
             ),
             (
                 read_only_fd.clone(),
                 13,
                 512,
-                chunks_of(b"hello, world!", 5),
+                b"hello, world!"
+                    .chunks(5)
+                    .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
+                    .collect(),
                 |result| assert!(matches!(result, Err(Error::IO(_)))),
             ),
         ];
@@ -873,7 +909,7 @@ mod tests {
                 expected_length,
                 buffer_size,
                 &mut reader,
-                &buffer_pool(),
+                &BufferPool::new(64 * 1024 * 1024),
             )
             .await;
             expect(result.map(|response| response.length));
@@ -884,7 +920,7 @@ mod tests {
     async fn write_range_from_stream_writes_and_hashes_the_range() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("task");
-        let data = pattern(DATA_LENGTH);
+        let data: Vec<u8> = (0..DATA_LENGTH).map(|i| (i % 251) as u8).collect();
 
         let test_cases = vec![
             (0, 13, 512, 5),
@@ -907,7 +943,11 @@ mod tests {
             tokio::fs::write(&path, vec![0u8; FILE_LENGTH])
                 .await
                 .unwrap();
-            let mut stream = futures::stream::iter(chunks_of(&data, chunk_size));
+            let chunks: Vec<io::Result<Bytes>> = data
+                .chunks(chunk_size)
+                .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
+                .collect();
+            let mut stream = futures::stream::iter(chunks);
             let response = write_range_from_stream(
                 open_rw(&path),
                 offset,
@@ -921,10 +961,11 @@ mod tests {
             let written = &data[..expected_length as usize];
             assert_eq!(response.length, expected_length);
             assert_eq!(response.hash, crc32fast::hash(written).to_string());
-            assert_eq!(
-                tokio::fs::read(&path).await.unwrap(),
-                written_file(offset, written)
-            );
+
+            let end = offset as usize + written.len();
+            let mut expected_file = vec![0u8; max(FILE_LENGTH, end)];
+            expected_file[offset as usize..end].copy_from_slice(written);
+            assert_eq!(tokio::fs::read(&path).await.unwrap(), expected_file);
         }
     }
 
@@ -957,35 +998,68 @@ mod tests {
         tokio::fs::write(&path, b"").await.unwrap();
         let fd = open_rw(&path);
         let read_only_fd = Arc::new(File::open(&path).unwrap());
+        let data: Vec<u8> = (0..16 * 1024).map(|i| (i % 251) as u8).collect();
 
-        let test_cases: Vec<(Arc<File>, u64, usize, Chunks, ExpectWriteRange)> = vec![
+        let test_cases: Vec<(
+            Arc<File>,
+            u64,
+            usize,
+            Vec<io::Result<Bytes>>,
+            fn(Result<u64>),
+        )> = vec![
             (
                 fd.clone(),
                 2048,
                 512,
-                chunks_of(&pattern(1024), 100),
+                data[..1024]
+                    .chunks(100)
+                    .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
+                    .collect(),
                 |result| {
                     assert!(matches!(result, Err(Error::Unknown(_))));
                 },
             ),
-            (fd.clone(), 10, 512, failing_chunks(), |result| {
-                assert!(matches!(result, Err(Error::IO(_))));
-            }),
-            (fd.clone(), 10, 4, failing_chunks(), |result| {
-                assert!(matches!(result, Err(Error::IO(_))));
-            }),
+            (
+                fd.clone(),
+                10,
+                512,
+                vec![
+                    Ok(Bytes::from_static(b"hello")),
+                    Err(io::Error::other("stream failed")),
+                ],
+                |result| {
+                    assert!(matches!(result, Err(Error::IO(_))));
+                },
+            ),
+            (
+                fd.clone(),
+                10,
+                4,
+                vec![
+                    Ok(Bytes::from_static(b"hello")),
+                    Err(io::Error::other("stream failed")),
+                ],
+                |result| {
+                    assert!(matches!(result, Err(Error::IO(_))));
+                },
+            ),
             (
                 read_only_fd.clone(),
                 16 * 1024,
                 4,
-                chunks_of(&pattern(16 * 1024), 512),
+                data.chunks(512)
+                    .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
+                    .collect(),
                 |result| assert!(matches!(result, Err(Error::IO(_)))),
             ),
             (
                 read_only_fd.clone(),
                 13,
                 512,
-                chunks_of(b"hello, world!", 5),
+                b"hello, world!"
+                    .chunks(5)
+                    .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
+                    .collect(),
                 |result| assert!(matches!(result, Err(Error::IO(_)))),
             ),
         ];
@@ -1002,7 +1076,7 @@ mod tests {
     async fn concurrent_writers_write_disjoint_ranges() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("task");
-        let data = pattern(64 * 1024);
+        let data: Vec<u8> = (0..64 * 1024).map(|i| (i % 251) as u8).collect();
         tokio::fs::write(&path, vec![0u8; data.len()])
             .await
             .unwrap();
@@ -1020,7 +1094,7 @@ mod tests {
                         piece.len() as u64,
                         1024,
                         &mut piece.as_slice(),
-                        &buffer_pool(),
+                        &BufferPool::new(64 * 1024 * 1024),
                     )
                     .await
                     .unwrap();

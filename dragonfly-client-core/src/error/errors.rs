@@ -186,10 +186,6 @@ pub struct DownloadFromParentFailed {
 mod tests {
     use super::*;
 
-    fn io_error() -> std::io::Error {
-        std::io::Error::other("inner error")
-    }
-
     #[test]
     fn as_str_names_each_error_type() {
         let test_cases = vec![
@@ -226,7 +222,7 @@ mod tests {
             (
                 ExternalError::new(ErrorType::StorageError)
                     .with_context("error message with owned string".to_string())
-                    .with_cause(Box::new(io_error())),
+                    .with_cause(Box::new(std::io::Error::other("inner error"))),
                 "StorageError context: error message with owned string cause: inner error",
             ),
             (
@@ -256,11 +252,12 @@ mod tests {
     fn or_err_and_or_context_wrap_the_cause() {
         let test_cases = vec![
             (
-                Err::<(), _>(io_error()).or_err(ErrorType::StorageError),
+                Err::<(), _>(std::io::Error::other("inner error")).or_err(ErrorType::StorageError),
                 "StorageError cause: inner error",
             ),
             (
-                Err::<(), _>(io_error()).or_context(ErrorType::StorageError, "error message"),
+                Err::<(), _>(std::io::Error::other("inner error"))
+                    .or_context(ErrorType::StorageError, "error message"),
                 "StorageError context: error message cause: inner error",
             ),
         ];

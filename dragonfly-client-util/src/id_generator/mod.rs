@@ -286,23 +286,11 @@ impl IDGenerator {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use dragonfly_api::common::v2::{HuggingFace, ModelScope, OpenCsg};
     use tempfile::tempdir;
-
-    type ExpectTaskID = fn(Result<String>);
-
-    fn generator(is_seed_peer: bool) -> IDGenerator {
-        IDGenerator::new(
-            "127.0.0.1".to_string(),
-            "localhost".to_string(),
-            is_seed_peer,
-        )
-    }
-
-    fn expect_invalid_uri(task_id: Result<String>) {
-        assert!(matches!(task_id, Err(Error::InvalidURI(_))));
-    }
 
     #[test]
     fn repository_revision_reads_the_hub_backend_revision() {
@@ -353,7 +341,12 @@ mod tests {
         ];
 
         for (is_seed_peer, expected) in test_cases {
-            assert_eq!(generator(is_seed_peer).host_id(), expected);
+            let generator = IDGenerator::new(
+                "127.0.0.1".to_string(),
+                "localhost".to_string(),
+                is_seed_peer,
+            );
+            assert_eq!(generator.host_id(), expected);
         }
     }
 
@@ -470,7 +463,7 @@ mod tests {
             ),
         ];
 
-        let generator = generator(false);
+        let generator = IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false);
         for (url, piece_length, tag, application, filtered_query_params, revision, expected) in
             test_cases
         {
@@ -492,7 +485,7 @@ mod tests {
 
     #[test]
     fn task_id_hashes_content() {
-        let task_id = generator(false)
+        let task_id = IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false)
             .task_id(TaskIDParameter::Content("This is a test file".to_string()))
             .unwrap();
         assert_eq!(
@@ -503,7 +496,7 @@ mod tests {
 
     #[test]
     fn task_id_extracts_oci_digests_or_rejects_invalid_urls() {
-        let test_cases: Vec<(TaskIDParameter, ExpectTaskID)> = vec![
+        let test_cases: Vec<(TaskIDParameter, fn(Result<String>))> = vec![
             (
                 TaskIDParameter::BlobDigestBased(
                     "http://registry.example.com/v2/library/ubuntu/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e"
@@ -556,28 +549,28 @@ mod tests {
                 TaskIDParameter::ManifestDigestBased(
                     "http://registry.example.com/v2/library/ubuntu/manifests/latest".to_string(),
                 ),
-                expect_invalid_uri,
+                |task_id| assert!(matches!(task_id, Err(Error::InvalidURI(_)))),
             ),
             (
                 TaskIDParameter::BlobDigestBased("https://example.com/file.txt".to_string()),
-                expect_invalid_uri,
+                |task_id| assert!(matches!(task_id, Err(Error::InvalidURI(_)))),
             ),
             (
                 TaskIDParameter::BlobDigestBased(
                     "http://registry.example.com/v2/library/ubuntu/blobs/sha256:abc".to_string(),
                 ),
-                expect_invalid_uri,
+                |task_id| assert!(matches!(task_id, Err(Error::InvalidURI(_)))),
             ),
             (
                 TaskIDParameter::BlobDigestBased(
                     "http://registry.example.com/v2/library/ubuntu/blobs/md5:8a04994a666b4e4b20a2fd9e5a44f44c"
                         .to_string(),
                 ),
-                expect_invalid_uri,
+                |task_id| assert!(matches!(task_id, Err(Error::InvalidURI(_)))),
             ),
         ];
 
-        let generator = generator(false);
+        let generator = IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false);
         for (parameter, expect) in test_cases {
             expect(generator.task_id(parameter));
         }
@@ -585,7 +578,7 @@ mod tests {
 
     #[test]
     fn persistent_task_id_hashes_url_region_and_endpoint() {
-        let task_id = generator(false)
+        let task_id = IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false)
             .persistent_task_id(PersistentTaskIDParameter::FileContentBased {
                 url: "my-object-key".to_string(),
                 region: "us-west-1".to_string(),
@@ -631,7 +624,7 @@ mod tests {
             ),
         ];
 
-        let generator = generator(false);
+        let generator = IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false);
         for (piece_length, tag, application, expected) in test_cases {
             let parameter = PersistentCacheTaskIDParameter::FileContentBased {
                 path: path.clone(),
@@ -646,7 +639,7 @@ mod tests {
 
     #[test]
     fn persistent_cache_task_id_hashes_content() {
-        let task_id = generator(false)
+        let task_id = IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false)
             .persistent_cache_task_id(PersistentCacheTaskIDParameter::Content(
                 "This is a test file".to_string(),
             ))
@@ -662,7 +655,12 @@ mod tests {
         let test_cases = vec![(false, ""), (true, "-seed")];
 
         for (is_seed_peer, expected_suffix) in test_cases {
-            let peer_id = generator(is_seed_peer).peer_id();
+            let generator = IDGenerator::new(
+                "127.0.0.1".to_string(),
+                "localhost".to_string(),
+                is_seed_peer,
+            );
+            let peer_id = generator.peer_id();
             let uuid = peer_id
                 .strip_prefix("127.0.0.1-localhost-")
                 .and_then(|uuid| uuid.strip_suffix(expected_suffix));

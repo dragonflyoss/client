@@ -80,28 +80,20 @@ impl Credentials {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use http::header::{HeaderValue, AUTHORIZATION};
 
-    type ExpectVerify = fn(Result<()>);
-
-    fn header(authorization: Option<&str>) -> HeaderMap {
-        let mut header = HeaderMap::new();
-        if let Some(authorization) = authorization {
-            header.insert(AUTHORIZATION, HeaderValue::from_str(authorization).unwrap());
-        }
-        header
-    }
-
-    fn expect_unauthorized(result: Result<()>) {
-        assert!(matches!(result, Err(Error::Unauthorized)));
-    }
-
     #[test]
     fn verify_accepts_only_matching_basic_credentials() {
-        let test_cases: Vec<(Option<&str>, ExpectVerify)> = vec![
-            (None, expect_unauthorized),
-            (Some("Bearer some_token"), expect_unauthorized),
+        let test_cases: Vec<(Option<&str>, fn(Result<()>))> = vec![
+            (None, |result| {
+                assert!(matches!(result, Err(Error::Unauthorized)))
+            }),
+            (Some("Bearer some_token"), |result| {
+                assert!(matches!(result, Err(Error::Unauthorized)))
+            }),
             (Some("Basic invalid_base64"), |result| {
                 assert_eq!(
                     result.unwrap_err().to_string(),
@@ -114,15 +106,24 @@ mod tests {
                     "ParseError cause: invalid utf-8 sequence of 1 bytes from index 0"
                 )
             }),
-            (Some("Basic dXNlcg=="), expect_unauthorized),
-            (Some("Basic dXNlcjpwYXNzX2Vycm9y"), expect_unauthorized),
+            (Some("Basic dXNlcg=="), |result| {
+                assert!(matches!(result, Err(Error::Unauthorized)))
+            }),
+            (Some("Basic dXNlcjpwYXNzX2Vycm9y"), |result| {
+                assert!(matches!(result, Err(Error::Unauthorized)))
+            }),
             (Some("Basic dXNlcjpwYXNz"), |result| assert!(result.is_ok())),
             (Some("basic dXNlcjpwYXNz"), |result| assert!(result.is_ok())),
         ];
 
         let credentials = Credentials::new("user", "pass");
         for (authorization, expect) in test_cases {
-            expect(credentials.verify(&header(authorization)));
+            let mut header = HeaderMap::new();
+            if let Some(authorization) = authorization {
+                header.insert(AUTHORIZATION, HeaderValue::from_str(authorization).unwrap());
+            }
+
+            expect(credentials.verify(&header));
         }
     }
 }

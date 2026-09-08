@@ -916,39 +916,6 @@ mod tests {
         Scheme::COS,
     ];
 
-    fn parsed_url(url: &str) -> ParsedURL {
-        url.parse::<Url>().unwrap().try_into().unwrap()
-    }
-
-    fn access_key_id() -> ObjectStorageInfo {
-        ObjectStorageInfo {
-            access_key_id: Some("access-key-id".into()),
-            ..Default::default()
-        }
-    }
-
-    fn access_key_secret() -> ObjectStorageInfo {
-        ObjectStorageInfo {
-            access_key_secret: Some("access-key-secret".into()),
-            ..Default::default()
-        }
-    }
-
-    fn credentials() -> ObjectStorageInfo {
-        ObjectStorageInfo {
-            access_key_id: Some("access-key-id".into()),
-            access_key_secret: Some("access-key-secret".into()),
-            ..Default::default()
-        }
-    }
-
-    fn endpoint_credentials() -> ObjectStorageInfo {
-        ObjectStorageInfo {
-            endpoint: Some("test-endpoint.local".into()),
-            ..credentials()
-        }
-    }
-
     #[test]
     fn scheme_is_supported_only_for_object_storage_schemes() {
         let test_cases = vec![
@@ -985,7 +952,7 @@ mod tests {
         for (location, expected_key, expected_is_dir) in test_cases {
             for scheme in SCHEMES {
                 let url = format!("{scheme}://{location}");
-                let parsed_url = parsed_url(&url);
+                let parsed_url: ParsedURL = url.parse::<Url>().unwrap().try_into().unwrap();
                 assert_eq!(parsed_url.scheme, scheme);
                 assert_eq!(parsed_url.bucket, "test-bucket");
                 assert_eq!(parsed_url.key, expected_key);
@@ -1024,7 +991,7 @@ mod tests {
         for (location, entry_path, expected_is_dir) in test_cases {
             for scheme in SCHEMES {
                 let url = format!("{scheme}://{location}");
-                let parsed_url = parsed_url(&url);
+                let parsed_url: ParsedURL = url.parse::<Url>().unwrap().try_into().unwrap();
                 let entry_url: ParsedURL = parsed_url
                     .make_url_by_entry_path(entry_path)
                     .try_into()
@@ -1040,31 +1007,31 @@ mod tests {
     #[test]
     fn operator_builds_with_scheme_specific_fields() {
         dragonfly_client_util::tls::install_crypto_provider();
+        let credentials = ObjectStorageInfo {
+            access_key_id: Some("access-key-id".into()),
+            access_key_secret: Some("access-key-secret".into()),
+            ..Default::default()
+        };
+        let endpoint_credentials = ObjectStorageInfo {
+            endpoint: Some("test-endpoint.local".into()),
+            ..credentials.clone()
+        };
 
         let test_cases = vec![
             (
                 Scheme::S3,
                 ObjectStorageInfo {
                     region: Some("test-region".into()),
-                    ..credentials()
+                    ..credentials.clone()
                 },
                 "s3",
             ),
-            (Scheme::S3, credentials(), "s3"),
+            (Scheme::S3, credentials.clone(), "s3"),
             (
                 Scheme::S3,
                 ObjectStorageInfo {
                     region: Some("test-region".into()),
-                    ..endpoint_credentials()
-                },
-                "s3",
-            ),
-            (
-                Scheme::S3,
-                ObjectStorageInfo {
-                    region: Some("test-region".into()),
-                    session_token: Some("session-token".into()),
-                    ..credentials()
+                    ..endpoint_credentials.clone()
                 },
                 "s3",
             ),
@@ -1073,7 +1040,16 @@ mod tests {
                 ObjectStorageInfo {
                     region: Some("test-region".into()),
                     session_token: Some("session-token".into()),
-                    ..endpoint_credentials()
+                    ..credentials.clone()
+                },
+                "s3",
+            ),
+            (
+                Scheme::S3,
+                ObjectStorageInfo {
+                    region: Some("test-region".into()),
+                    session_token: Some("session-token".into()),
+                    ..endpoint_credentials.clone()
                 },
                 "s3",
             ),
@@ -1143,16 +1119,16 @@ mod tests {
                 Scheme::ABS,
                 ObjectStorageInfo {
                     access_key_secret: Some("YWNjZXNzLWtleS1zZWNyZXQK".into()),
-                    ..endpoint_credentials()
+                    ..endpoint_credentials.clone()
                 },
                 "azblob",
             ),
-            (Scheme::OSS, endpoint_credentials(), "oss"),
+            (Scheme::OSS, endpoint_credentials.clone(), "oss"),
             (
                 Scheme::OSS,
                 ObjectStorageInfo {
                     security_token: Some("security-token".into()),
-                    ..endpoint_credentials()
+                    ..endpoint_credentials.clone()
                 },
                 "oss",
             ),
@@ -1161,7 +1137,7 @@ mod tests {
                 ObjectStorageInfo {
                     endpoint: Some("https://oss-cn-beijing.aliyuncs.com".into()),
                     insecure_skip_verify: Some(true),
-                    ..credentials()
+                    ..credentials.clone()
                 },
                 "oss",
             ),
@@ -1170,7 +1146,7 @@ mod tests {
                 ObjectStorageInfo {
                     endpoint: Some("https://oss-cn-beijing.aliyuncs.com".into()),
                     insecure_skip_verify: Some(false),
-                    ..credentials()
+                    ..credentials.clone()
                 },
                 "oss",
             ),
@@ -1179,17 +1155,21 @@ mod tests {
                 ObjectStorageInfo {
                     endpoint: Some("https://oss-cn-beijing.aliyuncs.com".into()),
                     insecure_skip_verify: None,
-                    ..credentials()
+                    ..credentials.clone()
                 },
                 "oss",
             ),
-            (Scheme::OBS, endpoint_credentials(), "obs"),
-            (Scheme::COS, endpoint_credentials(), "cos"),
+            (Scheme::OBS, endpoint_credentials.clone(), "obs"),
+            (Scheme::COS, endpoint_credentials.clone(), "cos"),
         ];
 
         let config = Arc::new(Config::default());
         for (scheme, object_storage, expected_service) in test_cases {
-            let parsed_url = parsed_url(&format!("{scheme}://test-bucket/file"));
+            let parsed_url: ParsedURL = format!("{scheme}://test-bucket/file")
+                .parse::<Url>()
+                .unwrap()
+                .try_into()
+                .unwrap();
             let result = ObjectStorage::new(scheme, config.clone())
                 .unwrap()
                 .operator(
@@ -1208,6 +1188,19 @@ mod tests {
     #[test]
     fn operator_rejects_missing_required_fields() {
         dragonfly_client_util::tls::install_crypto_provider();
+        let access_key_id = ObjectStorageInfo {
+            access_key_id: Some("access-key-id".into()),
+            ..Default::default()
+        };
+        let access_key_secret = ObjectStorageInfo {
+            access_key_secret: Some("access-key-secret".into()),
+            ..Default::default()
+        };
+        let credentials = ObjectStorageInfo {
+            access_key_id: Some("access-key-id".into()),
+            access_key_secret: Some("access-key-secret".into()),
+            ..Default::default()
+        };
 
         let test_cases = vec![
             (
@@ -1222,17 +1215,17 @@ mod tests {
             ),
             (
                 Scheme::ABS,
-                Some(access_key_id()),
+                Some(access_key_id.clone()),
                 "backend error: abs need endpoint",
             ),
             (
                 Scheme::ABS,
-                Some(access_key_secret()),
+                Some(access_key_secret.clone()),
                 "backend error: abs need endpoint",
             ),
             (
                 Scheme::ABS,
-                Some(credentials()),
+                Some(credentials.clone()),
                 "backend error: abs need endpoint",
             ),
             (
@@ -1242,17 +1235,17 @@ mod tests {
             ),
             (
                 Scheme::OSS,
-                Some(access_key_id()),
+                Some(access_key_id.clone()),
                 "backend error: oss need endpoint",
             ),
             (
                 Scheme::OSS,
-                Some(access_key_secret()),
+                Some(access_key_secret.clone()),
                 "backend error: oss need endpoint",
             ),
             (
                 Scheme::OSS,
-                Some(credentials()),
+                Some(credentials.clone()),
                 "backend error: oss need endpoint",
             ),
             (
@@ -1262,17 +1255,17 @@ mod tests {
             ),
             (
                 Scheme::OBS,
-                Some(access_key_id()),
+                Some(access_key_id.clone()),
                 "backend error: obs need endpoint",
             ),
             (
                 Scheme::OBS,
-                Some(access_key_secret()),
+                Some(access_key_secret.clone()),
                 "backend error: obs need endpoint",
             ),
             (
                 Scheme::OBS,
-                Some(credentials()),
+                Some(credentials.clone()),
                 "backend error: obs need endpoint",
             ),
             (
@@ -1282,24 +1275,28 @@ mod tests {
             ),
             (
                 Scheme::COS,
-                Some(access_key_id()),
+                Some(access_key_id.clone()),
                 "backend error: cos need endpoint",
             ),
             (
                 Scheme::COS,
-                Some(access_key_secret()),
+                Some(access_key_secret.clone()),
                 "backend error: cos need endpoint",
             ),
             (
                 Scheme::COS,
-                Some(credentials()),
+                Some(credentials.clone()),
                 "backend error: cos need endpoint",
             ),
         ];
 
         let config = Arc::new(Config::default());
         for (scheme, object_storage, expected) in test_cases {
-            let parsed_url = parsed_url(&format!("{scheme}://test-bucket/file"));
+            let parsed_url: ParsedURL = format!("{scheme}://test-bucket/file")
+                .parse::<Url>()
+                .unwrap()
+                .try_into()
+                .unwrap();
             let err = ObjectStorage::new(scheme, config.clone())
                 .unwrap()
                 .operator(&parsed_url, object_storage.clone(), Duration::from_secs(3))

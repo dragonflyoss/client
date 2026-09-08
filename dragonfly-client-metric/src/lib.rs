@@ -1445,47 +1445,10 @@ impl Metrics {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use dragonfly_client_config::dfdaemon::Storage;
-
-    type CollectTyped = fn(i32);
-
-    fn counter(metric: &IntCounterVec, labels: &[&str]) -> u64 {
-        metric.with_label_values(labels).get()
-    }
-
-    fn gauge(metric: &IntGaugeVec, labels: &[&str]) -> i64 {
-        metric.with_label_values(labels).get()
-    }
-
-    fn samples(metric: &HistogramVec, labels: &[&str]) -> u64 {
-        metric.with_label_values(labels).get_sample_count()
-    }
-
-    fn assert_task_lifecycle(
-        count: &IntCounterVec,
-        failure_count: &IntCounterVec,
-        concurrent: &IntGaugeVec,
-        labels: &[&str],
-        started: impl Fn(),
-        finished: impl FnOnce(),
-        failed: impl FnOnce(),
-    ) {
-        let count_before = counter(count, labels);
-        let concurrent_before = gauge(concurrent, labels);
-        started();
-        assert_eq!(counter(count, labels), count_before + 1);
-        assert_eq!(gauge(concurrent, labels), concurrent_before + 1);
-
-        finished();
-        assert_eq!(gauge(concurrent, labels), concurrent_before);
-
-        let failure_before = counter(failure_count, labels);
-        started();
-        failed();
-        assert_eq!(counter(failure_count, labels), failure_before + 1);
-        assert_eq!(gauge(concurrent, labels), concurrent_before);
-    }
 
     #[test]
     fn calculate_size_level_maps_bytes_to_levels() {
@@ -1559,18 +1522,51 @@ mod tests {
     #[test]
     fn upload_task_metrics_follow_started_finished_and_failure() {
         let (tag, app) = ("upload-task-tag", "upload-task-app");
-        let samples_before = samples(&UPLOAD_TASK_DURATION, &["1", "1"]);
-        assert_task_lifecycle(
-            &UPLOAD_TASK_COUNT,
-            &UPLOAD_TASK_FAILURE_COUNT,
-            &CONCURRENT_UPLOAD_TASK_GAUGE,
-            &["1", tag, app],
-            || collect_upload_task_started_metrics(1, tag, app),
-            || collect_upload_task_finished_metrics(1, tag, app, 1024, Duration::from_millis(100)),
-            || collect_upload_task_failure_metrics(1, tag, app),
+        let labels = ["1", tag, app];
+        let samples_before = UPLOAD_TASK_DURATION
+            .with_label_values(&["1", "1"])
+            .get_sample_count();
+        let count_before = UPLOAD_TASK_COUNT.with_label_values(&labels).get();
+        let concurrent_before = CONCURRENT_UPLOAD_TASK_GAUGE
+            .with_label_values(&labels)
+            .get();
+        collect_upload_task_started_metrics(1, tag, app);
+        assert_eq!(
+            UPLOAD_TASK_COUNT.with_label_values(&labels).get(),
+            count_before + 1
         );
         assert_eq!(
-            samples(&UPLOAD_TASK_DURATION, &["1", "1"]),
+            CONCURRENT_UPLOAD_TASK_GAUGE
+                .with_label_values(&labels)
+                .get(),
+            concurrent_before + 1
+        );
+
+        collect_upload_task_finished_metrics(1, tag, app, 1024, Duration::from_millis(100));
+        assert_eq!(
+            CONCURRENT_UPLOAD_TASK_GAUGE
+                .with_label_values(&labels)
+                .get(),
+            concurrent_before
+        );
+
+        let failure_before = UPLOAD_TASK_FAILURE_COUNT.with_label_values(&labels).get();
+        collect_upload_task_started_metrics(1, tag, app);
+        collect_upload_task_failure_metrics(1, tag, app);
+        assert_eq!(
+            UPLOAD_TASK_FAILURE_COUNT.with_label_values(&labels).get(),
+            failure_before + 1
+        );
+        assert_eq!(
+            CONCURRENT_UPLOAD_TASK_GAUGE
+                .with_label_values(&labels)
+                .get(),
+            concurrent_before
+        );
+        assert_eq!(
+            UPLOAD_TASK_DURATION
+                .with_label_values(&["1", "1"])
+                .get_sample_count(),
             samples_before + 1
         );
     }
@@ -1587,38 +1583,76 @@ mod tests {
         for (typ, content_length, cost, expected_level) in test_cases {
             let typ_label = typ.to_string();
             let labels = [typ_label.as_str(), expected_level];
-            let samples_before = samples(&UPLOAD_TASK_DURATION, &labels);
+            let samples_before = UPLOAD_TASK_DURATION
+                .with_label_values(&labels)
+                .get_sample_count();
             collect_upload_task_started_metrics(typ, tag, app);
             collect_upload_task_finished_metrics(typ, tag, app, content_length, cost);
-            assert_eq!(samples(&UPLOAD_TASK_DURATION, &labels), samples_before + 1);
+            assert_eq!(
+                UPLOAD_TASK_DURATION
+                    .with_label_values(&labels)
+                    .get_sample_count(),
+                samples_before + 1
+            );
         }
     }
 
     #[test]
     fn download_task_metrics_follow_started_finished_and_failure() {
         let (tag, app, priority) = ("download-task-tag", "download-task-app", "5");
-        let samples_before = samples(&DOWNLOAD_TASK_DURATION, &["1", "2"]);
-        assert_task_lifecycle(
-            &DOWNLOAD_TASK_COUNT,
-            &DOWNLOAD_TASK_FAILURE_COUNT,
-            &CONCURRENT_DOWNLOAD_TASK_GAUGE,
-            &["1", tag, app, priority],
-            || collect_download_task_started_metrics(1, tag, app, priority),
-            || {
-                collect_download_task_finished_metrics(
-                    1,
-                    tag,
-                    app,
-                    priority,
-                    1024 * 1024,
-                    None,
-                    Duration::from_millis(200),
-                )
-            },
-            || collect_download_task_failure_metrics(1, tag, app, priority),
+        let labels = ["1", tag, app, priority];
+        let samples_before = DOWNLOAD_TASK_DURATION
+            .with_label_values(&["1", "2"])
+            .get_sample_count();
+        let count_before = DOWNLOAD_TASK_COUNT.with_label_values(&labels).get();
+        let concurrent_before = CONCURRENT_DOWNLOAD_TASK_GAUGE
+            .with_label_values(&labels)
+            .get();
+        collect_download_task_started_metrics(1, tag, app, priority);
+        assert_eq!(
+            DOWNLOAD_TASK_COUNT.with_label_values(&labels).get(),
+            count_before + 1
         );
         assert_eq!(
-            samples(&DOWNLOAD_TASK_DURATION, &["1", "2"]),
+            CONCURRENT_DOWNLOAD_TASK_GAUGE
+                .with_label_values(&labels)
+                .get(),
+            concurrent_before + 1
+        );
+
+        collect_download_task_finished_metrics(
+            1,
+            tag,
+            app,
+            priority,
+            1024 * 1024,
+            None,
+            Duration::from_millis(200),
+        );
+        assert_eq!(
+            CONCURRENT_DOWNLOAD_TASK_GAUGE
+                .with_label_values(&labels)
+                .get(),
+            concurrent_before
+        );
+
+        let failure_before = DOWNLOAD_TASK_FAILURE_COUNT.with_label_values(&labels).get();
+        collect_download_task_started_metrics(1, tag, app, priority);
+        collect_download_task_failure_metrics(1, tag, app, priority);
+        assert_eq!(
+            DOWNLOAD_TASK_FAILURE_COUNT.with_label_values(&labels).get(),
+            failure_before + 1
+        );
+        assert_eq!(
+            CONCURRENT_DOWNLOAD_TASK_GAUGE
+                .with_label_values(&labels)
+                .get(),
+            concurrent_before
+        );
+        assert_eq!(
+            DOWNLOAD_TASK_DURATION
+                .with_label_values(&["1", "2"])
+                .get_sample_count(),
             samples_before + 1
         );
     }
@@ -1645,7 +1679,9 @@ mod tests {
         for (typ, content_length, range, cost, expected_level) in test_cases {
             let typ_label = typ.to_string();
             let labels = [typ_label.as_str(), expected_level];
-            let samples_before = samples(&DOWNLOAD_TASK_DURATION, &labels);
+            let samples_before = DOWNLOAD_TASK_DURATION
+                .with_label_values(&labels)
+                .get_sample_count();
             collect_download_task_started_metrics(typ, tag, app, priority);
             collect_download_task_finished_metrics(
                 typ,
@@ -1657,7 +1693,9 @@ mod tests {
                 cost,
             );
             assert_eq!(
-                samples(&DOWNLOAD_TASK_DURATION, &labels),
+                DOWNLOAD_TASK_DURATION
+                    .with_label_values(&labels)
+                    .get_sample_count(),
                 samples_before + 1
             );
         }
@@ -1667,85 +1705,119 @@ mod tests {
     fn prefetch_task_metrics_count_started_and_failure() {
         let (tag, app, priority) = ("prefetch-tag", "prefetch-app", "5");
         let labels = ["3", tag, app, priority];
-        let count_before = counter(&PREFETCH_TASK_COUNT, &labels);
+        let count_before = PREFETCH_TASK_COUNT.with_label_values(&labels).get();
         collect_prefetch_task_started_metrics(3, tag, app, priority);
-        assert_eq!(counter(&PREFETCH_TASK_COUNT, &labels), count_before + 1);
+        assert_eq!(
+            PREFETCH_TASK_COUNT.with_label_values(&labels).get(),
+            count_before + 1
+        );
 
-        let failure_before = counter(&PREFETCH_TASK_FAILURE_COUNT, &labels);
+        let failure_before = PREFETCH_TASK_FAILURE_COUNT.with_label_values(&labels).get();
         collect_prefetch_task_failure_metrics(3, tag, app, priority);
         assert_eq!(
-            counter(&PREFETCH_TASK_FAILURE_COUNT, &labels),
+            PREFETCH_TASK_FAILURE_COUNT.with_label_values(&labels).get(),
             failure_before + 1
         );
     }
 
     #[test]
     fn upload_piece_metrics_move_gauge_and_traffic() {
-        let gauge_before = gauge(&CONCURRENT_UPLOAD_PIECE_GAUGE, &[]);
+        let gauge_before = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
         collect_upload_piece_started_metrics();
-        assert_eq!(gauge(&CONCURRENT_UPLOAD_PIECE_GAUGE, &[]), gauge_before + 1);
+        assert_eq!(
+            CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get(),
+            gauge_before + 1
+        );
 
         collect_upload_piece_finished_metrics();
-        assert_eq!(gauge(&CONCURRENT_UPLOAD_PIECE_GAUGE, &[]), gauge_before);
+        assert_eq!(
+            CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get(),
+            gauge_before
+        );
 
-        let traffic_before = counter(&UPLOAD_TRAFFIC, &[]);
+        let traffic_before = UPLOAD_TRAFFIC.with_label_values(&[]).get();
         collect_upload_piece_traffic_metrics(1024);
-        assert_eq!(counter(&UPLOAD_TRAFFIC, &[]), traffic_before + 1024);
+        assert_eq!(
+            UPLOAD_TRAFFIC.with_label_values(&[]).get(),
+            traffic_before + 1024
+        );
 
         collect_upload_piece_started_metrics();
         collect_upload_piece_failure_metrics();
-        assert_eq!(gauge(&CONCURRENT_UPLOAD_PIECE_GAUGE, &[]), gauge_before);
+        assert_eq!(
+            CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get(),
+            gauge_before
+        );
     }
 
     #[test]
     fn download_piece_traffic_adds_length_for_the_traffic_type() {
         let labels = [TrafficType::RemotePeer.as_str_name()];
-        let traffic_before = counter(&DOWNLOAD_TRAFFIC, &labels);
+        let traffic_before = DOWNLOAD_TRAFFIC.with_label_values(&labels).get();
         collect_download_piece_traffic_metrics(&TrafficType::RemotePeer, 2048);
-        assert_eq!(counter(&DOWNLOAD_TRAFFIC, &labels), traffic_before + 2048);
+        assert_eq!(
+            DOWNLOAD_TRAFFIC.with_label_values(&labels).get(),
+            traffic_before + 2048
+        );
     }
 
     #[test]
     fn download_piece_duration_observes_a_sample_for_the_traffic_type() {
         let labels = [TrafficType::RemotePeer.as_str_name()];
-        let samples_before = samples(&DOWNLOAD_PIECE_DURATION, &labels);
+        let samples_before = DOWNLOAD_PIECE_DURATION
+            .with_label_values(&labels)
+            .get_sample_count();
         collect_download_piece_duration_metrics(
             &TrafficType::RemotePeer,
             Duration::from_millis(42),
         );
         assert_eq!(
-            samples(&DOWNLOAD_PIECE_DURATION, &labels),
+            DOWNLOAD_PIECE_DURATION
+                .with_label_values(&labels)
+                .get_sample_count(),
             samples_before + 1
         );
     }
 
     #[test]
     fn backend_request_metrics_count_and_time_by_scheme_and_method() {
-        let count_before = counter(&BACKEND_REQUEST_COUNT, &["http", "GET"]);
+        let count_before = BACKEND_REQUEST_COUNT
+            .with_label_values(&["http", "GET"])
+            .get();
         collect_backend_request_started_metrics("http", "GET");
         assert_eq!(
-            counter(&BACKEND_REQUEST_COUNT, &["http", "GET"]),
+            BACKEND_REQUEST_COUNT
+                .with_label_values(&["http", "GET"])
+                .get(),
             count_before + 1
         );
 
-        let failure_before = counter(&BACKEND_REQUEST_FAILURE_COUNT, &["http", "GET"]);
+        let failure_before = BACKEND_REQUEST_FAILURE_COUNT
+            .with_label_values(&["http", "GET"])
+            .get();
         collect_backend_request_failure_metrics("http", "GET");
         assert_eq!(
-            counter(&BACKEND_REQUEST_FAILURE_COUNT, &["http", "GET"]),
+            BACKEND_REQUEST_FAILURE_COUNT
+                .with_label_values(&["http", "GET"])
+                .get(),
             failure_before + 1
         );
 
-        let samples_before = samples(&BACKEND_REQUEST_DURATION, &["http", "POST"]);
+        let samples_before = BACKEND_REQUEST_DURATION
+            .with_label_values(&["http", "POST"])
+            .get_sample_count();
         collect_backend_request_finished_metrics("http", "POST", Duration::from_millis(150));
         assert_eq!(
-            samples(&BACKEND_REQUEST_DURATION, &["http", "POST"]),
+            BACKEND_REQUEST_DURATION
+                .with_label_values(&["http", "POST"])
+                .get_sample_count(),
             samples_before + 1
         );
     }
 
     #[test]
     fn typed_counters_increment_under_the_type_label() {
-        let test_cases: Vec<(CollectTyped, &IntCounterVec)> = vec![
+        let test_cases: Vec<(fn(i32), &IntCounterVec)> = vec![
             (collect_update_task_started_metrics, &UPDATE_TASK_COUNT),
             (
                 collect_update_task_failure_metrics,
@@ -1801,9 +1873,9 @@ mod tests {
         ];
 
         for (collect, metric) in test_cases {
-            let count_before = counter(metric, &["1"]);
+            let count_before = metric.with_label_values(&["1"]).get();
             collect(1);
-            assert_eq!(counter(metric, &["1"]), count_before + 1);
+            assert_eq!(metric.with_label_values(&["1"]).get(), count_before + 1);
         }
     }
 
@@ -1827,23 +1899,23 @@ mod tests {
         ];
 
         for (collect, metric) in test_cases {
-            let count_before = counter(metric, &[]);
+            let count_before = metric.with_label_values(&[]).get();
             collect();
-            assert_eq!(counter(metric, &[]), count_before + 1);
+            assert_eq!(metric.with_label_values(&[]).get(), count_before + 1);
         }
     }
 
     #[test]
     fn collect_disk_metrics_sets_space_gauges_only_for_an_existing_path() {
         collect_disk_metrics(&std::env::temp_dir());
-        let total_space = gauge(&DISK_SPACE, &[]);
-        let usage_space = gauge(&DISK_USAGE_SPACE, &[]);
+        let total_space = DISK_SPACE.with_label_values(&[]).get();
+        let usage_space = DISK_USAGE_SPACE.with_label_values(&[]).get();
         assert!(total_space > 0);
         assert!((0..=total_space).contains(&usage_space));
 
         collect_disk_metrics(Path::new("/nonexistent/dragonfly-client-metric"));
-        assert_eq!(gauge(&DISK_SPACE, &[]), total_space);
-        assert_eq!(gauge(&DISK_USAGE_SPACE, &[]), usage_space);
+        assert_eq!(DISK_SPACE.with_label_values(&[]).get(), total_space);
+        assert_eq!(DISK_USAGE_SPACE.with_label_values(&[]).get(), usage_space);
     }
 
     #[tokio::test]

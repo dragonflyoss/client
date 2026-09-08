@@ -247,15 +247,13 @@ pub fn load_key_from_pem(key_pem: &str) -> ClientResult<PrivateKeyDer<'static>> 
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use rustls::client::danger::ServerCertVerifier;
     use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
     use std::io::Write;
     use tempfile::NamedTempFile;
-
-    type ExpectCaCert = fn(ClientResult<Certificate>);
-    type ExpectCerts = fn(ClientResult<Vec<CertificateDer<'static>>>);
-    type ExpectKey = fn(ClientResult<PrivateKeyDer<'static>>);
 
     const SERVER_CERT: &str = r#"""
 -----BEGIN CERTIFICATE-----
@@ -319,16 +317,6 @@ Z+yQ5jhu/fmSBNhqO/8Lp+Y=
         file
     }
 
-    fn ca_cert() -> Certificate {
-        let ca_cert_file = pem_file(SERVER_CERT);
-        let ca_key_file = pem_file(SERVER_KEY);
-        generate_ca_cert_from_pem(
-            &ca_cert_file.path().to_path_buf(),
-            &ca_key_file.path().to_path_buf(),
-        )
-        .unwrap()
-    }
-
     #[test]
     fn no_verifier_accepts_any_server_cert() {
         let verifier = NoVerifier::new();
@@ -346,7 +334,7 @@ Z+yQ5jhu/fmSBNhqO/8Lp+Y=
 
     #[test]
     fn generate_ca_cert_from_pem_requires_matching_pem_files() {
-        let test_cases: Vec<(&str, &str, ExpectCaCert)> = vec![
+        let test_cases: Vec<(&str, &str, fn(ClientResult<Certificate>))> = vec![
             (SERVER_CERT, SERVER_KEY, |result| assert!(result.is_ok())),
             (SERVER_CERT, "not a key", |result| {
                 assert!(matches!(result, Err(ClientError::ExternalError(_))));
@@ -379,7 +367,7 @@ Z+yQ5jhu/fmSBNhqO/8Lp+Y=
 
     #[test]
     fn generate_cert_from_pem_parses_the_certificates_in_the_file() {
-        let test_cases: Vec<(&str, ExpectCerts)> = vec![
+        let test_cases: Vec<(&str, fn(ClientResult<Vec<CertificateDer<'static>>>))> = vec![
             (SERVER_CERT, |result| assert_eq!(result.unwrap().len(), 1)),
             ("", |result| assert!(result.unwrap().is_empty())),
             (
@@ -396,7 +384,13 @@ Z+yQ5jhu/fmSBNhqO/8Lp+Y=
 
     #[test]
     fn generate_self_signed_certs_by_ca_cert_caches_by_host() {
-        let ca_cert = ca_cert();
+        let ca_cert_file = pem_file(SERVER_CERT);
+        let ca_key_file = pem_file(SERVER_KEY);
+        let ca_cert = generate_ca_cert_from_pem(
+            &ca_cert_file.path().to_path_buf(),
+            &ca_key_file.path().to_path_buf(),
+        )
+        .unwrap();
 
         let (certs, key) = generate_self_signed_certs_by_ca_cert(
             &ca_cert,
@@ -457,7 +451,7 @@ Z+yQ5jhu/fmSBNhqO/8Lp+Y=
 
     #[test]
     fn load_certs_from_pem_parses_the_certificates() {
-        let test_cases: Vec<(&str, ExpectCerts)> = vec![
+        let test_cases: Vec<(&str, fn(ClientResult<Vec<CertificateDer<'static>>>))> = vec![
             (SERVER_CERT, |result| assert_eq!(result.unwrap().len(), 1)),
             ("", |result| assert!(result.unwrap().is_empty())),
             (SERVER_KEY, |result| assert!(result.unwrap().is_empty())),
@@ -474,7 +468,7 @@ Z+yQ5jhu/fmSBNhqO/8Lp+Y=
 
     #[test]
     fn load_key_from_pem_requires_a_private_key() {
-        let test_cases: Vec<(&str, ExpectKey)> = vec![
+        let test_cases: Vec<(&str, fn(ClientResult<PrivateKeyDer<'static>>))> = vec![
             (SERVER_KEY, |result| {
                 assert!(matches!(result.unwrap(), PrivateKeyDer::Pkcs8(_)));
             }),
