@@ -19,7 +19,7 @@ use dragonfly_client_core::{
     Result,
 };
 use percent_encoding::percent_encode_byte;
-use url::{form_urlencoded, Url};
+use url::{form_urlencoded, Position, Url};
 
 /// Escapes the string so it can be safely placed inside a url query, identical
 /// to the scheduler's query escaping (Go's url.QueryEscape). Mirrors the byte
@@ -46,6 +46,7 @@ pub fn filter_query_params(url: &str, filtered_query_params: &[String]) -> Resul
         return Ok(url.to_string());
     }
 
+    let has_empty_path = has_empty_path(url);
     let mut url = Url::parse(url).or_err(ErrorType::ParseError)?;
     let mut query_pairs: Vec<(String, String)> = url
         .query()
@@ -73,12 +74,23 @@ pub fn filter_query_params(url: &str, filtered_query_params: &[String]) -> Resul
         url.set_query(Some(&query));
     }
 
-    let filtered = url.to_string();
-    if url.path() == "/" && filtered.ends_with('/') {
-        return Ok(filtered.trim_end_matches('/').to_string());
+    if has_empty_path {
+        return Ok(format!(
+            "{}{}",
+            &url[..Position::BeforePath],
+            &url[Position::AfterPath..]
+        ));
     }
 
-    Ok(filtered)
+    Ok(url.into())
+}
+
+/// Returns whether the url has an empty path, splitting the authority like Go's
+/// url.parse, since the url crate normalizes an empty path to "/".
+fn has_empty_path(url: &str) -> bool {
+    url.split_once("://")
+        .and_then(|(_, rest)| rest.split(['?', '#']).next())
+        .is_some_and(|authority| !authority.contains('/'))
 }
 
 #[cfg(test)]
@@ -118,6 +130,31 @@ mod tests {
                 "https://example.com?foo=foo",
                 vec!["foo".to_string()],
                 "https://example.com",
+            ),
+            (
+                "https://example.com?foo=foo&bar=bar",
+                vec!["foo".to_string()],
+                "https://example.com?bar=bar",
+            ),
+            (
+                "https://example.com?foo=foo#size",
+                vec!["foo".to_string()],
+                "https://example.com#size",
+            ),
+            (
+                "https://user:pass@[::1]:8080?foo=foo&bar=bar",
+                vec!["foo".to_string()],
+                "https://user:pass@[::1]:8080?bar=bar",
+            ),
+            (
+                "https://example.com/?foo=foo",
+                vec!["foo".to_string()],
+                "https://example.com/",
+            ),
+            (
+                "https://example.com/?foo=foo&bar=bar",
+                vec!["foo".to_string()],
+                "https://example.com/?bar=bar",
             ),
             (
                 "https://example.com/file.txt?k=a b&m=x*y&n=c~d",
