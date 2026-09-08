@@ -182,13 +182,13 @@ Write unit tests in the same file as the code being tested, inside a `#[cfg(test
 ```rust
 #[cfg(test)]
 mod tests {
-    use super::*;
+    #![allow(clippy::type_complexity)]
 
-    type ExpectResult = fn(Result<()>);
+    use super::*;
 
     #[test]
     fn parse_rejects_invalid_input() {
-        let test_cases: Vec<(&str, ExpectResult)> = vec![
+        let test_cases: Vec<(&str, fn(Result<()>))> = vec![
             ("valid", |result| assert!(result.is_ok())),
             ("", |result| assert!(matches!(result, Err(Error::InvalidArgument(_))))),
         ];
@@ -203,7 +203,7 @@ mod tests {
 }
 ```
 
-Name tests as `<subject>_<behavior>` without a `test_` or `should_` prefix. Prefer table-driven tests: a `test_cases` vector of input tuples ending in an `expected` value or an `expect` fn that performs the assertions, and no custom message arguments on assertions. Do not write comments inside tests.
+Name tests as `<subject>_<behavior>` without a `test_` or `should_` prefix. Prefer table-driven tests: a `test_cases` vector of input tuples ending in an `expected` value compared with one `assert_eq!`, or an `expect` fn that holds every case-specific assertion. Write the fn pointer type inline in the `Vec<(...)>` annotation and never as a `type` alias; add `#![allow(clippy::type_complexity)]` at the top of the module when clippy complains. Keep the loop body straight-line: build inputs, call the function, run the shared assertions, call `expect`. Build inputs inline at each call site instead of through helper fns; keep helpers only for real I/O such as writing temp files or starting a mock server. Use `.unwrap()` rather than `.expect("...")`, put no custom message arguments on assertions, and do not write comments inside tests.
 
 ### Test Dependencies
 
