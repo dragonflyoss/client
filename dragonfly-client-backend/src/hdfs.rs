@@ -298,28 +298,38 @@ impl Backend for Hdfs {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
 
     #[tokio::test]
-    async fn should_get_operator() {
+    async fn operator_requires_a_host() {
         dragonfly_client_util::tls::install_crypto_provider();
 
-        let url: Url = Url::parse("hdfs://127.0.0.1:9870/file").unwrap();
-        let operator = Hdfs::new().operator(url, None, Duration::from_secs(10));
+        let test_cases: Vec<(&str, Option<common::v2::Hdfs>, fn(ClientResult<Operator>))> = vec![
+            ("hdfs://127.0.0.1:9870/file", None, |result| {
+                assert_eq!(result.unwrap().info().scheme(), "webhdfs");
+            }),
+            ("hdfs://127.0.0.1/file", None, |result| {
+                assert_eq!(result.unwrap().info().scheme(), "webhdfs");
+            }),
+            (
+                "hdfs://namenode:9870/file",
+                Some(common::v2::Hdfs {
+                    delegation_token: Some("delegation-token".into()),
+                }),
+                |result| {
+                    assert_eq!(result.unwrap().info().scheme(), "webhdfs");
+                },
+            ),
+            ("hdfs:/127.0.0.1:9870/file", None, |result| {
+                assert!(matches!(result, Err(ClientError::InvalidURI(_))));
+            }),
+        ];
 
-        assert!(
-            operator.is_ok(),
-            "can not get hdfs operator, due to: {}",
-            operator.unwrap_err()
-        );
-    }
-
-    #[test]
-    fn should_return_error_when_url_not_valid() {
-        let url: Url = Url::parse("hdfs:/127.0.0.1:9870/file").unwrap();
-        let result = Hdfs::new().operator(url, None, Duration::from_secs(10));
-
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ClientError::InvalidURI(..)));
+        for (url, config, expect) in test_cases {
+            let url = Url::parse(url).unwrap();
+            expect(Hdfs::new().operator(url, config, Duration::from_secs(10)));
+        }
     }
 }

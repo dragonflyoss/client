@@ -2532,26 +2532,24 @@ impl Task {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use tempfile::tempdir;
 
     #[tokio::test]
-    async fn test_delete_task_not_found() {
+    async fn delete_task_removes_the_task_from_storage() {
         let temp_dir = tempdir().unwrap();
         let log_dir = temp_dir.path().join("log");
         std::fs::create_dir_all(&log_dir).unwrap();
 
-        let config = Config::default();
-        let config = Arc::new(config);
-
-        let storage = Storage::new(config.clone(), temp_dir.path(), log_dir)
-            .await
-            .unwrap();
-        let storage = Arc::new(storage);
+        let config = Arc::new(Config::default());
+        let storage = Arc::new(
+            Storage::new(config.clone(), temp_dir.path(), log_dir)
+                .await
+                .unwrap(),
+        );
 
         let task_id = "non-existent-task-id";
         let task = storage.get_task(task_id).unwrap();
-        assert!(task.is_none(), "non-existent tasks should return None");
+        assert!(task.is_none());
 
         let task_id = "test-task-id";
         storage
@@ -2560,10 +2558,10 @@ mod tests {
             .unwrap();
 
         let task = storage.get_task(task_id).unwrap();
-        assert!(task.is_some(), "task should exist");
+        assert!(task.is_some());
 
         storage.delete_task(task_id).await;
         let task = storage.get_task(task_id).unwrap();
-        assert!(task.is_none(), "task should be deleted");
+        assert!(task.is_none());
     }
 }

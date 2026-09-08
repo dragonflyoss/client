@@ -1493,9 +1493,9 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-request"
-version = "1.7.2"
+version = "1.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ad5b4c0719c695a360fa1f43d9c4fb996ed17abd161ef71e0a48732ff141ad1"
+checksum = "fef483000b7cfef89d9d88604422681bb1d6ed4ef0607cf691123b56c00927ae"
 dependencies = [
  "async-trait",
  "backon",

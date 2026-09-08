@@ -792,284 +792,667 @@ impl Backend for HuggingFace {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
-    use crate::DEFAULT_USER_AGENT;
     use dragonfly_api::common::v2::HuggingFace as HuggingFaceOptions;
+    use reqwest::StatusCode;
     use std::time::Duration;
     use wiremock::{
-        matchers::{method, path},
+        matchers::{header, method, path, query_param},
         Mock, MockServer, ResponseTemplate,
     };
 
     #[test]
-    fn test_parse_url_simple() {
-        let parsed_url = ParsedURL::try_from("hf://deepseek-ai/DeepSeek-OCR").unwrap();
-        assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-OCR");
-        assert_eq!(parsed_url.repository_type, RepositoryType::Model);
-        assert!(parsed_url.file_path.is_none());
+    fn parse_url_extracts_type_id_and_path() {
+        let test_cases = vec![
+            (
+                "hf://deepseek-ai/DeepSeek-OCR",
+                RepositoryType::Model,
+                "deepseek-ai/DeepSeek-OCR",
+                None,
+            ),
+            (
+                "hf://deepseek-ai/DeepSeek-OCR/",
+                RepositoryType::Model,
+                "deepseek-ai/DeepSeek-OCR",
+                None,
+            ),
+            (
+                "hf://deepseek-ai/DeepSeek-OCR/model.safetensors",
+                RepositoryType::Model,
+                "deepseek-ai/DeepSeek-OCR",
+                Some("model.safetensors"),
+            ),
+            (
+                "hf://deepseek-ai/DeepSeek-OCR/models/v1/model.bin",
+                RepositoryType::Model,
+                "deepseek-ai/DeepSeek-OCR",
+                Some("models/v1/model.bin"),
+            ),
+            (
+                "hf://models/deepseek-ai/DeepSeek-OCR/model.safetensors",
+                RepositoryType::Model,
+                "deepseek-ai/DeepSeek-OCR",
+                Some("model.safetensors"),
+            ),
+            (
+                "hf://datasets/huggingface/squad",
+                RepositoryType::Dataset,
+                "huggingface/squad",
+                None,
+            ),
+            (
+                "hf://datasets/huggingface/squad/train.json",
+                RepositoryType::Dataset,
+                "huggingface/squad",
+                Some("train.json"),
+            ),
+            (
+                "hf://spaces/huggingface/transformers-demo",
+                RepositoryType::Space,
+                "huggingface/transformers-demo",
+                None,
+            ),
+        ];
+
+        for (url, expected_type, expected_id, expected_path) in test_cases {
+            let parsed_url = ParsedURL::try_from(url).unwrap();
+            assert_eq!(parsed_url.repository_type, expected_type);
+            assert_eq!(parsed_url.repository_id, expected_id);
+            assert_eq!(parsed_url.file_path.as_deref(), expected_path);
+        }
     }
 
     #[test]
-    fn test_parse_url_with_file() {
-        let parsed_url =
-            ParsedURL::try_from("hf://deepseek-ai/DeepSeek-OCR/model.safetensors").unwrap();
-        assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-OCR");
-        assert_eq!(parsed_url.repository_type, RepositoryType::Model);
-        assert_eq!(parsed_url.file_path, Some("model.safetensors".to_string()));
+    fn parse_url_rejects_missing_owner_or_repository() {
+        let test_cases = vec!["hf://deepseek-ai", "hf://datasets/huggingface"];
+
+        for url in test_cases {
+            let result = ParsedURL::try_from(url);
+            assert!(matches!(result, Err(Error::InvalidParameter)));
+        }
     }
 
     #[test]
-    fn test_parse_url_with_revision() {
-        let parsed_url = ParsedURL::try_from("hf://deepseek-ai/DeepSeek-OCR").unwrap();
-        assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-OCR");
-        assert!(parsed_url.file_path.is_none());
+    fn repository_type_as_str_returns_route_segment() {
+        let test_cases = vec![
+            (RepositoryType::Model, "models"),
+            (RepositoryType::Dataset, "datasets"),
+            (RepositoryType::Space, "spaces"),
+        ];
+
+        for (repository_type, expected) in test_cases {
+            assert_eq!(repository_type.as_str(), expected);
+        }
     }
 
     #[test]
-    fn test_parse_url_with_nested_path() {
-        let parsed_url =
-            ParsedURL::try_from("hf://deepseek-ai/DeepSeek-OCR/models/v1/model.bin").unwrap();
-        assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-OCR");
-        assert_eq!(parsed_url.repository_type, RepositoryType::Model);
-        assert_eq!(
-            parsed_url.file_path,
-            Some("models/v1/model.bin".to_string())
-        );
+    fn resolve_base_urls_defaults_to_hub_and_joins_api_path() {
+        let test_cases = vec![
+            (
+                None,
+                "https://huggingface.co/",
+                "https://huggingface.co/api/",
+            ),
+            (
+                Some("https://hf-mirror.com/"),
+                "https://hf-mirror.com/",
+                "https://hf-mirror.com/api/",
+            ),
+        ];
+
+        for (base_url, expected_base_url, expected_api_base_url) in test_cases {
+            let (resolved_base_url, api_base_url) =
+                HuggingFace::resolve_base_urls(base_url).unwrap();
+            assert_eq!(resolved_base_url.as_str(), expected_base_url);
+            assert_eq!(api_base_url.as_str(), expected_api_base_url);
+        }
     }
 
     #[test]
-    fn test_parse_url_dataset() {
-        let parsed_url = ParsedURL::try_from("hf://datasets/huggingface/squad").unwrap();
-        assert_eq!(parsed_url.repository_id, "huggingface/squad");
-        assert_eq!(parsed_url.repository_type, RepositoryType::Dataset);
-        assert!(parsed_url.file_path.is_none());
+    fn build_download_url_routes_by_repository_type() {
+        let base_url = Url::parse(HUGGING_FACE_BASE_URL).unwrap();
+
+        let test_cases = vec![
+            (
+                "hf://deepseek-ai/DeepSeek-OCR/model.safetensors",
+                "model.safetensors",
+                "main",
+                "https://huggingface.co/deepseek-ai/DeepSeek-OCR/resolve/main/model.safetensors",
+            ),
+            (
+                "hf://datasets/huggingface/squad/train.json",
+                "train.json",
+                "main",
+                "https://huggingface.co/datasets/huggingface/squad/resolve/main/train.json",
+            ),
+            (
+                "hf://spaces/huggingface/transformers-demo/app.py",
+                "app.py",
+                "v1.0",
+                "https://huggingface.co/spaces/huggingface/transformers-demo/resolve/v1.0/app.py",
+            ),
+        ];
+
+        for (url, file_path, revision, expected) in test_cases {
+            let parsed_url = ParsedURL::try_from(url).unwrap();
+            let download_url =
+                HuggingFace::build_download_url(&parsed_url, file_path, revision, &base_url)
+                    .unwrap();
+            assert_eq!(download_url.as_str(), expected);
+        }
     }
 
     #[test]
-    fn test_parse_url_dataset_with_path() {
-        let parsed_url = ParsedURL::try_from("hf://datasets/huggingface/squad/train.json").unwrap();
-        assert_eq!(parsed_url.repository_id, "huggingface/squad");
-        assert_eq!(parsed_url.repository_type, RepositoryType::Dataset);
-        assert_eq!(parsed_url.file_path, Some("train.json".to_string()));
+    fn build_repository_url_routes_by_repository_type() {
+        let api_base_url = Url::parse("https://huggingface.co/api/").unwrap();
+
+        let test_cases = vec![
+            (
+                "hf://deepseek-ai/DeepSeek-OCR",
+                "https://huggingface.co/api/models/deepseek-ai/DeepSeek-OCR",
+            ),
+            (
+                "hf://datasets/huggingface/squad",
+                "https://huggingface.co/api/datasets/huggingface/squad",
+            ),
+            (
+                "hf://spaces/huggingface/transformers-demo",
+                "https://huggingface.co/api/spaces/huggingface/transformers-demo",
+            ),
+        ];
+
+        for (url, expected) in test_cases {
+            let parsed_url = ParsedURL::try_from(url).unwrap();
+            let repository_url =
+                HuggingFace::build_repository_url(&parsed_url, &api_base_url).unwrap();
+            assert_eq!(repository_url.as_str(), expected);
+        }
     }
 
     #[test]
-    fn test_parse_url_space() {
-        let parsed_url = ParsedURL::try_from("hf://spaces/huggingface/transformers-demo").unwrap();
-        assert_eq!(parsed_url.repository_id, "huggingface/transformers-demo");
-        assert_eq!(parsed_url.repository_type, RepositoryType::Space);
-        assert!(parsed_url.file_path.is_none());
+    fn build_repository_revision_url_routes_by_repository_type() {
+        let api_base_url = Url::parse("https://huggingface.co/api/").unwrap();
+
+        let test_cases = vec![
+            (
+                "hf://deepseek-ai/DeepSeek-OCR",
+                "main",
+                "https://huggingface.co/api/models/deepseek-ai/DeepSeek-OCR?revision=main",
+            ),
+            (
+                "hf://datasets/huggingface/squad",
+                "v1.0",
+                "https://huggingface.co/api/datasets/huggingface/squad?revision=v1.0",
+            ),
+            (
+                "hf://spaces/huggingface/transformers-demo",
+                "main",
+                "https://huggingface.co/api/spaces/huggingface/transformers-demo?revision=main",
+            ),
+        ];
+
+        for (url, revision, expected) in test_cases {
+            let parsed_url = ParsedURL::try_from(url).unwrap();
+            let repository_revision_url =
+                HuggingFace::build_repository_revision_url(&parsed_url, revision, &api_base_url)
+                    .unwrap();
+            assert_eq!(repository_revision_url.as_str(), expected);
+        }
     }
 
     #[test]
-    fn test_parse_url_explicit_model_type() {
-        let parsed_url =
-            ParsedURL::try_from("hf://models/deepseek-ai/DeepSeek-OCR/model.safetensors").unwrap();
-        assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-OCR");
-        assert_eq!(parsed_url.repository_type, RepositoryType::Model);
-        assert_eq!(parsed_url.file_path, Some("model.safetensors".to_string()));
+    fn build_hf_url_routes_by_repository_type() {
+        let test_cases = vec![
+            (
+                "hf://deepseek-ai/DeepSeek-OCR",
+                "model.safetensors",
+                "hf://deepseek-ai/DeepSeek-OCR/model.safetensors",
+            ),
+            (
+                "hf://deepseek-ai/DeepSeek-OCR",
+                "models/v1/model.bin",
+                "hf://deepseek-ai/DeepSeek-OCR/models/v1/model.bin",
+            ),
+            (
+                "hf://datasets/huggingface/squad",
+                "train.json",
+                "hf://datasets/huggingface/squad/train.json",
+            ),
+            (
+                "hf://spaces/huggingface/transformers-demo",
+                "app.py",
+                "hf://spaces/huggingface/transformers-demo/app.py",
+            ),
+        ];
+
+        for (url, filename, expected) in test_cases {
+            let parsed_url = ParsedURL::try_from(url).unwrap();
+            let hf_url = HuggingFace::build_hf_url(&parsed_url, filename).unwrap();
+            assert_eq!(hf_url.as_str(), expected);
+        }
     }
 
     #[test]
-    fn test_parse_url_missing_repo() {
-        let result = ParsedURL::try_from("hf://deepseek-ai");
-        assert!(result.is_err());
-    }
+    fn build_request_headers_sets_user_agent_token_and_range() {
+        let test_cases = vec![
+            (None, None, None, None),
+            (Some("test-token"), None, Some("Bearer test-token"), None),
+            (
+                None,
+                Some(Range {
+                    start: 0,
+                    length: 1024,
+                }),
+                None,
+                Some("bytes=0-1023"),
+            ),
+            (
+                Some("my-secret-token"),
+                Some(Range {
+                    start: 100,
+                    length: 200,
+                }),
+                Some("Bearer my-secret-token"),
+                Some("bytes=100-299"),
+            ),
+        ];
 
-    #[test]
-    fn test_build_download_url_model() {
-        let parsed_url =
-            ParsedURL::try_from("hf://deepseek-ai/DeepSeek-OCR/model.safetensors").unwrap();
-        let url = HuggingFace::build_download_url(
-            &parsed_url,
-            "model.safetensors",
-            "main",
-            &Url::parse(HUGGING_FACE_BASE_URL).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            url.as_str(),
-            "https://huggingface.co/deepseek-ai/DeepSeek-OCR/resolve/main/model.safetensors"
-        );
-    }
-
-    #[test]
-    fn test_build_download_url_dataset() {
-        let parsed_url = ParsedURL::try_from("hf://datasets/huggingface/squad/train.json").unwrap();
-        let url = HuggingFace::build_download_url(
-            &parsed_url,
-            "train.json",
-            "main",
-            &Url::parse(HUGGING_FACE_BASE_URL).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            url.as_str(),
-            "https://huggingface.co/datasets/huggingface/squad/resolve/main/train.json"
-        );
-    }
-
-    #[test]
-    fn test_build_api_url_model() {
-        let parsed_url = ParsedURL::try_from("hf://deepseek-ai/DeepSeek-OCR").unwrap();
-        let url = HuggingFace::build_repository_url(
-            &parsed_url,
-            &Url::parse("https://huggingface.co/api/").unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            url.as_str(),
-            "https://huggingface.co/api/models/deepseek-ai/DeepSeek-OCR"
-        );
-    }
-
-    #[test]
-    fn test_build_api_url_dataset() {
-        let parsed_url = ParsedURL::try_from("hf://datasets/huggingface/squad").unwrap();
-        let url = HuggingFace::build_repository_url(
-            &parsed_url,
-            &Url::parse("https://huggingface.co/api/").unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            url.as_str(),
-            "https://huggingface.co/api/datasets/huggingface/squad"
-        );
-    }
-
-    #[test]
-    fn test_build_hf_url_model() {
-        let parsed_url = ParsedURL::try_from("hf://deepseek-ai/DeepSeek-OCR").unwrap();
-        let url = HuggingFace::build_hf_url(&parsed_url, "model.safetensors").unwrap();
-        assert_eq!(
-            url.as_str(),
-            "hf://deepseek-ai/DeepSeek-OCR/model.safetensors"
-        );
-    }
-
-    #[test]
-    fn test_build_hf_url_dataset() {
-        let parsed_url = ParsedURL::try_from("hf://datasets/huggingface/squad").unwrap();
-        let url = HuggingFace::build_hf_url(&parsed_url, "train.json").unwrap();
-        assert_eq!(url.as_str(), "hf://datasets/huggingface/squad/train.json");
-    }
-
-    #[test]
-    fn test_resolve_base_urls() {
-        let (base_url, api_base_url) =
-            HuggingFace::resolve_base_urls(Some("https://hf-mirror.com/")).unwrap();
-        assert_eq!(base_url.as_str(), "https://hf-mirror.com/");
-        assert_eq!(api_base_url.as_str(), "https://hf-mirror.com/api/");
-    }
-
-    #[test]
-    fn test_build_headers_default_user_agent() {
-        let request_header = HuggingFace::build_request_headers(None, None).unwrap();
-        assert_eq!(
-            request_header.get(USER_AGENT).unwrap(),
-            HeaderValue::from_static(DEFAULT_USER_AGENT)
-        );
-    }
-
-    #[test]
-    fn test_build_headers_preserves_request_headers() {
-        let request_headers =
-            HuggingFace::build_request_headers(Some("test-token".to_string()), None).unwrap();
-        assert_eq!(
-            request_headers.get(reqwest::header::AUTHORIZATION).unwrap(),
-            "Bearer test-token"
-        );
-        assert_eq!(
-            request_headers.get(USER_AGENT).unwrap(),
-            HeaderValue::from_static(DEFAULT_USER_AGENT)
-        );
-    }
-
-    #[test]
-    fn test_build_headers_with_range() {
-        let request_headers = HuggingFace::build_request_headers(
-            None,
-            Some(Range {
-                start: 0,
-                length: 1024,
-            }),
-        )
-        .unwrap();
-        assert_eq!(
-            request_headers.get(RANGE).unwrap(),
-            HeaderValue::from_static("bytes=0-1023")
-        );
+        for (token, range, expected_authorization, expected_range) in test_cases {
+            let request_header =
+                HuggingFace::build_request_headers(token.map(str::to_string), range).unwrap();
+            assert_eq!(request_header.get(USER_AGENT).unwrap(), DEFAULT_USER_AGENT);
+            assert_eq!(
+                request_header
+                    .get(AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok()),
+                expected_authorization
+            );
+            assert_eq!(
+                request_header
+                    .get(RANGE)
+                    .and_then(|value| value.to_str().ok()),
+                expected_range
+            );
+        }
     }
 
     #[tokio::test]
-    async fn test_stat_file_with_error_status() {
+    async fn stat_maps_file_and_repository_responses() {
+        let test_cases: Vec<(&str, Mock, fn(Result<StatResponse>))> = vec![
+            (
+                "hf://owner/repo/model.bin",
+                Mock::given(method("HEAD"))
+                    .and(path("/owner/repo/resolve/main/model.bin"))
+                    .and(header("authorization", "Bearer secret"))
+                    .respond_with(
+                        ResponseTemplate::new(200).insert_header("content-length", "4096"),
+                    ),
+                |result| {
+                    let response = result.unwrap();
+                    assert!(response.success);
+                    assert_eq!(response.content_length, Some(4096));
+                    assert!(response.entries.is_empty());
+                },
+            ),
+            (
+                "hf://owner/repo/model.bin",
+                Mock::given(method("HEAD"))
+                    .and(path("/owner/repo/resolve/main/model.bin"))
+                    .respond_with(ResponseTemplate::new(404)),
+                |result| {
+                    assert!(
+                        matches!(&result, Err(Error::BackendError(err)) if err.status_code == Some(StatusCode::NOT_FOUND))
+                    );
+                },
+            ),
+            (
+                "hf://owner/repo",
+                Mock::given(method("GET"))
+                    .and(path("/api/models/owner/repo"))
+                    .and(query_param("revision", "main"))
+                    .and(header("authorization", "Bearer secret"))
+                    .and(header("user-agent", DEFAULT_USER_AGENT))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "siblings": [
+                            {"rfilename": "nested/config file.json", "size": 12},
+                            {"rfilename": "model.bin", "size": 128, "lfs": {"size": 4096}},
+                            {"rfilename": "README.md"}
+                        ]
+                    }))),
+                |result| {
+                    let response = result.unwrap();
+                    assert!(response.success);
+                    assert_eq!(response.entries.len(), 3);
+                    assert_eq!(
+                        response.entries[0],
+                        DirEntry {
+                            url: "hf://owner/repo/nested/config%20file.json".to_string(),
+                            content_length: 12,
+                            is_dir: false,
+                        }
+                    );
+                    assert_eq!(response.entries[1].content_length, 4096);
+                    assert_eq!(response.entries[2].content_length, 0);
+                },
+            ),
+            (
+                "hf://datasets/owner/repo",
+                Mock::given(method("GET"))
+                    .and(path("/api/datasets/owner/repo"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "siblings": [
+                            {"rfilename": "nested/train.json"},
+                            {"rfilename": "README.md"}
+                        ]
+                    }))),
+                |result| {
+                    let response = result.unwrap();
+                    assert!(response.success);
+                    assert_eq!(response.entries.len(), 2);
+                    assert_eq!(
+                        response.entries[0],
+                        DirEntry {
+                            url: "hf://datasets/owner/repo/nested/train.json".to_string(),
+                            content_length: 0,
+                            is_dir: false,
+                        }
+                    );
+                },
+            ),
+            (
+                "hf://owner/repo",
+                Mock::given(method("GET"))
+                    .and(path("/api/models/owner/repo"))
+                    .respond_with(
+                        ResponseTemplate::new(200)
+                            .set_body_json(serde_json::json!({"siblings": null})),
+                    ),
+                |result| {
+                    let response = result.unwrap();
+                    assert!(response.success);
+                    assert!(response.entries.is_empty());
+                },
+            ),
+            (
+                "hf://owner/repo",
+                Mock::given(method("GET"))
+                    .and(path("/api/models/owner/repo"))
+                    .respond_with(ResponseTemplate::new(401)),
+                |result| {
+                    assert!(
+                        matches!(&result, Err(Error::BackendError(err)) if err.status_code == Some(StatusCode::UNAUTHORIZED))
+                    );
+                },
+            ),
+            (
+                "hf://owner/repo",
+                Mock::given(method("GET"))
+                    .and(path("/api/models/owner/repo"))
+                    .respond_with(ResponseTemplate::new(200).set_body_string("not json")),
+                |result| {
+                    assert!(
+                        matches!(&result, Err(Error::BackendError(err)) if err.status_code.is_none())
+                    );
+                },
+            ),
+        ];
+
+        let backend = HuggingFace::new(Arc::new(Config::default())).unwrap();
+        for (url, mock, expect) in test_cases {
+            let server = MockServer::start().await;
+            mock.mount(&server).await;
+            expect(
+                backend
+                    .stat(StatRequest {
+                        task_id: "task".to_string(),
+                        url: url.to_string(),
+                        http_header: None,
+                        timeout: Duration::from_secs(5),
+                        client_cert: None,
+                        object_storage: None,
+                        hdfs: None,
+                        hugging_face: Some(HuggingFaceOptions {
+                            revision: "main".to_string(),
+                            token: Some("secret".to_string()),
+                            base_url: Some(server.uri()),
+                        }),
+                        model_scope: None,
+                        open_csg: None,
+                    })
+                    .await,
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn get_streams_body_and_validates_ranged_responses() {
+        let test_cases: Vec<(Option<Range>, Mock, fn(&GetResponse<Body>, &str))> = vec![
+            (
+                None,
+                Mock::given(method("GET"))
+                    .and(path("/owner/repo/resolve/main/model.bin"))
+                    .respond_with(ResponseTemplate::new(200).set_body_string("full content")),
+                |response, text| {
+                    assert!(response.success);
+                    assert_eq!(response.http_status_code, Some(StatusCode::OK));
+                    assert_eq!(text, "full content");
+                },
+            ),
+            (
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                Mock::given(method("GET"))
+                    .and(path("/owner/repo/resolve/main/model.bin"))
+                    .and(header("range", "bytes=10-29"))
+                    .respond_with(
+                        ResponseTemplate::new(206)
+                            .insert_header("content-range", "bytes 10-29/100")
+                            .set_body_string("partial content"),
+                    ),
+                |response, text| {
+                    assert!(response.success);
+                    assert_eq!(response.http_status_code, Some(StatusCode::PARTIAL_CONTENT));
+                    assert_eq!(text, "partial content");
+                },
+            ),
+            (
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                Mock::given(method("GET"))
+                    .and(path("/owner/repo/resolve/main/model.bin"))
+                    .and(header("range", "bytes=10-29"))
+                    .respond_with(ResponseTemplate::new(200).set_body_string("full body content")),
+                |response, text| {
+                    assert!(!response.success);
+                    assert_eq!(response.http_status_code, Some(StatusCode::OK));
+                    assert!(response
+                        .error_message
+                        .as_deref()
+                        .unwrap()
+                        .contains("expected 206 Partial Content"));
+                    assert_eq!(text, "");
+                },
+            ),
+            (
+                None,
+                Mock::given(method("GET"))
+                    .and(path("/owner/repo/resolve/main/model.bin"))
+                    .respond_with(ResponseTemplate::new(404)),
+                |response, text| {
+                    assert!(!response.success);
+                    assert_eq!(response.http_status_code, Some(StatusCode::NOT_FOUND));
+                    assert_eq!(text, "");
+                },
+            ),
+        ];
+
+        let backend = HuggingFace::new(Arc::new(Config::default())).unwrap();
+        for (range, mock, expect) in test_cases {
+            let server = MockServer::start().await;
+            mock.mount(&server).await;
+            let mut response = backend
+                .get(GetRequest {
+                    task_id: "task".to_string(),
+                    piece_id: "piece".to_string(),
+                    url: "hf://owner/repo/model.bin".to_string(),
+                    range,
+                    http_header: None,
+                    timeout: Duration::from_secs(5),
+                    client_cert: None,
+                    object_storage: None,
+                    hdfs: None,
+                    hugging_face: Some(HuggingFaceOptions {
+                        revision: "main".to_string(),
+                        token: None,
+                        base_url: Some(server.uri()),
+                    }),
+                    model_scope: None,
+                    open_csg: None,
+                })
+                .await
+                .unwrap();
+            let text = response.text().await.unwrap();
+            expect(&response, &text);
+        }
+    }
+
+    #[tokio::test]
+    async fn get_follows_redirect_without_forwarding_token() {
+        let server = MockServer::start().await;
+        let object_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/owner/repo/resolve/main/model.bin"))
+            .and(header("range", "bytes=10-29"))
+            .respond_with(ResponseTemplate::new(302).insert_header(
+                "location",
+                format!("{}/objects/model.bin", object_server.uri()),
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/objects/model.bin"))
+            .and(header("range", "bytes=10-29"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header("content-range", "bytes 10-29/100")
+                    .set_body_string("redirected lfs data!"),
+            )
+            .mount(&object_server)
+            .await;
+
+        let mut response = HuggingFace::new(Arc::new(Config::default()))
+            .unwrap()
+            .get(GetRequest {
+                task_id: "task".to_string(),
+                piece_id: "piece".to_string(),
+                url: "hf://owner/repo/model.bin".to_string(),
+                range: Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                http_header: None,
+                timeout: Duration::from_secs(5),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: Some(HuggingFaceOptions {
+                    revision: "main".to_string(),
+                    token: Some("secret".to_string()),
+                    base_url: Some(server.uri()),
+                }),
+                model_scope: None,
+                open_csg: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(response.success);
+        assert_eq!(response.text().await.unwrap(), "redirected lfs data!");
+
+        let object_requests = object_server.received_requests().await.unwrap();
+        assert_eq!(object_requests.len(), 1);
+        assert!(object_requests[0].headers.get("authorization").is_none());
+    }
+
+    #[tokio::test]
+    async fn get_rejects_missing_options_or_file_path() {
+        let test_cases = vec![
+            ("hf://owner/repo/model.bin", None),
+            ("hf://owner/repo", Some(HuggingFaceOptions::default())),
+        ];
+
+        let backend = HuggingFace::new(Arc::new(Config::default())).unwrap();
+        for (url, hugging_face) in test_cases {
+            let result = backend
+                .get(GetRequest {
+                    task_id: "task".to_string(),
+                    piece_id: "piece".to_string(),
+                    url: url.to_string(),
+                    range: None,
+                    http_header: None,
+                    timeout: Duration::from_secs(5),
+                    client_cert: None,
+                    object_storage: None,
+                    hdfs: None,
+                    hugging_face,
+                    model_scope: None,
+                    open_csg: None,
+                })
+                .await;
+            assert!(matches!(result, Err(Error::InvalidParameter)));
+        }
+    }
+
+    #[tokio::test]
+    async fn exists_reports_file_and_repository_presence() {
         let server = MockServer::start().await;
         Mock::given(method("HEAD"))
             .and(path("/owner/repo/resolve/main/model.bin"))
-            .respond_with(ResponseTemplate::new(404))
+            .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
-
-        let backend = HuggingFace::new(Arc::new(Config::default())).unwrap();
-        let err = backend
-            .stat(StatRequest {
-                task_id: "task".to_string(),
-                url: "hf://owner/repo/model.bin".to_string(),
-                http_header: None,
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: Some(HuggingFaceOptions {
-                    revision: "main".to_string(),
-                    token: None,
-                    base_url: Some(server.uri()),
-                }),
-                model_scope: None,
-                open_csg: None,
-            })
-            .await
-            .unwrap_err();
-
-        assert!(matches!(
-            err,
-            Error::BackendError(err) if err.status_code == Some(reqwest::StatusCode::NOT_FOUND)
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_stat_repository_with_error_status() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
+        Mock::given(method("HEAD"))
             .and(path("/api/models/owner/repo"))
-            .respond_with(ResponseTemplate::new(401))
+            .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
 
         let backend = HuggingFace::new(Arc::new(Config::default())).unwrap();
-        let err = backend
-            .stat(StatRequest {
-                task_id: "task".to_string(),
-                url: "hf://owner/repo".to_string(),
-                http_header: None,
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: Some(HuggingFaceOptions {
-                    revision: "main".to_string(),
-                    token: None,
-                    base_url: Some(server.uri()),
-                }),
-                model_scope: None,
-                open_csg: None,
-            })
-            .await
-            .unwrap_err();
 
-        assert!(matches!(
-            err,
-            Error::BackendError(err) if err.status_code == Some(reqwest::StatusCode::UNAUTHORIZED)
-        ));
+        let test_cases = vec![
+            ("hf://owner/repo/model.bin", true),
+            ("hf://owner/repo", true),
+            ("hf://owner/repo/missing.bin", false),
+            ("hf://owner/missing", false),
+        ];
+
+        for (url, expected) in test_cases {
+            let exists = backend
+                .exists(ExistsRequest {
+                    task_id: "task".to_string(),
+                    url: url.to_string(),
+                    http_header: None,
+                    timeout: Duration::from_secs(5),
+                    client_cert: None,
+                    object_storage: None,
+                    hdfs: None,
+                    hugging_face: Some(HuggingFaceOptions {
+                        revision: "main".to_string(),
+                        token: None,
+                        base_url: Some(server.uri()),
+                    }),
+                    model_scope: None,
+                    open_csg: None,
+                })
+                .await
+                .unwrap();
+            assert_eq!(exists, expected);
+        }
     }
 }

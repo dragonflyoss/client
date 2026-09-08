@@ -764,311 +764,543 @@ impl Backend for ModelScope {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
-    use crate::DEFAULT_USER_AGENT;
     use dragonfly_api::common::v2::ModelScope as ModelScopeOptions;
-    use dragonfly_client_config::dfdaemon::Config;
-    use std::{sync::Arc, time::Duration};
+    use reqwest::StatusCode;
+    use std::time::Duration;
     use wiremock::{
-        matchers::{header, method, path},
+        matchers::{header, method, path, query_param},
         Mock, MockServer, ResponseTemplate,
     };
 
     #[test]
-    fn test_parse_url_simple() {
-        let parsed_url = ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1").unwrap();
-        assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-R1");
-        assert_eq!(parsed_url.repository_type, RepositoryType::Model);
-        assert!(parsed_url.file_path.is_none());
+    fn parse_url_extracts_type_id_and_path() {
+        let test_cases = vec![
+            (
+                "modelscope://deepseek-ai/DeepSeek-R1",
+                RepositoryType::Model,
+                "deepseek-ai/DeepSeek-R1",
+                None,
+            ),
+            (
+                "modelscope://deepseek-ai/DeepSeek-R1/",
+                RepositoryType::Model,
+                "deepseek-ai/DeepSeek-R1",
+                None,
+            ),
+            (
+                "modelscope://deepseek-ai/DeepSeek-R1/config.json",
+                RepositoryType::Model,
+                "deepseek-ai/DeepSeek-R1",
+                Some("config.json"),
+            ),
+            (
+                "modelscope://deepseek-ai/DeepSeek-R1/models/v1/model.bin",
+                RepositoryType::Model,
+                "deepseek-ai/DeepSeek-R1",
+                Some("models/v1/model.bin"),
+            ),
+            (
+                "modelscope://models/deepseek-ai/DeepSeek-R1/config.json",
+                RepositoryType::Model,
+                "deepseek-ai/DeepSeek-R1",
+                Some("config.json"),
+            ),
+            (
+                "modelscope://datasets/owner/my-dataset",
+                RepositoryType::Dataset,
+                "owner/my-dataset",
+                None,
+            ),
+            (
+                "modelscope://datasets/owner/my-dataset/train.json",
+                RepositoryType::Dataset,
+                "owner/my-dataset",
+                Some("train.json"),
+            ),
+        ];
+
+        for (url, expected_type, expected_id, expected_path) in test_cases {
+            let parsed_url = ParsedURL::try_from(url).unwrap();
+            assert_eq!(parsed_url.repository_type, expected_type);
+            assert_eq!(parsed_url.repository_id, expected_id);
+            assert_eq!(parsed_url.file_path.as_deref(), expected_path);
+        }
     }
 
     #[test]
-    fn test_parse_url_with_file() {
-        let parsed_url =
-            ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1/config.json").unwrap();
-        assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-R1");
-        assert_eq!(parsed_url.repository_type, RepositoryType::Model);
-        assert_eq!(parsed_url.file_path, Some("config.json".to_string()));
+    fn parse_url_rejects_missing_owner_or_repository() {
+        let test_cases = vec!["modelscope://deepseek-ai", "modelscope://datasets/owner"];
+
+        for url in test_cases {
+            let result = ParsedURL::try_from(url);
+            assert!(matches!(result, Err(Error::InvalidParameter)));
+        }
     }
 
     #[test]
-    fn test_parse_url_with_nested_path() {
-        let parsed_url =
-            ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1/models/v1/model.bin")
-                .unwrap();
-        assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-R1");
-        assert_eq!(parsed_url.repository_type, RepositoryType::Model);
-        assert_eq!(
-            parsed_url.file_path,
-            Some("models/v1/model.bin".to_string())
-        );
+    fn repository_type_as_str_returns_route_segment() {
+        let test_cases = vec![
+            (RepositoryType::Model, "models"),
+            (RepositoryType::Dataset, "datasets"),
+        ];
+
+        for (repository_type, expected) in test_cases {
+            assert_eq!(repository_type.as_str(), expected);
+        }
     }
 
     #[test]
-    fn test_parse_url_dataset() {
-        let parsed_url = ParsedURL::try_from("modelscope://datasets/owner/my-dataset").unwrap();
-        assert_eq!(parsed_url.repository_id, "owner/my-dataset");
-        assert_eq!(parsed_url.repository_type, RepositoryType::Dataset);
-        assert!(parsed_url.file_path.is_none());
+    fn resolve_base_urls_defaults_to_hub_and_joins_api_path() {
+        let test_cases = vec![
+            (
+                None,
+                "https://modelscope.cn/",
+                "https://modelscope.cn/api/v1/",
+            ),
+            (
+                Some("https://modelscope-mirror.example.com/"),
+                "https://modelscope-mirror.example.com/",
+                "https://modelscope-mirror.example.com/api/v1/",
+            ),
+        ];
+
+        for (base_url, expected_base_url, expected_api_base_url) in test_cases {
+            let (resolved_base_url, api_base_url) =
+                ModelScope::resolve_base_urls(base_url).unwrap();
+            assert_eq!(resolved_base_url.as_str(), expected_base_url);
+            assert_eq!(api_base_url.as_str(), expected_api_base_url);
+        }
     }
 
     #[test]
-    fn test_parse_url_dataset_with_path() {
-        let parsed_url =
-            ParsedURL::try_from("modelscope://datasets/owner/my-dataset/train.json").unwrap();
-        assert_eq!(parsed_url.repository_id, "owner/my-dataset");
-        assert_eq!(parsed_url.repository_type, RepositoryType::Dataset);
-        assert_eq!(parsed_url.file_path, Some("train.json".to_string()));
+    fn build_download_url_routes_by_repository_type() {
+        let base_url = Url::parse(MODEL_SCOPE_BASE_URL).unwrap();
+
+        let test_cases = vec![
+            (
+                "modelscope://deepseek-ai/DeepSeek-R1/config.json",
+                "config.json",
+                "master",
+                "https://modelscope.cn/models/deepseek-ai/DeepSeek-R1/resolve/master/config.json",
+            ),
+            (
+                "modelscope://deepseek-ai/DeepSeek-R1/config.json",
+                "config.json",
+                "v1.0",
+                "https://modelscope.cn/models/deepseek-ai/DeepSeek-R1/resolve/v1.0/config.json",
+            ),
+            (
+                "modelscope://datasets/owner/my-dataset/train.json",
+                "train.json",
+                "master",
+                "https://modelscope.cn/datasets/owner/my-dataset/resolve/master/train.json",
+            ),
+        ];
+
+        for (url, file_path, revision, expected) in test_cases {
+            let parsed_url = ParsedURL::try_from(url).unwrap();
+            let download_url =
+                ModelScope::build_download_url(&parsed_url, file_path, revision, &base_url)
+                    .unwrap();
+            assert_eq!(download_url.as_str(), expected);
+        }
     }
 
     #[test]
-    fn test_parse_url_explicit_model_type() {
-        let parsed_url =
-            ParsedURL::try_from("modelscope://models/deepseek-ai/DeepSeek-R1/config.json").unwrap();
-        assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-R1");
-        assert_eq!(parsed_url.repository_type, RepositoryType::Model);
-        assert_eq!(parsed_url.file_path, Some("config.json".to_string()));
+    fn build_file_list_url_routes_by_repository_type() {
+        let api_base_url = Url::parse("https://modelscope.cn/api/v1/").unwrap();
+
+        let test_cases = vec![
+            (
+                "modelscope://deepseek-ai/DeepSeek-R1",
+                "master",
+                "https://modelscope.cn/api/v1/models/deepseek-ai/DeepSeek-R1/repo/files?Revision=master&Recursive=true",
+            ),
+            (
+                "modelscope://datasets/owner/my-dataset",
+                "v1.0",
+                "https://modelscope.cn/api/v1/datasets/owner/my-dataset/repo/files?Revision=v1.0&Recursive=true",
+            ),
+        ];
+
+        for (url, revision, expected) in test_cases {
+            let parsed_url = ParsedURL::try_from(url).unwrap();
+            let file_list_url =
+                ModelScope::build_file_list_url(&parsed_url, revision, &api_base_url).unwrap();
+            assert_eq!(file_list_url.as_str(), expected);
+        }
     }
 
     #[test]
-    fn test_parse_url_missing_repo() {
-        let result = ParsedURL::try_from("modelscope://deepseek-ai");
-        assert!(result.is_err());
+    fn build_model_scope_url_routes_by_repository_type() {
+        let test_cases = vec![
+            (
+                "modelscope://deepseek-ai/DeepSeek-R1",
+                "config.json",
+                "modelscope://deepseek-ai/DeepSeek-R1/config.json",
+            ),
+            (
+                "modelscope://deepseek-ai/DeepSeek-R1",
+                "models/v1/model.bin",
+                "modelscope://deepseek-ai/DeepSeek-R1/models/v1/model.bin",
+            ),
+            (
+                "modelscope://datasets/owner/my-dataset",
+                "train.json",
+                "modelscope://datasets/owner/my-dataset/train.json",
+            ),
+        ];
+
+        for (url, filename, expected) in test_cases {
+            let parsed_url = ParsedURL::try_from(url).unwrap();
+            let model_scope_url = ModelScope::build_model_scope_url(&parsed_url, filename).unwrap();
+            assert_eq!(model_scope_url.as_str(), expected);
+        }
     }
 
     #[test]
-    fn test_parse_url_trailing_slash() {
-        let parsed_url = ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1/").unwrap();
-        assert_eq!(parsed_url.repository_id, "deepseek-ai/DeepSeek-R1");
-        assert_eq!(parsed_url.repository_type, RepositoryType::Model);
-        assert!(parsed_url.file_path.is_none());
-    }
+    fn build_request_headers_sets_user_agent_token_and_range() {
+        let test_cases = vec![
+            (None, None, None, None),
+            (Some("test-token"), None, Some("Bearer test-token"), None),
+            (
+                None,
+                Some(Range {
+                    start: 0,
+                    length: 1024,
+                }),
+                None,
+                Some("bytes=0-1023"),
+            ),
+            (
+                Some("my-secret-token"),
+                Some(Range {
+                    start: 100,
+                    length: 200,
+                }),
+                Some("Bearer my-secret-token"),
+                Some("bytes=100-299"),
+            ),
+        ];
 
-    #[test]
-    fn test_build_download_url_model() {
-        let parsed_url =
-            ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1/config.json").unwrap();
-        let url = ModelScope::build_download_url(
-            &parsed_url,
-            "config.json",
-            "master",
-            &Url::parse(MODEL_SCOPE_BASE_URL).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            url.as_str(),
-            "https://modelscope.cn/models/deepseek-ai/DeepSeek-R1/resolve/master/config.json"
-        );
-    }
-
-    #[test]
-    fn test_build_download_url_dataset() {
-        let parsed_url =
-            ParsedURL::try_from("modelscope://datasets/owner/my-dataset/train.json").unwrap();
-        let url = ModelScope::build_download_url(
-            &parsed_url,
-            "train.json",
-            "master",
-            &Url::parse(MODEL_SCOPE_BASE_URL).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            url.as_str(),
-            "https://modelscope.cn/datasets/owner/my-dataset/resolve/master/train.json"
-        );
-    }
-
-    #[test]
-    fn test_build_download_url_with_revision() {
-        let parsed_url =
-            ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1/config.json").unwrap();
-        let url = ModelScope::build_download_url(
-            &parsed_url,
-            "config.json",
-            "v1.0",
-            &Url::parse(MODEL_SCOPE_BASE_URL).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            url.as_str(),
-            "https://modelscope.cn/models/deepseek-ai/DeepSeek-R1/resolve/v1.0/config.json"
-        );
-    }
-
-    #[test]
-    fn test_build_file_list_url_model() {
-        let parsed_url = ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1").unwrap();
-        let url = ModelScope::build_file_list_url(
-            &parsed_url,
-            "master",
-            &Url::parse("https://modelscope.cn/api/v1/").unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            url.as_str(),
-            "https://modelscope.cn/api/v1/models/deepseek-ai/DeepSeek-R1/repo/files?Revision=master&Recursive=true"
-        );
-    }
-
-    #[test]
-    fn test_build_file_list_url_dataset() {
-        let parsed_url = ParsedURL::try_from("modelscope://datasets/owner/my-dataset").unwrap();
-        let url = ModelScope::build_file_list_url(
-            &parsed_url,
-            "master",
-            &Url::parse("https://modelscope.cn/api/v1/").unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            url.as_str(),
-            "https://modelscope.cn/api/v1/datasets/owner/my-dataset/repo/files?Revision=master&Recursive=true"
-        );
-    }
-
-    #[test]
-    fn test_resolve_base_urls() {
-        let (base_url, api_base_url) = ModelScope::resolve_base_urls(None).unwrap();
-        assert_eq!(base_url.as_str(), "https://modelscope.cn/");
-        assert_eq!(api_base_url.as_str(), "https://modelscope.cn/api/v1/");
-
-        let (base_url, api_base_url) =
-            ModelScope::resolve_base_urls(Some("https://modelscope-mirror.example.com/")).unwrap();
-        assert_eq!(base_url.as_str(), "https://modelscope-mirror.example.com/");
-        assert_eq!(
-            api_base_url.as_str(),
-            "https://modelscope-mirror.example.com/api/v1/"
-        );
-    }
-
-    #[test]
-    fn test_build_model_scope_url_model() {
-        let parsed_url = ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1").unwrap();
-        let url = ModelScope::build_model_scope_url(&parsed_url, "config.json").unwrap();
-        assert_eq!(
-            url.as_str(),
-            "modelscope://deepseek-ai/DeepSeek-R1/config.json"
-        );
-    }
-
-    #[test]
-    fn test_build_model_scope_url_dataset() {
-        let parsed_url = ParsedURL::try_from("modelscope://datasets/owner/my-dataset").unwrap();
-        let url = ModelScope::build_model_scope_url(&parsed_url, "train.json").unwrap();
-        assert_eq!(
-            url.as_str(),
-            "modelscope://datasets/owner/my-dataset/train.json"
-        );
-    }
-
-    #[test]
-    fn test_build_model_scope_url_nested_file() {
-        let parsed_url = ParsedURL::try_from("modelscope://deepseek-ai/DeepSeek-R1").unwrap();
-        let url = ModelScope::build_model_scope_url(&parsed_url, "models/v1/model.bin").unwrap();
-        assert_eq!(
-            url.as_str(),
-            "modelscope://deepseek-ai/DeepSeek-R1/models/v1/model.bin"
-        );
-    }
-
-    #[test]
-    fn test_build_headers_default_user_agent() {
-        let request_header = ModelScope::build_request_headers(None, None).unwrap();
-        assert_eq!(
-            request_header.get(USER_AGENT).unwrap(),
-            HeaderValue::from_static(DEFAULT_USER_AGENT)
-        );
-    }
-
-    #[test]
-    fn test_build_headers_with_token() {
-        let request_headers =
-            ModelScope::build_request_headers(Some("test-token".to_string()), None).unwrap();
-        assert_eq!(
-            request_headers.get(reqwest::header::AUTHORIZATION).unwrap(),
-            "Bearer test-token"
-        );
-        assert_eq!(
-            request_headers.get(USER_AGENT).unwrap(),
-            HeaderValue::from_static(DEFAULT_USER_AGENT)
-        );
-    }
-
-    #[test]
-    fn test_build_headers_without_token() {
-        let request_headers = ModelScope::build_request_headers(None, None).unwrap();
-        assert!(request_headers
-            .get(reqwest::header::AUTHORIZATION)
-            .is_none());
-        assert_eq!(
-            request_headers.get(USER_AGENT).unwrap(),
-            HeaderValue::from_static(DEFAULT_USER_AGENT)
-        );
-    }
-
-    #[test]
-    fn test_build_headers_with_range() {
-        let range = Range {
-            start: 100,
-            length: 200,
-        };
-        let request_headers = ModelScope::build_request_headers(None, Some(range)).unwrap();
-        assert_eq!(
-            request_headers.get(reqwest::header::RANGE).unwrap(),
-            "bytes=100-299"
-        );
-    }
-
-    #[test]
-    fn test_build_headers_with_token_and_range() {
-        let range = Range {
-            start: 0,
-            length: 1024,
-        };
-        let request_headers =
-            ModelScope::build_request_headers(Some("my-secret-token".to_string()), Some(range))
-                .unwrap();
-        assert_eq!(
-            request_headers.get(reqwest::header::AUTHORIZATION).unwrap(),
-            "Bearer my-secret-token"
-        );
-        assert_eq!(
-            request_headers.get(reqwest::header::RANGE).unwrap(),
-            "bytes=0-1023"
-        );
-        assert_eq!(
-            request_headers.get(USER_AGENT).unwrap(),
-            HeaderValue::from_static(DEFAULT_USER_AGENT)
-        );
-    }
-
-    #[test]
-    fn test_repository_type_as_str() {
-        assert_eq!(RepositoryType::Model.as_str(), "models");
-        assert_eq!(RepositoryType::Dataset.as_str(), "datasets");
+        for (token, range, expected_authorization, expected_range) in test_cases {
+            let request_header =
+                ModelScope::build_request_headers(token.map(str::to_string), range).unwrap();
+            assert_eq!(request_header.get(USER_AGENT).unwrap(), DEFAULT_USER_AGENT);
+            assert_eq!(
+                request_header
+                    .get(AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok()),
+                expected_authorization
+            );
+            assert_eq!(
+                request_header
+                    .get(RANGE)
+                    .and_then(|value| value.to_str().ok()),
+                expected_range
+            );
+        }
     }
 
     #[tokio::test]
-    async fn test_get_propagates_range_header() {
+    async fn stat_maps_file_and_repository_responses() {
+        let test_cases: Vec<(&str, Mock, fn(Result<StatResponse>))> = vec![
+            (
+                "modelscope://owner/repo/config.json",
+                Mock::given(method("GET"))
+                    .and(path("/models/owner/repo/resolve/master/config.json"))
+                    .and(header("authorization", "Bearer secret"))
+                    .respond_with(ResponseTemplate::new(200).set_body_string("file content")),
+                |result| {
+                    let response = result.unwrap();
+                    assert!(response.success);
+                    assert_eq!(response.content_length, Some(12));
+                    assert!(response.entries.is_empty());
+                },
+            ),
+            (
+                "modelscope://owner/repo/config.json",
+                Mock::given(method("GET"))
+                    .and(path("/models/owner/repo/resolve/master/config.json"))
+                    .respond_with(ResponseTemplate::new(404)),
+                |result| {
+                    assert!(
+                        matches!(&result, Err(Error::BackendError(err)) if err.status_code == Some(StatusCode::NOT_FOUND))
+                    );
+                },
+            ),
+            (
+                "modelscope://owner/repo",
+                Mock::given(method("GET"))
+                    .and(path("/api/v1/models/owner/repo/repo/files"))
+                    .and(query_param("Revision", "master"))
+                    .and(query_param("Recursive", "true"))
+                    .and(header("authorization", "Bearer secret"))
+                    .and(header("user-agent", DEFAULT_USER_AGENT))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "Code": 200,
+                        "Data": {
+                            "Files": [
+                                {"Path": "nested/config file.json", "Type": "blob", "Size": 12},
+                                {"Path": "model.bin", "Type": "blob", "Size": 4096},
+                                {"Path": "README.md", "Type": "blob"},
+                                {"Path": "nested", "Type": "tree", "Size": 0}
+                            ]
+                        }
+                    }))),
+                |result| {
+                    let response = result.unwrap();
+                    assert!(response.success);
+                    assert_eq!(response.entries.len(), 3);
+                    assert_eq!(
+                        response.entries[0],
+                        DirEntry {
+                            url: "modelscope://owner/repo/nested/config%20file.json".to_string(),
+                            content_length: 12,
+                            is_dir: false,
+                        }
+                    );
+                    assert_eq!(response.entries[1].content_length, 4096);
+                    assert_eq!(response.entries[2].content_length, 0);
+                },
+            ),
+            (
+                "modelscope://datasets/owner/repo",
+                Mock::given(method("GET"))
+                    .and(path("/api/v1/datasets/owner/repo/repo/files"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "Code": 200,
+                        "Data": {
+                            "Files": [
+                                {"Path": "nested/train.json", "Type": "blob"},
+                                {"Path": "README.md", "Type": "blob"}
+                            ]
+                        }
+                    }))),
+                |result| {
+                    let response = result.unwrap();
+                    assert!(response.success);
+                    assert_eq!(response.entries.len(), 2);
+                    assert_eq!(
+                        response.entries[0],
+                        DirEntry {
+                            url: "modelscope://datasets/owner/repo/nested/train.json".to_string(),
+                            content_length: 0,
+                            is_dir: false,
+                        }
+                    );
+                },
+            ),
+            (
+                "modelscope://owner/repo",
+                Mock::given(method("GET"))
+                    .and(path("/api/v1/models/owner/repo/repo/files"))
+                    .respond_with(
+                        ResponseTemplate::new(200).set_body_json(
+                            serde_json::json!({"Code": 200, "Data": {"Files": null}}),
+                        ),
+                    ),
+                |result| {
+                    let response = result.unwrap();
+                    assert!(response.success);
+                    assert!(response.entries.is_empty());
+                },
+            ),
+            (
+                "modelscope://owner/repo",
+                Mock::given(method("GET"))
+                    .and(path("/api/v1/models/owner/repo/repo/files"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "Code": 404,
+                        "Message": "repo not found",
+                        "Data": {}
+                    }))),
+                |result| {
+                    assert!(
+                        matches!(&result, Err(Error::BackendError(err)) if err.status_code.is_none() && err.message.contains("code=404, message=repo not found"))
+                    );
+                },
+            ),
+            (
+                "modelscope://owner/repo",
+                Mock::given(method("GET"))
+                    .and(path("/api/v1/models/owner/repo/repo/files"))
+                    .respond_with(ResponseTemplate::new(401)),
+                |result| {
+                    assert!(
+                        matches!(&result, Err(Error::BackendError(err)) if err.status_code == Some(StatusCode::UNAUTHORIZED))
+                    );
+                },
+            ),
+            (
+                "modelscope://owner/repo",
+                Mock::given(method("GET"))
+                    .and(path("/api/v1/models/owner/repo/repo/files"))
+                    .respond_with(ResponseTemplate::new(200).set_body_string("not json")),
+                |result| {
+                    assert!(
+                        matches!(&result, Err(Error::BackendError(err)) if err.status_code.is_none())
+                    );
+                },
+            ),
+        ];
+
+        let backend = ModelScope::new(Arc::new(Config::default())).unwrap();
+        for (url, mock, expect) in test_cases {
+            let server = MockServer::start().await;
+            mock.mount(&server).await;
+            expect(
+                backend
+                    .stat(StatRequest {
+                        task_id: "task".to_string(),
+                        url: url.to_string(),
+                        http_header: None,
+                        timeout: Duration::from_secs(5),
+                        client_cert: None,
+                        object_storage: None,
+                        hdfs: None,
+                        hugging_face: None,
+                        model_scope: Some(ModelScopeOptions {
+                            revision: "master".to_string(),
+                            token: Some("secret".to_string()),
+                            base_url: Some(server.uri()),
+                        }),
+                        open_csg: None,
+                    })
+                    .await,
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn get_streams_body_and_validates_ranged_responses() {
+        let test_cases: Vec<(Option<Range>, Mock, fn(&GetResponse<Body>, &str))> = vec![
+            (
+                None,
+                Mock::given(method("GET"))
+                    .and(path("/models/owner/repo/resolve/master/config.json"))
+                    .respond_with(ResponseTemplate::new(200).set_body_string("full content")),
+                |response, text| {
+                    assert!(response.success);
+                    assert_eq!(response.http_status_code, Some(StatusCode::OK));
+                    assert_eq!(text, "full content");
+                },
+            ),
+            (
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                Mock::given(method("GET"))
+                    .and(path("/models/owner/repo/resolve/master/config.json"))
+                    .and(header("range", "bytes=10-29"))
+                    .respond_with(
+                        ResponseTemplate::new(206)
+                            .insert_header("content-range", "bytes 10-29/100")
+                            .set_body_string("partial content"),
+                    ),
+                |response, text| {
+                    assert!(response.success);
+                    assert_eq!(response.http_status_code, Some(StatusCode::PARTIAL_CONTENT));
+                    assert_eq!(text, "partial content");
+                },
+            ),
+            (
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                Mock::given(method("GET"))
+                    .and(path("/models/owner/repo/resolve/master/config.json"))
+                    .and(header("range", "bytes=10-29"))
+                    .respond_with(ResponseTemplate::new(200).set_body_string("full body content")),
+                |response, text| {
+                    assert!(!response.success);
+                    assert_eq!(response.http_status_code, Some(StatusCode::OK));
+                    assert!(response
+                        .error_message
+                        .as_deref()
+                        .unwrap()
+                        .contains("expected 206 Partial Content"));
+                    assert_eq!(text, "");
+                },
+            ),
+            (
+                None,
+                Mock::given(method("GET"))
+                    .and(path("/models/owner/repo/resolve/master/config.json"))
+                    .respond_with(ResponseTemplate::new(404)),
+                |response, text| {
+                    assert!(!response.success);
+                    assert_eq!(response.http_status_code, Some(StatusCode::NOT_FOUND));
+                    assert_eq!(text, "");
+                },
+            ),
+        ];
+
+        let backend = ModelScope::new(Arc::new(Config::default())).unwrap();
+        for (range, mock, expect) in test_cases {
+            let server = MockServer::start().await;
+            mock.mount(&server).await;
+            let mut response = backend
+                .get(GetRequest {
+                    task_id: "task".to_string(),
+                    piece_id: "piece".to_string(),
+                    url: "modelscope://owner/repo/config.json".to_string(),
+                    range,
+                    http_header: None,
+                    timeout: Duration::from_secs(5),
+                    client_cert: None,
+                    object_storage: None,
+                    hdfs: None,
+                    hugging_face: None,
+                    model_scope: Some(ModelScopeOptions {
+                        revision: "master".to_string(),
+                        token: None,
+                        base_url: Some(server.uri()),
+                    }),
+                    open_csg: None,
+                })
+                .await
+                .unwrap();
+            let text = response.text().await.unwrap();
+            expect(&response, &text);
+        }
+    }
+
+    #[tokio::test]
+    async fn get_follows_redirect_without_forwarding_token() {
         let server = MockServer::start().await;
+        let object_server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path(
-                "/models/deepseek-ai/DeepSeek-R1/resolve/master/config.json",
+            .and(path("/models/owner/repo/resolve/master/config.json"))
+            .and(header("range", "bytes=10-29"))
+            .respond_with(ResponseTemplate::new(302).insert_header(
+                "location",
+                format!("{}/objects/config.json", object_server.uri()),
             ))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/objects/config.json"))
             .and(header("range", "bytes=10-29"))
             .respond_with(
                 ResponseTemplate::new(206)
-                    .insert_header("content-range", "bytes 10-29/30")
-                    .set_body_string("partial content"),
+                    .insert_header("content-range", "bytes 10-29/100")
+                    .set_body_string("redirected cdn data!"),
             )
-            .mount(&server)
+            .mount(&object_server)
             .await;
 
-        let backend = ModelScope::new(Arc::new(Config::default())).unwrap();
-        let mut response = backend
+        let mut response = ModelScope::new(Arc::new(Config::default()))
+            .unwrap()
             .get(GetRequest {
                 task_id: "task".to_string(),
                 piece_id: "piece".to_string(),
-                url: "modelscope://deepseek-ai/DeepSeek-R1/config.json".to_string(),
+                url: "modelscope://owner/repo/config.json".to_string(),
                 range: Some(Range {
                     start: 10,
                     length: 20,
@@ -1081,7 +1313,7 @@ mod tests {
                 hugging_face: None,
                 model_scope: Some(ModelScopeOptions {
                     revision: "master".to_string(),
-                    token: None,
+                    token: Some("secret".to_string()),
                     base_url: Some(server.uri()),
                 }),
                 open_csg: None,
@@ -1090,128 +1322,89 @@ mod tests {
             .unwrap();
 
         assert!(response.success);
-        assert_eq!(
-            response.http_status_code,
-            Some(reqwest::StatusCode::PARTIAL_CONTENT)
-        );
-        assert_eq!(response.text().await.unwrap(), "partial content");
+        assert_eq!(response.text().await.unwrap(), "redirected cdn data!");
+
+        let object_requests = object_server.received_requests().await.unwrap();
+        assert_eq!(object_requests.len(), 1);
+        assert!(object_requests[0].headers.get("authorization").is_none());
     }
 
     #[tokio::test]
-    async fn test_get_rejects_full_body_for_range_request() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path(
-                "/models/deepseek-ai/DeepSeek-R1/resolve/master/config.json",
-            ))
-            .and(header("range", "bytes=10-29"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("full body content"))
-            .mount(&server)
-            .await;
+    async fn get_rejects_missing_options_or_file_path() {
+        let test_cases = vec![
+            ("modelscope://owner/repo/config.json", None),
+            (
+                "modelscope://owner/repo",
+                Some(ModelScopeOptions::default()),
+            ),
+        ];
 
         let backend = ModelScope::new(Arc::new(Config::default())).unwrap();
-        let response = backend
-            .get(GetRequest {
-                task_id: "task".to_string(),
-                piece_id: "piece".to_string(),
-                url: "modelscope://deepseek-ai/DeepSeek-R1/config.json".to_string(),
-                range: Some(Range {
-                    start: 10,
-                    length: 20,
-                }),
-                http_header: None,
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: Some(ModelScopeOptions {
-                    revision: "master".to_string(),
-                    token: None,
-                    base_url: Some(server.uri()),
-                }),
-                open_csg: None,
-            })
-            .await
-            .unwrap();
-
-        assert!(!response.success);
-        assert_eq!(response.http_status_code, Some(reqwest::StatusCode::OK));
-        assert!(response
-            .error_message
-            .unwrap()
-            .contains("expected 206 Partial Content"));
+        for (url, model_scope) in test_cases {
+            let result = backend
+                .get(GetRequest {
+                    task_id: "task".to_string(),
+                    piece_id: "piece".to_string(),
+                    url: url.to_string(),
+                    range: None,
+                    http_header: None,
+                    timeout: Duration::from_secs(5),
+                    client_cert: None,
+                    object_storage: None,
+                    hdfs: None,
+                    hugging_face: None,
+                    model_scope,
+                    open_csg: None,
+                })
+                .await;
+            assert!(matches!(result, Err(Error::InvalidParameter)));
+        }
     }
 
     #[tokio::test]
-    async fn test_stat_file_with_error_status() {
+    async fn exists_reports_file_and_repository_presence() {
         let server = MockServer::start().await;
-        Mock::given(method("GET"))
+        Mock::given(method("HEAD"))
             .and(path("/models/owner/repo/resolve/master/config.json"))
-            .respond_with(ResponseTemplate::new(404))
+            .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
-
-        let backend = ModelScope::new(Arc::new(Config::default())).unwrap();
-        let err = backend
-            .stat(StatRequest {
-                task_id: "task".to_string(),
-                url: "modelscope://owner/repo/config.json".to_string(),
-                http_header: None,
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: Some(ModelScopeOptions {
-                    revision: "master".to_string(),
-                    token: None,
-                    base_url: Some(server.uri()),
-                }),
-                open_csg: None,
-            })
-            .await
-            .unwrap_err();
-
-        assert!(matches!(
-            err,
-            Error::BackendError(err) if err.status_code == Some(reqwest::StatusCode::NOT_FOUND)
-        ));
-    }
-
-    #[tokio::test]
-    async fn test_stat_repository_with_error_status() {
-        let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/v1/models/owner/repo/repo/files"))
-            .respond_with(ResponseTemplate::new(401))
+            .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
 
         let backend = ModelScope::new(Arc::new(Config::default())).unwrap();
-        let err = backend
-            .stat(StatRequest {
-                task_id: "task".to_string(),
-                url: "modelscope://owner/repo".to_string(),
-                http_header: None,
-                timeout: Duration::from_secs(5),
-                client_cert: None,
-                object_storage: None,
-                hdfs: None,
-                hugging_face: None,
-                model_scope: Some(ModelScopeOptions {
-                    revision: "master".to_string(),
-                    token: None,
-                    base_url: Some(server.uri()),
-                }),
-                open_csg: None,
-            })
-            .await
-            .unwrap_err();
 
-        assert!(matches!(
-            err,
-            Error::BackendError(err) if err.status_code == Some(reqwest::StatusCode::UNAUTHORIZED)
-        ));
+        let test_cases = vec![
+            ("modelscope://owner/repo/config.json", true),
+            ("modelscope://owner/repo", true),
+            ("modelscope://owner/repo/missing.json", false),
+            ("modelscope://owner/missing", false),
+        ];
+
+        for (url, expected) in test_cases {
+            let exists = backend
+                .exists(ExistsRequest {
+                    task_id: "task".to_string(),
+                    url: url.to_string(),
+                    http_header: None,
+                    timeout: Duration::from_secs(5),
+                    client_cert: None,
+                    object_storage: None,
+                    hdfs: None,
+                    hugging_face: None,
+                    model_scope: Some(ModelScopeOptions {
+                        revision: "master".to_string(),
+                        token: None,
+                        base_url: Some(server.uri()),
+                    }),
+                    open_csg: None,
+                })
+                .await
+                .unwrap();
+            assert_eq!(exists, expected);
+        }
     }
 }

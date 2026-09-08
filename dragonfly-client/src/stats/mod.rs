@@ -235,29 +235,28 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
 
     #[test]
-    fn test_pprof_profile_query_params_default() {
-        let params = PProfProfileQueryParams::default();
-        assert_eq!(params.seconds, DEFAULT_PROFILER_SECONDS);
-        assert_eq!(params.frequency, DEFAULT_PROFILER_FREQUENCY);
+    fn pprof_profile_query_params_from_query_falls_back_to_defaults() {
+        let test_cases = vec![
+            ("seconds=25&frequency=1500", 25, 1500),
+            ("seconds=25", 25, DEFAULT_PROFILER_FREQUENCY),
+            ("frequency=1500", DEFAULT_PROFILER_SECONDS, 1500),
+            (
+                "seconds=invalid&unknown=1",
+                DEFAULT_PROFILER_SECONDS,
+                DEFAULT_PROFILER_FREQUENCY,
+            ),
+            ("", DEFAULT_PROFILER_SECONDS, DEFAULT_PROFILER_FREQUENCY),
+        ];
+
+        for (query, expected_seconds, expected_frequency) in test_cases {
+            let params = PProfProfileQueryParams::from_query(query);
+            assert_eq!(params.seconds, expected_seconds);
+            assert_eq!(params.frequency, expected_frequency);
+        }
     }
 
     #[test]
-    fn test_pprof_profile_query_params_from_query() {
-        let params = PProfProfileQueryParams::from_query("seconds=25&frequency=1500");
-        assert_eq!(params.seconds, 25);
-        assert_eq!(params.frequency, 1500);
-
-        let params = PProfProfileQueryParams::from_query("seconds=25");
-        assert_eq!(params.seconds, 25);
-        assert_eq!(params.frequency, DEFAULT_PROFILER_FREQUENCY);
-
-        let params = PProfProfileQueryParams::from_query("seconds=invalid&unknown=1");
-        assert_eq!(params.seconds, DEFAULT_PROFILER_SECONDS);
-        assert_eq!(params.frequency, DEFAULT_PROFILER_FREQUENCY);
-    }
-
-    #[test]
-    fn test_stats_new() {
+    fn stats_new_keeps_the_addr() {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
         let shutdown = shutdown::Shutdown::new();
         let (shutdown_complete_tx, _shutdown_complete_rx) = mpsc::unbounded_channel();
@@ -267,28 +266,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_pprof_profile_handler_with_default_params() {
-        let params = PProfProfileQueryParams {
-            seconds: 0,
-            frequency: 1000,
-        };
-        let result = Stats::pprof_profile_handler(params).await;
-        let _ = result;
+    async fn handler_returns_not_found_for_unknown_routes() {
+        let test_cases = vec![
+            (Method::GET, "/unknown"),
+            (Method::POST, "/debug/pprof/profile"),
+            (Method::POST, "/debug/pprof/heap"),
+        ];
+
+        for (method, path) in test_cases {
+            let request = Request::builder()
+                .method(method.clone())
+                .uri(path)
+                .body(())
+                .unwrap();
+            let response = Stats::handler(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
     }
 
     #[tokio::test]
-    async fn test_pprof_profile_handler_with_custom_frequency() {
-        let params = PProfProfileQueryParams {
-            seconds: 0,
-            frequency: 500,
-        };
-        let result = Stats::pprof_profile_handler(params).await;
-        let _ = result;
+    async fn pprof_profile_handler_builds_a_profile_for_each_frequency() {
+        for frequency in [1000, 500] {
+            let params = PProfProfileQueryParams {
+                seconds: 0,
+                frequency,
+            };
+            let result = Stats::pprof_profile_handler(params).await;
+            assert!(result.is_ok());
+        }
     }
 
     #[cfg(not(target_os = "linux"))]
     #[tokio::test]
-    async fn test_pprof_heap_handler_non_linux() {
+    async fn pprof_heap_handler_fails_on_non_linux() {
         let result = Stats::pprof_heap_handler().await;
         assert!(result.is_err());
     }

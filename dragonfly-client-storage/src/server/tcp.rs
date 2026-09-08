@@ -806,102 +806,67 @@ async fn sendfile_range(
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    use std::io::Seek;
 
-    fn pattern(length: usize) -> Vec<u8> {
-        (0..length).map(|i| (i % 251) as u8).collect()
-    }
+    const DATA_LENGTH: u64 = 8 * 1024 * 1024;
 
     async fn tcp_pair() -> (TcpStream, TcpStream) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let sender = TcpStream::connect(addr).await.unwrap();
         let (receiver, _) = listener.accept().await.unwrap();
+        socket2::SockRef::from(&sender)
+            .set_send_buffer_size(16 * 1024)
+            .unwrap();
         (sender, receiver)
     }
 
     #[tokio::test]
-    async fn test_sendfile_range() {
+    async fn sendfile_range_sends_the_range_until_eof() {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().join("task");
-        let data = pattern(8 * 1024 * 1024);
+        let data: Vec<u8> = (0..DATA_LENGTH).map(|i| (i % 251) as u8).collect();
         tokio::fs::write(&path, &data).await.unwrap();
-        let fd = std::fs::File::open(&path).unwrap();
 
-        let (sender, mut receiver) = tcp_pair().await;
-        socket2::SockRef::from(&sender)
-            .set_send_buffer_size(16 * 1024)
-            .unwrap();
+        let test_cases: Vec<(u64, u64, &[u8])> = vec![
+            (0, DATA_LENGTH, &data[..]),
+            (1_000, 50_000, &data[1_000..51_000]),
+            (0, DATA_LENGTH + 4096, &data[..]),
+            (0, 0, &[]),
+            (DATA_LENGTH, 5, &[]),
+        ];
 
-        let length = data.len() as u64;
-        let sender_handle = tokio::spawn(async move {
-            sendfile_range(&sender, &fd, 0, length).await.unwrap();
-            fd
-        });
+        for (offset, remaining, expected) in test_cases {
+            let fd = std::fs::File::open(&path).unwrap();
+            let (sender, mut receiver) = tcp_pair().await;
+            let sender_handle = tokio::spawn(async move {
+                sendfile_range(&sender, &fd, offset, remaining)
+                    .await
+                    .unwrap();
+                fd
+            });
 
-        let mut received = Vec::new();
-        receiver.read_to_end(&mut received).await.unwrap();
-        assert_eq!(received, data);
+            let mut received = Vec::new();
+            receiver.read_to_end(&mut received).await.unwrap();
+            assert_eq!(received, expected);
 
-        use std::io::Seek as _;
-        let fd = sender_handle.await.unwrap();
-        assert_eq!((&fd).stream_position().unwrap(), 0);
+            let fd = sender_handle.await.unwrap();
+            assert_eq!((&fd).stream_position().unwrap(), 0);
+        }
     }
 
     #[tokio::test]
-    async fn test_sendfile_range_sub_range() {
+    async fn sendfile_range_fails_when_the_peer_closed() {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().join("task");
-        let data = pattern(64 * 1024);
-        tokio::fs::write(&path, &data).await.unwrap();
-        let fd = std::fs::File::open(&path).unwrap();
-
-        let (sender, mut receiver) = tcp_pair().await;
-        tokio::spawn(async move {
-            sendfile_range(&sender, &fd, 1_000, 50_000).await.unwrap();
-        });
-
-        let mut received = Vec::new();
-        receiver.read_to_end(&mut received).await.unwrap();
-        assert_eq!(received, &data[1_000..51_000]);
-    }
-
-    #[tokio::test]
-    async fn test_sendfile_range_stops_at_eof() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let path = temp_dir.path().join("task");
-        let data = pattern(64 * 1024);
-        tokio::fs::write(&path, &data).await.unwrap();
-        let fd = std::fs::File::open(&path).unwrap();
-
-        let (sender, mut receiver) = tcp_pair().await;
-        let length = data.len() as u64;
-        tokio::spawn(async move {
-            sendfile_range(&sender, &fd, 0, length + 4096)
-                .await
-                .unwrap();
-        });
-
-        let mut received = Vec::new();
-        receiver.read_to_end(&mut received).await.unwrap();
-        assert_eq!(received, data);
-    }
-
-    #[tokio::test]
-    async fn test_sendfile_range_peer_closed() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let path = temp_dir.path().join("task");
-        let data = pattern(8 * 1024 * 1024);
+        let data: Vec<u8> = (0..DATA_LENGTH).map(|i| (i % 251) as u8).collect();
         tokio::fs::write(&path, &data).await.unwrap();
         let fd = std::fs::File::open(&path).unwrap();
 
         let (sender, receiver) = tcp_pair().await;
-        socket2::SockRef::from(&sender)
-            .set_send_buffer_size(16 * 1024)
-            .unwrap();
         drop(receiver);
 
-        assert!(sendfile_range(&sender, &fd, 0, data.len() as u64)
-            .await
-            .is_err());
+        let result = sendfile_range(&sender, &fd, 0, DATA_LENGTH).await;
+        assert!(result.is_err());
     }
 }

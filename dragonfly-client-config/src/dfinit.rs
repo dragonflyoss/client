@@ -380,222 +380,348 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
+    use dragonfly_client_core::Error;
     use std::path::Path;
 
     #[test]
-    fn test_default_dfinit_config_path() {
-        let expected = crate::default_config_dir().join("dfinit.yaml");
-        assert_eq!(default_dfinit_config_path(), expected);
-    }
-
-    #[test]
-    fn test_container_runtime_default_paths() {
+    fn default_dfinit_config_path_joins_config_dir() {
         assert_eq!(
-            default_container_runtime_containerd_config_path(),
-            Path::new("/etc/containerd/config.toml")
-        );
-        assert_eq!(
-            default_container_runtime_docker_config_path(),
-            Path::new("/etc/docker/daemon.json")
-        );
-        assert_eq!(
-            default_container_runtime_crio_config_path(),
-            Path::new("/etc/containers/registries.conf")
-        );
-        assert_eq!(
-            default_container_runtime_podman_config_path(),
-            Path::new("/etc/containers/registries.conf")
+            default_dfinit_config_path(),
+            crate::default_config_dir().join("dfinit.yaml")
         );
     }
 
     #[test]
-    fn test_default_unqualified_search_registries() {
-        let crio_registries = default_container_runtime_crio_unqualified_search_registries();
-        assert_eq!(
-            crio_registries,
-            vec![
-                "registry.fedoraproject.org",
-                "registry.access.redhat.com",
-                "docker.io"
-            ]
-        );
-
-        let podman_registries = default_container_runtime_podman_unqualified_search_registries();
-        assert_eq!(
-            podman_registries,
-            vec![
-                "registry.fedoraproject.org",
-                "registry.access.redhat.com",
-                "docker.io"
-            ]
-        );
-    }
-
-    #[test]
-    fn serialize_container_runtime() {
-        let cfg = ContainerRuntimeConfig::Containerd(Containerd {
-            ..Default::default()
-        });
-        let res = serde_yaml::to_string(&cfg).unwrap();
-        let expected = r#"
-containerd:
-  configPath: ''
-  registries: []
-  proxyAllRegistries: true"#;
-        assert_eq!(expected.trim(), res.trim());
-
-        let runtime_cfg = ContainerRuntimeConfig::Docker(Docker {
-            config_path: PathBuf::from("/root/.dragonfly/config/dfinit/yaml"),
-        });
-        let cfg = Config {
-            container_runtime: ContainerRuntime {
-                config: Some(runtime_cfg),
-            },
-            proxy: Proxy {
-                addr: String::from("hello"),
-            },
-        };
-
-        let res = serde_yaml::to_string(&cfg).unwrap();
-        let expected = r#"
+    fn config_serializes_container_runtime_under_runtime_key() {
+        let test_cases = vec![
+            (
+                None,
+                r#"
+proxy:
+  addr: hello
+containerRuntime: {}"#,
+            ),
+            (
+                Some(ContainerRuntimeConfig::Containerd(Containerd::default())),
+                r#"
 proxy:
   addr: hello
 containerRuntime:
-  docker:
-    configPath: /root/.dragonfly/config/dfinit/yaml"#;
-        assert_eq!(expected.trim(), res.trim());
-
-        let runtime_cfg = ContainerRuntimeConfig::Containerd(Containerd {
-            config_path: PathBuf::from("/root/.dragonfly/config/dfinit/yaml"),
-            ..Default::default()
-        });
-        let cfg = Config {
-            container_runtime: ContainerRuntime {
-                config: Some(runtime_cfg),
-            },
-            proxy: Proxy {
-                addr: String::from("hello"),
-            },
-        };
-        let res = serde_yaml::to_string(&cfg).unwrap();
-        let expected = r#"
+  containerd:
+    configPath: ''
+    registries: []
+    proxyAllRegistries: true"#,
+            ),
+            (
+                Some(ContainerRuntimeConfig::Containerd(Containerd {
+                    config_path: PathBuf::from("/root/.dragonfly/config/dfinit/yaml"),
+                    ..Default::default()
+                })),
+                r#"
 proxy:
   addr: hello
 containerRuntime:
   containerd:
     configPath: /root/.dragonfly/config/dfinit/yaml
     registries: []
-    proxyAllRegistries: true"#;
-        assert_eq!(expected.trim(), res.trim());
-    }
+    proxyAllRegistries: true"#,
+            ),
+            (
+                Some(ContainerRuntimeConfig::Docker(Docker {
+                    config_path: PathBuf::from("/root/.dragonfly/config/dfinit/yaml"),
+                })),
+                r#"
+proxy:
+  addr: hello
+containerRuntime:
+  docker:
+    configPath: /root/.dragonfly/config/dfinit/yaml"#,
+            ),
+            (
+                Some(ContainerRuntimeConfig::CRIO(CRIO::default())),
+                r#"
+proxy:
+  addr: hello
+containerRuntime:
+  crio:
+    configPath: ''
+    unqualifiedSearchRegistries: []
+    registries: []"#,
+            ),
+            (
+                Some(ContainerRuntimeConfig::Podman(Podman::default())),
+                r#"
+proxy:
+  addr: hello
+containerRuntime:
+  podman:
+    configPath: ''
+    unqualifiedSearchRegistries: []
+    registries: []"#,
+            ),
+        ];
 
-    #[test]
-    fn deserialize_container_runtime_correctly() {
-        let raw_data = r#"
-            proxy: 
-                addr: "hello"
-        "#;
-        let cfg: Config = serde_yaml::from_str(raw_data).expect("failed to deserialize");
-        assert!(cfg.container_runtime.config.is_none());
-        assert_eq!("hello".to_string(), cfg.proxy.addr);
-
-        let raw_data = r#"
-            proxy:
-                addr: "hello"
-            containerRuntime:
-                containerd:
-                    configPath: "test_path"
-                    criPluginId: "io.containerd.cri.v1.images"
-        "#;
-        let cfg: Config = serde_yaml::from_str(raw_data).expect("failed to deserialize");
-        assert_eq!("hello".to_string(), cfg.proxy.addr);
-        if let Some(ContainerRuntimeConfig::Containerd(c)) = cfg.container_runtime.config {
-            assert_eq!(PathBuf::from("test_path"), c.config_path);
-            assert_eq!(
-                Some("io.containerd.cri.v1.images".to_string()),
-                c.cri_plugin_id
-            );
-        } else {
-            panic!("failed to deserialize");
+        for (runtime_config, expected) in test_cases {
+            let config = Config {
+                proxy: Proxy {
+                    addr: "hello".to_string(),
+                },
+                container_runtime: ContainerRuntime {
+                    config: runtime_config,
+                },
+            };
+            let yaml = serde_yaml::to_string(&config).unwrap();
+            assert_eq!(yaml.trim(), expected.trim());
         }
     }
 
     #[test]
-    fn deserialize_container_runtime_crio_correctly() {
-        let raw_data = r#"
-            proxy: 
-                addr: "hello"
-            containerRuntime:
-                crio:
-                    configPath: "test_path"
-                    unqualifiedSearchRegistries:
-                        - "reg1"
-                        - "reg2"
+    fn config_deserializes_container_runtime_variant() {
+        let test_cases: Vec<(&str, fn(&Config))> = vec![
+            ("{}", |config| {
+                assert_eq!(config.proxy.addr, "http://127.0.0.1:4001");
+                assert!(config.container_runtime.config.is_none());
+            }),
+            ("proxy:\n  addr: hello\n", |config| {
+                assert_eq!(config.proxy.addr, "hello");
+                assert!(config.container_runtime.config.is_none());
+            }),
+            ("containerRuntime:\n  unknown: {}\n", |config| {
+                assert!(config.container_runtime.config.is_none());
+            }),
+            (
+                r#"
+                proxy:
+                  addr: hello
+                containerRuntime:
+                  containerd:
+                    configPath: test_path
+                    criPluginId: io.containerd.cri.v1.images
+                    proxyAllRegistries: false
                     registries:
-                        - prefix: "prefix1"
-                          location: "location1"
-                        - prefix: "prefix2"
-                          location: "location2"
-        "#;
-        let cfg: Config = serde_yaml::from_str(raw_data).expect("failed to deserialize");
-        if let Some(ContainerRuntimeConfig::CRIO(c)) = cfg.container_runtime.config {
-            assert_eq!(PathBuf::from("test_path"), c.config_path);
-            assert_eq!(vec!["reg1", "reg2"], c.unqualified_search_registries);
-            assert_eq!(
-                vec![
-                    CRIORegistry {
-                        location: "location1".to_string(),
-                        prefix: "prefix1".to_string()
-                    },
-                    CRIORegistry {
-                        location: "location2".to_string(),
-                        prefix: "prefix2".to_string()
-                    },
-                ],
-                c.registries
-            );
-        } else {
-            panic!("failed to deserialize");
+                      - hostNamespace: docker.io
+                        serverAddr: https://index.docker.io
+                        skipVerify: true
+                        ca:
+                          - /etc/ssl/certs/ca.crt
+                      - hostNamespace: ghcr.io
+                        serverAddr: https://ghcr.io
+                        capabilities:
+                          - pull
+                "#,
+                |config| {
+                    assert_eq!(config.proxy.addr, "hello");
+                    let Some(ContainerRuntimeConfig::Containerd(containerd)) =
+                        &config.container_runtime.config
+                    else {
+                        unreachable!()
+                    };
+                    assert_eq!(containerd.config_path, PathBuf::from("test_path"));
+                    assert_eq!(
+                        containerd.cri_plugin_id,
+                        Some("io.containerd.cri.v1.images".to_string())
+                    );
+                    assert!(!containerd.proxy_all_registries);
+                    assert_eq!(containerd.registries.len(), 2);
+                    assert_eq!(containerd.registries[0].host_namespace, "docker.io");
+                    assert_eq!(
+                        containerd.registries[0].server_addr,
+                        "https://index.docker.io"
+                    );
+                    assert_eq!(
+                        containerd.registries[0].capabilities,
+                        vec!["pull", "resolve"]
+                    );
+                    assert_eq!(containerd.registries[0].skip_verify, Some(true));
+                    assert_eq!(
+                        containerd.registries[0].ca,
+                        Some(vec!["/etc/ssl/certs/ca.crt".to_string()])
+                    );
+                    assert_eq!(containerd.registries[1].capabilities, vec!["pull"]);
+                    assert!(containerd.registries[1].skip_verify.is_none());
+                    assert!(containerd.registries[1].ca.is_none());
+                },
+            ),
+            ("containerRuntime:\n  containerd: {}\n", |config| {
+                let Some(ContainerRuntimeConfig::Containerd(containerd)) =
+                    &config.container_runtime.config
+                else {
+                    unreachable!()
+                };
+                assert_eq!(
+                    containerd.config_path,
+                    Path::new("/etc/containerd/config.toml")
+                );
+                assert!(containerd.cri_plugin_id.is_none());
+                assert!(containerd.registries.is_empty());
+                assert!(containerd.proxy_all_registries);
+            }),
+            (
+                "containerRuntime:\n  docker:\n    configPath: test_path\n",
+                |config| {
+                    let Some(ContainerRuntimeConfig::Docker(docker)) =
+                        &config.container_runtime.config
+                    else {
+                        unreachable!()
+                    };
+                    assert_eq!(docker.config_path, PathBuf::from("test_path"));
+                },
+            ),
+            ("containerRuntime:\n  docker: {}\n", |config| {
+                let Some(ContainerRuntimeConfig::Docker(docker)) = &config.container_runtime.config
+                else {
+                    unreachable!()
+                };
+                assert_eq!(docker.config_path, Path::new("/etc/docker/daemon.json"));
+            }),
+            (
+                r#"
+                containerRuntime:
+                  crio:
+                    configPath: test_path
+                    unqualifiedSearchRegistries:
+                      - reg1
+                      - reg2
+                    registries:
+                      - prefix: prefix1
+                        location: location1
+                      - prefix: prefix2
+                        location: location2
+                "#,
+                |config| {
+                    let Some(ContainerRuntimeConfig::CRIO(crio)) = &config.container_runtime.config
+                    else {
+                        unreachable!()
+                    };
+                    assert_eq!(crio.config_path, PathBuf::from("test_path"));
+                    assert_eq!(crio.unqualified_search_registries, vec!["reg1", "reg2"]);
+                    assert_eq!(
+                        crio.registries,
+                        vec![
+                            CRIORegistry {
+                                prefix: "prefix1".to_string(),
+                                location: "location1".to_string(),
+                            },
+                            CRIORegistry {
+                                prefix: "prefix2".to_string(),
+                                location: "location2".to_string(),
+                            },
+                        ]
+                    );
+                },
+            ),
+            ("containerRuntime:\n  crio: {}\n", |config| {
+                let Some(ContainerRuntimeConfig::CRIO(crio)) = &config.container_runtime.config
+                else {
+                    unreachable!()
+                };
+                assert_eq!(
+                    crio.config_path,
+                    Path::new("/etc/containers/registries.conf")
+                );
+                assert_eq!(
+                    crio.unqualified_search_registries,
+                    vec![
+                        "registry.fedoraproject.org",
+                        "registry.access.redhat.com",
+                        "docker.io"
+                    ]
+                );
+                assert!(crio.registries.is_empty());
+            }),
+            (
+                r#"
+                containerRuntime:
+                  podman:
+                    configPath: test_path
+                    unqualifiedSearchRegistries:
+                      - reg1
+                      - reg2
+                    registries:
+                      - prefix: prefix1
+                        location: location1
+                      - prefix: prefix2
+                        location: location2
+                "#,
+                |config| {
+                    let Some(ContainerRuntimeConfig::Podman(podman)) =
+                        &config.container_runtime.config
+                    else {
+                        unreachable!()
+                    };
+                    assert_eq!(podman.config_path, PathBuf::from("test_path"));
+                    assert_eq!(podman.unqualified_search_registries, vec!["reg1", "reg2"]);
+                    assert_eq!(
+                        podman.registries,
+                        vec![
+                            PodmanRegistry {
+                                prefix: "prefix1".to_string(),
+                                location: "location1".to_string(),
+                            },
+                            PodmanRegistry {
+                                prefix: "prefix2".to_string(),
+                                location: "location2".to_string(),
+                            },
+                        ]
+                    );
+                },
+            ),
+            ("containerRuntime:\n  podman: {}\n", |config| {
+                let Some(ContainerRuntimeConfig::Podman(podman)) = &config.container_runtime.config
+                else {
+                    unreachable!()
+                };
+                assert_eq!(
+                    podman.config_path,
+                    Path::new("/etc/containers/registries.conf")
+                );
+                assert_eq!(
+                    podman.unqualified_search_registries,
+                    vec![
+                        "registry.fedoraproject.org",
+                        "registry.access.redhat.com",
+                        "docker.io"
+                    ]
+                );
+                assert!(podman.registries.is_empty());
+            }),
+        ];
+
+        for (yaml, expect) in test_cases {
+            let config: Config = serde_yaml::from_str(yaml).unwrap();
+            expect(&config);
         }
     }
 
     #[test]
-    fn deserialize_container_runtime_podman_correctly() {
-        let raw_data = r#"
-            proxy: 
-                addr: "hello"
-            containerRuntime:
-                podman:
-                    configPath: "test_path"
-                    unqualifiedSearchRegistries:
-                        - "reg1"
-                        - "reg2"
-                    registries:
-                        - prefix: "prefix1"
-                          location: "location1"
-                        - prefix: "prefix2"
-                          location: "location2"
-        "#;
-        let cfg: Config = serde_yaml::from_str(raw_data).expect("failed to deserialize");
-        if let Some(ContainerRuntimeConfig::Podman(c)) = cfg.container_runtime.config {
-            assert_eq!(PathBuf::from("test_path"), c.config_path);
-            assert_eq!(vec!["reg1", "reg2"], c.unqualified_search_registries);
-            assert_eq!(
-                vec![
-                    PodmanRegistry {
-                        location: "location1".to_string(),
-                        prefix: "prefix1".to_string()
-                    },
-                    PodmanRegistry {
-                        location: "location2".to_string(),
-                        prefix: "prefix2".to_string()
-                    },
-                ],
-                c.registries
-            );
-        } else {
-            panic!("failed to deserialize");
+    fn load_reads_file_and_wraps_parse_errors() {
+        let test_cases: Vec<(&str, fn(Result<Config>))> = vec![
+            (
+                "containerRuntime:\n  docker:\n    configPath: test_path\n",
+                |result| {
+                    let config = result.unwrap();
+                    let Some(ContainerRuntimeConfig::Docker(docker)) =
+                        &config.container_runtime.config
+                    else {
+                        unreachable!()
+                    };
+                    assert_eq!(docker.config_path, PathBuf::from("test_path"));
+                },
+            ),
+            ("containerRuntime: [", |result| {
+                assert!(
+                    matches!(result, Err(Error::ExternalError(ref err)) if err.etype == ErrorType::ConfigError)
+                );
+            }),
+        ];
+
+        for (content, expect) in test_cases {
+            let file = tempfile::NamedTempFile::new().unwrap();
+            fs::write(file.path(), content).unwrap();
+            expect(Config::load(&file.path().to_path_buf()));
         }
     }
 }

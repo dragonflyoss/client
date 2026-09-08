@@ -304,204 +304,191 @@ impl<K, V> Drop for LruCache<K, V> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
 
     #[test]
-    fn test_new() {
-        let test_cases = vec![
-            // Normal capacity.
-            (5, 5),
-            // Minimum meaningful capacity.
-            (1, 1),
-            // Zero capacity.
-            (0, 0),
-            // Maximum capacity.
-            (usize::MAX, usize::MAX),
-        ];
+    fn new_sets_capacity_and_starts_empty() {
+        let test_cases = vec![5, 1, 0, usize::MAX];
 
-        for (capacity, expected_capacity) in test_cases {
+        for capacity in test_cases {
             let cache: LruCache<String, i32> = LruCache::new(capacity);
+            assert_eq!(cache.capacity, capacity);
             assert!(cache.is_empty());
-            assert_eq!(cache.capacity, expected_capacity);
         }
     }
 
     #[test]
-    fn test_get() {
-        let mut cache: LruCache<String, i32> = LruCache::new(3);
+    fn put_returns_replaced_or_evicted_value() {
         let test_cases = vec![
-            // Initial insertions.
             ("key1", 1, None),
             ("key2", 2, None),
             ("key3", 3, None),
-            // Update existing key.
             ("key2", 22, Some(2)),
-            // Eviction of oldest key.
             ("key4", 4, Some(1)),
-        ];
-
-        for (key, value, expected_result) in test_cases {
-            let result = cache.put(key.to_string(), value);
-            assert_eq!(result, expected_result);
-        }
-
-        // Verify final cache state.
-        assert_eq!(cache.get(&"key1".to_string()), None);
-        assert_eq!(cache.get(&"key2".to_string()).copied(), Some(22));
-        assert_eq!(cache.get(&"key3".to_string()).copied(), Some(3));
-        assert_eq!(cache.get(&"key4".to_string()).copied(), Some(4));
-    }
-
-    #[test]
-    fn test_get_after_evction() {
-        let mut cache = LruCache::new(3);
-        assert_eq!(cache.get(&"nonexistent".to_string()), None);
-
-        // Prepare cache with initial values.
-        for (key, value) in [("key1", 1), ("key2", 2), ("key3", 3)] {
-            cache.put(key.to_string(), value);
-        }
-
-        let test_cases = vec![
-            ("key1", Some(1)),
-            ("nonexistent", None),
-            ("key1", Some(1)),
-            ("key3", Some(3)),
-        ];
-
-        for (key, expected_value) in test_cases {
-            assert_eq!(cache.get(&key.to_string()).copied(), expected_value);
-        }
-
-        // Test eviction after getting.
-        cache.put("key4".to_string(), 4);
-        assert_eq!(cache.get(&"key1".to_string()).copied(), Some(1));
-        assert_eq!(cache.get(&"key2".to_string()), None);
-        assert_eq!(cache.get(&"key3".to_string()).copied(), Some(3));
-        assert_eq!(cache.get(&"key4".to_string()).copied(), Some(4));
-    }
-
-    #[test]
-    fn test_put() {
-        let mut cache = LruCache::new(3);
-        let test_cases = vec![
-            // Initial insertions within capacity.
-            ("key1", 1, None),
-            ("key2", 2, None),
-            ("key3", 3, None),
-            // Overflow capacity, should evict oldest.
-            ("key4", 4, Some(1)),
-            ("key5", 5, Some(2)),
-            // Update existing key.
+            ("key5", 5, Some(3)),
             ("key4", 44, Some(4)),
         ];
 
-        for (key, value, expected_result) in test_cases {
-            let result = cache.put(key.to_string(), value);
-            assert_eq!(result, expected_result);
+        let mut cache = LruCache::new(3);
+        for (key, value, expected) in test_cases {
+            let replaced = cache.put(key.to_string(), value);
+            assert_eq!(replaced, expected);
         }
 
-        // Verify final cache state.
-        assert_eq!(cache.get(&"key1".to_string()), None);
-        assert_eq!(cache.get(&"key2".to_string()), None);
-        assert_eq!(cache.get(&"key3".to_string()).copied(), Some(3));
-        assert_eq!(cache.get(&"key4".to_string()).copied(), Some(44));
-        assert_eq!(cache.get(&"key5".to_string()).copied(), Some(5));
+        let expected_entries = vec![
+            ("key1", None),
+            ("key2", Some(22)),
+            ("key3", None),
+            ("key4", Some(44)),
+            ("key5", Some(5)),
+        ];
+        for (key, expected) in expected_entries {
+            assert_eq!(cache.peek(key).copied(), expected);
+        }
     }
 
     #[test]
-    fn test_peek() {
-        let mut cache: LruCache<String, i32> = LruCache::new(3);
-        assert_eq!(cache.peek(&"nonexistent".to_string()), None);
-
-        // Prepare cache with initial values.
-        for (key, value) in [("key1", 1), ("key2", 2), ("key3", 3)] {
-            cache.put(key.to_string(), value);
-        }
-
+    fn get_peek_and_contains_find_only_present_keys() {
         let test_cases = vec![
+            (vec![], "key1", None),
+            (
+                vec![("key1", 1), ("key2", 2), ("key3", 3)],
+                "nonexistent",
+                None,
+            ),
+            (vec![("key1", 1), ("key2", 2), ("key3", 3)], "key1", Some(1)),
+            (vec![("key1", 1), ("key2", 2), ("key3", 3)], "key2", Some(2)),
+            (vec![("key1", 1), ("key2", 2), ("key3", 3)], "key3", Some(3)),
+        ];
+
+        for (entries, key, expected) in test_cases {
+            let mut cache = LruCache::new(3);
+            for (put_key, value) in entries {
+                cache.put(put_key.to_string(), value);
+            }
+
+            assert_eq!(cache.peek(key).copied(), expected);
+            assert_eq!(cache.contains(key), expected.is_some());
+            assert_eq!(cache.get(key).copied(), expected);
+        }
+    }
+
+    #[test]
+    fn get_and_put_promote_key_peek_and_contains_do_not() {
+        let test_cases: Vec<(
+            fn(&mut LruCache<String, i32>, &str),
+            Vec<(&'static str, Option<i32>)>,
+        )> = vec![
+            (
+                |cache, key| {
+                    cache.get(key);
+                },
+                vec![
+                    ("key1", Some(1)),
+                    ("key2", None),
+                    ("key3", Some(3)),
+                    ("key4", Some(4)),
+                ],
+            ),
+            (
+                |cache, key| {
+                    cache.put(key.to_string(), 11);
+                },
+                vec![
+                    ("key1", Some(11)),
+                    ("key2", None),
+                    ("key3", Some(3)),
+                    ("key4", Some(4)),
+                ],
+            ),
+            (
+                |cache, key| {
+                    cache.peek(key);
+                },
+                vec![
+                    ("key1", None),
+                    ("key2", Some(2)),
+                    ("key3", Some(3)),
+                    ("key4", Some(4)),
+                ],
+            ),
+            (
+                |cache, key| {
+                    cache.contains(key);
+                },
+                vec![
+                    ("key1", None),
+                    ("key2", Some(2)),
+                    ("key3", Some(3)),
+                    ("key4", Some(4)),
+                ],
+            ),
+        ];
+
+        for (access, expected_entries) in test_cases {
+            let mut cache = LruCache::new(3);
+            for (key, value) in [("key1", 1), ("key2", 2), ("key3", 3)] {
+                cache.put(key.to_string(), value);
+            }
+
+            access(&mut cache, "key1");
+            cache.put("key4".to_string(), 4);
+
+            for (key, expected) in expected_entries {
+                assert_eq!(cache.peek(key).copied(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn pop_lru_drains_entries_from_least_recently_used() {
+        let test_cases = vec![
+            (vec![], vec![]),
+            (
+                vec![("key1", 1), ("key2", 2), ("key3", 3)],
+                vec![("key1", 1), ("key2", 2), ("key3", 3)],
+            ),
+            (
+                vec![("key1", 1), ("key2", 2), ("key1", 11)],
+                vec![("key2", 2), ("key1", 11)],
+            ),
+        ];
+
+        for (entries, expected_order) in test_cases {
+            let mut cache = LruCache::new(3);
+            for (key, value) in entries {
+                cache.put(key.to_string(), value);
+            }
+
+            for (key, value) in expected_order {
+                assert_eq!(cache.pop_lru(), Some((key.to_string(), value)));
+            }
+
+            assert_eq!(cache.pop_lru(), None);
+            assert!(cache.is_empty());
+        }
+    }
+
+    #[test]
+    fn pop_removes_only_present_keys() {
+        let test_cases = vec![
+            ("key3", Some(("key3".to_string(), 3))),
             ("nonexistent", None),
-            ("key1", Some(1)),
-            ("key2", Some(2)),
-            ("key3", Some(3)),
+            ("key1", Some(("key1".to_string(), 1))),
+            ("key3", None),
+            ("key2", Some(("key2".to_string(), 2))),
         ];
 
-        for (key, expected_value) in test_cases {
-            assert_eq!(cache.peek(&key.to_string()).copied(), expected_value);
-        }
-
-        // Test eviction after peeking.
-        cache.put("key4".to_string(), 4);
-        assert_eq!(cache.peek(&"key1".to_string()), None);
-        assert_eq!(cache.peek(&"key2".to_string()).copied(), Some(2));
-        assert_eq!(cache.peek(&"key3".to_string()).copied(), Some(3));
-        assert_eq!(cache.peek(&"key4".to_string()).copied(), Some(4));
-    }
-
-    #[test]
-    fn test_contains() {
-        let mut cache: LruCache<String, i32> = LruCache::new(3);
-        assert!(!cache.contains(&"nonexistent".to_string()));
-
-        // Prepare cache with initial values.
+        let mut cache = LruCache::new(3);
         for (key, value) in [("key1", 1), ("key2", 2), ("key3", 3)] {
             cache.put(key.to_string(), value);
         }
-
-        let test_cases = vec![
-            ("nonexistent", false),
-            ("key1", true),
-            ("key2", true),
-            ("key3", true),
-        ];
-
-        for (key, expected_result) in test_cases {
-            assert_eq!(cache.contains(&key.to_string()), expected_result);
-        }
-
-        // Test eviction after contains.
-        cache.put("key4".to_string(), 4);
-        assert!(!cache.contains(&"key1".to_string()));
-        assert!(cache.contains(&"key2".to_string()));
-        assert!(cache.contains(&"key3".to_string()));
-        assert!(cache.contains(&"key4".to_string()));
-    }
-
-    #[test]
-    fn test_pop_lru() {
-        let mut cache: LruCache<String, i32> = LruCache::new(3);
-        assert_eq!(cache.pop_lru(), None);
-
-        for (key, value) in [("key1", 1), ("key2", 2), ("key3", 3)] {
-            cache.put(key.to_string(), value);
-        }
-
-        assert_eq!(cache.pop_lru(), Some(("key1".to_string(), 1)));
-        assert_eq!(cache.pop_lru(), Some(("key2".to_string(), 2)));
-        assert_eq!(cache.pop_lru(), Some(("key3".to_string(), 3)));
-        assert_eq!(cache.pop_lru(), None);
-        assert!(cache.is_empty());
-    }
-
-    #[test]
-    fn test_pop() {
-        let mut cache: LruCache<String, i32> = LruCache::new(3);
-
-        let test_cases = vec![
-            ("key1".to_string(), Some(("key1".to_string(), 1))),
-            ("key2".to_string(), Some(("key2".to_string(), 2))),
-            ("key3".to_string(), Some(("key3".to_string(), 3))),
-            ("key1".to_string(), None),
-            ("key2".to_string(), None),
-            ("key3".to_string(), None),
-        ];
-
-        cache.put("key1".to_string(), 1);
-        cache.put("key2".to_string(), 2);
-        cache.put("key3".to_string(), 3);
 
         for (key, expected) in test_cases {
-            assert_eq!(cache.pop(&key), expected);
+            assert_eq!(cache.pop(key), expected);
+            assert!(!cache.contains(key));
         }
 
         assert!(cache.is_empty());

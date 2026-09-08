@@ -32,46 +32,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_get_ns_from_query_with_ns_param() {
-        let uri: http::Uri = "/v2/library/nginx/manifests/latest?ns=docker.io"
-            .parse()
-            .unwrap();
-        assert_eq!(
-            get_ns_from_query(&uri),
-            Some("https://docker.io".to_string())
-        );
-    }
+    fn get_ns_from_query_extracts_the_registry_with_a_scheme() {
+        let test_cases = vec![
+            (
+                "/v2/library/nginx/manifests/latest?ns=docker.io",
+                Some("https://docker.io"),
+            ),
+            (
+                "/v2/library/nginx/manifests/latest?ns=https://registry.example.com",
+                Some("https://registry.example.com"),
+            ),
+            (
+                "/v2/library/nginx/manifests/latest?ns=registry.example.com%3A5000",
+                Some("https://registry.example.com:5000"),
+            ),
+            (
+                "/v2/library/nginx/manifests/latest?foo=bar&ns=ghcr.io&baz=qux",
+                Some("https://ghcr.io"),
+            ),
+            ("/v2/library/nginx/manifests/latest?foo=bar", None),
+            ("/v2/library/nginx/manifests/latest", None),
+        ];
 
-    #[test]
-    fn test_get_ns_from_query_with_scheme() {
-        let uri: http::Uri = "/v2/library/nginx/manifests/latest?ns=https://registry.example.com"
-            .parse()
-            .unwrap();
-        assert_eq!(
-            get_ns_from_query(&uri),
-            Some("https://registry.example.com".to_string())
-        );
-    }
-
-    #[test]
-    fn test_get_ns_from_query_no_ns_param() {
-        let uri: http::Uri = "/v2/library/nginx/manifests/latest?foo=bar"
-            .parse()
-            .unwrap();
-        assert_eq!(get_ns_from_query(&uri), None);
-    }
-
-    #[test]
-    fn test_get_ns_from_query_no_query() {
-        let uri: http::Uri = "/v2/library/nginx/manifests/latest".parse().unwrap();
-        assert_eq!(get_ns_from_query(&uri), None);
-    }
-
-    #[test]
-    fn test_get_ns_from_query_multiple_params() {
-        let uri: http::Uri = "/v2/library/nginx/manifests/latest?foo=bar&ns=ghcr.io&baz=qux"
-            .parse()
-            .unwrap();
-        assert_eq!(get_ns_from_query(&uri), Some("https://ghcr.io".to_string()));
+        for (uri, expected) in test_cases {
+            let uri: http::Uri = uri.parse().unwrap();
+            assert_eq!(get_ns_from_query(&uri), expected.map(str::to_string));
+        }
     }
 }

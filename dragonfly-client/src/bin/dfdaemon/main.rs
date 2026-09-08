@@ -575,13 +575,54 @@ mod tests {
     use tokio::sync::mpsc;
 
     #[test]
-    fn logging_uses_cli_defaults_when_options_are_omitted() {
-        let args = Args::try_parse_from(["dfdaemon"]).unwrap();
-        assert_eq!(args.log_level, Level::INFO);
-        assert_eq!(args.log_dir, dfdaemon::default_dfdaemon_log_dir());
-        assert_eq!(args.log_max_files, 6);
-        assert_eq!(args.log_max_file_size, ByteSize::gib(1));
-        assert!(!args.console);
+    fn args_parse_logging_options_and_defaults() {
+        let test_cases = vec![
+            (
+                vec!["dfdaemon"],
+                (
+                    Level::INFO,
+                    dfdaemon::default_dfdaemon_log_dir(),
+                    6,
+                    ByteSize::gib(1),
+                    false,
+                ),
+            ),
+            (
+                vec![
+                    "dfdaemon",
+                    "--log-level",
+                    "debug",
+                    "--log-dir",
+                    "/var/log/dfdaemon-test",
+                    "--log-max-files",
+                    "3",
+                    "--log-max-file-size",
+                    "512MiB",
+                    "--console",
+                ],
+                (
+                    Level::DEBUG,
+                    PathBuf::from("/var/log/dfdaemon-test"),
+                    3,
+                    ByteSize::mib(512),
+                    true,
+                ),
+            ),
+        ];
+
+        for (argv, expected) in test_cases {
+            let args = Args::try_parse_from(&argv).unwrap();
+            assert_eq!(
+                (
+                    args.log_level,
+                    args.log_dir,
+                    args.log_max_files,
+                    args.log_max_file_size,
+                    args.console,
+                ),
+                expected
+            );
+        }
     }
 
     #[tokio::test]

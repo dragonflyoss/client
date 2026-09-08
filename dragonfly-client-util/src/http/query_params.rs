@@ -99,47 +99,24 @@ pub fn default_proxy_rule_filtered_query_params() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
 
     #[test]
-    fn default_proxy_rule_filtered_query_params_contains_all_params() {
-        let mut expected = HashSet::new();
-        expected.extend(S3_FILTERED_QUERY_PARAMS.iter().map(|s| s.to_string()));
-        expected.extend(GCS_FILTERED_QUERY_PARAMS.iter().map(|s| s.to_string()));
-        expected.extend(OSS_FILTERED_QUERY_PARAMS.iter().map(|s| s.to_string()));
-        expected.extend(OBS_FILTERED_QUERY_PARAMS.iter().map(|s| s.to_string()));
-        expected.extend(COS_FILTERED_QUERY_PARAMS.iter().map(|s| s.to_string()));
-        expected.extend(
-            CONTAINERD_FILTERED_QUERY_PARAMS
-                .iter()
-                .map(|s| s.to_string()),
-        );
-
-        let actual = default_proxy_rule_filtered_query_params();
-        let actual_set: HashSet<_> = actual.into_iter().collect();
-
-        assert_eq!(actual_set, expected);
-    }
-
-    #[test]
-    fn default_proxy_rule_removes_duplicates() {
-        let params: Vec<String> = default_proxy_rule_filtered_query_params();
-        let param_count = params.len();
-
-        let unique_params: HashSet<_> = params.into_iter().collect();
-        assert_eq!(unique_params.len(), param_count);
-    }
-
-    #[test]
-    fn default_proxy_rule_filtered_query_params_contains_key_properties() {
+    fn default_proxy_rule_filtered_query_params_unions_protocols_once() {
         let params = default_proxy_rule_filtered_query_params();
-        let param_set: HashSet<_> = params.into_iter().collect();
+        let unique_params: HashSet<&str> = params.iter().map(|param| param.as_str()).collect();
+        let expected: HashSet<&str> = [
+            S3_FILTERED_QUERY_PARAMS,
+            GCS_FILTERED_QUERY_PARAMS,
+            OSS_FILTERED_QUERY_PARAMS,
+            OBS_FILTERED_QUERY_PARAMS,
+            COS_FILTERED_QUERY_PARAMS,
+            CONTAINERD_FILTERED_QUERY_PARAMS,
+        ]
+        .concat()
+        .into_iter()
+        .collect();
 
-        assert!(param_set.contains("X-Amz-Signature"));
-        assert!(param_set.contains("X-Goog-Signature"));
-        assert!(param_set.contains("OSSAccessKeyId"));
-        assert!(param_set.contains("X-Obs-Security-Token"));
-        assert!(param_set.contains("q-sign-algorithm"));
-        assert!(param_set.contains("ns"));
+        assert_eq!(unique_params.len(), params.len());
+        assert_eq!(unique_params, expected);
     }
 }

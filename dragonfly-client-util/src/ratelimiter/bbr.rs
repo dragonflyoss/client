@@ -572,105 +572,144 @@ impl RollingWindow {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
-    use std::sync::Arc;
     use std::thread;
-    use std::time::Duration;
 
     #[test]
-    fn test_new_rolling_window() {
+    fn default_config_uses_the_default_fns() {
+        let config = BBRConfig::default();
+        assert_eq!(config.bucket_count, default_bucket_count());
+        assert_eq!(config.bucket_interval, default_bucket_interval());
+        assert_eq!(config.cpu_threshold, default_cpu_threshold());
+        assert_eq!(config.memory_threshold, default_memory_threshold());
+        assert_eq!(config.shed_cooldown, default_shed_cooldown());
+        assert_eq!(config.collect_interval, default_collect_interval());
+    }
+
+    #[test]
+    fn new_window_starts_empty() {
         let window = RollingWindow::new(5, Duration::from_millis(50));
+        assert_eq!(window.bucket_count(), 5);
         assert_eq!(window.in_flight(), 0);
-
-        let (max_pass, min_rt, in_flight) = window.get_stats();
-        assert_eq!(max_pass, 0);
-        assert_eq!(min_rt, 1);
-        assert_eq!(in_flight, 0);
+        assert_eq!(window.get_stats(), (0, 1, 0));
+        assert_eq!(window.ring.lock().occupied_len(), 0);
     }
 
     #[test]
-    fn test_add_single_request() {
-        let window = RollingWindow::new(10, Duration::from_millis(100));
-        window.add(100);
+    fn add_counts_passes_and_tracks_the_min_rt_within_a_bucket() {
+        let test_cases: Vec<(Vec<u64>, fn((u64, u64)))> = vec![
+            (vec![100], |bucket| assert_eq!(bucket, (1, 100))),
+            (vec![100, 50, 200], |bucket| assert_eq!(bucket, (3, 50))),
+            (vec![0], |bucket| assert_eq!(bucket, (1, 0))),
+            (vec![u64::MAX - 1], |bucket| {
+                assert_eq!(bucket, (1, u64::MAX - 1));
+            }),
+        ];
 
-        let current_bucket = window.current_bucket.lock();
-        assert_eq!(current_bucket.1, 1);
-        assert_eq!(current_bucket.2, 100);
+        for (rts, expect) in test_cases {
+            let window = RollingWindow::new(10, Duration::from_millis(100));
+            for rt in rts {
+                window.add(rt);
+            }
+
+            assert_eq!(window.ring.lock().occupied_len(), 0);
+            let current_bucket = window.current_bucket.lock();
+            expect((current_bucket.1, current_bucket.2));
+        }
     }
 
     #[test]
-    fn test_add_multiple_requests_same_bucket() {
-        let window = RollingWindow::new(10, Duration::from_millis(100));
-        window.add(100);
-        window.add(50);
-        window.add(200);
-
-        let current_bucket = window.current_bucket.lock();
-        assert_eq!(current_bucket.1, 3);
-        assert_eq!(current_bucket.2, 50);
-    }
-
-    #[test]
-    fn test_bucket_rotation() {
+    fn add_flushes_the_expired_bucket_into_the_ring() {
         let window = RollingWindow::new(10, Duration::from_millis(100));
         window.add(100);
         window.add(80);
         thread::sleep(Duration::from_millis(150));
-        window.add(150);
 
+        window.add(150);
         let ring = window.ring.lock();
         assert_eq!(ring.occupied_len(), 1);
 
         let sample = ring.iter().next().unwrap();
         assert_eq!(sample.pass, 2);
         assert_eq!(sample.min_rt, 80);
+
+        drop(ring);
+        let current_bucket = window.current_bucket.lock();
+        assert_eq!((current_bucket.1, current_bucket.2), (1, 150));
     }
 
     #[test]
-    fn test_in_flight_initial_value() {
+    fn add_skips_flushing_an_empty_bucket() {
         let window = RollingWindow::new(10, Duration::from_millis(100));
-        assert_eq!(window.in_flight(), 0);
+        thread::sleep(Duration::from_millis(120));
+
+        window.add(100);
+        assert_eq!(window.ring.lock().occupied_len(), 0);
+        let current_bucket = window.current_bucket.lock();
+        assert_eq!((current_bucket.1, current_bucket.2), (1, 100));
     }
 
     #[test]
-    fn test_add_in_flight() {
-        let window = RollingWindow::new(10, Duration::from_millis(100));
+    fn add_overwrites_the_oldest_sample_when_the_ring_is_full() {
+        let window = RollingWindow::new(1, Duration::from_millis(100));
+        window.add(100);
+        thread::sleep(Duration::from_millis(150));
 
-        assert_eq!(window.add_in_flight(), 1);
-        assert_eq!(window.add_in_flight(), 2);
-        assert_eq!(window.add_in_flight(), 3);
-        assert_eq!(window.in_flight(), 3);
+        window.add(50);
+        thread::sleep(Duration::from_millis(150));
+
+        window.add(25);
+        let ring = window.ring.lock();
+        assert_eq!(ring.occupied_len(), 1);
+        assert_eq!(ring.iter().next().unwrap().min_rt, 50);
     }
 
     #[test]
-    fn test_sub_in_flight() {
-        let window = RollingWindow::new(10, Duration::from_millis(100));
-        window.add_in_flight();
-        window.add_in_flight();
-        window.add_in_flight();
+    fn in_flight_follows_add_and_sub() {
+        let test_cases: Vec<(Vec<fn(&RollingWindow)>, u64)> = vec![
+            (vec![], 0),
+            (
+                vec![
+                    |window| assert_eq!(window.add_in_flight(), 1),
+                    |window| assert_eq!(window.add_in_flight(), 2),
+                    |window| assert_eq!(window.add_in_flight(), 3),
+                ],
+                3,
+            ),
+            (
+                vec![
+                    |window| assert_eq!(window.add_in_flight(), 1),
+                    |window| assert_eq!(window.add_in_flight(), 2),
+                    RollingWindow::sub_in_flight,
+                ],
+                1,
+            ),
+            (
+                vec![
+                    |window| assert_eq!(window.add_in_flight(), 1),
+                    RollingWindow::sub_in_flight,
+                    |window| assert_eq!(window.add_in_flight(), 1),
+                    RollingWindow::sub_in_flight,
+                ],
+                0,
+            ),
+        ];
 
-        window.sub_in_flight();
-        assert_eq!(window.in_flight(), 2);
+        for (ops, expected) in test_cases {
+            let window = RollingWindow::new(10, Duration::from_millis(100));
+            for op in ops {
+                op(&window);
+            }
 
-        window.sub_in_flight();
-        assert_eq!(window.in_flight(), 1);
-
-        window.sub_in_flight();
-        assert_eq!(window.in_flight(), 0);
+            assert_eq!(window.in_flight(), expected);
+            assert_eq!(window.get_stats().2, expected);
+        }
     }
 
     #[test]
-    fn test_get_stats_empty_window() {
-        let window = RollingWindow::new(10, Duration::from_millis(100));
-
-        let (max_pass, min_rt, in_flight) = window.get_stats();
-        assert_eq!(max_pass, 0);
-        assert_eq!(min_rt, 1);
-        assert_eq!(in_flight, 0);
-    }
-
-    #[test]
-    fn test_get_stats_with_data() {
+    fn get_stats_aggregates_the_flushed_buckets() {
         let window = RollingWindow::new(10, Duration::from_millis(100));
         window.add(100);
         window.add(50);
@@ -684,95 +723,32 @@ mod tests {
         window.add(80);
         window.add_in_flight();
         window.add_in_flight();
-
-        let (max_pass, min_rt, in_flight) = window.get_stats();
-        assert_eq!(max_pass, 3);
-        assert_eq!(min_rt, 50);
-        assert_eq!(in_flight, 2);
+        assert_eq!(window.get_stats(), (3, 50, 2));
     }
 
     #[test]
-    fn test_get_stats_includes_in_flight() {
-        let window = RollingWindow::new(10, Duration::from_millis(100));
-
-        window.add_in_flight();
-        window.add_in_flight();
-        window.add_in_flight();
-        let (_, _, in_flight) = window.get_stats();
-        assert_eq!(in_flight, 3);
-    }
-
-    #[test]
-    fn test_expired_samples_filtered() {
+    fn get_stats_drops_samples_beyond_the_bucket_count() {
         let window = RollingWindow::new(3, Duration::from_millis(100));
-        window.add(100);
-        thread::sleep(Duration::from_millis(120));
-
-        window.add(80);
-        thread::sleep(Duration::from_millis(110));
-
-        window.add(60);
-        thread::sleep(Duration::from_millis(110));
-
-        window.add(40);
-        thread::sleep(Duration::from_millis(200));
+        for rt in [100, 80, 60, 40] {
+            window.add(rt);
+            thread::sleep(Duration::from_millis(120));
+        }
 
         window.add(30);
         let (max_pass, min_rt, _) = window.get_stats();
-
         assert_eq!(max_pass, 1);
-        assert!(min_rt == 40);
+        assert_eq!(min_rt, 40);
     }
 
     #[test]
-    fn test_zero_response_time() {
-        let window = RollingWindow::new(10, Duration::from_millis(100));
-        window.add(0);
-
-        let current_bucket = window.current_bucket.lock();
-        assert_eq!(current_bucket.1, 1);
-        assert_eq!(current_bucket.2, 0);
-    }
-
-    #[test]
-    fn test_max_response_time() {
-        let window = RollingWindow::new(10, Duration::from_millis(100));
-        window.add(u64::MAX - 1);
-
-        let current_bucket = window.current_bucket.lock();
-        assert_eq!(current_bucket.1, 1);
-        assert_eq!(current_bucket.2, u64::MAX - 1);
-    }
-
-    #[test]
-    fn test_single_bucket_window() {
-        let window = RollingWindow::new(1, Duration::from_millis(100));
-        window.add(100);
-        thread::sleep(Duration::from_millis(150));
-        window.add(50);
-
-        let ring = window.ring.lock();
-        assert_eq!(ring.occupied_len(), 1);
-    }
-
-    #[test]
-    fn test_empty_bucket_not_flushed() {
-        let window = RollingWindow::new(10, Duration::from_millis(100));
-        thread::sleep(Duration::from_millis(120));
-        window.add(100);
-        let ring = window.ring.lock();
-        assert_eq!(ring.occupied_len(), 0);
-    }
-
-    #[test]
-    fn test_concurrent_add_requests() {
+    fn concurrent_adds_land_in_the_current_bucket() {
         let window = Arc::new(RollingWindow::new(10, Duration::from_millis(100)));
         let mut handles = vec![];
         for _ in 0..4 {
-            let w = window.clone();
+            let window = window.clone();
             handles.push(thread::spawn(move || {
-                for i in 0..100 {
-                    w.add(i as u64);
+                for rt in 0..100 {
+                    window.add(rt);
                 }
             }));
         }
@@ -787,24 +763,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_concurrent_add_and_stats() {
+    async fn concurrent_adds_and_stats_stay_consistent() {
         let window = Arc::new(RollingWindow::new(10, Duration::from_millis(100)));
         let mut handles = vec![];
         for _ in 0..2 {
-            let w = window.clone();
+            let window = window.clone();
             handles.push(tokio::spawn(async move {
-                for i in 0..50 {
-                    w.add(i as u64 + 10);
+                for rt in 0..50 {
+                    window.add(rt + 10);
                     tokio::time::sleep(Duration::from_micros(100)).await;
                 }
             }));
         }
 
         for _ in 0..2 {
-            let w = window.clone();
+            let window = window.clone();
             handles.push(tokio::spawn(async move {
                 for _ in 0..50 {
-                    let (max_pass, min_rt, _) = w.get_stats();
+                    let (max_pass, min_rt, _) = window.get_stats();
                     assert!(min_rt > 0);
                     assert!(max_pass <= 100);
                     tokio::time::sleep(Duration::from_micros(100)).await;
@@ -817,24 +793,103 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_bbr_style_usage() {
-        let window = RollingWindow::new(10, Duration::from_millis(100));
-        for rt in [100, 80, 120, 60, 90, 70, 110, 50, 85, 95] {
-            let _ = window.add_in_flight();
-            window.add(rt);
-            window.sub_in_flight();
-        }
+    #[tokio::test]
+    async fn acquire_admits_requests_when_not_overloaded() {
+        let bbr = BBR::new(BBRConfig {
+            cpu_threshold: 100,
+            memory_threshold: 100,
+            ..Default::default()
+        })
+        .await;
+        assert!(!bbr.overload_collector.is_overloaded());
 
-        thread::sleep(Duration::from_millis(110));
-        for rt in [40, 55, 45, 60, 50] {
-            let _ = window.add_in_flight();
-            window.add(rt);
-            window.sub_in_flight();
-        }
+        let guard = bbr.acquire().await.unwrap();
+        assert_eq!(bbr.rolling_window.in_flight(), 1);
 
-        let (max_pass, min_rt, _) = window.get_stats();
-        let estimated_limit = max_pass as f64 * min_rt as f64 / 1000.0;
-        assert!(estimated_limit == 0.5 || max_pass == 0);
+        drop(guard);
+        assert_eq!(bbr.rolling_window.in_flight(), 0);
+        assert_eq!(bbr.rolling_window.current_bucket.lock().1, 1);
+        assert!(bbr.shed_at.lock().is_none());
+    }
+
+    #[tokio::test]
+    async fn acquire_sheds_only_when_in_flight_exceeds_the_estimated_limit() {
+        let bbr = BBR::new(BBRConfig {
+            cpu_threshold: 100,
+            memory_threshold: 100,
+            ..Default::default()
+        })
+        .await;
+        bbr.overload_collector
+            .is_overloaded
+            .store(true, Ordering::Relaxed);
+        let _baseline = bbr.acquire().await.unwrap();
+        assert_eq!(bbr.rolling_window.in_flight(), 1);
+
+        bbr.rolling_window.add(40);
+        thread::sleep(bbr.rolling_window.bucket_interval + Duration::from_millis(10));
+        bbr.rolling_window.add(40);
+        assert_eq!(bbr.rolling_window.get_stats(), (1, 40, 1));
+
+        let guard = bbr.acquire().await;
+        assert!(guard.is_some());
+        assert_eq!(bbr.rolling_window.in_flight(), 2);
+        assert!(!bbr.is_in_cooldown());
+
+        drop(guard);
+        bbr.rolling_window.add_in_flight();
+        assert!(bbr.acquire().await.is_none());
+        assert_eq!(bbr.rolling_window.in_flight(), 2);
+        assert!(bbr.is_in_cooldown());
+    }
+
+    #[tokio::test]
+    async fn acquire_keeps_shedding_during_the_cooldown() {
+        let bbr = BBR::new(BBRConfig {
+            cpu_threshold: 100,
+            memory_threshold: 100,
+            shed_cooldown: Duration::from_millis(50),
+            ..Default::default()
+        })
+        .await;
+
+        bbr.shed_at.lock().replace(Instant::now());
+        assert!(bbr.is_in_cooldown());
+        assert!(bbr.acquire().await.is_none());
+        assert_eq!(bbr.rolling_window.in_flight(), 0);
+
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert!(!bbr.is_in_cooldown());
+        assert!(bbr.acquire().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn collector_ignores_resources_at_the_full_threshold() {
+        let collector = OverloadCollector::new(BBRConfig {
+            cpu_threshold: 100,
+            memory_threshold: 100,
+            ..Default::default()
+        });
+
+        collector.collect_overloaded().await;
+        assert!(!collector.is_overloaded());
+        assert!(!collector.is_cpu_overloaded().await);
+        assert!(!collector.is_memory_overloaded());
+        assert_eq!(collector.cpu_used_percent(), 0);
+        assert_eq!(collector.memory_used_percent(), 0);
+    }
+
+    #[tokio::test]
+    async fn collector_flags_overload_at_a_zero_threshold() {
+        let collector = OverloadCollector::new(BBRConfig {
+            cpu_threshold: 0,
+            memory_threshold: 0,
+            ..Default::default()
+        });
+
+        collector.collect_overloaded().await;
+        assert!(collector.is_overloaded());
+        assert!(collector.is_cpu_overloaded().await);
+        assert!(collector.is_memory_overloaded());
     }
 }

@@ -184,13 +184,26 @@ Write unit tests in the same file as the code being tested, inside a `#[cfg(test
 mod tests {
     use super::*;
 
+    type ExpectResult = fn(Result<()>);
+
     #[test]
-    fn test_synchronous_behavior() { ... }
+    fn parse_rejects_invalid_input() {
+        let test_cases: Vec<(&str, ExpectResult)> = vec![
+            ("valid", |result| assert!(result.is_ok())),
+            ("", |result| assert!(matches!(result, Err(Error::InvalidArgument(_))))),
+        ];
+
+        for (input, expect) in test_cases {
+            expect(parse(input));
+        }
+    }
 
     #[tokio::test]
-    async fn test_async_behavior() { ... }
+    async fn download_reads_the_whole_body() { ... }
 }
 ```
+
+Name tests as `<subject>_<behavior>` without a `test_` or `should_` prefix. Prefer table-driven tests: a `test_cases` vector of input tuples ending in an `expected` value or an `expect` fn that performs the assertions, and no custom message arguments on assertions. Do not write comments inside tests.
 
 ### Test Dependencies
 
@@ -211,7 +224,7 @@ cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
 cargo test -p dragonfly-client-storage
 
 # Run a specific test
-cargo test -p dragonfly-client-storage test_lru_cache
+cargo test -p dragonfly-client-storage cache::lru_cache::
 ```
 
 ### Benchmarks

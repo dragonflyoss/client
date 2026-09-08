@@ -271,3 +271,150 @@ where
         self.clients.clear();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::type_complexity)]
+
+    use super::*;
+    use tokio::time::sleep;
+
+    struct CountingFactory(Arc<AtomicUsize>);
+
+    #[async_trait]
+    impl Factory<String, u32> for CountingFactory {
+        type Error = std::convert::Infallible;
+
+        async fn make_client(&self, _addr: &String) -> Result<u32, Self::Error> {
+            Ok(self.0.fetch_add(1, Ordering::SeqCst) as u32 + 1)
+        }
+    }
+
+    #[tokio::test]
+    async fn entry_reuses_client_for_same_key_and_creates_one_for_new_key() {
+        let addr = "127.0.0.1:4000".to_string();
+        let test_cases: Vec<(&str, fn(u32, u32, usize, usize))> = vec![
+            ("a", |first, second, calls, size| {
+                assert_eq!(first, second);
+                assert_eq!(calls, 1);
+                assert_eq!(size, 1);
+            }),
+            ("b", |first, second, calls, size| {
+                assert_ne!(first, second);
+                assert_eq!(calls, 2);
+                assert_eq!(size, 2);
+            }),
+        ];
+
+        for (key, expect) in test_cases {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let pool = Builder::new(CountingFactory(calls.clone()))
+                .capacity(DEFAULT_POOL_CAPACITY)
+                .idle_timeout(DEFAULT_POOL_IDLE_TIMEOUT)
+                .build();
+            let first = pool.entry(&"a".to_string(), &addr).await.unwrap();
+            let second = pool.entry(&key.to_string(), &addr).await.unwrap();
+            expect(
+                first.client,
+                second.client,
+                calls.load(Ordering::SeqCst),
+                pool.size().await,
+            );
+        }
+    }
+
+    #[test]
+    fn request_guard_counts_active_requests_until_dropped() {
+        let entry = Entry::new(1);
+        assert!(!entry.has_active_requests());
+
+        let first = entry.request_guard();
+        let second = entry.request_guard();
+        assert_eq!(entry.active_requests.load(Ordering::SeqCst), 2);
+        assert!(entry.has_active_requests());
+
+        drop(first);
+        assert_eq!(entry.active_requests.load(Ordering::SeqCst), 1);
+        assert!(entry.has_active_requests());
+
+        drop(second);
+        assert_eq!(entry.active_requests.load(Ordering::SeqCst), 0);
+        assert!(!entry.has_active_requests());
+    }
+
+    #[tokio::test]
+    async fn remove_entry_skips_entries_with_active_requests() {
+        let addr = "127.0.0.1:4000".to_string();
+        let test_cases = vec![(false, 0), (true, 1)];
+
+        for (hold_guard, expected) in test_cases {
+            let pool = Builder::new(CountingFactory(Arc::new(AtomicUsize::new(0))))
+                .capacity(DEFAULT_POOL_CAPACITY)
+                .idle_timeout(DEFAULT_POOL_IDLE_TIMEOUT)
+                .build();
+            let entry = pool.entry(&"a".to_string(), &addr).await.unwrap();
+            let guard = hold_guard.then(|| entry.request_guard());
+            pool.remove_entry(&"a".to_string()).await;
+            assert_eq!(pool.size().await, expected);
+
+            drop(guard);
+            pool.remove_entry(&"a".to_string()).await;
+            assert_eq!(pool.size().await, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn entry_evicts_idle_entries_without_active_requests() {
+        let addr = "127.0.0.1:4000".to_string();
+        let test_cases = vec![(false, 1), (true, 2)];
+
+        for (hold_guard, expected) in test_cases {
+            let pool = Builder::new(CountingFactory(Arc::new(AtomicUsize::new(0))))
+                .capacity(DEFAULT_POOL_CAPACITY)
+                .idle_timeout(Duration::from_millis(40))
+                .build();
+            let entry = pool.entry(&"a".to_string(), &addr).await.unwrap();
+            let _guard = hold_guard.then(|| entry.request_guard());
+
+            sleep(Duration::from_millis(80)).await;
+            pool.entry(&"b".to_string(), &addr).await.unwrap();
+            assert_eq!(pool.size().await, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn entry_evicts_entries_beyond_capacity_without_active_requests() {
+        let addr = "127.0.0.1:4000".to_string();
+        let test_cases = vec![(2, false, 3), (1, false, 1), (1, true, 2)];
+
+        for (capacity, hold_guard, expected) in test_cases {
+            let pool = Builder::new(CountingFactory(Arc::new(AtomicUsize::new(0))))
+                .capacity(capacity)
+                .idle_timeout(Duration::from_millis(200))
+                .build();
+            let entry = pool.entry(&"a".to_string(), &addr).await.unwrap();
+            pool.entry(&"b".to_string(), &addr).await.unwrap();
+            let _guard = hold_guard.then(|| entry.request_guard());
+
+            sleep(Duration::from_millis(120)).await;
+            pool.entry(&"c".to_string(), &addr).await.unwrap();
+            assert_eq!(pool.size().await, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn clear_removes_entries_even_with_active_requests() {
+        let addr = "127.0.0.1:4000".to_string();
+        let pool = Builder::new(CountingFactory(Arc::new(AtomicUsize::new(0))))
+            .capacity(DEFAULT_POOL_CAPACITY)
+            .idle_timeout(DEFAULT_POOL_IDLE_TIMEOUT)
+            .build();
+        let entry = pool.entry(&"a".to_string(), &addr).await.unwrap();
+        pool.entry(&"b".to_string(), &addr).await.unwrap();
+        let _guard = entry.request_guard();
+        assert_eq!(pool.size().await, 2);
+
+        pool.clear().await;
+        assert_eq!(pool.size().await, 0);
+    }
+}

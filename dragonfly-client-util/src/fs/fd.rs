@@ -134,11 +134,11 @@ impl FDCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::FileExt;
+    use std::os::unix::fs::{FileExt, PermissionsExt};
     use tempfile::tempdir;
 
     #[tokio::test]
-    async fn test_fd_cache() {
+    async fn open_caches_one_fd_per_path_and_mode() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("task");
         tokio::fs::write(&path, b"hello, world!").await.unwrap();
@@ -153,22 +153,36 @@ mod tests {
         assert!(Arc::ptr_eq(&first_write, &second_write));
         assert!(!Arc::ptr_eq(&first, &first_write));
 
-        let _ = cache.remove(&path);
+        cache.remove(&path).unwrap();
         let third = cache.open(&path).await.unwrap();
-        assert!(!Arc::ptr_eq(&first, &third));
         let third_write = cache.open_write(&path).await.unwrap();
+        assert!(!Arc::ptr_eq(&first, &third));
         assert!(!Arc::ptr_eq(&first_write, &third_write));
 
-        let _ = cache.remove(&path);
+        cache.remove(&path).unwrap();
         tokio::fs::remove_file(&path).await.unwrap();
         assert!(cache.open(&path).await.is_err());
         assert!(cache.open_write(&path).await.is_err());
     }
 
     #[tokio::test]
-    async fn test_fd_cache_open_write_read_only_file() {
-        use std::os::unix::fs::PermissionsExt;
+    async fn open_evicts_the_least_recently_used_fd() {
+        let temp_dir = tempdir().unwrap();
+        let first_path = temp_dir.path().join("first");
+        let second_path = temp_dir.path().join("second");
+        tokio::fs::write(&first_path, b"first").await.unwrap();
+        tokio::fs::write(&second_path, b"second").await.unwrap();
 
+        let cache = FDCache::new(0);
+        let first = cache.open(&first_path).await.unwrap();
+        let second = cache.open(&second_path).await.unwrap();
+        let reopened = cache.open(&first_path).await.unwrap();
+        assert!(!Arc::ptr_eq(&first, &reopened));
+        assert!(!Arc::ptr_eq(&second, &reopened));
+    }
+
+    #[tokio::test]
+    async fn open_write_fails_on_a_read_only_file_until_it_is_writable() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("task");
         tokio::fs::write(&path, b"hello, world!").await.unwrap();
@@ -189,7 +203,6 @@ mod tests {
         tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
             .await
             .unwrap();
-
         let fd = cache.open_write(&path).await.unwrap();
         fd.write_all_at(b"HELLO", 0).unwrap();
         assert_eq!(&tokio::fs::read(&path).await.unwrap()[..5], b"HELLO");

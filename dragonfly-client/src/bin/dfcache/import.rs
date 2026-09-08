@@ -303,3 +303,56 @@ impl ImportCommand {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn validate_args_checks_ttl_path_and_piece_length() {
+        let tempdir = tempdir().unwrap();
+        let dir = tempdir.path().to_str().unwrap();
+        let existing_file = format!("{dir}/existing.txt");
+        let missing_file = format!("{dir}/missing.txt");
+        std::fs::File::create(&existing_file).unwrap();
+
+        let test_cases: Vec<(Vec<&str>, Result<()>)> = vec![
+            (vec![existing_file.as_str(), "--ttl", "5m"], Ok(())),
+            (vec![existing_file.as_str(), "--ttl", "7d"], Ok(())),
+            (vec![existing_file.as_str(), "--piece-length", "4mib"], Ok(())),
+            (
+                vec![existing_file.as_str(), "--ttl", "299s"],
+                Err(Error::ValidationError("ttl must be between 5 minutes and 7 days, but got 299".to_string())),
+            ),
+            (
+                vec![existing_file.as_str(), "--ttl", "604801s"],
+                Err(Error::ValidationError("ttl must be between 5 minutes and 7 days, but got 604801".to_string())),
+            ),
+            (
+                vec![dir],
+                Err(Error::ValidationError(format!("path {dir} is a directory"))),
+            ),
+            (
+                vec![missing_file.as_str()],
+                Err(Error::ValidationError(format!("path {missing_file} does not exist"))),
+            ),
+            (
+                vec![existing_file.as_str(), "--piece-length", "1mib"],
+                Err(Error::ValidationError(format!(
+                    "piece length 1048576 bytes is less than the minimum piece length {MIN_PIECE_LENGTH} bytes"
+                ))),
+            ),
+        ];
+
+        for (argv, expected) in test_cases {
+            let command =
+                ImportCommand::parse_from(std::iter::once("dfcache").chain(argv.iter().copied()));
+            let result = command.validate_args();
+            assert_eq!(
+                result.map_err(|err| err.to_string()),
+                expected.map_err(|err| err.to_string())
+            );
+        }
+    }
+}

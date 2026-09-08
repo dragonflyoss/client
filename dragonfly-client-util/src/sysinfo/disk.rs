@@ -366,43 +366,51 @@ impl Disk {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    use cgroups_rs::fs::blkio::IoService;
 
     #[test]
-    fn test_parse_cgroup_v2_io_stat() {
-        let content = "8:0 rbytes=90430464 wbytes=299008000 rios=8950 wios=1252 dbytes=50331648 dios=3021\n253:0 rbytes=1459200 wbytes=314773504 rios=192 wios=353 dbytes=0 dios=0";
-        assert_eq!(
-            Disk::parse_cgroup_v2_io_stat(content),
-            (90430464 + 1459200, 299008000 + 314773504)
-        );
+    fn parse_cgroup_v2_io_stat_sums_read_and_written_bytes() {
+        let test_cases = vec![
+            (
+                "8:0 rbytes=90430464 wbytes=299008000 rios=8950 wios=1252 dbytes=50331648 dios=3021\n253:0 rbytes=1459200 wbytes=314773504 rios=192 wios=353 dbytes=0 dios=0",
+                (90430464 + 1459200, 299008000 + 314773504),
+            ),
+            ("8:0 rbytes=abc wbytes=100", (0, 100)),
+            ("", (0, 0)),
+        ];
 
-        assert_eq!(Disk::parse_cgroup_v2_io_stat(""), (0, 0));
+        for (content, expected) in test_cases {
+            assert_eq!(Disk::parse_cgroup_v2_io_stat(content), expected);
+        }
     }
 
     #[test]
-    fn test_parse_cgroup_v1_io_stat() {
-        use cgroups_rs::fs::blkio::IoService;
-
-        let io_service_bytes = vec![
-            IoService {
-                major: 8,
-                minor: 0,
-                read: 90430464,
-                write: 299008000,
-                ..Default::default()
-            },
-            IoService {
-                major: 253,
-                minor: 0,
-                read: 1459200,
-                write: 314773504,
-                ..Default::default()
-            },
+    fn parse_cgroup_v1_io_stat_sums_read_and_written_bytes() {
+        let test_cases = vec![
+            (
+                vec![
+                    IoService {
+                        major: 8,
+                        minor: 0,
+                        read: 90430464,
+                        write: 299008000,
+                        ..Default::default()
+                    },
+                    IoService {
+                        major: 253,
+                        minor: 0,
+                        read: 1459200,
+                        write: 314773504,
+                        ..Default::default()
+                    },
+                ],
+                (90430464 + 1459200, 299008000 + 314773504),
+            ),
+            (vec![], (0, 0)),
         ];
-        assert_eq!(
-            Disk::parse_cgroup_v1_io_stat(&io_service_bytes),
-            (90430464 + 1459200, 299008000 + 314773504)
-        );
 
-        assert_eq!(Disk::parse_cgroup_v1_io_stat(&[]), (0, 0));
+        for (io_service_bytes, expected) in test_cases {
+            assert_eq!(Disk::parse_cgroup_v1_io_stat(&io_service_bytes), expected);
+        }
     }
 }
