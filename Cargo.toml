@@ -102,7 +102,7 @@ reqwest = { version = "0.12.28", default-features = false, features = [
 ] }
 reqwest-middleware = "0.4"
 reqwest-tracing = "0.5"
-rocksdb = "0.24.0"
+rocksdb = "0.25.0"
 rustls = { version = "0.23.40", default-features = false, features = [
   "aws_lc_rs",
   "tls12"
