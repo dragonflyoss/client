@@ -19,7 +19,7 @@ use dragonfly_client_core::{
     Result,
 };
 use percent_encoding::percent_encode_byte;
-use url::{form_urlencoded, Url};
+use url::{form_urlencoded, Position, Url};
 
 /// Escapes the string so it can be safely placed inside a url query, identical
 /// to the scheduler's query escaping (Go's url.QueryEscape). Mirrors the byte
@@ -46,6 +46,7 @@ pub fn filter_query_params(url: &str, filtered_query_params: &[String]) -> Resul
         return Ok(url.to_string());
     }
 
+    let has_empty_path = has_empty_path(url);
     let mut url = Url::parse(url).or_err(ErrorType::ParseError)?;
     let mut query_pairs: Vec<(String, String)> = url
         .query()
@@ -73,29 +74,47 @@ pub fn filter_query_params(url: &str, filtered_query_params: &[String]) -> Resul
         url.set_query(Some(&query));
     }
 
-    let filtered = url.to_string();
-    if url.path() == "/" && filtered.ends_with('/') {
-        return Ok(filtered.trim_end_matches('/').to_string());
+    if has_empty_path {
+        return Ok(format!(
+            "{}{}",
+            &url[..Position::BeforePath],
+            &url[Position::AfterPath..]
+        ));
     }
 
-    Ok(filtered)
+    Ok(url.into())
+}
+
+/// Returns whether the url has an empty path, splitting the authority like Go's
+/// url.parse, since the url crate normalizes an empty path to "/".
+fn has_empty_path(url: &str) -> bool {
+    url.split_once("://")
+        .and_then(|(_, rest)| rest.split(['?', '#']).next())
+        .is_some_and(|authority| !authority.contains('/'))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dragonfly_client_core::Error;
 
     #[test]
-    fn should_escape_query() {
-        assert_eq!(query_escape("a b"), "a+b");
-        assert_eq!(query_escape("x*y"), "x%2Ay");
-        assert_eq!(query_escape("c~d"), "c~d");
-        assert_eq!(query_escape("1+1"), "1%2B1");
-        assert_eq!(query_escape("中"), "%E4%B8%AD");
+    fn query_escape_encodes_like_go_query_escape() {
+        let test_cases = vec![
+            ("a b", "a+b"),
+            ("x*y", "x%2Ay"),
+            ("c~d", "c~d"),
+            ("1+1", "1%2B1"),
+            ("中", "%E4%B8%AD"),
+        ];
+
+        for (query, expected) in test_cases {
+            assert_eq!(query_escape(query), expected);
+        }
     }
 
     #[test]
-    fn should_filter_query_params() {
+    fn filter_query_params_drops_filtered_keys_and_sorts_the_rest() {
         let test_cases = vec![
             (
                 "https://example.com/file.txt?z=9&b=2&a=1",
@@ -111,6 +130,31 @@ mod tests {
                 "https://example.com?foo=foo",
                 vec!["foo".to_string()],
                 "https://example.com",
+            ),
+            (
+                "https://example.com?foo=foo&bar=bar",
+                vec!["foo".to_string()],
+                "https://example.com?bar=bar",
+            ),
+            (
+                "https://example.com?foo=foo#size",
+                vec!["foo".to_string()],
+                "https://example.com#size",
+            ),
+            (
+                "https://user:pass@[::1]:8080?foo=foo&bar=bar",
+                vec!["foo".to_string()],
+                "https://user:pass@[::1]:8080?bar=bar",
+            ),
+            (
+                "https://example.com/?foo=foo",
+                vec!["foo".to_string()],
+                "https://example.com/",
+            ),
+            (
+                "https://example.com/?foo=foo&bar=bar",
+                vec!["foo".to_string()],
+                "https://example.com/?bar=bar",
             ),
             (
                 "https://example.com/file.txt?k=a b&m=x*y&n=c~d",
@@ -140,7 +184,11 @@ mod tests {
                 expected
             );
         }
+    }
 
-        assert!(filter_query_params(":error_url", &["x".to_string()]).is_err());
+    #[test]
+    fn filter_query_params_fails_on_invalid_url() {
+        let result = filter_query_params(":error_url", &["x".to_string()]);
+        assert!(matches!(result, Err(Error::ExternalError(_))));
     }
 }

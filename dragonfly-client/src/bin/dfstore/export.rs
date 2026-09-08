@@ -579,3 +579,64 @@ impl ExportCommand {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn validate_args_checks_output() {
+        let tempdir = tempdir().unwrap();
+        let dir = tempdir.path().to_str().unwrap();
+        let new_file = format!("{dir}/new.txt");
+        let existing_file = format!("{dir}/existing.txt");
+        let missing_dir = format!("{dir}/missing");
+        let file_in_missing_dir = format!("{missing_dir}/missing.txt");
+        std::fs::File::create(&existing_file).unwrap();
+
+        let test_cases: Vec<(Vec<&str>, Result<()>)> = vec![
+            (
+                vec!["s3://bucket/key", "--output", new_file.as_str()],
+                Ok(()),
+            ),
+            (
+                vec![
+                    "s3://bucket/key",
+                    "--output",
+                    existing_file.as_str(),
+                    "--overwrite",
+                ],
+                Ok(()),
+            ),
+            (
+                vec!["s3://bucket/key", "--output", file_in_missing_dir.as_str()],
+                Err(Error::ValidationError(format!(
+                    "output path {missing_dir} is not a directory"
+                ))),
+            ),
+            (
+                vec!["s3://bucket/key", "--output", existing_file.as_str()],
+                Err(Error::ValidationError(format!(
+                    "output path {existing_file} is already exist"
+                ))),
+            ),
+            (
+                vec!["s3://bucket/key", "--output", "/"],
+                Err(Error::ValidationError(
+                    "output path / is not exist".to_string(),
+                )),
+            ),
+        ];
+
+        for (argv, expected) in test_cases {
+            let command =
+                ExportCommand::parse_from(std::iter::once("dfstore").chain(argv.iter().copied()));
+            let result = command.validate_args();
+            assert_eq!(
+                result.map_err(|err| err.to_string()),
+                expected.map_err(|err| err.to_string())
+            );
+        }
+    }
+}

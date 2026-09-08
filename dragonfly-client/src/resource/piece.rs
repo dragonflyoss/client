@@ -1218,53 +1218,43 @@ impl Piece {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use tempfile::tempdir;
 
+    async fn piece(dir: &Path) -> Piece {
+        let config = Arc::new(Config::default());
+        let storage = Arc::new(
+            Storage::new(config.clone(), dir, dir.to_path_buf())
+                .await
+                .unwrap(),
+        );
+        let backend_factory = Arc::new(BackendFactory::new(config.clone(), None).unwrap());
+        Piece::new(
+            config,
+            storage,
+            backend_factory,
+            Arc::new(RateLimiter::builder().build()),
+            Arc::new(RateLimiter::builder().build()),
+            Arc::new(RateLimiter::builder().build()),
+        )
+        .unwrap()
+    }
+
     #[tokio::test]
-    async fn test_calculate_interested() {
+    async fn calculate_interested_splits_the_content_into_pieces() {
         let temp_dir = tempdir().unwrap();
-
-        let config = Config::default();
-        let config = Arc::new(config);
-
-        let storage = Storage::new(
-            config.clone(),
-            temp_dir.path(),
-            temp_dir.path().to_path_buf(),
-        )
-        .await
-        .unwrap();
-        let storage = Arc::new(storage);
-
-        let backend_factory = BackendFactory::new(config.clone(), None).unwrap();
-        let backend_factory = Arc::new(backend_factory);
-
-        let download_bandwidth_limiter = Arc::new(RateLimiter::builder().build());
-        let prefetch_bandwidth_limiter = Arc::new(RateLimiter::builder().build());
-        let back_to_source_bandwidth_limiter = Arc::new(RateLimiter::builder().build());
-
-        let piece = Piece::new(
-            config.clone(),
-            storage.clone(),
-            backend_factory.clone(),
-            download_bandwidth_limiter,
-            prefetch_bandwidth_limiter,
-            back_to_source_bandwidth_limiter,
-        )
-        .unwrap();
+        let piece = piece(temp_dir.path()).await;
 
         let test_cases = vec![
-            (1000, 1, None, 1, vec![0], 0, 1),
-            (1000, 5000, None, 5, vec![0, 1, 2, 3, 4], 4000, 1000),
-            (5000, 1000, None, 1, vec![0], 0, 1000),
+            (1000, 1, None, vec![0], Some((0, 1))),
+            (1000, 5000, None, vec![0, 1, 2, 3, 4], Some((4000, 1000))),
+            (5000, 1000, None, vec![0], Some((0, 1000))),
             (
                 10,
                 101,
                 None,
-                11,
                 vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-                100,
-                1,
+                Some((100, 1)),
             ),
             (
                 1000,
@@ -1273,10 +1263,8 @@ mod tests {
                     start: 1500,
                     length: 2000,
                 }),
-                3,
                 vec![1, 2, 3],
-                3000,
-                1000,
+                Some((3000, 1000)),
             ),
             (
                 1000,
@@ -1285,38 +1273,74 @@ mod tests {
                     start: 0,
                     length: 1,
                 }),
-                1,
                 vec![0],
-                0,
-                1000,
+                Some((0, 1000)),
             ),
+            (1000, 0, None, vec![], None),
         ];
 
-        for (
-            piece_length,
-            content_length,
-            range,
-            expected_len,
-            expected_numbers,
-            expected_last_piece_offset,
-            expected_last_piece_length,
-        ) in test_cases
+        for (piece_length, content_length, range, expected_numbers, expected_last_piece) in
+            test_cases
         {
             let pieces = piece
                 .calculate_interested(piece_length, content_length, range)
                 .unwrap();
-            assert_eq!(pieces.len(), expected_len);
-            assert_eq!(
-                pieces
-                    .iter()
-                    .map(|piece| piece.number)
-                    .collect::<Vec<u32>>(),
-                expected_numbers
-            );
+            let numbers: Vec<u32> = pieces.iter().map(|piece| piece.number).collect();
+            assert_eq!(numbers, expected_numbers);
 
-            let last_piece = pieces.last().unwrap();
-            assert_eq!(last_piece.offset, expected_last_piece_offset);
-            assert_eq!(last_piece.length, expected_last_piece_length);
+            let last_piece = pieces.last().map(|piece| (piece.offset, piece.length));
+            assert_eq!(last_piece, expected_last_piece);
+        }
+    }
+
+    #[tokio::test]
+    async fn calculate_interested_rejects_a_zero_length_range() {
+        let temp_dir = tempdir().unwrap();
+        let piece = piece(temp_dir.path()).await;
+
+        let result = piece.calculate_interested(
+            1000,
+            5000,
+            Some(Range {
+                start: 0,
+                length: 0,
+            }),
+        );
+        assert!(matches!(result, Err(Error::InvalidParameter)));
+    }
+
+    #[tokio::test]
+    async fn calculate_piece_length_clamps_the_optimized_length() {
+        let temp_dir = tempdir().unwrap();
+        let piece = piece(temp_dir.path()).await;
+
+        let test_cases = vec![
+            (0, MIN_PIECE_LENGTH),
+            (500 * MIN_PIECE_LENGTH, MIN_PIECE_LENGTH),
+            (500 * 5 * 1024 * 1024, 8 * 1024 * 1024),
+            (500 * MAX_PIECE_LENGTH, MAX_PIECE_LENGTH),
+            (1000 * MAX_PIECE_LENGTH, MAX_PIECE_LENGTH),
+        ];
+
+        for (content_length, expected) in test_cases {
+            let piece_length = piece
+                .calculate_piece_length(PieceLengthStrategy::OptimizeByFileLength(content_length));
+            assert_eq!(piece_length, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn calculate_piece_count_rounds_up_to_whole_pieces() {
+        let temp_dir = tempdir().unwrap();
+        let piece = piece(temp_dir.path()).await;
+
+        let test_cases = vec![(1000, 5000, 5), (1000, 5001, 6), (1000, 1, 1), (1000, 0, 0)];
+
+        for (piece_length, content_length, expected) in test_cases {
+            assert_eq!(
+                piece.calculate_piece_count(piece_length, content_length),
+                expected
+            );
         }
     }
 }

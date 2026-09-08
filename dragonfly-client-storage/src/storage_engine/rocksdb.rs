@@ -316,410 +316,342 @@ mod tests {
         const NAMESPACE: &'static str = "object";
     }
 
-    fn create_test_engine() -> RocksdbStorageEngine {
-        let temp_dir = tempdir().unwrap();
-        let log_dir = temp_dir.path().to_path_buf();
-        RocksdbStorageEngine::open(temp_dir.path(), &log_dir, &[], &[Object::NAMESPACE], false)
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct UnregisteredObject {
+        data: String,
+    }
+
+    impl DatabaseObject for UnregisteredObject {
+        const NAMESPACE: &'static str = "unregistered";
+    }
+
+    fn open(dir: &Path, keep: bool) -> RocksdbStorageEngine {
+        RocksdbStorageEngine::open(dir, &dir.to_path_buf(), &[], &[Object::NAMESPACE], keep)
             .unwrap()
     }
 
     #[test]
-    fn test_put_and_get() {
-        let engine = create_test_engine();
+    fn get_and_exists_follow_put_and_delete() {
+        let dir = tempdir().unwrap();
+        let engine = open(dir.path(), false);
+        let key = b"1";
+        assert_eq!(engine.get::<Object>(key).unwrap(), None);
+        assert!(!engine.exists::<Object>(key).unwrap());
 
         let object = Object {
             id: "1".to_string(),
             value: 42,
         };
-
-        engine.put::<Object>(object.id.as_bytes(), &object).unwrap();
-        let retrieved_object = engine.get::<Object>(object.id.as_bytes()).unwrap().unwrap();
-        assert_eq!(object, retrieved_object);
-    }
-
-    #[test]
-    fn test_exists() {
-        let engine = create_test_engine();
+        engine.put(key, &object).unwrap();
+        assert_eq!(engine.get::<Object>(key).unwrap(), Some(object));
+        assert!(engine.exists::<Object>(key).unwrap());
 
         let object = Object {
-            id: "2".to_string(),
-            value: 100,
+            id: "1".to_string(),
+            value: 43,
         };
+        engine.put(key, &object).unwrap();
+        assert_eq!(engine.get::<Object>(key).unwrap(), Some(object));
 
-        assert!(!engine.exists::<Object>(object.id.as_bytes()).unwrap());
-        engine.put::<Object>(object.id.as_bytes(), &object).unwrap();
-        assert!(engine.exists::<Object>(object.id.as_bytes()).unwrap());
+        engine.delete::<Object>(key).unwrap();
+        assert_eq!(engine.get::<Object>(key).unwrap(), None);
+        assert!(!engine.exists::<Object>(key).unwrap());
+
+        engine.delete::<Object>(key).unwrap();
+        assert!(!engine.exists::<Object>(key).unwrap());
     }
 
     #[test]
-    fn test_delete() {
-        let engine = create_test_engine();
-
-        let object = Object {
-            id: "3".to_string(),
-            value: 200,
-        };
-
-        engine.put::<Object>(object.id.as_bytes(), &object).unwrap();
-        assert!(engine.exists::<Object>(object.id.as_bytes()).unwrap());
-
-        engine.delete::<Object>(object.id.as_bytes()).unwrap();
-        assert!(!engine.exists::<Object>(object.id.as_bytes()).unwrap());
-    }
-
-    #[test]
-    fn test_multi_get() {
-        let engine = create_test_engine();
-
-        let objects = vec![
-            Object {
-                id: "1".to_string(),
-                value: 1,
-            },
-            Object {
-                id: "2".to_string(),
-                value: 2,
-            },
-        ];
-        for object in &objects {
-            engine.put::<Object>(object.id.as_bytes(), object).unwrap();
+    fn multi_get_returns_values_in_key_order() {
+        let dir = tempdir().unwrap();
+        let engine = open(dir.path(), false);
+        for (id, value) in [("1", 1), ("2", 2)] {
+            engine
+                .put(
+                    id.as_bytes(),
+                    &Object {
+                        id: id.to_string(),
+                        value,
+                    },
+                )
+                .unwrap();
         }
 
-        let retrieved_objects = engine
-            .multi_get::<Object>(&[b"2".as_slice(), b"missing".as_slice(), b"1".as_slice()])
-            .unwrap();
-        assert_eq!(retrieved_objects[0].as_ref(), Some(&objects[1]));
-        assert!(retrieved_objects[1].is_none());
-        assert_eq!(retrieved_objects[2].as_ref(), Some(&objects[0]));
-        assert!(engine.multi_get::<Object>(&[]).unwrap().is_empty());
-    }
-
-    #[test]
-    fn test_batch_delete() {
-        let engine = create_test_engine();
-
-        let objects = vec![
-            Object {
-                id: "1".to_string(),
-                value: 1,
-            },
-            Object {
-                id: "2".to_string(),
-                value: 2,
-            },
-            Object {
-                id: "3".to_string(),
-                value: 3,
-            },
+        let test_cases = vec![
+            (vec![], vec![]),
+            (
+                vec!["2", "missing", "1"],
+                vec![
+                    Some(Object {
+                        id: "2".to_string(),
+                        value: 2,
+                    }),
+                    None,
+                    Some(Object {
+                        id: "1".to_string(),
+                        value: 1,
+                    }),
+                ],
+            ),
         ];
 
-        for object in &objects {
-            engine.put::<Object>(object.id.as_bytes(), object).unwrap();
-            assert!(engine.exists::<Object>(object.id.as_bytes()).unwrap());
-        }
-
-        let ids: Vec<&[u8]> = objects.iter().map(|object| object.id.as_bytes()).collect();
-        engine.batch_delete::<Object>(ids).unwrap();
-
-        for object in &objects {
-            assert!(!engine.exists::<Object>(object.id.as_bytes()).unwrap());
+        for (ids, expected) in test_cases {
+            let keys: Vec<&[u8]> = ids.iter().map(|id| id.as_bytes()).collect();
+            assert_eq!(engine.multi_get::<Object>(&keys).unwrap(), expected);
         }
     }
 
     #[test]
-    fn test_iter() {
-        let engine = create_test_engine();
-
-        let objects = vec![
-            Object {
-                id: "1".to_string(),
-                value: 10,
-            },
-            Object {
-                id: "2".to_string(),
-                value: 20,
-            },
-            Object {
-                id: "3".to_string(),
-                value: 30,
-            },
+    fn batch_delete_removes_only_the_given_keys() {
+        let test_cases = vec![
+            (vec![], vec!["1", "2", "3"]),
+            (vec!["missing"], vec!["1", "2", "3"]),
+            (vec!["1", "3"], vec!["2"]),
+            (vec!["1", "2", "3"], vec![]),
         ];
 
-        for object in &objects {
-            engine.put::<Object>(object.id.as_bytes(), object).unwrap();
+        for (deleted_ids, expected_ids) in test_cases {
+            let dir = tempdir().unwrap();
+            let engine = open(dir.path(), false);
+            for (id, value) in [("1", 1), ("2", 2), ("3", 3)] {
+                engine
+                    .put(
+                        id.as_bytes(),
+                        &Object {
+                            id: id.to_string(),
+                            value,
+                        },
+                    )
+                    .unwrap();
+            }
+
+            let keys: Vec<&[u8]> = deleted_ids.iter().map(|id| id.as_bytes()).collect();
+            engine.batch_delete::<Object>(keys).unwrap();
+
+            let stored_ids: Vec<String> = engine
+                .iter::<Object>()
+                .unwrap()
+                .map(|ele| {
+                    let (_, object) = ele.unwrap();
+                    object.id
+                })
+                .collect();
+            assert_eq!(stored_ids, expected_ids);
         }
+    }
 
-        let retrieved_objects = engine
-            .iter::<Object>()
-            .unwrap()
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
+    #[test]
+    fn iter_yields_objects_in_key_order() {
+        let test_cases = vec![
+            (vec![], vec![]),
+            (
+                vec![
+                    Object {
+                        id: "3".to_string(),
+                        value: 30,
+                    },
+                    Object {
+                        id: "1".to_string(),
+                        value: 10,
+                    },
+                    Object {
+                        id: "2".to_string(),
+                        value: 20,
+                    },
+                ],
+                vec![
+                    Object {
+                        id: "1".to_string(),
+                        value: 10,
+                    },
+                    Object {
+                        id: "2".to_string(),
+                        value: 20,
+                    },
+                    Object {
+                        id: "3".to_string(),
+                        value: 30,
+                    },
+                ],
+            ),
+        ];
 
-        assert_eq!(retrieved_objects.len(), objects.len());
-        for object in &objects {
-            let found = retrieved_objects
+        for (objects, expected) in test_cases {
+            let dir = tempdir().unwrap();
+            let engine = open(dir.path(), false);
+            for object in &objects {
+                engine.put(object.id.as_bytes(), object).unwrap();
+            }
+
+            let expected: Vec<(Box<[u8]>, Object)> = expected
                 .iter()
-                .any(|(_, v)| v.id == object.id && v.value == object.value);
-            assert!(found, "could not find object with id {:?}", object.id);
+                .map(|object| (object.id.as_bytes().into(), object.clone()))
+                .collect();
+            let iterated = engine
+                .iter::<Object>()
+                .unwrap()
+                .collect::<Result<Vec<_>>>()
+                .unwrap();
+            let raw_iterated: Vec<(Box<[u8]>, Object)> = engine
+                .iter_raw::<Object>()
+                .unwrap()
+                .map(|ele| {
+                    let (key, value) = ele.unwrap();
+                    (key, Object::deserialize_from(&value).unwrap())
+                })
+                .collect();
+            assert_eq!(iterated, expected);
+            assert_eq!(raw_iterated, expected);
         }
     }
 
     #[test]
-    fn test_prefix_iter() {
-        let engine = create_test_engine();
+    fn prefix_iter_yields_only_objects_under_the_prefix() {
+        let dir = tempdir().unwrap();
+        let engine = open(dir.path(), false);
+        for (prefix_char, suffix, id, value) in [
+            ("a", "_suffix1", "a1", 100),
+            ("a", "_suffix2", "a2", 200),
+            ("b", "_suffix1", "b1", 300),
+            ("b", "_suffix2", "b2", 400),
+        ] {
+            engine
+                .put(
+                    format!("{}{suffix}", prefix_char.repeat(64)).as_bytes(),
+                    &Object {
+                        id: id.to_string(),
+                        value,
+                    },
+                )
+                .unwrap();
+        }
 
-        // RocksDB prefix extractor is configured with fixed_prefix(64) in the open method.
-        let prefix_a = [b'a'; 64];
-        let prefix_b = [b'b'; 64];
-
-        // Create test keys with 64-byte identical prefixes.
-        let key_a1 = [&prefix_a[..], b"_suffix1"].concat();
-        let key_a2 = [&prefix_a[..], b"_suffix2"].concat();
-
-        let key_b1 = [&prefix_b[..], b"_suffix1"].concat();
-        let key_b2 = [&prefix_b[..], b"_suffix2"].concat();
-
-        let objects_with_prefix_a = vec![
+        let test_cases = vec![
             (
-                key_a1.clone(),
-                Object {
-                    id: "prefix_id_a1".to_string(),
-                    value: 100,
-                },
+                "a",
+                vec![
+                    Object {
+                        id: "a1".to_string(),
+                        value: 100,
+                    },
+                    Object {
+                        id: "a2".to_string(),
+                        value: 200,
+                    },
+                ],
             ),
             (
-                key_a2.clone(),
-                Object {
-                    id: "prefix_id_a2".to_string(),
-                    value: 200,
-                },
+                "b",
+                vec![
+                    Object {
+                        id: "b1".to_string(),
+                        value: 300,
+                    },
+                    Object {
+                        id: "b2".to_string(),
+                        value: 400,
+                    },
+                ],
             ),
+            ("0", vec![]),
         ];
 
-        let objects_with_prefix_b = vec![
-            (
-                key_b1.clone(),
-                Object {
-                    id: "prefix_id_b1".to_string(),
-                    value: 300,
-                },
-            ),
-            (
-                key_b2.clone(),
-                Object {
-                    id: "prefix_id_b2".to_string(),
-                    value: 400,
-                },
-            ),
-        ];
-
-        for (key, obj) in &objects_with_prefix_a {
-            engine.put::<Object>(key, obj).unwrap();
-        }
-
-        for (key, obj) in &objects_with_prefix_b {
-            engine.put::<Object>(key, obj).unwrap();
-        }
-
-        let retrieved_objects = engine
-            .prefix_iter::<Object>(&prefix_a)
-            .unwrap()
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
-
-        assert_eq!(
-            retrieved_objects.len(),
-            objects_with_prefix_a.len(),
-            "expected {} objects with prefix 'a', but got {}",
-            objects_with_prefix_a.len(),
-            retrieved_objects.len()
-        );
-
-        // Verify each object with prefix is correctly retrieved.
-        for (key, object) in &objects_with_prefix_a {
-            let found = retrieved_objects
+        for (prefix_char, expected) in test_cases {
+            let prefix = prefix_char.repeat(64);
+            let iterated = engine
+                .prefix_iter::<Object>(prefix.as_bytes())
+                .unwrap()
+                .collect::<Result<Vec<_>>>()
+                .unwrap();
+            let raw_iterated: Vec<(Box<[u8]>, Object)> = engine
+                .prefix_iter_raw::<Object>(prefix.as_bytes())
+                .unwrap()
+                .map(|ele| {
+                    let (key, value) = ele.unwrap();
+                    (key, Object::deserialize_from(&value).unwrap())
+                })
+                .collect();
+            assert_eq!(raw_iterated, iterated);
+            assert!(iterated
                 .iter()
-                .any(|(_, v)| v.id == object.id && v.value == object.value);
-            assert!(found, "could not find object with key {key:?}");
-        }
+                .all(|(key, _)| key.starts_with(prefix.as_bytes())));
 
-        // Verify objects with different prefix are not retrieved.
-        for (key, object) in &objects_with_prefix_b {
-            let found = retrieved_objects
-                .iter()
-                .any(|(_, v)| v.id == object.id && v.value == object.value);
-            assert!(!found, "found object with different prefix: {key:?}");
+            let objects: Vec<Object> = iterated.into_iter().map(|(_, object)| object).collect();
+            assert_eq!(objects, expected);
         }
     }
 
     #[test]
-    fn test_iter_raw() {
-        let engine = create_test_engine();
+    fn operations_fail_on_an_unregistered_column_family() {
+        let dir = tempdir().unwrap();
+        let engine = open(dir.path(), false);
 
-        let objects = vec![
-            Object {
-                id: "1".to_string(),
-                value: 10,
+        let test_cases: Vec<fn(&RocksdbStorageEngine) -> Result<()>> = vec![
+            |engine| engine.get::<UnregisteredObject>(b"1").map(|_| ()),
+            |engine| {
+                engine
+                    .multi_get::<UnregisteredObject>(&[b"1".as_slice()])
+                    .map(|_| ())
             },
-            Object {
-                id: "2".to_string(),
-                value: 20,
+            |engine| engine.exists::<UnregisteredObject>(b"1").map(|_| ()),
+            |engine| {
+                engine.put(
+                    b"1",
+                    &UnregisteredObject {
+                        data: "1".to_string(),
+                    },
+                )
             },
-            Object {
-                id: "3".to_string(),
-                value: 30,
+            |engine| engine.delete::<UnregisteredObject>(b"1"),
+            |engine| engine.iter::<UnregisteredObject>().map(|_| ()),
+            |engine| engine.iter_raw::<UnregisteredObject>().map(|_| ()),
+            |engine| engine.prefix_iter::<UnregisteredObject>(b"1").map(|_| ()),
+            |engine| {
+                engine
+                    .prefix_iter_raw::<UnregisteredObject>(b"1")
+                    .map(|_| ())
             },
+            |engine| engine.batch_delete::<UnregisteredObject>(vec![b"1".as_slice()]),
         ];
 
-        for object in &objects {
-            engine.put::<Object>(object.id.as_bytes(), object).unwrap();
-        }
-
-        let retrieved_objects = engine
-            .iter_raw::<Object>()
-            .unwrap()
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
-
-        assert_eq!(retrieved_objects.len(), objects.len());
-
-        // Verify each object can be deserialized from the raw bytes.
-        for object in &objects {
-            let found = retrieved_objects
-                .iter()
-                .any(|(_, v)| match Object::deserialize_from(v) {
-                    Ok(deserialized) => {
-                        deserialized.id == object.id && deserialized.value == object.value
-                    }
-                    Err(_) => false,
-                });
-
-            assert!(
-                found,
-                "could not find or deserialize object with key {:?}",
-                object.id
-            );
+        for run in test_cases {
+            let result = run(&engine);
+            assert!(matches!(
+                result,
+                Err(Error::ColumnFamilyNotFound(ref name)) if name == UnregisteredObject::NAMESPACE
+            ));
         }
     }
 
     #[test]
-    fn test_prefix_iter_raw() {
-        let engine = create_test_engine();
-
-        // RocksDB prefix extractor is configured with fixed_prefix(64) in the open method.
-        let prefix_a = [b'a'; 64];
-        let prefix_b = [b'b'; 64];
-
-        // Create test keys with 64-byte identical prefixes.
-        let key_a1 = [&prefix_a[..], b"_raw_suffix1"].concat();
-        let key_a2 = [&prefix_a[..], b"_raw_suffix2"].concat();
-
-        let key_b1 = [&prefix_b[..], b"_raw_suffix1"].concat();
-        let key_b2 = [&prefix_b[..], b"_raw_suffix2"].concat();
-
-        let objects_with_prefix_a = vec![
+    fn open_keeps_or_destroys_the_existing_data() {
+        let test_cases = vec![
             (
-                key_a1.clone(),
-                Object {
-                    id: "raw_prefix_id_a1".to_string(),
-                    value: 100,
-                },
+                true,
+                Some(Object {
+                    id: "1".to_string(),
+                    value: 42,
+                }),
             ),
-            (
-                key_a2.clone(),
-                Object {
-                    id: "raw_prefix_id_a2".to_string(),
-                    value: 200,
-                },
-            ),
+            (false, None),
         ];
 
-        let objects_with_prefix_b = vec![
-            (
-                key_b1.clone(),
-                Object {
-                    id: "raw_prefix_id_b1".to_string(),
-                    value: 300,
-                },
-            ),
-            (
-                key_b2.clone(),
-                Object {
-                    id: "raw_prefix_id_b2".to_string(),
-                    value: 400,
-                },
-            ),
-        ];
+        for (keep, expected) in test_cases {
+            let dir = tempdir().unwrap();
+            let engine = open(dir.path(), false);
+            engine
+                .put(
+                    b"1",
+                    &Object {
+                        id: "1".to_string(),
+                        value: 42,
+                    },
+                )
+                .unwrap();
+            drop(engine);
 
-        for (key, obj) in &objects_with_prefix_a {
-            engine.put::<Object>(key, obj).unwrap();
-        }
-
-        for (key, obj) in &objects_with_prefix_b {
-            engine.put::<Object>(key, obj).unwrap();
-        }
-
-        let retrieved_objects = engine
-            .prefix_iter_raw::<Object>(&prefix_a)
-            .unwrap()
-            .collect::<Result<Vec<_>>>()
-            .unwrap();
-
-        assert_eq!(
-            retrieved_objects.len(),
-            objects_with_prefix_a.len(),
-            "expected {} raw objects with prefix 'a', but got {}",
-            objects_with_prefix_a.len(),
-            retrieved_objects.len()
-        );
-
-        // Verify each object with prefix can be deserialized from raw bytes.
-        for (_, object) in &objects_with_prefix_a {
-            let found = retrieved_objects
-                .iter()
-                .any(|(_, v)| match Object::deserialize_from(v) {
-                    Ok(deserialized) => {
-                        deserialized.id == object.id && deserialized.value == object.value
-                    }
-                    Err(_) => false,
-                });
-
-            assert!(
-                found,
-                "could not find or deserialize object with key {:?}",
-                object.id
-            );
-        }
-
-        // Verify objects with different prefix are not retrieved.
-        for (key, _) in &objects_with_prefix_b {
-            let found = retrieved_objects
-                .iter()
-                .any(|(k, _)| k.as_ref() == key.as_slice());
-            assert!(!found, "found object with different prefix: {key:?}");
-        }
-    }
-
-    #[test]
-    fn test_column_family_not_found() {
-        let engine = create_test_engine();
-
-        // Define a new type with a different namespace that hasn't been registered.
-        #[derive(Debug, Serialize, Deserialize, PartialEq)]
-        struct UnregisteredObject {
-            data: String,
-        }
-
-        impl DatabaseObject for UnregisteredObject {
-            const NAMESPACE: &'static str = "unregistered";
-        }
-
-        let key = b"unregistered";
-        let result = engine.get::<UnregisteredObject>(key);
-
-        assert!(result.is_err());
-        if let Err(err) = result {
-            assert!(format!("{err:?}").contains("ColumnFamilyNotFound"));
+            let engine = open(dir.path(), keep);
+            assert_eq!(engine.get::<Object>(b"1").unwrap(), expected);
         }
     }
 }

@@ -323,3 +323,32 @@ impl CPU {
         None
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_usage_usec_returns_the_value_of_the_usage_usec_line() {
+        let test_cases = vec![
+            (
+                "usage_usec 123456789\nuser_usec 100000000\nsystem_usec 23456789\nnr_periods 0\nnr_throttled 0\nthrottled_usec 0",
+                Some(123456789),
+            ),
+            (
+                "user_usec 100000000\nsystem_usec 23456789\nusage_usec 42",
+                Some(42),
+            ),
+            ("  usage_usec   7  \nuser_usec 1", Some(7)),
+            ("user_usec 100000000\nsystem_usec 23456789", None),
+            ("usage_usec abc", None),
+            ("usage_usec", None),
+            ("", None),
+        ];
+
+        let cpu = CPU::new();
+        for (stat, expected) in test_cases {
+            assert_eq!(cpu.parse_usage_usec(stat), expected);
+        }
+    }
+}

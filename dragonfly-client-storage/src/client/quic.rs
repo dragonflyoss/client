@@ -497,10 +497,9 @@ mod tests {
     use quinn::rustls::client::danger::ServerCertVerifier;
 
     #[test]
-    fn test_no_verifier() {
+    fn no_verifier_accepts_any_server_cert() {
         let verifier = NoVerifier::new();
 
-        // Test verify_server_cert
         let result = verifier.verify_server_cert(
             &CertificateDer::from(vec![]),
             &[],
@@ -510,7 +509,6 @@ mod tests {
         );
         assert!(result.is_ok());
 
-        // Test supported_verify_schemes
         let schemes = verifier.supported_verify_schemes();
         assert!(!schemes.is_empty());
     }
