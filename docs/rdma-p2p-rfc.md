@@ -3,8 +3,8 @@
 Status: **Draft — proposed design, pending maintainer agreement.**
 
 Related issue: [client#1926](https://github.com/dragonflyoss/client/issues/1926).
-Prototype: [client#1945](https://github.com/dragonflyoss/client/pull/1945), reviewed at
-[`1ccc7d1`](https://github.com/YQ-Wang/dragonfly-client/tree/1ccc7d1048d213dd1237dfe0978a06ac2bde5c1c).
+Implementation draft: [client#1945](https://github.com/dragonflyoss/client/pull/1945), updated at
+[`944aa7a`](https://github.com/YQ-Wang/dragonfly-client/tree/944aa7ad08d9163b00e1ee921e3c1a36a8e06915).
 
 This RFC proposes an optional Linux transport for moving piece content between peers
 over AWS EFA or RoCE/InfiniBand. It uses libfabric tagged messaging for content and
@@ -15,10 +15,34 @@ not establish release readiness or close #1926.
 
 ## Motivation and scope
 
-Model, dataset, and image distribution can be limited by network throughput and CPU
-overhead on nodes that already have a fast fabric. The goal is to improve completed
-piece throughput or CPU cost when the fabric is useful, while preserving Dragonfly's
-storage, piece validation, rate limiting, and existing recovery behavior.
+Dragonfly's [v2.6 roadmap](https://d7y.io/docs/next/roadmap-v2.6/) includes RDMA file
+distribution, lower CPU/memory overhead, and bandwidth-aware distribution across
+parents. Its [model-distribution design](https://d7y.io/blog/2026/03/11/cloud-native-ai-model-management-and-distribution-for-inference-workloads/)
+describes peer sharing and preheating for inference fleets, with RoCE/InfiniBand
+acceleration as a next step. This establishes the project direction; the EFA,
+libfabric, and control-protocol choices below still require agreement.
+
+The target workload is distributing or preheating the same immutable model weights,
+checkpoint, or dataset shards across nodes in a trusted cluster. Nodes must already
+have an accessible fast fabric and enough storage/memory throughput for peer transfer
+to be a bottleneck. A newly populated peer can serve pieces to other nodes while
+downloading the rest. The goal is to reduce fleet completion time or CPU cost while
+preserving Dragonfly's storage, piece validation, rate limiting, and recovery behavior.
+
+There are concrete precedents for this workload. [Mooncake P2P Store](https://kvcache-ai.github.io/Mooncake/design/p2p-store.html)
+uses its RDMA-capable Transfer Engine to share temporary objects between peers; the
+project reports deployment in Moonshot AI's checkpoint-transfer service. [NVIDIA
+Dynamo ModelExpress](https://developer.nvidia.com/blog/modelexpress-distributing-model-artifacts-at-the-speed-of-light/)
+also describes transferring file-backed kernel-cache artifacts between registered
+host-memory buffers, verifying them, and installing them into a filesystem cache.
+These are evidence for the use case, not validation of Dragonfly's implementation
+or a reason to adopt another project's protocol.
+
+RDMA accelerates the peer-transfer stage. It does not further reduce origin traffic
+by itself, bypass storage writes, or load models into GPUs. An origin-limited first
+download, slow destination disk, or already-local cache may see little benefit.
+The proposal must therefore demonstrate value over the existing TCP and QUIC paths
+on the operator's complete distribution workload.
 
 The first implementation covers regular, persistent, and persistent-cache pieces,
 host memory, and one selected fabric device per endpoint. It is opt-in at build and
@@ -167,7 +191,8 @@ arithmetic is checked. With a 64 KiB minimum chunk, a 1 GiB piece needs 16,384 c
 identifiers; the tag allocation must accommodate this. If provider constraints
 cannot support the required tag space and chunk size, reject the RDMA attempt
 before transfer and use TCP. Do not exceed either peer's chunk-size limit. The
-prototype's 4,096-tag reservation is not sufficient for every proposed configuration.
+historical `1ccc7d1` prototype's 4,096-tag reservation was insufficient; the revised
+implementation reserves 16,384 tags and checks provider limits.
 
 Each attempt reserves a disjoint set of usable fabric tags. The allocator must
 respect the provider's tag-bit format and prevent overlap or wraparound. An endpoint
@@ -176,7 +201,12 @@ old in-flight traffic must not be accepted as a new transfer. Endpoint informati
 and tag layout must be validated before posting operations.
 
 The receiver validates the returned offset and length against the expected piece
-range before writing. A receive completion must report the expected chunk length.
+range before writing. `Ready` must contain a non-empty, well-formed digest in a
+supported existing piece-digest format. An absent or malformed digest rejects the
+RDMA attempt before receiving content and permits the existing TCP/retry path; it
+must not silently disable verification. Computing a digest from received bytes alone
+does not supply the expected digest. A receive completion must report the expected
+chunk length.
 The parent recomputes each requested window and rejects duplicates, gaps, out-of-range
 chunks, and credits exceeding the negotiated limit. It sends only after matching
 `RecvPosted`. This is flow control for cooperating peers, not protection against an
@@ -208,6 +238,7 @@ failure, rather than repeatedly downloading bytes that cannot be stored.
 | `BUSY` or local buffer/admission pressure | Use TCP after bounded admission. | Retain compatible capability; do not classify capacity as a broken fabric. |
 | Peer connection failure, fabric timeout, invalid transfer, or digest mismatch | Clean up and retry the entire piece over TCP. | Invalidate stale discovery and back off that parent from 2 seconds up to 60 seconds. |
 | `NOT_FOUND` or `TOO_LARGE` | Use the existing piece retry policy, allowing a TCP attempt. | Do not mark all requests to this parent incompatible. |
+| Parent has no stored piece digest | Decline RDMA for that piece and use TCP. | Do not treat other pieces from the parent as incompatible. |
 | Fatal local endpoint error | Withdraw local readiness and fail affected RDMA attempts. | Reinitialize with the endpoint recovery policy below. |
 | Local disk/write failure or caller cancellation | Stop and clean up; report the actual outcome. | Do not penalize the remote parent for a local failure. |
 
@@ -217,10 +248,10 @@ to the same health bookkeeping. TCP success must not erase a preceding RDMA pena
 Backoff/cache state must have bounded storage and must not accumulate indefinitely
 as peers churn.
 
-Use one absolute deadline for each RDMA attempt, beginning before discovery. All
-network, admission, and receive waits use the remaining time; receiving `Ready` or
-starting a background task does not reset it. Individual fabric operations are also
-bounded by `transferTimeout`. The TCP fallback gets one normal TCP attempt budget;
+Use one absolute deadline for each RDMA attempt, beginning before discovery. Its
+budget is the smaller of `download.pieceTimeout` and `transferTimeout`. All network,
+admission, and receive waits use the remaining time; receiving `Ready` or starting
+a background task does not reset it. The TCP fallback gets one normal TCP attempt budget;
 there is no repeated RDMA/TCP loop within a piece attempt. This bounds added RDMA
 waiting, not kernel filesystem execution time.
 
@@ -244,16 +275,19 @@ Cancellation/completion races need bounded cleanup and a single terminal outcome
 Both serving and downloading follow the same lifecycle: initialize, publish/use,
 withdraw on failure, stop new posts, clean up, then retry initialization. Initial
 failure and retirement of a previously healthy endpoint impose at least 300 seconds
-before the next initialization attempt, with jitter to avoid fleet-wide retry bursts.
+before the next initialization attempt. Deployment validation must assess synchronized
+retry bursts and whether bounded jitter is needed.
 Only one initialization runs per role. TCP remains available during the cooldown.
 
 Every posted operation retains its context, buffer, registration, and accounting
 until completion or safe endpoint teardown. A successful `fi_cancel` request alone
 does not release ownership. Current [libfabric endpoint documentation](https://ofiwg.github.io/libfabric/main/man/fi_endpoint.3.html#fi_close)
-defines endpoint close and buffer lifetime; the implementation must establish the
-corresponding guarantee for each supported provider/version and serialize close with
-posting and completion processing. The API contract, rather than a provider-name
-heuristic about queue-pair destruction, is the basis for reuse.
+permits buffer release after completion or endpoint close. The implementation must
+check that `fi_close` succeeds, serialize close with posting and completion handling,
+and account for discarded operations that will not produce completions. Tie this
+behavior to the documented API of each supported provider/version and validate the
+failure paths on that configuration. A provider-name allowlist is not evidence that
+teardown was safe, and these requirements do not claim untested hardware is supported.
 
 If close fails or safe teardown cannot be established, retain the affected memory
 and its resource charge. A retired generation must not receive a fresh unaccounted
@@ -281,7 +315,7 @@ other. Local resource exhaustion falls back to TCP; it must not create a cycle i
 which transfers each hold a buffer while waiting for another.
 
 The following uses the prototype's configuration names as proposed starting points.
-The daemon-wide budget and recovery semantics require implementation changes.
+The implementation and validation status below tracks these semantics.
 
 ```yaml
 download:
@@ -307,23 +341,45 @@ storage:
 | `chunkSize` | `4MiB` | Maximum chunk size; accepted range 64 KiB–1 GiB, subject to provider and peer limits. |
 | `maxInflightChunks` | `16` | Maximum chunks per window; accepted range 1–4,096. |
 | `maxConcurrentTransfers` | `64` | Server admission limit; downloader concurrency also follows the existing piece limit. |
-| `transferTimeout` | `10s` | Per-operation timeout, within the attempt deadline. |
+| `transferTimeout` | `10s` | Caps the complete RDMA attempt alongside `download.pieceTimeout`; disk cleanup may take longer. |
 | `allowSoftwareProvider` | `false` | Permit software providers for development and CI. |
 | `mmapContent` | `false` | Optional upload optimization; may be deferred from the first implementation. |
 
-The existing download piece timeout supplies the RDMA attempt budget. Configuration
+The smaller of `download.pieceTimeout` and `transferTimeout` supplies the RDMA
+attempt budget. Configuration
 validation checks cross-field feasibility, including room for one configured window
 and a valid tag allocation for every supported piece size. Hardware absence or runtime
 initialization failure degrades to TCP with a diagnostic. A binary built without
-`rdma` rejects an explicitly enabled RDMA configuration with a clear build-feature
-error; it must not silently claim the feature is active.
+`rdma` must clearly report that explicit RDMA settings cannot be activated, retain
+TCP availability, and never advertise the feature as active.
 
 An RDMA build is Linux-only and needs the chosen libfabric headers and libraries.
 Packaging must state runtime dependencies, supported versions, device permissions,
 locked-memory limits, and network access for the TCP listeners and selected fabric.
-Default releases need not include RDMA until that packaging is validated. Rollback
-selects TCP downloading and disables RDMA serving; no stored-content migration is
-required.
+Each supported deployment needs a reproducible host-service or Kubernetes DaemonSet
+profile that identifies how dfdaemon obtains its device and coexists with GPU jobs.
+Having a NIC on the node does not guarantee that it is available to the daemon.
+For example, [EFA device allocation on EKS](https://docs.aws.amazon.com/eks/latest/userguide/device-management-efa.html)
+is exclusive per Pod with the device plugin; sharing through DRA requires an explicit
+shared claim. Document the selected allocation/sharing mechanism, required privileges,
+memory headroom, and reachability without requiring a new device-management system
+in Dragonfly. Validate that deployment and rollback preserve the GPU workload's
+device access. Default releases need not include RDMA until packaging is validated.
+Rollback selects TCP downloading and disables RDMA serving; no stored-content
+migration is required.
+
+### Bandwidth accounting
+
+Keeping scheduler policy unchanged does not establish that existing host network
+counters measure fabric load. The current client selects network counters using the
+advertised IP interface; a separate fabric, such as an EFA-only device without an IP,
+may carry the piece bytes. [EFA exposes dedicated RDMA counters](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/efa-working-monitor.html).
+For every supported deployment, verify which counters feed load-aware parent
+selection and whether they cover the selected fabric, including other users of it.
+Do not report idle TCP-interface bandwidth as idle RDMA capacity. If representative
+fabric load is unavailable, document the limitation and use an explicit unknown-load
+or conservative selection policy agreed with maintainers. A new scheduler algorithm
+or automatic fabric-topology discovery remains outside this proposal.
 
 ## Security boundary
 
@@ -355,20 +411,32 @@ performance.
 
 | Area | Required evidence |
 | --- | --- |
-| Build and packaging | Default builds remain independent of libfabric. Linux CI installs native dependencies and runs RDMA-enabled check, clippy, and tests, including the workspace `--all-features` job. |
-| Actual fallback | Drive the piece manager through incompatibility, partial transfer, timeout, peer disappearance, invalid length, and digest mismatch, then complete a real TCP retry for all three piece kinds. Assert bytes, digest, metadata, and one completion notification. |
+| Build and packaging | Default builds remain independent of libfabric. Linux CI installs native dependencies and runs RDMA-enabled check, clippy, and tests, including the workspace `--all-features` job. Validate a documented device-allocation and rollback profile alongside GPU workloads. |
+| Actual fallback | Drive the piece manager through incompatibility, partial transfer, timeout, peer disappearance, invalid length, missing/malformed digest, and digest mismatch, then complete a real TCP retry for all three piece kinds. Assert bytes, digest, metadata, and one completion notification. |
 | Cancellation and ownership | Cancel during admission, rendezvous, posted operations, and storage consumption; race cancellation with completions. Verify no late storage writes after retry, no premature reuse, and bounded task/resource cleanup or accounted quarantine. |
 | Recovery and pressure | Concurrent serving/downloading under one budget, one-window progress, slow consumers, repeated endpoint failure, unsuccessful close, and restart/port changes. Verify advertisement withdrawal, cooldown, and absence of resource growth beyond bounds. |
 | Wire compatibility | Encoding fixtures, malformed/truncated/oversized inputs, version mismatch, real old peers, fragmented probes, provider/tag mismatch, and preservation of normal TCP requests. Exercise `BUSY` separately from incompatibility and transport failure. |
 | Hardware | EFA and each claimed verbs-provider configuration: successful transfer, concurrent load, cancellation, timeout, and teardown. Record device, driver, firmware, OS, libfabric version, and provider options. |
+| Load accounting | Compare reported host load with selected-fabric counters under peer traffic and competing workloads. Verify parent selection does not treat fabric saturation as idle capacity; test the documented behavior when counters are unavailable. |
 
-Benchmark complete verified downloads against TCP at equal piece size, concurrency,
-CPU placement, and storage/cache conditions. Include small and large pieces, real
-disk and memory-backed storage, warm and cold caches, and mixed-capability peers.
-Report repeated-run distributions, throughput, CPU time per GiB, tail latency,
-memory/resource use, and fallback cost. Transport-only results can help diagnosis,
-but must be separated from end-to-end results. Publish commands, configuration,
-raw outputs, and the exact commit with each result.
+Benchmark complete verified downloads against tuned TCP and QUIC at equal piece size,
+concurrency, CPU placement, and storage/cache conditions. Record tuning and the
+effective bandwidth available to each transport, including differences between EFA
+and the IP path; do not attribute all such differences to protocol overhead. Include
+small and large pieces, real disk and memory-backed storage, warm and cold caches,
+and mixed-capability peers. Report repeated-run distributions, throughput, CPU time
+per GiB, tail latency, memory/resource use, and fallback cost.
+
+Also run a multi-node model/checkpoint distribution through Dragonfly's scheduler
+and piece manager, with the target workload's normal piece sizing. Include a cold
+fleet rollout, preheated parents, simultaneous serving/downloading, and parent
+failure or churn. Measure time until all target nodes have verified content,
+per-node completion percentiles, origin bytes, and resource use. If the supported
+deployment shares a fabric with training or inference, measure the effect on that
+workload under concurrent distribution. A two-node transfer cannot establish fleet
+scaling or coexistence. Transport-only results can help diagnosis but must be
+separated from these end-to-end results. Publish commands, configuration, raw outputs,
+and the exact commit with each result.
 
 The prototype reports a single-rail EFA experiment on two `p6-b200.48xlarge` nodes,
 24 GiB in 512 MiB pieces, best of three runs. Its reported CRC32-plus-write speedup
@@ -383,22 +451,44 @@ task IDs as unbounded metric labels. Broader enablement requires demonstrated be
 and acceptable fallback latency on the target workload; no universal speedup threshold
 is assumed by this RFC.
 
-## Prototype gaps and implementation sequence
+## Implementation acceptance and sequence
 
-At `1ccc7d1`, #1945 contains the control protocol, C shim, fabric wrapper, configuration,
-three piece kinds, TCP fallback paths, and direct-window writes for regular pieces.
-It remains a prototype. In particular:
+The revised implementation at `944aa7a` uses the current storage stream writer for
+all three piece kinds and retains the original piece claim through RDMA failure,
+write cleanup, and TCP fallback. It adds shared buffer accounting, cancellation
+cleanup, endpoint cooldowns, provider-aware tags, typed rejection handling, and
+completion-based parent health reporting.
 
-- Success is recorded when a reader is returned; later failures miss parent backoff.
-  Typed capacity/incompatibility outcomes are not preserved throughout the path.
-- The downloader can immediately recreate a retired endpoint; the server does not
-  retry initialization or withdraw an advertisement when only the fabric fails.
-- Upload and download endpoints each receive the full configured buffer budget.
-  Shared accounting and recovery across generations need to be implemented.
-- Cancellation ownership, deadline composition, usable tag bits, full piece/chunk
-  range coverage, and source matching need review against the requirements above.
-- The fallback-named mismatch test asserts an RDMA error, not a successful TCP retry.
-  Feature-enabled CI also needs libfabric installation.
+On Linux arm64, Rust 1.88.0 and libfabric 2.1.0 with the software TCP provider passed
+136 storage unit tests, 11 storage integration tests, 14 piece-manager tests, and
+36 configuration tests. The fallback regression checks partial bytes on disk,
+retained claim identity while TCP is blocked, a concurrent waiter, and final
+content/digest for all three namespaces. Default and RDMA-enabled workspace checks
+and clippy also passed. These results are specific to this revision and provider.
+
+Evaluate each implementation revision against the full acceptance checklist and
+link additional evidence to its exact commit:
+
+- Commit-based success and consistent typed failure/backoff bookkeeping, including
+  failures after a reader has been returned.
+- Both endpoint roles withdraw readiness and recover with the specified cooldown;
+  active and retired generations share the daemon-wide buffer budget.
+- Cancellation, blocking-write ownership, deadlines, tag allocation, peer-source
+  matching, and the complete piece/chunk range satisfy the transfer contract.
+- Missing digests cannot become successful unverified RDMA pieces. Actual TCP
+  fallback tests cover every piece kind, including partial transfer and corruption.
+- Native-feature CI passes, and provider safety, deployment coexistence, load
+  accounting, and multi-node TCP/QUIC comparisons have the evidence required above.
+
+Concurrent discovery misses are not yet coalesced. Receives currently use wildcard
+source matching, so each supported provider needs the source-isolation decision
+required above. Fabric-aware load reporting and its behavior when counters are
+unavailable also remain open. These are implementation or deployment gaps, separate
+from passing software tests.
+
+Software tests and document review cannot satisfy the hardware or fleet-performance
+gates. Record any untested provider or deployment as unsupported rather than extending
+claims from a successful result on a different fabric.
 
 First agree on hardware scope, control-protocol ownership, discovery, and the resource
 contract. Then land reviewable implementation changes covering protocol/configuration,
