@@ -22,7 +22,7 @@ use dragonfly_api::dfdaemon::v2::SyncHostRequest;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Result;
 use dragonfly_client_util::id_generator::IDGenerator;
-use dragonfly_client_util::net::format_url;
+use dragonfly_client_util::net::{format_url, scheme_for_tls};
 use dragonfly_client_util::shutdown::{self, Shutdown};
 use rand::distr::weighted::WeightedIndex;
 use rand::distr::Distribution;
@@ -204,6 +204,11 @@ impl ParentSelector {
     pub async fn register(&self, parents: &[Peer]) -> Result<()> {
         let dfdaemon_shutdown = self.shutdown.clone();
         let mut join_set = JoinSet::new();
+        let scheme = scheme_for_tls(
+            self.config.upload.client.ca_cert.as_deref(),
+            self.config.upload.client.cert.as_deref(),
+            self.config.upload.client.key.as_deref(),
+        );
         for parent in parents {
             debug!("register parent {}", parent.id);
 
@@ -221,7 +226,7 @@ impl ParentSelector {
             let dfdaemon_upload_client = match DfdaemonUploadClient::new(
                 self.config.clone(),
                 format_url(
-                    "http",
+                    scheme,
                     IpAddr::from_str(&parent_host.ip)?,
                     parent_host.port as u16,
                 ),
@@ -525,6 +530,11 @@ impl PersistentParentSelector {
     pub async fn register(&self, parents: &[PersistentPeer]) -> Result<()> {
         let dfdaemon_shutdown = self.shutdown.clone();
         let mut join_set = JoinSet::new();
+        let scheme = scheme_for_tls(
+            self.config.upload.client.ca_cert.as_deref(),
+            self.config.upload.client.cert.as_deref(),
+            self.config.upload.client.key.as_deref(),
+        );
         for parent in parents {
             debug!("register persistent parent {}", parent.id);
 
@@ -542,7 +552,7 @@ impl PersistentParentSelector {
             let dfdaemon_upload_client = match DfdaemonUploadClient::new(
                 self.config.clone(),
                 format_url(
-                    "http",
+                    scheme,
                     IpAddr::from_str(&parent_host.ip)?,
                     parent_host.port as u16,
                 ),
@@ -846,6 +856,11 @@ impl PersistentCacheParentSelector {
     pub async fn register(&self, parents: &[PersistentCachePeer]) -> Result<()> {
         let dfdaemon_shutdown = self.shutdown.clone();
         let mut join_set = JoinSet::new();
+        let scheme = scheme_for_tls(
+            self.config.upload.client.ca_cert.as_deref(),
+            self.config.upload.client.cert.as_deref(),
+            self.config.upload.client.key.as_deref(),
+        );
         for parent in parents {
             debug!("register persistent cache parent {}", parent.id);
 
@@ -866,7 +881,7 @@ impl PersistentCacheParentSelector {
             let dfdaemon_upload_client = match DfdaemonUploadClient::new(
                 self.config.clone(),
                 format_url(
-                    "http",
+                    scheme,
                     IpAddr::from_str(&parent_host.ip)?,
                     parent_host.port as u16,
                 ),
