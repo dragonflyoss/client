@@ -25,7 +25,7 @@ use bytes::Bytes;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::Error;
 use dragonfly_client_storage::client::rdma::{discover, RDMAClient};
-use dragonfly_client_storage::rdma::fabric::Fabric;
+use dragonfly_client_storage::rdma::fabric::{Fabric, RegisteredMemoryBudget};
 use dragonfly_client_storage::rdma::rendezvous::{
     read_frame, write_frame, CapabilityRegistry, Frame, PieceKind, PieceReady, PieceRequest,
     RendezvousError, WireCapability, ERROR_CODE_BUSY, ERROR_CODE_INCOMPATIBLE, ERROR_CODE_INTERNAL,
@@ -881,6 +881,135 @@ async fn rejects_connections_over_the_transfer_admission_limit() {
         }
         frame => panic!("expected Error, got {frame:?}"),
     }
+
+    shutdown.trigger();
+}
+
+/// A parent that is still fetching a piece must serve it over RDMA once it commits. Reading the
+/// uncommitted metadata instead would refuse every child of a parent that is mid-download, which
+/// is exactly the fan-out RDMA is meant to accelerate. The TCP piece server already waits.
+#[tokio::test(flavor = "multi_thread")]
+async fn serves_a_piece_that_is_still_downloading() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let mut config = test_config();
+    assign_free_ports(&mut config);
+    let config = Arc::new(config);
+
+    let storage = Arc::new(
+        Storage::new(
+            config.clone(),
+            temp_dir.path(),
+            temp_dir.path().to_path_buf(),
+        )
+        .await
+        .unwrap(),
+    );
+
+    let task_id = "3f1e7c2a9b4d6e8f0a1c3d5e7f9b0d2c4e6a8c0e2f4a6b8d0c2e4f6a8b0d2c4e";
+    let content: Vec<u8> = (0..4 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
+
+    // Claim the piece without committing it: this is the state of a parent that is still
+    // downloading. The digest does not exist yet.
+    storage
+        .download_task_started(task_id, content.len() as u64, content.len() as u64, None)
+        .await
+        .unwrap();
+    let piece_id = storage.piece_id(task_id, 0);
+    storage
+        .download_piece_started(&piece_id, 0, 0, content.len() as u64)
+        .await
+        .unwrap();
+
+    let (tcp_addr, addr, shutdown, _shutdown_complete_rx) =
+        start_server(config.clone(), storage.clone()).await;
+
+    let (fabric, capability) = client_fabric(FABRIC_TAG);
+    let advertisement = discover(&tcp_addr, Duration::from_secs(5)).await.unwrap();
+    assert!(capability.compatible(&advertisement.capability).is_ok());
+    let client = RDMAClient::new(config.clone(), fabric, capability, addr);
+
+    // Ask for the piece before it exists, then commit it while the request is in flight.
+    let request = tokio::spawn(async move { client.download_piece(0, task_id).await });
+    tokio::time::sleep(Duration::from_millis(250)).await;
+
+    let expected = storage
+        .download_piece_from_source_finished(
+            &piece_id,
+            task_id,
+            0,
+            content.len() as u64,
+            &mut content_stream(&content),
+            Duration::from_secs(10),
+        )
+        .await
+        .unwrap();
+
+    let (mut reader, offset, digest) = request
+        .await
+        .unwrap()
+        .expect("an in-flight piece must be served once it commits, not refused");
+    assert_eq!(offset, 0);
+    assert_eq!(digest, expected.digest);
+    let mut downloaded = Vec::new();
+    reader.read_to_end(&mut downloaded).await.unwrap();
+    assert_eq!(downloaded, content);
+
+    shutdown.trigger();
+}
+
+/// A busy registration budget is capacity, not a broken fabric. The first receive window must
+/// wait for room within the attempt deadline instead of failing the piece the moment the budget
+/// is held by another transfer.
+#[tokio::test(flavor = "multi_thread")]
+async fn first_receive_window_waits_for_a_busy_budget() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let mut config = test_config();
+    assign_free_ports(&mut config);
+    let config = Arc::new(config);
+
+    let storage = Arc::new(
+        Storage::new(
+            config.clone(),
+            temp_dir.path(),
+            temp_dir.path().to_path_buf(),
+        )
+        .await
+        .unwrap(),
+    );
+
+    let task_id = "8d2c4e6a0b1f3d5e7a9c1e3f5a7b9d1c3e5f7a9b1d3c5e7f9a1b3d5c7e9f1a3b";
+    let content: Vec<u8> = (0..2 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
+    let digest = write_piece(&storage, task_id, 0, &content).await;
+
+    let (tcp_addr, addr, shutdown, _shutdown_complete_rx) =
+        start_server(config.clone(), storage).await;
+
+    // A budget with room for exactly one window, so the download cannot start until the
+    // buffer held below is released.
+    let budget = Arc::new(RegisteredMemoryBudget::new(2 * 1024 * 1024));
+    let fabric = Arc::new(Fabric::new_with_budget(None, None, budget, true).unwrap());
+    let capability = WireCapability {
+        provider: fabric.provider().to_string(),
+        fabric_tag: FABRIC_TAG.to_string(),
+    };
+    let held = fabric.acquire_buffer(2 * 1024 * 1024).await.unwrap();
+
+    let advertisement = discover(&tcp_addr, Duration::from_secs(5)).await.unwrap();
+    assert!(capability.compatible(&advertisement.capability).is_ok());
+    let client = RDMAClient::new(config.clone(), fabric.clone(), capability, addr);
+
+    let request = tokio::spawn(async move { client.download_piece(0, task_id).await });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    drop(held);
+
+    let (mut reader, _offset, got_digest) = request
+        .await
+        .unwrap()
+        .expect("a momentarily busy budget must be waited on, not reported as a failure");
+    assert_eq!(got_digest, digest);
+    let mut downloaded = Vec::new();
+    reader.read_to_end(&mut downloaded).await.unwrap();
+    assert_eq!(downloaded, content);
 
     shutdown.trigger();
 }

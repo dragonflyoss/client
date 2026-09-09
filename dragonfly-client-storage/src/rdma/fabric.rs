@@ -43,7 +43,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::{oneshot, Notify, OwnedSemaphorePermit, Semaphore, TryAcquireError};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// ffi declares the C ABI exported by shim.c.
 mod ffi {
@@ -289,6 +289,21 @@ struct FabricInner {
     /// pending maps context addresses to in-flight operations.
     pending: Mutex<HashMap<usize, PendingOp>>,
 
+    /// quarantined retains operations the provider will never report a completion for, keyed by
+    /// context address. Some providers cannot cancel a send already handed to the device, and
+    /// answer fi_cancel with FI_ENOENT without ever producing a cancellation completion. The
+    /// buffer, its registration, and its budget charge are held so the device can keep writing
+    /// into memory nobody reuses, rather than retiring an endpoint that still serves every other
+    /// transfer. A late completion releases the entry.
+    quarantined: Mutex<Vec<(usize, PendingOp)>>,
+
+    /// quarantined_bytes is the registered capacity held by `quarantined`.
+    quarantined_bytes: AtomicU64,
+
+    /// quarantine_limit_bytes bounds that capacity. Past it the budget can no longer satisfy
+    /// transfers, which is the fatal local endpoint error that does justify retirement.
+    quarantine_limit_bytes: u64,
+
     /// op_counter issues the identifiers that tell a live operation apart from a completed one
     /// whose context address has been reused.
     op_counter: AtomicU64,
@@ -349,6 +364,10 @@ impl FabricInner {
             // returns successfully. Do not infer this guarantee from a provider's name or
             // queue-pair implementation. A failed close still quarantines every operation.
             self.pending.lock().unwrap().clear();
+            // The same guarantee covers operations quarantined earlier, so their capacity
+            // returns to the budget for the next generation.
+            self.quarantined.lock().unwrap().clear();
+            self.quarantined_bytes.store(0, Ordering::Release);
         } else {
             error!(
                 "rdma endpoint close failed; pending buffers remain quarantined for process lifetime"
@@ -390,6 +409,62 @@ impl FabricInner {
         }
     }
 
+    /// quarantine_op retires one operation instead of the endpoint. The operation is moved out of
+    /// `pending` still owning its context, buffer, registration and budget permit, so the provider
+    /// may keep writing into it forever without that memory ever being reused. Returns whether the
+    /// operation was still tracked. Retirement is reserved for the case where quarantine has taken
+    /// enough of the budget that no transfer can be admitted.
+    fn quarantine_op(&self, ctx_addr: usize, id: u64) -> bool {
+        let held = {
+            // Serialize with completion reaping so the CQ path cannot free this context midway.
+            let _progress_guard = self.cancel_progress_lock.lock().unwrap();
+            let op = {
+                let mut pending = self.pending.lock().unwrap();
+                match pending.get(&ctx_addr) {
+                    Some(op) if op.id == id => pending.remove(&ctx_addr),
+                    _ => None,
+                }
+            };
+            let Some(op) = op else {
+                return false;
+            };
+
+            let bytes = op._buf.len() as u64;
+            self.quarantined.lock().unwrap().push((ctx_addr, op));
+            self.quarantined_bytes.fetch_add(bytes, Ordering::AcqRel) + bytes
+        };
+
+        if held > self.quarantine_limit_bytes {
+            // fail_and_abort takes cancel_progress_lock, so it must run after the guard above.
+            self.fail_and_abort(format!(
+                "rdma quarantined {held} bytes of registered memory the provider never released, \
+                 over the {} byte limit",
+                self.quarantine_limit_bytes
+            ));
+        }
+        true
+    }
+
+    /// release_quarantined frees a quarantined operation once its completion finally arrives. A
+    /// completion means the provider is done with the buffer, so returning it is safe.
+    fn release_quarantined(&self, ctx_addr: usize) -> bool {
+        let released = {
+            let mut quarantined = self.quarantined.lock().unwrap();
+            match quarantined.iter().position(|(addr, _)| *addr == ctx_addr) {
+                Some(index) => Some(quarantined.swap_remove(index).1),
+                None => None,
+            }
+        };
+        match released {
+            Some(op) => {
+                self.quarantined_bytes
+                    .fetch_sub(op._buf.len() as u64, Ordering::AcqRel);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// is_pending reports whether the operation identified by both its context address and its id
     /// is still in flight.
     fn is_pending(&self, ctx_addr: usize, id: u64) -> bool {
@@ -403,6 +478,17 @@ impl FabricInner {
 
 impl Drop for FabricInner {
     fn drop(&mut self) {
+        let quarantined = std::mem::take(self.quarantined.get_mut().unwrap());
+        if !quarantined.is_empty() {
+            // These are operations the provider never reported. Their buffers may still be
+            // written to, so the registrations outlive the process rather than being freed.
+            error!(
+                "leaking {} quarantined rdma registrations the provider never released",
+                quarantined.len()
+            );
+            std::mem::forget(quarantined);
+        }
+
         let pending = std::mem::take(self.pending.get_mut().unwrap());
         if !pending.is_empty() {
             // A shutdown that reached the provider empties this map, so anything left here is an
@@ -580,6 +666,11 @@ impl RegisteredMemoryBudget {
             pools: Mutex::new(Vec::new()),
             changed: Notify::new(),
         }
+    }
+
+    /// total_bytes is the whole accounted capacity, used to bound unreclaimable quarantine.
+    pub fn total_bytes(&self) -> u64 {
+        u64::from(self.permits) * BUDGET_UNIT
     }
 
     /// reclaim_idle releases idle registrations, including those cached by another role.
@@ -990,6 +1081,11 @@ impl Fabric {
             cancel_progress_lock: Mutex::new(()),
             handle,
             pending: Mutex::new(HashMap::new()),
+            quarantined: Mutex::new(Vec::new()),
+            quarantined_bytes: AtomicU64::new(0),
+            // Half the budget still admits transfers; past it the endpoint cannot make
+            // progress and retiring it is the honest outcome.
+            quarantine_limit_bytes: (budget.total_bytes() / 2).max(BUDGET_UNIT),
             op_counter: AtomicU64::new(0),
             av: Mutex::new(HashMap::new()),
             shutdown: AtomicBool::new(false),
@@ -1522,10 +1618,16 @@ impl Fabric {
                         break;
                     }
                     if tokio::time::Instant::now() >= deadline {
-                        error!("rdma operation neither completed nor cancelled; retiring endpoint");
-                        self.inner.fail_and_abort(
-                            "rdma operation cancellation grace period expired".to_string(),
-                        );
+                        // The provider accepted the cancellation but will not report this
+                        // operation. That is a property of this operation, not of an endpoint
+                        // that is still serving other transfers, so quarantine its memory and
+                        // fail only this transfer.
+                        if self.inner.quarantine_op(ctx_addr, op_id) {
+                            warn!(
+                                "rdma operation neither completed nor cancelled; \
+                                 quarantining its registered buffer"
+                            );
+                        }
                         break;
                     }
                     tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1565,12 +1667,27 @@ fn progress_loop(inner: Arc<FabricInner>) {
         loop {
             if cancellation_check.elapsed() >= Duration::from_millis(100) {
                 cancellation_check = Instant::now();
-                let expired = inner.pending.lock().unwrap().values().any(|op| {
-                    op.cancel_deadline
-                        .is_some_and(|deadline| deadline <= cancellation_check)
-                });
-                if expired {
-                    inner.fail_and_abort("rdma cancellation grace period expired".to_string());
+                let expired: Vec<(usize, u64)> = inner
+                    .pending
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(_, op)| {
+                        op.cancel_deadline
+                            .is_some_and(|deadline| deadline <= cancellation_check)
+                    })
+                    .map(|(ctx_addr, op)| (*ctx_addr, op.id))
+                    .collect();
+                for (ctx_addr, id) in expired {
+                    if inner.quarantine_op(ctx_addr, id) {
+                        warn!(
+                            "rdma operation abandoned by an unwaited canceller; \
+                             quarantining its registered buffer"
+                        );
+                    }
+                }
+                // Quarantine only retires the endpoint once it has consumed the budget.
+                if inner.failed.load(Ordering::Acquire) {
                     return;
                 }
             }
@@ -1630,6 +1747,10 @@ fn progress_loop(inner: Arc<FabricInner>) {
                             drop(_ctx);
                             drop(_buf);
                             let _ = tx.send(completion);
+                        } else if inner.release_quarantined(entries[index].context as usize) {
+                            debug!(
+                                "late rdma completion released a quarantined registered buffer"
+                            );
                         } else {
                             let _ = entries[index].flags;
                             warn!("rdma completion for unknown context, dropping");
@@ -1910,13 +2031,74 @@ mod tests {
         assert_eq!(Arc::strong_count(&buf), 1);
     }
 
+    /// Waits for `predicate` or gives up, so watchdog tests do not race the progress thread.
+    async fn eventually(predicate: impl Fn() -> bool) -> bool {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !predicate() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .is_ok()
+    }
+
     #[tokio::test]
-    async fn expired_cancellation_retires_endpoint_without_a_waiter() {
+    async fn expired_cancellation_quarantines_the_operation_and_keeps_the_endpoint() {
         let fabric = open_fabric();
         let buf = fabric.alloc_buffer(4096).await.unwrap();
         let mut op = fabric.post_recv(&buf, 0, 4096, 0).await.unwrap();
-        // Model a provider accepting cancellation but never publishing its completion.
-        // The receive remains posted until the progress watchdog closes the endpoint.
+        let ctx_addr = op.ctx_addr;
+        // Model a provider accepting cancellation but never publishing its completion, which is
+        // how EFA answers fi_cancel for an operation already handed to the device.
+        fabric
+            .inner
+            .pending
+            .lock()
+            .unwrap()
+            .get_mut(&ctx_addr)
+            .unwrap()
+            .cancel_deadline = Some(Instant::now());
+        op.armed = false;
+        drop(op);
+
+        assert!(
+            eventually(|| fabric.inner.pending.lock().unwrap().is_empty()).await,
+            "abandoned cancellation had no cleanup owner"
+        );
+        assert!(
+            !fabric.inner.failed.load(Ordering::Acquire),
+            "one operation the provider will not report must not retire an endpoint that is \
+             still serving other transfers"
+        );
+        assert!(fabric
+            .inner
+            .quarantined
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(addr, _)| *addr == ctx_addr));
+        // The registration and its budget charge stay held, so the provider can never write
+        // into memory that has been handed back to the pool.
+        assert_eq!(Arc::strong_count(&buf), 2);
+        assert_eq!(
+            fabric.inner.quarantined_bytes.load(Ordering::Acquire),
+            4096
+        );
+    }
+
+    #[tokio::test]
+    async fn quarantine_retires_the_endpoint_once_it_exhausts_the_budget() {
+        // A budget this small makes one buffer exceed the half-budget quarantine ceiling.
+        let budget = Arc::new(RegisteredMemoryBudget::new(2 * BUDGET_UNIT));
+        let fabric = Fabric::new_with_budget(None, None, budget, true).unwrap();
+        let buf = fabric
+            .alloc_buffer(2 * BUDGET_UNIT as usize)
+            .await
+            .unwrap();
+        let mut op = fabric
+            .post_recv(&buf, 0, 2 * BUDGET_UNIT as usize, 0)
+            .await
+            .unwrap();
         fabric
             .inner
             .pending
@@ -1927,11 +2109,31 @@ mod tests {
             .cancel_deadline = Some(Instant::now());
         op.armed = false;
         drop(op);
+
+        // Quarantine that no longer leaves room to admit a transfer is a genuine local endpoint
+        // failure, and is the only case that still retires.
         tokio::time::timeout(Duration::from_secs(2), fabric.wait_failed())
             .await
-            .expect("abandoned cancellation had no cleanup owner");
-        assert!(fabric.inner.pending.lock().unwrap().is_empty());
+            .expect("quarantine past the budget must retire the endpoint");
+    }
+
+    #[tokio::test]
+    async fn a_late_completion_releases_a_quarantined_operation() {
+        let fabric = open_fabric();
+        let buf = fabric.alloc_buffer(4096).await.unwrap();
+        let op = fabric.post_recv(&buf, 0, 4096, 0).await.unwrap();
+        let ctx_addr = op.ctx_addr;
+        assert!(fabric.inner.quarantine_op(ctx_addr, op.id));
+        assert_eq!(fabric.inner.quarantined_bytes.load(Ordering::Acquire), 4096);
+
+        // The provider reporting the operation means it is done with the buffer, so the
+        // capacity returns to the budget instead of being held for the process lifetime.
+        assert!(fabric.inner.release_quarantined(ctx_addr));
+        assert_eq!(fabric.inner.quarantined_bytes.load(Ordering::Acquire), 0);
+        assert!(!fabric.inner.release_quarantined(ctx_addr));
+        // The test still owns the buffer, so releasing the quarantine cannot free it here.
         assert_eq!(Arc::strong_count(&buf), 1);
+        drop(op);
     }
 
     #[tokio::test(flavor = "multi_thread")]

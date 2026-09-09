@@ -435,7 +435,13 @@ impl RDMAClient {
         let window_length = usize::try_from(window_length).map_err(|_| {
             ClientError::Unknown("rdma receive window exceeds addressable memory".to_string())
         })?;
-        let buf = acquire_receive_window(&self.fabric, window_length)?;
+        let buf = acquire_receive_window(
+            &self.fabric,
+            window_length,
+            deadline,
+            self.config.storage.server.rdma.transfer_timeout,
+        )
+        .await?;
         let (window_tx, window_rx) = mpsc::channel(2);
         let fabric = self.fabric.clone();
         let transfer_timeout = self.config.storage.server.rdma.transfer_timeout;
@@ -477,17 +483,41 @@ impl RDMAClient {
     }
 }
 
-/// Local admission failures must not consume the attempt deadline or penalize a peer.
-fn acquire_receive_window(fabric: &Fabric, length: usize) -> ClientResult<PooledBuf> {
+/// acquire_receive_window reserves the first window's registered memory. Budget pressure is
+/// capacity, not a broken fabric, so a busy budget is waited on for a bounded time before the
+/// piece declines to TCP. Waiting here cannot deadlock against other transfers: this transfer
+/// holds no registration yet, so it is not part of any cycle. The wait is capped by the peer's
+/// own per-window patience as well as the attempt deadline, because a reservation the parent has
+/// already stopped waiting for is worthless.
+///
+/// Local admission failures must not penalize a peer.
+async fn acquire_receive_window(
+    fabric: &Fabric,
+    length: usize,
+    deadline: time::Instant,
+    transfer_timeout: std::time::Duration,
+) -> ClientResult<PooledBuf> {
     match fabric.try_acquire_buffer(length) {
-        Ok(Some(buffer)) => Ok(buffer),
-        Ok(None) => Err(ClientError::RdmaRejected {
-            code: ERROR_CODE_BUSY,
-            message: "local RDMA registered-memory budget is busy".to_string(),
-        }),
-        Err(err) => Err(ClientError::RdmaRejected {
+        Ok(Some(buffer)) => return Ok(buffer),
+        Ok(None) => {}
+        Err(err) => {
+            return Err(ClientError::RdmaRejected {
+                code: ERROR_CODE_BUSY,
+                message: format!("local RDMA receive buffer unavailable: {err}"),
+            });
+        }
+    }
+
+    let admission_deadline = deadline.min(time::Instant::now() + transfer_timeout);
+    match time::timeout_at(admission_deadline, fabric.acquire_buffer(length)).await {
+        Ok(Ok(buffer)) => Ok(buffer),
+        Ok(Err(err)) => Err(ClientError::RdmaRejected {
             code: ERROR_CODE_BUSY,
             message: format!("local RDMA receive buffer unavailable: {err}"),
+        }),
+        Err(_) => Err(ClientError::RdmaRejected {
+            code: ERROR_CODE_BUSY,
+            message: "local RDMA registered-memory budget is busy".to_string(),
         }),
     }
 }
@@ -713,19 +743,54 @@ mod tests {
     use tokio::io::AsyncReadExt;
 
     #[tokio::test]
-    async fn local_receive_memory_pressure_declines_without_waiting() {
+    async fn local_receive_memory_pressure_declines_after_bounded_admission() {
         // The shared budget charges each allocation in 64 KiB units.
         let fabric = Fabric::new(None, None, 64 * 1024, true).unwrap();
         let held = fabric.acquire_buffer(4096).await.unwrap();
+
+        // A budget that stays busy declines to TCP once the admission bound elapses, rather
+        // than spending the whole piece attempt waiting for memory.
+        let deadline = time::Instant::now() + std::time::Duration::from_millis(200);
         assert!(matches!(
-            acquire_receive_window(&fabric, 4096),
+            acquire_receive_window(&fabric, 4096, deadline, std::time::Duration::from_secs(30))
+                .await,
             Err(ClientError::RdmaRejected {
                 code: ERROR_CODE_BUSY,
                 ..
             })
         ));
+
         drop(held);
-        assert!(acquire_receive_window(&fabric, 4096).is_ok());
+        assert!(acquire_receive_window(
+            &fabric,
+            4096,
+            time::Instant::now() + std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(30),
+        )
+        .await
+        .is_ok());
+    }
+
+    #[tokio::test]
+    async fn first_receive_window_waits_for_capacity_within_the_deadline() {
+        let fabric = Fabric::new(None, None, 64 * 1024, true).unwrap();
+        let held = fabric.acquire_buffer(4096).await.unwrap();
+        let releaser = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            drop(held);
+        });
+
+        // Budget pressure is capacity, not a broken fabric: room that appears inside the
+        // deadline must be used instead of failing the piece over to TCP.
+        let buffer = acquire_receive_window(
+            &fabric,
+            4096,
+            time::Instant::now() + std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(30),
+        )
+        .await;
+        assert!(buffer.is_ok());
+        releaser.await.unwrap();
     }
 
     #[test]

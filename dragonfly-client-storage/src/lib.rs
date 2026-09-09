@@ -1034,6 +1034,30 @@ impl Storage {
         }
     }
 
+    /// wait_for_rdma_piece_finished returns the committed metadata for a piece of any RDMA-servable
+    /// kind, waiting for a piece this node is still downloading exactly as the TCP piece server
+    /// does. Serving RDMA requires the stored digest, which only exists once the piece is
+    /// finished, so reading metadata without this wait would refuse every child of a parent that
+    /// is mid-download.
+    #[instrument(skip_all)]
+    pub async fn wait_for_rdma_piece_finished(
+        &self,
+        piece_id: &str,
+        kind: crate::rdma::rendezvous::PieceKind,
+    ) -> Result<metadata::Piece> {
+        match kind {
+            crate::rdma::rendezvous::PieceKind::Piece => {
+                self.wait_for_piece_finished(piece_id).await
+            }
+            crate::rdma::rendezvous::PieceKind::PersistentPiece => {
+                self.wait_for_persistent_piece_finished(piece_id).await
+            }
+            crate::rdma::rendezvous::PieceKind::PersistentCachePiece => {
+                self.wait_for_persistent_cache_piece_finished(piece_id).await
+            }
+        }
+    }
+
     /// map_upload_piece memory-maps finished on-disk piece bytes for RDMA upload. Cache-resident
     /// pieces and missing content return an error so callers can fall back to `upload_piece`.
     #[instrument(skip_all)]

@@ -47,6 +47,9 @@ use tracing::{debug, error, info, instrument, warn, Span};
 /// Failed endpoint generations cannot immediately consume another initialization budget.
 const RECOVERY_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(300);
 
+/// How long an orderly close waits for the peer's unread control bytes before giving up.
+const DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// RDMAServer serves piece content over the libfabric transport. It accepts rendezvous
 /// connections on a TCP port, negotiates fabric compatibility fail-closed, and pushes bulk
 /// piece bytes as tagged fabric messages. The TCP piece server remains the mandatory
@@ -399,14 +402,37 @@ impl RDMAServerHandler {
     #[instrument(skip_all, fields(host_id, remote_address, task_id, piece_id))]
     async fn handle(&self, stream: TcpStream, remote_address: String) -> ClientResult<()> {
         let (mut reader, mut writer) = stream.into_split();
-        let request = match time::timeout(self.transfer_timeout, read_frame(&mut reader)).await? {
-            Ok(Frame::Request(request)) => request,
-            Ok(frame) => {
-                return Err(ClientError::Unknown(format!(
-                    "unexpected rendezvous frame: {frame:?}"
-                )));
+        // Every decline says why. Returning here without a frame closes the socket, which the
+        // client reports as a bare connection reset that is indistinguishable from a broken
+        // fabric, so the operator loses the one piece of evidence that identifies the cause.
+        let request = match time::timeout(self.transfer_timeout, read_frame(&mut reader)).await {
+            Ok(Ok(Frame::Request(request))) => request,
+            Ok(Ok(frame)) => {
+                let message = format!("unexpected rendezvous frame: {frame:?}");
+                let _ = self
+                    .abort(&mut writer, ERROR_CODE_INTERNAL, message.clone())
+                    .await;
+                return Err(ClientError::Unknown(message));
             }
-            Err(err) => return Err(err),
+            Ok(Err(err)) => {
+                // A request this server cannot parse is most often a peer on another protocol
+                // version, which is an incompatibility rather than a transport fault.
+                let message = format!("unreadable rendezvous request: {err}");
+                let _ = self
+                    .abort(&mut writer, ERROR_CODE_INCOMPATIBLE, message)
+                    .await;
+                return Err(err);
+            }
+            Err(err) => {
+                let message = format!(
+                    "timed out after {:?} reading the rendezvous request",
+                    self.transfer_timeout
+                );
+                let _ = self
+                    .abort(&mut writer, ERROR_CODE_INTERNAL, message)
+                    .await;
+                return Err(err.into());
+            }
         };
 
         Span::current().record("host_id", self.id_generator.host_id());
@@ -465,14 +491,16 @@ impl RDMAServerHandler {
             .storage
             .piece_id(&request.task_id, request.piece_number);
 
-        // Fetch the piece metadata for the requested namespace.
+        // Probe the requested namespace so a piece this node never started is declined without
+        // waiting. The metadata itself is read again after the wait below, because this snapshot
+        // is not yet committed.
         let piece = match request.kind {
             PieceKind::Piece => self.storage.get_piece(&piece_id),
             PieceKind::PersistentPiece => self.storage.get_persistent_piece(&piece_id),
             PieceKind::PersistentCachePiece => self.storage.get_persistent_cache_piece(&piece_id),
         };
-        let piece = match piece {
-            Ok(Some(piece)) => piece,
+        match piece {
+            Ok(Some(_)) => {}
             Ok(None) => {
                 self.abort(
                     writer,
@@ -485,6 +513,27 @@ impl RDMAServerHandler {
             Err(err) => {
                 self.abort(writer, ERROR_CODE_INTERNAL, err.to_string())
                     .await?;
+                return Err(err);
+            }
+        }
+
+        // The metadata above only proves the piece exists; a piece this node is still downloading
+        // carries no digest yet. Wait for it to be committed exactly as the TCP piece server does,
+        // then serve from the committed metadata. Reading the pre-wait snapshot would both refuse
+        // RDMA for every in-flight piece and describe the piece to the peer with a stale digest.
+        let piece = match self
+            .storage
+            .wait_for_rdma_piece_finished(&piece_id, request.kind)
+            .await
+        {
+            Ok(piece) => piece,
+            Err(err) => {
+                self.abort(
+                    writer,
+                    ERROR_CODE_NOT_FOUND,
+                    format!("piece {piece_id} did not finish: {err}"),
+                )
+                .await?;
                 return Err(err);
             }
         };
@@ -665,7 +714,22 @@ impl RDMAServerHandler {
         while start_chunk < chunk_count {
             let window_count =
                 (chunk_count - start_chunk).min(u64::from(max_inflight_chunks)) as u32;
-            match time::timeout(self.transfer_timeout, read_frame(reader)).await? {
+            let posted = match time::timeout(self.transfer_timeout, read_frame(reader)).await {
+                Ok(posted) => posted,
+                Err(_) => {
+                    // A client that is slower than this timeout is the expected cause. Name the
+                    // window so the fallback is attributable instead of arriving as a reset.
+                    let message = format!(
+                        "timed out after {:?} waiting for the client to post receives for the \
+                         window at chunk {start_chunk}",
+                        self.transfer_timeout
+                    );
+                    self.abort(writer, ERROR_CODE_INTERNAL, message.clone())
+                        .await?;
+                    return Err(ClientError::Unknown(message));
+                }
+            };
+            match posted {
                 Ok(Frame::RecvPosted {
                     start_chunk: posted_start,
                     chunk_count: posted_count,
@@ -677,7 +741,12 @@ impl RDMAServerHandler {
                         .await?;
                     return Err(ClientError::Unknown(message));
                 }
-                Err(err) => return Err(err),
+                Err(err) => {
+                    let message =
+                        format!("unreadable receive-window frame at chunk {start_chunk}: {err}");
+                    self.abort(writer, ERROR_CODE_INTERNAL, message).await?;
+                    return Err(err);
+                }
             }
 
             let buffer_offset = (window_index % ring_windows as usize) * window_capacity;
@@ -769,8 +838,31 @@ impl RDMAServerHandler {
         }
 
         write_frame(writer, &Frame::Done).await?;
+        self.close_orderly(reader, writer).await;
         debug!("finished uploading piece content over rdma");
         Ok(piece.length)
+    }
+
+    /// close_orderly ends a rendezvous connection with a FIN rather than a reset.
+    ///
+    /// The client keeps two windows posted, so it can send the next `RecvPosted` before learning
+    /// the transfer is over. Closing a socket that still has unread bytes queued makes the kernel
+    /// send RST instead of FIN, and the client surfaces that as `Connection reset by peer` on a
+    /// transfer that actually succeeded. Draining first keeps a completed transfer from being
+    /// reported as a transport failure, which would also back off a healthy parent.
+    async fn close_orderly(&self, reader: &mut OwnedReadHalf, writer: &mut OwnedWriteHalf) {
+        use tokio::io::AsyncWriteExt;
+
+        let _ = writer.shutdown().await;
+        let _ = time::timeout(DRAIN_TIMEOUT, async {
+            let mut scratch = [0u8; 512];
+            while let Ok(read) = reader.read(&mut scratch).await {
+                if read == 0 {
+                    break;
+                }
+            }
+        })
+        .await;
     }
 
     /// open_piece_source prefers a content mmap when configured, otherwise streams through the
