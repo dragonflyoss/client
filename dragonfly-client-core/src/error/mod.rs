@@ -114,6 +114,10 @@ pub enum DFError {
     #[error{"unexpected response"}]
     UnexpectedResponse,
 
+    /// An RDMA peer declined a request with a protocol-level reason.
+    #[error("rdma request rejected ({code}): {message}")]
+    RdmaRejected { code: u32, message: String },
+
     /// The error when the digest is mismatch.
     #[error{"digest mismatch expected: {0}, actual: {1}"}]
     DigestMismatch(String, String),

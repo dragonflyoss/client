@@ -15,6 +15,8 @@
  */
 
 pub mod quic;
+#[cfg(feature = "rdma")]
+pub mod rdma;
 pub mod tcp;
 
 use std::time::Duration;

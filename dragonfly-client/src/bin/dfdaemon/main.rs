@@ -345,8 +345,14 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown_complete_tx.clone(),
     );
 
+    // RDMA readiness is advertised through the already-discovered TCP piece endpoint, avoiding
+    // a scheduler API dependency and ensuring only a bound, initialized listener is selected.
+    #[cfg(feature = "rdma")]
+    let rdma_capabilities =
+        dragonfly_client_storage::rdma::rendezvous::CapabilityRegistry::default();
+
     // Initialize storage tcp server.
-    let mut storage_tcp_server = TCPServer::new(
+    let storage_tcp_server = TCPServer::new(
         config.clone(),
         SocketAddr::new(
             config.storage.server.ip.unwrap(),
@@ -358,6 +364,9 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
+    #[cfg(feature = "rdma")]
+    let storage_tcp_server = storage_tcp_server.with_rdma_capabilities(rdma_capabilities.clone());
+    let mut storage_tcp_server = storage_tcp_server;
 
     // Initialize storage quic server.
     let mut storage_quic_server = QUICServer::new(
@@ -371,6 +380,46 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
+
+    // RDMA is optional and recovers independently. Its task must not participate in the
+    // daemon's critical select, including when it panics; TCP/QUIC keep serving.
+    let _storage_rdma_server_task: Option<tokio::task::JoinHandle<()>> = {
+        #[cfg(feature = "rdma")]
+        {
+            if config.storage.server.rdma.enable {
+                let mut storage_rdma_server =
+                    dragonfly_client_storage::server::rdma::RDMAServer::new(
+                        config.clone(),
+                        SocketAddr::new(
+                            config.storage.server.ip.unwrap(),
+                            config.storage.server.rdma.port,
+                        ),
+                        id_generator.clone(),
+                        storage.clone(),
+                        upload_bandwidth_limiter.clone(),
+                        shutdown.clone(),
+                        shutdown_complete_tx.clone(),
+                    )
+                    .with_capability_registry(rdma_capabilities.clone());
+                Some(tokio::spawn(async move {
+                    if let Err(err) = storage_rdma_server.run().await {
+                        error!("storage rdma server exited after failure: {}", err);
+                    }
+                }))
+            } else {
+                None
+            }
+        }
+        #[cfg(not(feature = "rdma"))]
+        {
+            if config.storage.server.rdma.enable {
+                error!(
+                    "storage.server.rdma.enable is set but this build lacks the rdma feature, rdma server disabled"
+                );
+            }
+            None
+        }
+    };
 
     // Initialize proxy server.
     let proxy = Proxy::new(

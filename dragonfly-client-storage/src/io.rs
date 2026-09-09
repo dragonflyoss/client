@@ -412,7 +412,18 @@ where
         // Stage the chunks until they hold buffer_size bytes, the expected
         // length is reached or the stream ends.
         while !eof && batch_size < buffer_size && length < expected_length {
-            match stream.try_next().await? {
+            let next = match stream.try_next().await {
+                Ok(next) => next,
+                Err(err) => {
+                    // A stream timeout or cancellation must not release the piece
+                    // while an earlier positional write can still overwrite a retry.
+                    if let Some(handle) = in_flight.take() {
+                        handle.await.map_err(io::Error::other)??;
+                    }
+                    return Err(err.into());
+                }
+            };
+            match next {
                 Some(mut chunk) => {
                     if chunk.is_empty() {
                         continue;
@@ -1070,6 +1081,53 @@ mod tests {
                 write_range_from_stream(fd, 0, expected_length, buffer_size, &mut stream).await;
             expect(result.map(|response| response.length));
         }
+    }
+
+    #[test]
+    fn stream_failure_waits_for_the_previous_disk_write() {
+        // Keep the positional write queued behind a blocker so the regression is
+        // independent of disk speed and thread scheduling.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let temp_dir = tempdir().unwrap();
+            let path = temp_dir.path().join("task");
+            std::fs::write(&path, b"........").unwrap();
+            let (release, blocked) = tokio::sync::oneshot::channel::<()>();
+            let (started, ready) = tokio::sync::oneshot::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                started.send(()).unwrap();
+                blocked.blocking_recv().unwrap();
+            });
+            ready.await.unwrap();
+
+            let mut stream = futures::stream::iter([
+                Ok(Bytes::from_static(b"data")),
+                Err(io::Error::other("receive cancelled")),
+            ]);
+            let write = write_range_from_stream(open_rw(&path), 0, 8, 4, &mut stream);
+            tokio::pin!(write);
+            let early =
+                tokio::time::timeout(std::time::Duration::from_millis(20), &mut write).await;
+            let waited_for_write = early.is_err();
+            release.send(()).unwrap();
+            blocker.await.unwrap();
+            let result = match early {
+                Ok(result) => result,
+                Err(_) => write.await,
+            };
+            assert!(
+                waited_for_write,
+                "released the piece with a disk write outstanding"
+            );
+            assert!(
+                matches!(result, Err(Error::IO(err)) if err.to_string() == "receive cancelled")
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), b"data....");
+        });
     }
 
     #[tokio::test]
