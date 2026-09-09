@@ -23,7 +23,7 @@ use crate::rdma::rendezvous::{
     ERROR_CODE_INTERNAL, ERROR_CODE_NOT_FOUND, ERROR_CODE_TOO_LARGE,
 };
 use crate::Storage;
-use dragonfly_client_config::dfdaemon::{Config, RdmaProvider};
+use dragonfly_client_config::dfdaemon::{Config, RdmaProvider, RDMA_MIN_CHUNK_SIZE};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_metric::{
     collect_upload_piece_failure_metrics, collect_upload_piece_finished_metrics,
@@ -428,9 +428,7 @@ impl RDMAServerHandler {
                     "timed out after {:?} reading the rendezvous request",
                     self.transfer_timeout
                 );
-                let _ = self
-                    .abort(&mut writer, ERROR_CODE_INTERNAL, message)
-                    .await;
+                let _ = self.abort(&mut writer, ERROR_CODE_INTERNAL, message).await;
                 return Err(err.into());
             }
         };
@@ -560,8 +558,17 @@ impl RDMAServerHandler {
             .min(self.chunk_size)
             .min(self.fabric.max_msg_size() as u64);
         let max_inflight_chunks = request.max_inflight_chunks.min(self.max_inflight_chunks);
+        // The configuration enforces a floor on this daemon's own chunk size because below it the
+        // per-operation posting and completion cost dominates. A peer proposes this value, so the
+        // floor has to hold on the wire too: otherwise a peer can ask for a large piece in
+        // 256-byte messages and spend thousands of posts and rendezvous round trips on it. A piece
+        // smaller than the floor is exempt, since splitting it at all is already cheap and
+        // requiring one chunk would reject a legitimate request.
+        let undersized_chunk = chunk_size < RDMA_MIN_CHUNK_SIZE.as_u64()
+            && piece.length > RDMA_MIN_CHUNK_SIZE.as_u64();
         if piece.length == 0
             || chunk_size == 0
+            || undersized_chunk
             || max_inflight_chunks == 0
             || u64::from(max_inflight_chunks) > MAX_CHUNKS
         {
@@ -667,8 +674,9 @@ impl RDMAServerHandler {
         let mut buf = match acquired {
             Ok(Ok(buf)) => buf,
             Ok(Err(err)) => {
-                self.abort(writer, ERROR_CODE_TOO_LARGE, err.to_string())
-                    .await?;
+                // Capacity or a retired local fabric, not a piece the client should stop asking
+                // for. Reporting TOO_LARGE here told the client the piece itself was the problem.
+                self.abort(writer, ERROR_CODE_BUSY, err.to_string()).await?;
                 return Err(err);
             }
             Err(_) => {

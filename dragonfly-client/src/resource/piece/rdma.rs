@@ -19,7 +19,8 @@ use dragonfly_client_storage::client::PieceContentStream;
 use dragonfly_client_storage::rdma::rendezvous::PieceKind;
 use futures::StreamExt;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::time::{timeout_at, Instant as Deadline};
+use std::time::Duration;
+use tokio::time::{timeout, timeout_at, Instant as Deadline};
 use tokio_util::sync::CancellationToken;
 
 impl Piece {
@@ -88,7 +89,11 @@ impl Piece {
                 let mut stream = checked_stream(
                     stream,
                     cancellation.clone(),
-                    deadline,
+                    manager
+                        .config
+                        .download
+                        .piece_timeout
+                        .min(manager.config.storage.server.rdma.transfer_timeout),
                     transport_failed.clone(),
                 );
                 match manager
@@ -163,7 +168,7 @@ impl Piece {
             let mut stream = checked_stream(
                 stream,
                 cancellation.clone(),
-                tcp_deadline,
+                manager.config.download.piece_timeout,
                 Arc::new(AtomicBool::new(false)),
             );
             let piece = manager
@@ -267,19 +272,28 @@ fn cancelled() -> Error {
     std::io::Error::new(std::io::ErrorKind::Interrupted, "piece download cancelled").into()
 }
 
-/// Cancellation and the absolute deadline interrupt receiving, never an in-flight write.
+/// Cancellation and the receive budget interrupt receiving, never an in-flight write.
+///
+/// The budget is spent only while waiting on the producer. Each chunk is drained to storage
+/// between polls, and that time is deliberately not charged: an absolute deadline covering
+/// both would report local write latency as a transport failure, which penalizes a healthy
+/// parent and starts a whole-piece TCP retry the same slow disk has to absorb again. The RFC
+/// is explicit that this budget "bounds added RDMA waiting, not kernel filesystem execution
+/// time". The budget still does not restart per chunk, so a producer that stalls repeatedly
+/// exhausts it.
 fn checked_stream(
     stream: PieceContentStream,
     cancellation: CancellationToken,
-    deadline: Deadline,
+    budget: Duration,
     failed: Arc<AtomicBool>,
 ) -> PieceContentStream {
-    futures::stream::unfold((stream, cancellation, failed, false), move |(mut stream, cancellation, failed, done)| async move {
+    futures::stream::unfold((stream, cancellation, failed, budget, false), move |(mut stream, cancellation, failed, budget, done)| async move {
         if done { return None; }
+        let waiting_since = Instant::now();
         let item = tokio::select! {
             biased;
             _ = cancellation.cancelled() => Some(Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "piece download cancelled"))),
-            result = timeout_at(deadline, stream.next()) => match result {
+            result = timeout(budget, stream.next()) => match result {
                 Ok(item) => {
                     if item.as_ref().is_some_and(|item| item.is_err()) || item.is_none() {
                         failed.store(true, Ordering::Relaxed);
@@ -288,13 +302,14 @@ fn checked_stream(
                 },
                 Err(_) => {
                     failed.store(true, Ordering::Relaxed);
-                    Some(Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "piece transfer deadline elapsed")))
+                    Some(Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "piece receive budget elapsed")))
                 }
             }
         };
+        let budget = budget.saturating_sub(waiting_since.elapsed());
         item.map(|item| {
             let done = item.is_err();
-            (item, (stream, cancellation, failed, done))
+            (item, (stream, cancellation, failed, budget, done))
         })
     }).boxed()
 }
@@ -650,7 +665,7 @@ mod tests {
         let mut stream = checked_stream(
             futures::stream::pending().boxed(),
             cancel.clone(),
-            Deadline::now() + Duration::from_secs(30),
+            Duration::from_secs(30),
             failed.clone(),
         );
         cancel.cancel();
@@ -668,7 +683,7 @@ mod tests {
         let mut stream = checked_stream(
             futures::stream::pending().boxed(),
             CancellationToken::new(),
-            Deadline::now(),
+            Duration::ZERO,
             failed.clone(),
         );
         assert_eq!(
@@ -676,5 +691,32 @@ mod tests {
             std::io::ErrorKind::TimedOut
         );
         assert!(failed.load(Ordering::Relaxed));
+    }
+
+    /// A slow consumer must not spend the receive budget. The budget covers waiting on the
+    /// producer; draining each chunk to storage happens between polls and is the filesystem's
+    /// time, not the fabric's. Charging it would blame a healthy parent for a slow disk.
+    #[tokio::test]
+    async fn draining_to_storage_does_not_spend_the_receive_budget() {
+        let failed = Arc::new(AtomicBool::new(false));
+        let chunks = vec![
+            Ok(Bytes::from_static(b"first")),
+            Ok(Bytes::from_static(b"second")),
+        ];
+        let mut stream = checked_stream(
+            futures::stream::iter(chunks).boxed(),
+            CancellationToken::new(),
+            Duration::from_millis(300),
+            failed.clone(),
+        );
+
+        assert_eq!(stream.next().await.unwrap().unwrap(), "first");
+        // Stand in for a write that takes longer than the whole budget.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(stream.next().await.unwrap().unwrap(), "second");
+        assert!(
+            !failed.load(Ordering::Relaxed),
+            "local write latency must not be recorded as a transport failure"
+        );
     }
 }

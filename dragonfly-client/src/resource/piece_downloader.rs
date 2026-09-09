@@ -87,8 +87,6 @@ impl DownloaderFactory {
                 DEFAULT_DOWNLOADER_CAPACITY,
                 DEFAULT_DOWNLOADER_IDLE_TIMEOUT,
             )),
-            #[cfg(feature = "rdma")]
-            "rdma" => Arc::new(rdma::RDMADownloader::new(config.clone())),
             _ => {
                 error!("unsupported protocol: {}", protocol);
                 return Err(Error::InvalidParameter);
@@ -456,6 +454,11 @@ pub mod rdma {
     /// CAPABLE_PARENT_TTL bounds how long a successful discovery result is reused.
     const CAPABLE_PARENT_TTL: Duration = Duration::from_secs(60);
 
+    /// MIN_DISCOVERY_BUDGET is the least time worth spending on a capability probe. Below it the
+    /// attempt declines locally rather than starting a request that will time out and be charged
+    /// to a parent that was never reached.
+    const MIN_DISCOVERY_BUDGET: Duration = Duration::from_millis(100);
+
     /// Bound daemon memory even when scheduling sees continual parent churn.
     const MAX_CACHED_PARENTS: usize = 4096;
 
@@ -488,6 +491,10 @@ pub mod rdma {
         /// backoff is the penalty applied on the most recent failure, and the basis for the next.
         backoff: Duration,
         recorded_at: Instant,
+
+        /// kind is what produced `backoff`. Only a transport backoff is a doubling sequence, so
+        /// only it may be used as the basis for the next one.
+        kind: Failure,
     }
 
     /// FabricState tracks the lazily initialized process-shared fabric endpoint.
@@ -652,12 +659,22 @@ pub mod rdma {
             self.capable_parents.lock().unwrap().remove(addr);
 
             let mut unhealthy_parents = self.unhealthy_parents.lock().unwrap();
+            // Expired penalties are only consulted through check_parent, which leaves them in
+            // place. Dropping them here keeps a long-lived daemon from carrying entries for
+            // parents that recovered, and keeps the eviction scan below meaningful.
+            let now = Instant::now();
+            unhealthy_parents.retain(|held, penalty| held == addr || penalty.until > now);
+
             let backoff = match failure {
                 // Incompatibility is a stable fact about the peer, so there is nothing for a
                 // doubling backoff to discover.
                 Failure::Incompatible => INCOMPATIBLE_PARENT_TTL,
+                // Double only a previous transport backoff. An earlier incompatibility parks the
+                // entry at the 60s ceiling, and reusing that as the base would send the first
+                // transport failure straight to the maximum instead of starting at 2s.
                 Failure::Transport => unhealthy_parents
                     .get(addr)
+                    .filter(|penalty| penalty.kind == Failure::Transport)
                     .map(|penalty| (penalty.backoff * 2).min(UNHEALTHY_PARENT_MAX_BACKOFF))
                     .unwrap_or(UNHEALTHY_PARENT_MIN_BACKOFF),
             };
@@ -679,6 +696,7 @@ pub mod rdma {
                     until: Instant::now() + backoff,
                     backoff,
                     recorded_at: Instant::now(),
+                    kind: failure,
                 },
             );
         }
@@ -704,6 +722,16 @@ pub mod rdma {
                 self.capable_parents.lock().unwrap().remove(addr);
             }
 
+            // Opening the local fabric happens before this and can consume most of the attempt
+            // budget on a cold first use. Handing discovery what is left would time it out and
+            // record that against the parent, backing off a peer that was never contacted.
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining < MIN_DISCOVERY_BUDGET {
+                return Err(Error::Unknown(
+                    "no time left to discover rdma capability after local setup".to_string(),
+                ));
+            }
+
             let advertisement = discover(
                 addr,
                 self.config
@@ -711,7 +739,7 @@ pub mod rdma {
                     .server
                     .rdma
                     .transfer_timeout
-                    .min(deadline.saturating_duration_since(tokio::time::Instant::now())),
+                    .min(remaining),
             )
             .await
             .inspect_err(|err| {
@@ -762,77 +790,10 @@ pub mod rdma {
         }
     }
 
-    #[async_trait]
-    impl Downloader for RDMADownloader {
-        async fn download_piece(
-            &self,
-            addr: &str,
-            number: u32,
-            _host_id: &str,
-            task_id: &str,
-        ) -> Result<(PieceContentStream, u64, String)> {
-            self.open_stream(
-                PieceKind::Piece,
-                addr,
-                number,
-                task_id,
-                tokio::time::Instant::now()
-                    + self
-                        .config
-                        .download
-                        .piece_timeout
-                        .min(self.config.storage.server.rdma.transfer_timeout),
-            )
-            .await
-            .map(|(reader, offset, digest)| (self.content_stream(reader), offset, digest))
-        }
-
-        async fn download_persistent_piece(
-            &self,
-            addr: &str,
-            number: u32,
-            _host_id: &str,
-            task_id: &str,
-        ) -> Result<(PieceContentStream, u64, String)> {
-            self.open_stream(
-                PieceKind::PersistentPiece,
-                addr,
-                number,
-                task_id,
-                tokio::time::Instant::now()
-                    + self
-                        .config
-                        .download
-                        .piece_timeout
-                        .min(self.config.storage.server.rdma.transfer_timeout),
-            )
-            .await
-            .map(|(reader, offset, digest)| (self.content_stream(reader), offset, digest))
-        }
-
-        async fn download_persistent_cache_piece(
-            &self,
-            addr: &str,
-            number: u32,
-            _host_id: &str,
-            task_id: &str,
-        ) -> Result<(PieceContentStream, u64, String)> {
-            self.open_stream(
-                PieceKind::PersistentCachePiece,
-                addr,
-                number,
-                task_id,
-                tokio::time::Instant::now()
-                    + self
-                        .config
-                        .download
-                        .piece_timeout
-                        .min(self.config.storage.server.rdma.transfer_timeout),
-            )
-            .await
-            .map(|(reader, offset, digest)| (self.content_stream(reader), offset, digest))
-        }
-    }
+    // RDMADownloader deliberately does not implement Downloader. That trait cannot carry the
+    // caller's expected offset and length, so an implementation would have to write whatever
+    // range the parent reported. download_stream is the validating entry point and the only
+    // one production uses.
 
     impl RDMADownloader {
         fn content_stream(
@@ -905,7 +866,7 @@ pub mod rdma {
 
         /// Reject metadata mismatches before any write can target the task file.
         #[allow(clippy::too_many_arguments)]
-        pub(crate) async fn download_stream(
+        pub async fn download_stream(
             &self,
             kind: PieceKind,
             addr: &str,

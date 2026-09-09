@@ -1145,7 +1145,7 @@ pub struct RdmaServer {
 /// RDMA_MIN_CHUNK_SIZE is the smallest tagged message the transport will use. Below this the
 /// per-operation posting and completion cost dominates the transfer, and a piece is split into
 /// enough chunks to exhaust the endpoint's queues.
-const RDMA_MIN_CHUNK_SIZE: ByteSize = ByteSize::kib(64);
+pub const RDMA_MIN_CHUNK_SIZE: ByteSize = ByteSize::kib(64);
 
 /// RDMA_MAX_CHUNK_SIZE bounds one tagged message. Providers cap the message size themselves and
 /// the transport clamps to that at runtime; this catches an unreasonable value at load time.

@@ -329,6 +329,20 @@ int dfrdma_av_insert(dfrdma_fabric *f, const uint8_t *addr, size_t len, uint64_t
     return 0;
 }
 
+/*
+ * Removes one peer from the address vector so a bounded cache can evict without leaking
+ * provider address-vector state. Returns 0 on success or a negative fi_errno value.
+ */
+int dfrdma_av_remove(dfrdma_fabric *f, uint64_t addr)
+{
+    fi_addr_t fi_addr = (fi_addr_t)addr;
+
+    if (f == NULL || f->av == NULL) {
+        return -FI_EOPBADSTATE;
+    }
+    return (int)fi_av_remove(f->av, &fi_addr, 1, 0);
+}
+
 int dfrdma_mr_reg(dfrdma_fabric *f, void *buf, size_t len, void **mr_out, void **desc_out)
 {
     struct fid_mr *mr = NULL;

@@ -87,6 +87,7 @@ mod ffi {
             len: usize,
             out: *mut u64,
         ) -> c_int;
+        pub fn dfrdma_av_remove(f: *mut DfrdmaFabric, addr: u64) -> c_int;
         pub fn dfrdma_mr_reg(
             f: *mut DfrdmaFabric,
             buf: *mut c_void,
@@ -308,8 +309,13 @@ struct FabricInner {
     /// whose context address has been reused.
     op_counter: AtomicU64,
 
-    /// av maps peer endpoint addresses to fabric addresses (fi_addr_t).
-    av: Mutex<HashMap<Vec<u8>, u64>>,
+    /// av maps peer endpoint addresses to a fabric address (fi_addr_t) and the tick it was last
+    /// used at, which orders eviction once the cache is full.
+    av: Mutex<HashMap<Vec<u8>, (u64, u64)>>,
+
+    /// av_clock orders `av` entries by last use. A counter rather than a clock: this only needs
+    /// to be monotonic, and it must not be perturbed by wall-clock adjustments.
+    av_clock: AtomicU64,
 
     /// shutdown stops the progress thread.
     shutdown: AtomicBool,
@@ -450,10 +456,10 @@ impl FabricInner {
     fn release_quarantined(&self, ctx_addr: usize) -> bool {
         let released = {
             let mut quarantined = self.quarantined.lock().unwrap();
-            match quarantined.iter().position(|(addr, _)| *addr == ctx_addr) {
-                Some(index) => Some(quarantined.swap_remove(index).1),
-                None => None,
-            }
+            quarantined
+                .iter()
+                .position(|(addr, _)| *addr == ctx_addr)
+                .map(|index| quarantined.swap_remove(index).1)
         };
         match released {
             Some(op) => {
@@ -1088,6 +1094,7 @@ impl Fabric {
             quarantine_limit_bytes: (budget.total_bytes() / 2).max(BUDGET_UNIT),
             op_counter: AtomicU64::new(0),
             av: Mutex::new(HashMap::new()),
+            av_clock: AtomicU64::new(0),
             shutdown: AtomicBool::new(false),
             failed: AtomicBool::new(false),
             failure_reason: Mutex::new(None),
@@ -1418,13 +1425,29 @@ impl Fabric {
         }
         // Hold the cache lock through insertion to avoid racing duplicate AV entries.
         let mut av = self.inner.av.lock().unwrap();
-        if let Some(addr) = av.get(endpoint) {
-            return Ok(*addr);
+        let tick = self.inner.av_clock.fetch_add(1, Ordering::Relaxed);
+        if let Some(entry) = av.get_mut(endpoint) {
+            entry.1 = tick;
+            return Ok(entry.0);
         }
+        // A full cache used to fail every later request permanently, so any peer able to reach
+        // the rendezvous port could take RDMA serving down for the process lifetime by asking
+        // for enough distinct endpoints. Evict the least recently used peer instead, and drop it
+        // from the provider's address vector as well so eviction does not leak provider state.
         if av.len() >= MAX_RESOLVED_PEERS {
-            return Err(Error::Unknown(
-                "rdma resolved-peer address cache is full".to_string(),
-            ));
+            if let Some(oldest) = av
+                .iter()
+                .min_by_key(|(_, (_, used))| *used)
+                .map(|(endpoint, _)| endpoint.clone())
+            {
+                if let Some((stale, _)) = av.remove(&oldest) {
+                    // Safety: the address came from this address vector and is removed once.
+                    let rc = unsafe { ffi::dfrdma_av_remove(self.inner.handle.raw, stale) };
+                    if rc != 0 {
+                        warn!("removing a stale rdma peer address failed: {rc}");
+                    }
+                }
+            }
         }
 
         let mut addr: u64 = 0;
@@ -1442,7 +1465,7 @@ impl Fabric {
             return Err(fi_error("fi_av_insert", rc as i64));
         }
 
-        av.insert(endpoint.to_vec(), addr);
+        av.insert(endpoint.to_vec(), (addr, tick));
         Ok(addr)
     }
 
@@ -1748,9 +1771,7 @@ fn progress_loop(inner: Arc<FabricInner>) {
                             drop(_buf);
                             let _ = tx.send(completion);
                         } else if inner.release_quarantined(entries[index].context as usize) {
-                            debug!(
-                                "late rdma completion released a quarantined registered buffer"
-                            );
+                            debug!("late rdma completion released a quarantined registered buffer");
                         } else {
                             let _ = entries[index].flags;
                             warn!("rdma completion for unknown context, dropping");
@@ -2080,10 +2101,7 @@ mod tests {
         // The registration and its budget charge stay held, so the provider can never write
         // into memory that has been handed back to the pool.
         assert_eq!(Arc::strong_count(&buf), 2);
-        assert_eq!(
-            fabric.inner.quarantined_bytes.load(Ordering::Acquire),
-            4096
-        );
+        assert_eq!(fabric.inner.quarantined_bytes.load(Ordering::Acquire), 4096);
     }
 
     #[tokio::test]
@@ -2091,10 +2109,7 @@ mod tests {
         // A budget this small makes one buffer exceed the half-budget quarantine ceiling.
         let budget = Arc::new(RegisteredMemoryBudget::new(2 * BUDGET_UNIT));
         let fabric = Fabric::new_with_budget(None, None, budget, true).unwrap();
-        let buf = fabric
-            .alloc_buffer(2 * BUDGET_UNIT as usize)
-            .await
-            .unwrap();
+        let buf = fabric.alloc_buffer(2 * BUDGET_UNIT as usize).await.unwrap();
         let mut op = fabric
             .post_recv(&buf, 0, 2 * BUDGET_UNIT as usize, 0)
             .await

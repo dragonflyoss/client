@@ -1053,7 +1053,8 @@ impl Storage {
                 self.wait_for_persistent_piece_finished(piece_id).await
             }
             crate::rdma::rendezvous::PieceKind::PersistentCachePiece => {
-                self.wait_for_persistent_cache_piece_finished(piece_id).await
+                self.wait_for_persistent_cache_piece_finished(piece_id)
+                    .await
             }
         }
     }
