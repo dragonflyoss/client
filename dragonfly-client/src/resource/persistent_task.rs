@@ -18,7 +18,7 @@ use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
 use crate::resource::parent_selector::PersistentParentSelector;
 use chrono::DateTime;
 use dragonfly_api::common::v2::{
-    Hdfs, HuggingFace, ModelScope, ObjectStorage, PersistentPeer,
+    Hdfs, HuggingFace, ModelScope, ObjectStorage, OpenCsg, PersistentPeer,
     PersistentTask as CommonPersistentTask, Piece, TrafficType,
 };
 use dragonfly_api::dfdaemon::{
@@ -586,6 +586,7 @@ impl PersistentTask {
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await
             .inspect_err(|err| {
@@ -2026,6 +2027,7 @@ impl PersistentTask {
                 host_id: String,
                 peer_id: String,
                 number: u32,
+                offset: u64,
                 length: u64,
                 need_piece_content: bool,
                 parents: Vec<piece_collector::CollectedParent>,
@@ -2038,36 +2040,50 @@ impl PersistentTask {
                 parent_selector: Arc<PersistentParentSelector>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
-                let parent = parent_selector.select(parents);
+                let mut collected_parents = parents;
+                let metadata = loop {
+                    let parent = parent_selector.select(&collected_parents);
 
-                debug!(
-                    "start to download persistent piece {} from parent {:?}",
-                    piece_id,
-                    parent.id.clone()
-                );
+                    debug!(
+                        "start to download persistent piece {} from parent {:?}",
+                        piece_id,
+                        parent.id.clone()
+                    );
 
-                let metadata = piece_manager
-                    .download_persistent_from_parent(
-                        piece_id.as_str(),
-                        host_id.as_str(),
-                        task_id.as_str(),
-                        number,
-                        length,
-                        parent.clone(),
-                    )
-                    .await
-                    .map_err(|err| {
-                        error!(
-                            "download persistent piece {} from parent {:?} error: {:?}",
-                            piece_id,
-                            parent.id.clone(),
-                            err
-                        );
-                        Error::DownloadFromParentFailed(DownloadFromParentFailed {
-                            piece_number: number,
-                            parent_id: parent.id.clone(),
-                        })
-                    })?;
+                    match piece_manager
+                        .download_persistent_from_parent(
+                            piece_id.as_str(),
+                            host_id.as_str(),
+                            task_id.as_str(),
+                            number,
+                            offset,
+                            length,
+                            parent.clone(),
+                        )
+                        .await
+                    {
+                        Ok(metadata) => break metadata,
+                        Err(err) => {
+                            error!(
+                                "download persistent piece {} from parent {:?} error: {:?}",
+                                piece_id,
+                                parent.id.clone(),
+                                err
+                            );
+
+                            collected_parents
+                                .retain(|collected_parent| collected_parent.id != parent.id);
+                            if collected_parents.is_empty() {
+                                return Err(Error::DownloadFromParentFailed(
+                                    DownloadFromParentFailed {
+                                        piece_number: number,
+                                        parent_id: parent.id.clone(),
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                };
 
                 // Construct the piece.
                 let piece = Piece {
@@ -2138,7 +2154,7 @@ impl PersistentTask {
                     })?;
                 } else {
                     download_progress_tx
-                    .send_timeout(
+                    .send(
                         Ok(DownloadPersistentTaskResponse {
                             host_id: host_id.to_string(),
                             task_id: task_id.clone(),
@@ -2151,7 +2167,6 @@ impl PersistentTask {
                                 ),
                             ),
                         }),
-                        REQUEST_TIMEOUT,
                     )
                     .await
                     .unwrap_or_else(|err| {
@@ -2221,6 +2236,7 @@ impl PersistentTask {
                         host_id,
                         peer_id,
                         collect_piece.number,
+                        collect_piece.offset,
                         collect_piece.length,
                         need_piece_content,
                         collect_piece.parents,
@@ -2327,7 +2343,7 @@ impl PersistentTask {
         // Download the piece from the local.
         let mut join_set = JoinSet::new();
         let semaphore = Arc::new(Semaphore::new(
-            self.config.download.concurrent_piece_count as usize,
+            self.config.download.back_to_source_concurrent_piece_count as usize,
         ));
         for interested_piece in interested_pieces {
             async fn download_from_source(
@@ -2347,6 +2363,7 @@ impl PersistentTask {
                 hdfs: Option<Hdfs>,
                 hugging_face: Option<HuggingFace>,
                 model_scope: Option<ModelScope>,
+                open_csg: Option<OpenCsg>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 debug!("start to download piece {} from source", piece_id);
@@ -2364,6 +2381,7 @@ impl PersistentTask {
                         hdfs,
                         hugging_face,
                         model_scope,
+                        open_csg,
                     )
                     .await?;
 
@@ -2433,7 +2451,7 @@ impl PersistentTask {
                     })?;
                 } else {
                     download_progress_tx
-                    .send_timeout(
+                    .send(
                         Ok(DownloadPersistentTaskResponse {
                             host_id: host_id.to_string(),
                             task_id: task_id.to_string(),
@@ -2446,7 +2464,6 @@ impl PersistentTask {
                                 ),
                             ),
                         }),
-                        REQUEST_TIMEOUT,
                     )
                     .await
                     .unwrap_or_else(|err| {
@@ -2508,6 +2525,7 @@ impl PersistentTask {
                         download_progress_tx,
                         in_stream_tx,
                         object_storage,
+                        None,
                         None,
                         None,
                         None,
@@ -2726,7 +2744,7 @@ impl PersistentTask {
                 })?;
             } else {
                 download_progress_tx
-                .send_timeout(Ok(DownloadPersistentTaskResponse {
+                .send(Ok(DownloadPersistentTaskResponse {
                     host_id: host_id.to_string(),
                     task_id: task_id.to_string(),
                     peer_id: peer_id.to_string(),
@@ -2735,7 +2753,7 @@ impl PersistentTask {
                             dfdaemon::v2::DownloadPieceFinishedResponse { piece: Some(piece) },
                         ),
                     ),
-                }), REQUEST_TIMEOUT)
+                }))
                 .await
                 .unwrap_or_else(|err| {
                     error!(
@@ -2773,7 +2791,7 @@ impl PersistentTask {
         // Download the pieces.
         let mut join_set = JoinSet::new();
         let semaphore = Arc::new(Semaphore::new(
-            self.config.download.concurrent_piece_count as usize,
+            self.config.download.back_to_source_concurrent_piece_count as usize,
         ));
         for interested_piece in interested_pieces.clone() {
             async fn download_from_source(
@@ -2792,6 +2810,7 @@ impl PersistentTask {
                 hdfs: Option<Hdfs>,
                 hugging_face: Option<HuggingFace>,
                 model_scope: Option<ModelScope>,
+                open_csg: Option<OpenCsg>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 debug!("start to download piece {} from source", piece_id);
@@ -2809,6 +2828,7 @@ impl PersistentTask {
                         hdfs,
                         hugging_face,
                         model_scope,
+                        open_csg,
                     )
                     .await?;
 
@@ -2878,7 +2898,7 @@ impl PersistentTask {
                     })?;
                 } else {
                     download_progress_tx
-                    .send_timeout(
+                    .send(
                         Ok(DownloadPersistentTaskResponse {
                             host_id: host_id.to_string(),
                             task_id: task_id.to_string(),
@@ -2891,7 +2911,6 @@ impl PersistentTask {
                                 ),
                             ),
                         }),
-                        REQUEST_TIMEOUT,
                     )
                     .await
                     .unwrap_or_else(|err| {
@@ -2930,6 +2949,7 @@ impl PersistentTask {
                         piece_manager,
                         download_progress_tx,
                         object_storage,
+                        None,
                         None,
                         None,
                         None,
@@ -2998,6 +3018,7 @@ impl PersistentTask {
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await
             .inspect_err(|err| {
@@ -3025,6 +3046,7 @@ impl PersistentTask {
                 hdfs: None,
                 hugging_face: None,
                 model_scope: None,
+                open_csg: None,
             })
             .await
             .inspect_err(|err| {

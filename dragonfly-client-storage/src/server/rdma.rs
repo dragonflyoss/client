@@ -40,8 +40,12 @@ use tokio::net::{
     TcpListener, TcpStream,
 };
 use tokio::sync::{mpsc, Semaphore};
+use tokio::task::JoinSet;
 use tokio::time;
 use tracing::{debug, error, info, instrument, warn, Span};
+
+/// Failed endpoint generations cannot immediately consume another initialization budget.
+const RECOVERY_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// RDMAServer serves piece content over the libfabric transport. It accepts rendezvous
 /// connections on a TCP port, negotiates fabric compatibility fail-closed, and pushes bulk
@@ -112,16 +116,21 @@ impl RDMAServer {
         self
     }
 
-    /// Starts the storage RDMA server. Initialization failures (no usable fabric device,
-    /// missing fabric tag) disable the server but keep the daemon running: peers simply use
-    /// the TCP piece server.
+    /// Runs optional RDMA serving until shutdown, retrying failed endpoint generations only
+    /// after the recovery cooldown. TCP remains available while readiness is withdrawn.
     pub async fn run(&mut self) -> ClientResult<()> {
-        let rdma_config = &self.config.storage.server.rdma;
-
-        let Some(fabric_tag) = rdma_config
+        if let Some(registry) = &self.capability_registry {
+            registry.clear();
+        }
+        let Some(fabric_tag) = self
+            .config
+            .storage
+            .server
+            .rdma
             .fabric_tag
             .as_deref()
             .filter(|tag| !tag.is_empty())
+            .map(str::to_owned)
         else {
             error!(
                 "rdma server disabled: storage.server.rdma.fabricTag is required so peers \
@@ -131,24 +140,54 @@ impl RDMAServer {
             return Ok(());
         };
 
+        loop {
+            let result = self.run_generation(&fabric_tag).await;
+            if self.shutdown.is_shutdown() {
+                return Ok(());
+            }
+            if let Err(err) = result {
+                error!(
+                    "rdma server unavailable, retrying after recovery cooldown: {}",
+                    err
+                );
+            }
+            // Measure from completion of cleanup, so even a slow teardown cannot shorten
+            // the required delay after the failed initialization or endpoint retirement.
+            tokio::select! {
+                biased;
+                _ = self.shutdown.recv() => return Ok(()),
+                _ = time::sleep(RECOVERY_COOLDOWN) => {}
+            }
+        }
+    }
+
+    /// Runs one endpoint generation and retires its handlers before another can initialize.
+    async fn run_generation(&mut self, fabric_tag: &str) -> ClientResult<()> {
+        let rdma_config = &self.config.storage.server.rdma;
         let provider = match rdma_config.provider {
             RdmaProvider::Auto => None,
             provider => Some(provider.to_string()),
         };
-        let fabric = match Fabric::new(
-            provider.as_deref(),
-            rdma_config.device.as_deref(),
-            rdma_config.max_registered_bytes.as_u64(),
-            rdma_config.allow_software_provider,
-        ) {
-            Ok(fabric) => Arc::new(fabric),
-            Err(err) => {
-                error!(
-                    "rdma server disabled, failed to open fabric endpoint: {}",
-                    err
-                );
-                self.shutdown.recv().await;
-                return Ok(());
+        let device = rdma_config.device.clone();
+        let budget = self.storage.rdma_memory_budget();
+        let allow_software_provider = rdma_config.allow_software_provider;
+        // Provider initialization may block in native code. Shutdown does not wait for it;
+        // a late result is dropped on the blocking worker with its original shared budget.
+        let initialize = tokio::task::spawn_blocking(move || {
+            Fabric::new_with_budget(
+                provider.as_deref(),
+                device.as_deref(),
+                budget,
+                allow_software_provider,
+            )
+        });
+        let fabric = tokio::select! {
+            biased;
+            _ = self.shutdown.recv() => return Ok(()),
+            result = initialize => {
+                Arc::new(result.map_err(|err| ClientError::Unknown(
+                    format!("rdma endpoint initialization task failed: {err}")
+                ))??)
             }
         };
 
@@ -173,41 +212,65 @@ impl RDMAServer {
             rdma_config.max_concurrent_transfers as usize,
         ));
 
-        let socket = Socket::new(
-            Domain::for_address(self.addr),
-            Type::STREAM,
-            Some(Protocol::TCP),
-        )?;
-        socket.set_tcp_nodelay(true)?;
-        socket.set_nonblocking(true)?;
-        socket.set_tcp_keepalive(
-            &TcpKeepalive::new()
-                .with_interval(super::DEFAULT_KEEPALIVE_INTERVAL)
-                .with_time(super::DEFAULT_KEEPALIVE_TIME)
-                .with_retries(super::DEFAULT_KEEPALIVE_RETRIES),
-        )?;
-        socket.bind(&self.addr.into())?;
-        socket.listen(1024)?;
-        let std_listener: std::net::TcpListener = socket.into();
-        let listener = TcpListener::from_std(std_listener).inspect_err(|err| {
-            error!("failed to bind rdma rendezvous server: {}", err);
-        })?;
+        let listener = match bind_listener(self.addr) {
+            Ok(listener) => listener,
+            Err(err) => {
+                retire_handler(handler, &mut self.shutdown).await?;
+                return Err(err.into());
+            }
+        };
+        let listening_addr = match listener.local_addr() {
+            Ok(addr) => addr,
+            Err(err) => {
+                retire_handler(handler, &mut self.shutdown).await?;
+                return Err(err.into());
+            }
+        };
+        if handler.fabric.is_failed() {
+            retire_handler(handler, &mut self.shutdown).await?;
+            return Err(ClientError::Unknown(
+                "rdma endpoint failed before publication".to_string(),
+            ));
+        }
         info!(
             "storage rdma server listening on {}, provider {}",
-            self.addr, handler.capability.provider
+            listening_addr, handler.capability.provider
         );
-        let _published_capability = self.capability_registry.as_ref().map(|registry| {
+        let published_capability = self.capability_registry.as_ref().map(|registry| {
             registry.publish(RdmaAdvertisement {
                 capability: handler.capability.clone(),
-                port: self.addr.port(),
+                port: listening_addr.port(),
             });
             PublishedCapability(registry.clone())
         });
-
-        loop {
+        let mut transfers = JoinSet::new();
+        let result = loop {
             tokio::select! {
+                biased;
+                _ = self.shutdown.recv() => {
+                    info!("rdma server shutting down");
+                    break Ok(());
+                },
+                _ = handler.fabric.wait_failed() => {
+                    break Err(ClientError::Unknown("rdma serving endpoint failed".to_string()));
+                },
+                _ = transfers.join_next(), if !transfers.is_empty() => {},
                 tcp_accepted = listener.accept() => {
-                    let (tcp, remote_address) = tcp_accepted?;
+                    let (tcp, remote_address) = match tcp_accepted {
+                        Ok(accepted) => accepted,
+                        Err(err) => {
+                            warn!("rdma rendezvous accept failed: {}", err);
+                            tokio::select! {
+                                biased;
+                                _ = self.shutdown.recv() => break Ok(()),
+                                _ = handler.fabric.wait_failed() => {
+                                    break Err(ClientError::Unknown("rdma serving endpoint failed".to_string()));
+                                },
+                                _ = time::sleep(std::time::Duration::from_millis(100)) => {}
+                            }
+                            continue;
+                        }
+                    };
                     debug!("accepted rdma rendezvous connection from {}", remote_address);
 
                     let Ok(admission) = transfer_admission.clone().try_acquire_owned() else {
@@ -215,12 +278,13 @@ impl RDMAServer {
                             "rdma rendezvous admission full, rejecting connection from {}",
                             remote_address
                         );
-                        // Dropping the socket here would surface on the client as a connection
-                        // reset, which is indistinguishable from a parent whose fabric is broken.
-                        // Saying "busy" instead lets the client fall back to TCP for this piece
-                        // and keep treating the parent as RDMA-capable.
+                        // Bound rejection tasks as well as transfers. An overloaded listener
+                        // must not allocate one detached task for every incoming connection.
+                        if transfers.len() >= rdma_config.max_concurrent_transfers as usize * 2 {
+                            continue;
+                        }
                         let reject_timeout = rdma_config.transfer_timeout;
-                        tokio::spawn(async move {
+                        transfers.spawn(async move {
                             let (_, mut writer) = tcp.into_split();
                             let _ = time::timeout(
                                 reject_timeout,
@@ -237,21 +301,56 @@ impl RDMAServer {
                         continue;
                     };
                     let handler = handler.clone();
-                    tokio::spawn(async move {
+                    transfers.spawn(async move {
                         let _admission = admission;
                         if let Err(err) = handler.handle(tcp, remote_address.to_string()).await {
                            error!("failed to serve rdma connection from {}: {}", remote_address, err);
                         }
                     });
-                },
-                _ = self.shutdown.recv() => {
-                    info!("rdma server shutting down");
-                    break;
                 }
             }
-        }
+        };
 
-        Ok(())
+        // Withdraw first, close the listener, then cancel and join every producer. Fabric
+        // operation handles retain DMA buffers through completion or safe endpoint close.
+        drop(published_capability);
+        drop(listener);
+        transfers.shutdown().await;
+        retire_handler(handler, &mut self.shutdown).await?;
+        result
+    }
+}
+
+/// Binds each generation to the same rendezvous port, including after TCP TIME_WAIT.
+fn bind_listener(addr: SocketAddr) -> std::io::Result<TcpListener> {
+    let socket = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP))?;
+    socket.set_reuse_address(true)?;
+    socket.set_tcp_nodelay(true)?;
+    socket.set_nonblocking(true)?;
+    socket.set_tcp_keepalive(
+        &TcpKeepalive::new()
+            .with_interval(super::DEFAULT_KEEPALIVE_INTERVAL)
+            .with_time(super::DEFAULT_KEEPALIVE_TIME)
+            .with_retries(super::DEFAULT_KEEPALIVE_RETRIES),
+    )?;
+    socket.bind(&addr.into())?;
+    socket.listen(1024)?;
+    let std_listener: std::net::TcpListener = socket.into();
+    TcpListener::from_std(std_listener)
+}
+
+/// Native endpoint teardown must finish before recovery, while shutdown remains responsive.
+async fn retire_handler(
+    handler: Arc<RDMAServerHandler>,
+    shutdown: &mut shutdown::Shutdown,
+) -> ClientResult<()> {
+    let retire = tokio::task::spawn_blocking(move || drop(handler));
+    tokio::select! {
+        biased;
+        _ = shutdown.recv() => Ok(()),
+        retired = retire => retired.map_err(|err| ClientError::Unknown(
+            format!("rdma endpoint retirement task failed: {err}")
+        )),
     }
 }
 
@@ -390,6 +489,23 @@ impl RDMAServerHandler {
             }
         };
 
+        // Every RDMA piece must have an independently stored expected CRC. In particular,
+        // old metadata with an empty digest must use TCP instead of becoming an unverified
+        // successful fabric transfer. The existing piece format is canonical decimal CRC32.
+        if !has_supported_digest(&piece.digest) {
+            self.abort(
+                writer,
+                // Unavailable for this piece attempt, not incompatible with every piece
+                // from this parent. Existing peers already retry NOT_FOUND through TCP.
+                ERROR_CODE_NOT_FOUND,
+                "piece has no supported CRC32 digest".to_string(),
+            )
+            .await?;
+            return Err(ClientError::Unknown(
+                "piece has no supported CRC32 digest".to_string(),
+            ));
+        }
+
         let chunk_size = request
             .chunk_size
             .min(self.chunk_size)
@@ -424,20 +540,10 @@ impl RDMAServerHandler {
             .await?;
             return Err(ClientError::Unknown("piece too large for rdma".to_string()));
         }
-        if request
-            .tag
-            .checked_add(chunk_count.saturating_sub(1))
-            .is_none()
-        {
-            self.abort(
-                writer,
-                ERROR_CODE_INTERNAL,
-                "rdma transfer tag range wraps around".to_string(),
-            )
-            .await?;
-            return Err(ClientError::Unknown(
-                "rdma transfer tag range wraps around".to_string(),
-            ));
+        if let Err(err) = self.fabric.validate_tag_range(request.tag, chunk_count) {
+            self.abort(writer, ERROR_CODE_INTERNAL, err.to_string())
+                .await?;
+            return Err(err);
         }
         let piece_length = match usize::try_from(piece.length) {
             Ok(length) => length,
@@ -699,17 +805,23 @@ impl RDMAServerHandler {
                     .storage
                     .upload_piece(piece_id, &request.task_id, None)
                     .await
-                    .map(|reader| Box::new(reader) as Box<dyn tokio::io::AsyncRead + Send + Unpin>),
+                    .map(|(_, reader)| {
+                        Box::new(reader) as Box<dyn tokio::io::AsyncRead + Send + Unpin>
+                    }),
                 PieceKind::PersistentPiece => self
                     .storage
                     .upload_persistent_piece(piece_id, &request.task_id, None)
                     .await
-                    .map(|reader| Box::new(reader) as Box<dyn tokio::io::AsyncRead + Send + Unpin>),
+                    .map(|(_, reader)| {
+                        Box::new(reader) as Box<dyn tokio::io::AsyncRead + Send + Unpin>
+                    }),
                 PieceKind::PersistentCachePiece => self
                     .storage
                     .upload_persistent_cache_piece(piece_id, &request.task_id, None)
                     .await
-                    .map(|reader| Box::new(reader) as Box<dyn tokio::io::AsyncRead + Send + Unpin>),
+                    .map(|(_, reader)| {
+                        Box::new(reader) as Box<dyn tokio::io::AsyncRead + Send + Unpin>
+                    }),
             };
         match content_reader {
             Ok(reader) => Ok(PieceSource::Reader(reader)),
@@ -734,6 +846,15 @@ impl RDMAServerHandler {
         )
         .await?
     }
+}
+
+/// Matches the existing piece writer's decimal CRC32 representation.
+fn has_supported_digest(digest: &str) -> bool {
+    digest.strip_prefix("crc32:").is_some_and(|encoded| {
+        encoded
+            .parse::<u32>()
+            .is_ok_and(|crc| crc.to_string() == encoded)
+    })
 }
 
 /// PieceSource supplies bytes for the registered send ring.
@@ -764,5 +885,100 @@ impl PieceSource {
             }
             Self::Reader(reader) => reader.read_exact(dst).await.map(|_| ()).map_err(Into::into),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::io::AsyncWriteExt;
+
+    #[test]
+    fn requires_a_supported_stored_piece_digest() {
+        for digest in ["crc32:0", "crc32:4294967295", "crc32:123456"] {
+            assert!(has_supported_digest(digest), "{digest}");
+        }
+        for digest in [
+            "",
+            "crc32:",
+            "crc32:bad",
+            "crc32:-1",
+            "crc32:4294967296",
+            "crc32:01",
+            "crc32:+1",
+            "sha256:abcd",
+        ] {
+            assert!(!has_supported_digest(digest), "{digest}");
+        }
+    }
+
+    #[tokio::test]
+    async fn rendezvous_port_can_rebind_after_an_accepted_connection() {
+        let listener = bind_listener("127.0.0.1:0".parse().unwrap()).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let (mut server, _) = listener.accept().await.unwrap();
+        drop(listener);
+
+        // The server actively closes, leaving its port in TIME_WAIT after the peer exits.
+        server.shutdown().await.unwrap();
+        client.read_to_end(&mut Vec::new()).await.unwrap();
+        drop(server);
+        drop(client);
+        let restarted = bind_listener(addr).unwrap();
+        assert_eq!(restarted.local_addr().unwrap(), addr);
+    }
+
+    #[tokio::test]
+    async fn failed_initialization_withdraws_readiness_and_remains_shutdown_responsive() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.storage.server.rdma.fabric_tag = Some("test-fabric".to_string());
+        // Reject the name before calling native provider initialization; no hardware needed.
+        config.storage.server.rdma.device = Some("invalid\0device".to_string());
+        let config = Arc::new(config);
+        let storage = Arc::new(
+            Storage::new(config.clone(), dir.path(), dir.path().to_path_buf())
+                .await
+                .unwrap(),
+        );
+        let registry = CapabilityRegistry::default();
+        registry.publish(RdmaAdvertisement {
+            capability: WireCapability {
+                provider: "old-provider".to_string(),
+                fabric_tag: "test-fabric".to_string(),
+            },
+            port: 4007,
+        });
+        let shutdown = shutdown::Shutdown::new();
+        let (complete, _completed) = mpsc::unbounded_channel();
+        let mut server = RDMAServer::new(
+            config,
+            "127.0.0.1:0".parse().unwrap(),
+            Arc::new(IDGenerator::new(
+                "127.0.0.1".to_string(),
+                "localhost".to_string(),
+                false,
+            )),
+            storage,
+            Arc::new(RateLimiter::builder().build()),
+            shutdown.clone(),
+            complete,
+        )
+        .with_capability_registry(registry.clone());
+        let run = server.run();
+        tokio::pin!(run);
+
+        assert!(time::timeout(Duration::from_millis(50), &mut run)
+            .await
+            .is_err());
+        assert!(registry.get().is_none());
+        shutdown.trigger();
+        time::timeout(Duration::from_secs(1), run)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(registry.get().is_none());
     }
 }

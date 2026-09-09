@@ -17,7 +17,7 @@
 use crate::rdma::fabric::{Fabric, OpHandle, PooledBuf, TAG_RANGE_SIZE};
 use crate::rdma::rendezvous::{
     read_frame, write_frame, Frame, PieceKind, PieceReady, PieceRequest, RdmaAdvertisement,
-    WireCapability, ERROR_CODE_INCOMPATIBLE,
+    WireCapability, ERROR_CODE_BUSY,
 };
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
@@ -44,6 +44,7 @@ pub struct RDMAStreamReader {
     receiver: mpsc::Receiver<io::Result<PooledBuf>>,
     current: Option<PooledBuf>,
     position: usize,
+    length: u64,
 }
 
 impl std::fmt::Debug for RDMAStreamReader {
@@ -60,11 +61,17 @@ impl std::fmt::Debug for RDMAStreamReader {
 }
 
 impl RDMAStreamReader {
+    /// length is the peer's advertised total, checked against scheduler metadata before writing.
+    pub fn length(&self) -> u64 {
+        self.length
+    }
+
     fn new(receiver: mpsc::Receiver<io::Result<PooledBuf>>) -> Self {
         Self {
             receiver,
             current: None,
             position: 0,
+            length: 0,
         }
     }
 
@@ -190,13 +197,10 @@ pub async fn discover(addr: &str, timeout: std::time::Duration) -> ClientResult<
             Frame::Capability(_) => Err(ClientError::Unsupported(
                 "parent advertised an invalid rdma rendezvous port".to_string(),
             )),
-            Frame::Error(err) if err.code == ERROR_CODE_INCOMPATIBLE => {
-                Err(ClientError::Unsupported(err.message))
-            }
-            Frame::Error(err) => Err(ClientError::Unknown(format!(
-                "rdma discovery error {}: {}",
-                err.code, err.message
-            ))),
+            Frame::Error(err) => Err(ClientError::RdmaRejected {
+                code: err.code,
+                message: err.message,
+            }),
             frame => Err(ClientError::Unknown(format!(
                 "unexpected rdma discovery frame: {frame:?}"
             ))),
@@ -222,6 +226,9 @@ pub struct RDMAClient {
 
     /// addr is the address of the parent's RDMA rendezvous server.
     addr: String,
+
+    /// deadline bounds discovery, rendezvous and every receive window in one attempt.
+    deadline: Option<time::Instant>,
 }
 
 /// RDMAClient implements the libfabric piece download client.
@@ -238,7 +245,14 @@ impl RDMAClient {
             fabric,
             capability,
             addr,
+            deadline: None,
         }
+    }
+
+    /// Reuses the deadline established before discovery instead of starting a new budget.
+    pub fn with_deadline(mut self, deadline: time::Instant) -> Self {
+        self.deadline = Some(deadline);
+        self
     }
 
     /// fabric_failed reports whether the shared endpoint has been retired and should be
@@ -257,9 +271,17 @@ impl RDMAClient {
         task_id: &str,
     ) -> ClientResult<(RDMAStreamReader, u64, String)> {
         Span::current().record("parent_addr", self.addr.as_str());
-        time::timeout(
-            self.config.download.piece_timeout,
-            self.handle_download(PieceKind::Piece, number, task_id),
+        let deadline = self.deadline.unwrap_or_else(|| {
+            time::Instant::now()
+                + self
+                    .config
+                    .download
+                    .piece_timeout
+                    .min(self.config.storage.server.rdma.transfer_timeout)
+        });
+        time::timeout_at(
+            deadline,
+            self.handle_download(PieceKind::Piece, number, task_id, deadline),
         )
         .await
         .inspect_err(|err| {
@@ -275,9 +297,17 @@ impl RDMAClient {
         task_id: &str,
     ) -> ClientResult<(RDMAStreamReader, u64, String)> {
         Span::current().record("parent_addr", self.addr.as_str());
-        time::timeout(
-            self.config.download.piece_timeout,
-            self.handle_download(PieceKind::PersistentPiece, number, task_id),
+        let deadline = self.deadline.unwrap_or_else(|| {
+            time::Instant::now()
+                + self
+                    .config
+                    .download
+                    .piece_timeout
+                    .min(self.config.storage.server.rdma.transfer_timeout)
+        });
+        time::timeout_at(
+            deadline,
+            self.handle_download(PieceKind::PersistentPiece, number, task_id, deadline),
         )
         .await
         .inspect_err(|err| {
@@ -293,9 +323,17 @@ impl RDMAClient {
         task_id: &str,
     ) -> ClientResult<(RDMAStreamReader, u64, String)> {
         Span::current().record("parent_addr", self.addr.as_str());
-        time::timeout(
-            self.config.download.piece_timeout,
-            self.handle_download(PieceKind::PersistentCachePiece, number, task_id),
+        let deadline = self.deadline.unwrap_or_else(|| {
+            time::Instant::now()
+                + self
+                    .config
+                    .download
+                    .piece_timeout
+                    .min(self.config.storage.server.rdma.transfer_timeout)
+        });
+        time::timeout_at(
+            deadline,
+            self.handle_download(PieceKind::PersistentCachePiece, number, task_id, deadline),
         )
         .await
         .inspect_err(|err| {
@@ -310,6 +348,7 @@ impl RDMAClient {
         kind: PieceKind,
         number: u32,
         task_id: &str,
+        deadline: time::Instant,
     ) -> ClientResult<(RDMAStreamReader, u64, String)> {
         let stream = TcpStream::connect(self.addr.clone()).await?;
         let socket = SockRef::from(&stream);
@@ -349,17 +388,11 @@ impl RDMAClient {
 
         let ready = match read_frame(&mut reader).await? {
             Frame::Ready(ready) => ready,
-            Frame::Error(err) if err.code == ERROR_CODE_INCOMPATIBLE => {
-                return Err(ClientError::Unsupported(format!(
-                    "rdma incompatible with {}: {}",
-                    self.addr, err.message
-                )));
-            }
             Frame::Error(err) => {
-                return Err(ClientError::Unknown(format!(
-                    "rdma rendezvous error {}: {}",
-                    err.code, err.message
-                )));
+                return Err(ClientError::RdmaRejected {
+                    code: err.code,
+                    message: err.message,
+                });
             }
             frame => {
                 return Err(ClientError::Unknown(format!(
@@ -372,6 +405,11 @@ impl RDMAClient {
             ready.offset, ready.length, ready.chunk_size, ready.max_inflight_chunks
         );
 
+        if !valid_piece_digest(&ready.digest) {
+            return Err(ClientError::Unsupported(
+                "rdma requires a valid CRC32 piece digest; use TCP for legacy peers".to_string(),
+            ));
+        }
         if ready.length == 0
             || ready.chunk_size == 0
             || ready.chunk_size > chunk_size
@@ -397,11 +435,11 @@ impl RDMAClient {
         let window_length = usize::try_from(window_length).map_err(|_| {
             ClientError::Unknown("rdma receive window exceeds addressable memory".to_string())
         })?;
-        let buf = self.fabric.acquire_buffer(window_length).await?;
+        let buf = acquire_receive_window(&self.fabric, window_length)?;
         let (window_tx, window_rx) = mpsc::channel(2);
         let fabric = self.fabric.clone();
         let transfer_timeout = self.config.storage.server.rdma.transfer_timeout;
-        let piece_timeout = self.config.download.piece_timeout;
+        let result_length = ready.length;
         let result_offset = ready.offset;
         let result_digest = ready.digest.clone();
 
@@ -417,7 +455,10 @@ impl RDMAClient {
                 transfer_timeout,
                 window_tx.clone(),
             );
-            let result = time::timeout(piece_timeout, transfer).await;
+            let result = tokio::select! {
+                result = time::timeout_at(deadline, transfer) => result,
+                _ = window_tx.closed() => return,
+            };
             let error = match result {
                 Ok(Ok(())) => return,
                 Ok(Err(err)) => err,
@@ -430,12 +471,34 @@ impl RDMAClient {
                 .await;
         });
 
-        Ok((
-            RDMAStreamReader::new(window_rx),
-            result_offset,
-            result_digest,
-        ))
+        let mut reader = RDMAStreamReader::new(window_rx);
+        reader.length = result_length;
+        Ok((reader, result_offset, result_digest))
     }
+}
+
+/// Local admission failures must not consume the attempt deadline or penalize a peer.
+fn acquire_receive_window(fabric: &Fabric, length: usize) -> ClientResult<PooledBuf> {
+    match fabric.try_acquire_buffer(length) {
+        Ok(Some(buffer)) => Ok(buffer),
+        Ok(None) => Err(ClientError::RdmaRejected {
+            code: ERROR_CODE_BUSY,
+            message: "local RDMA registered-memory budget is busy".to_string(),
+        }),
+        Err(err) => Err(ClientError::RdmaRejected {
+            code: ERROR_CODE_BUSY,
+            message: format!("local RDMA receive buffer unavailable: {err}"),
+        }),
+    }
+}
+
+/// Piece storage uses a canonical decimal CRC32 digest, not an authentication token.
+fn valid_piece_digest(digest: &str) -> bool {
+    digest.strip_prefix("crc32:").is_some_and(|encoded| {
+        encoded
+            .parse::<u32>()
+            .is_ok_and(|crc| encoded == crc.to_string())
+    })
 }
 
 /// RECEIVE_PIPELINE_DEPTH is how many receive windows are kept posted at once.
@@ -596,6 +659,25 @@ async fn receive_stream(
         }
 
         drained_chunk += u64::from(window.chunk_count);
+        // The storage writer stops after the expected byte count. Do not publish the final
+        // bytes until the control path confirms success, otherwise it could mark a piece
+        // finished before discovering a missing Done or a terminal server error.
+        if drained_chunk == chunk_count && !server_done {
+            match time::timeout(transfer_timeout, &mut control).await?? {
+                Frame::Done => server_done = true,
+                Frame::Error(err) => {
+                    return Err(ClientError::Unknown(format!(
+                        "rdma transfer failed on parent: {}",
+                        err.message
+                    )))
+                }
+                frame => {
+                    return Err(ClientError::Unknown(format!(
+                        "unexpected final rendezvous frame: {frame:?}"
+                    )))
+                }
+            }
+        }
         if window_tx.send(Ok(window.buf)).await.is_err() {
             return Err(ClientError::Unknown(
                 "rdma stream consumer closed early".to_string(),
@@ -629,6 +711,39 @@ mod tests {
     use super::*;
     use crate::rdma::fabric::Fabric;
     use tokio::io::AsyncReadExt;
+
+    #[tokio::test]
+    async fn local_receive_memory_pressure_declines_without_waiting() {
+        // The shared budget charges each allocation in 64 KiB units.
+        let fabric = Fabric::new(None, None, 64 * 1024, true).unwrap();
+        let held = fabric.acquire_buffer(4096).await.unwrap();
+        assert!(matches!(
+            acquire_receive_window(&fabric, 4096),
+            Err(ClientError::RdmaRejected {
+                code: ERROR_CODE_BUSY,
+                ..
+            })
+        ));
+        drop(held);
+        assert!(acquire_receive_window(&fabric, 4096).is_ok());
+    }
+
+    #[test]
+    fn requires_a_canonical_crc32_digest() {
+        for digest in [
+            "",
+            "crc32:",
+            "crc32:abc",
+            "crc32:4294967296",
+            "crc32:+1",
+            "crc32:01",
+            "sha256:123",
+        ] {
+            assert!(!valid_piece_digest(digest), "{digest}");
+        }
+        assert!(valid_piece_digest("crc32:0"));
+        assert!(valid_piece_digest("crc32:4294967295"));
+    }
 
     /// windows fills freshly registered buffers with the given payloads.
     async fn windows(fabric: &Fabric, payloads: &[&[u8]]) -> Vec<PooledBuf> {

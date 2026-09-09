@@ -21,6 +21,9 @@ use std::io;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use tracing::warn;
+
+use super::fadvise_sequential;
 
 /// The default capacity of the file descriptor cache.
 pub const DEFAULT_FD_CACHE_CAPACITY: usize = 1024;
@@ -55,6 +58,15 @@ impl FDCache {
     /// caching it if it is absent. Concurrent misses may open the file more than
     /// once, the last inserted descriptor wins and the others are closed when
     /// their readers finish.
+    ///
+    /// The descriptor is advised for sequential reads, doubling its readahead
+    /// cap over the device read_ahead_kb: 128KiB -> 256KiB on the NVMe/SSD/HDD
+    /// default, 4MiB -> 8MiB on md/RAID commonly tuned by distributions. With
+    /// a 128KiB cap, one 512KiB positional read is served by several small
+    /// readahead I/Os. At 256KiB each I/O is larger and the async readahead
+    /// marker is placed earlier, keeping the disk ahead of the sequential
+    /// in-piece reads and sendfile. The cap only bounds detected sequential
+    /// streams, so it costs nothing on random reads.
     pub async fn open(&self, path: &Path) -> Result<Arc<File>> {
         if let Some(fd) = self.read_fds.lock()?.get(path) {
             return Ok(fd.clone());
@@ -64,7 +76,14 @@ impl FDCache {
         let fd = Arc::new(
             tokio::task::spawn_blocking({
                 let path = path.clone();
-                move || File::open(path)
+                move || -> io::Result<File> {
+                    let f = File::open(path)?;
+                    fadvise_sequential(&f).unwrap_or_else(|err| {
+                        warn!("fadvise_sequential failed: {}", err);
+                    });
+
+                    Ok(f)
+                }
             })
             .await
             .map_err(io::Error::other)??,
@@ -115,11 +134,11 @@ impl FDCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::FileExt;
+    use std::os::unix::fs::{FileExt, PermissionsExt};
     use tempfile::tempdir;
 
     #[tokio::test]
-    async fn test_fd_cache() {
+    async fn open_caches_one_fd_per_path_and_mode() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("task");
         tokio::fs::write(&path, b"hello, world!").await.unwrap();
@@ -134,22 +153,36 @@ mod tests {
         assert!(Arc::ptr_eq(&first_write, &second_write));
         assert!(!Arc::ptr_eq(&first, &first_write));
 
-        let _ = cache.remove(&path);
+        cache.remove(&path).unwrap();
         let third = cache.open(&path).await.unwrap();
-        assert!(!Arc::ptr_eq(&first, &third));
         let third_write = cache.open_write(&path).await.unwrap();
+        assert!(!Arc::ptr_eq(&first, &third));
         assert!(!Arc::ptr_eq(&first_write, &third_write));
 
-        let _ = cache.remove(&path);
+        cache.remove(&path).unwrap();
         tokio::fs::remove_file(&path).await.unwrap();
         assert!(cache.open(&path).await.is_err());
         assert!(cache.open_write(&path).await.is_err());
     }
 
     #[tokio::test]
-    async fn test_fd_cache_open_write_read_only_file() {
-        use std::os::unix::fs::PermissionsExt;
+    async fn open_evicts_the_least_recently_used_fd() {
+        let temp_dir = tempdir().unwrap();
+        let first_path = temp_dir.path().join("first");
+        let second_path = temp_dir.path().join("second");
+        tokio::fs::write(&first_path, b"first").await.unwrap();
+        tokio::fs::write(&second_path, b"second").await.unwrap();
 
+        let cache = FDCache::new(0);
+        let first = cache.open(&first_path).await.unwrap();
+        let second = cache.open(&second_path).await.unwrap();
+        let reopened = cache.open(&first_path).await.unwrap();
+        assert!(!Arc::ptr_eq(&first, &reopened));
+        assert!(!Arc::ptr_eq(&second, &reopened));
+    }
+
+    #[tokio::test]
+    async fn open_write_fails_on_a_read_only_file_until_it_is_writable() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("task");
         tokio::fs::write(&path, b"hello, world!").await.unwrap();
@@ -170,7 +203,6 @@ mod tests {
         tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
             .await
             .unwrap();
-
         let fd = cache.open_write(&path).await.unwrap();
         fd.write_all_at(b"HELLO", 0).unwrap();
         assert_eq!(&tokio::fs::read(&path).await.unwrap()[..5], b"HELLO");

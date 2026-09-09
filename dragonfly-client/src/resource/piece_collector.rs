@@ -33,6 +33,36 @@ use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
 use tracing::{debug, error, info, instrument, Instrument};
 
+/// The maximum duration to wait for all parents to report a piece before sending it
+/// with the parents collected so far.
+const DEFAULT_WAIT_FOR_ALL_PARENTS_TIMEOUT: Duration = Duration::from_millis(100);
+
+/// Sends the piece with the parents collected so far after the timeout, if it has
+/// not been sent yet.
+fn send_piece_after_timeout(
+    number: u32,
+    collected_pieces: Arc<DashMap<u32, CollectedPiece>>,
+    collected_piece_tx: Sender<CollectedPiece>,
+) {
+    tokio::spawn(
+        async move {
+            tokio::time::sleep(DEFAULT_WAIT_FOR_ALL_PARENTS_TIMEOUT).await;
+            if let Some((_, piece)) = collected_pieces.remove(&number) {
+                debug!(
+                    "timeout waiting for all parents, send piece {} with {} parents",
+                    number,
+                    piece.parents.len()
+                );
+
+                collected_piece_tx.send(piece).await.unwrap_or_else(|err| {
+                    error!("send CollectedPiece failed: {}", err);
+                });
+            }
+        }
+        .in_current_span(),
+    );
+}
+
 /// The parent peer collected from the parent.
 #[derive(Clone, Debug, Default)]
 pub struct CollectedParent {
@@ -59,6 +89,9 @@ pub struct CollectedParent {
 pub struct CollectedPiece {
     /// The piece number.
     pub number: u32,
+
+    /// The piece offset.
+    pub offset: u64,
 
     /// The piece length.
     pub length: u64,
@@ -105,6 +138,7 @@ impl PieceCollector {
                 interested_piece.number,
                 CollectedPiece {
                     number: interested_piece.number,
+                    offset: interested_piece.offset,
                     length: interested_piece.length,
                     ..Default::default()
                 },
@@ -172,11 +206,10 @@ impl PieceCollector {
     /// # Piece Collection Strategy
     ///
     /// For each piece reported by a parent, the function accumulates parents in
-    /// `collected_pieces`. A piece is not dispatched to the downloader immediately upon the
-    /// first response. It waits until all candidate parents have had a chance to
-    /// report availability. This ensures that when a piece is finally sent through
-    /// `collected_piece_tx`, it carries a complete list of available parents, enabling
-    /// load-balanced concurrent downloads across different peers.
+    /// `collected_pieces`. A piece is sent to the piece downloader once all candidate
+    /// parents have reported it, or once the wait for all parents times out after the
+    /// first report, whichever comes first. This balances load across parents without
+    /// letting a slow parent block the piece.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn collect_from_parents(
@@ -255,11 +288,18 @@ impl PieceCollector {
                         parent.download_quic_port = message.quic_port;
                         piece.parents.push(parent.clone());
 
-                        // When a piece has already been collected, wait until we've
-                        // gathered responses from all candidate parents before proceeding.
-                        // This ensures load is balanced across different parents during
-                        // concurrent piece downloads.
+                        // Wait for all parents to report the piece for load balancing.
+                        // The first report starts a timeout to bound the wait when some
+                        // parents are slow.
                         if piece.parents.len() < parents.len() {
+                            if piece.parents.len() == 1 {
+                                send_piece_after_timeout(
+                                    message.number,
+                                    collected_pieces.clone(),
+                                    collected_piece_tx.clone(),
+                                );
+                            }
+
                             continue;
                         }
                     } else {
@@ -399,6 +439,7 @@ impl PersistentPieceCollector {
                 interested_piece.number,
                 CollectedPiece {
                     number: interested_piece.number,
+                    offset: interested_piece.offset,
                     length: interested_piece.length,
                     ..Default::default()
                 },
@@ -466,11 +507,10 @@ impl PersistentPieceCollector {
     /// # Piece Collection Strategy
     ///
     /// For each piece reported by a parent, the function accumulates parents in
-    /// `collected_pieces`. A piece is not dispatched to the downloader immediately upon the
-    /// first response. It waits until all candidate parents have had a chance to
-    /// report availability. This ensures that when a piece is finally sent through
-    /// `collected_piece_tx`, it carries a complete list of available parents, enabling
-    /// load-balanced concurrent downloads across different peers.
+    /// `collected_pieces`. A piece is sent to the piece downloader once all candidate
+    /// parents have reported it, or once the wait for all parents times out after the
+    /// first report, whichever comes first. This balances load across parents without
+    /// letting a slow parent block the piece.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn collect_from_parents(
@@ -554,11 +594,18 @@ impl PersistentPieceCollector {
                         parent.download_quic_port = message.quic_port;
                         piece.parents.push(parent.clone());
 
-                        // When a piece has already been collected, wait until we've
-                        // gathered responses from all candidate parents before proceeding.
-                        // This ensures load is balanced across different parents during
-                        // concurrent piece downloads.
+                        // Wait for all parents to report the piece for load balancing.
+                        // The first report starts a timeout to bound the wait when some
+                        // parents are slow.
                         if piece.parents.len() < parents.len() {
+                            if piece.parents.len() == 1 {
+                                send_piece_after_timeout(
+                                    message.number,
+                                    collected_pieces.clone(),
+                                    collected_piece_tx.clone(),
+                                );
+                            }
+
                             continue;
                         }
                     } else {
@@ -701,6 +748,7 @@ impl PersistentCachePieceCollector {
                 interested_piece.number,
                 CollectedPiece {
                     number: interested_piece.number,
+                    offset: interested_piece.offset,
                     length: interested_piece.length,
                     ..Default::default()
                 },
@@ -768,11 +816,10 @@ impl PersistentCachePieceCollector {
     /// # Piece Collection Strategy
     ///
     /// For each piece reported by a parent, the function accumulates parents in
-    /// `collected_pieces`. A piece is not dispatched to the downloader immediately upon the
-    /// first response. It waits until all candidate parents have had a chance to
-    /// report availability. This ensures that when a piece is finally sent through
-    /// `collected_piece_tx`, it carries a complete list of available parents, enabling
-    /// load-balanced concurrent downloads across different peers.
+    /// `collected_pieces`. A piece is sent to the piece downloader once all candidate
+    /// parents have reported it, or once the wait for all parents times out after the
+    /// first report, whichever comes first. This balances load across parents without
+    /// letting a slow parent block the piece.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all)]
     async fn collect_from_parents(
@@ -856,11 +903,18 @@ impl PersistentCachePieceCollector {
                         parent.download_quic_port = message.quic_port;
                         piece.parents.push(parent.clone());
 
-                        // When a piece has already been collected, wait until we've
-                        // gathered responses from all candidate parents before proceeding.
-                        // This ensures load is balanced across different parents during
-                        // concurrent piece downloads.
+                        // Wait for all parents to report the piece for load balancing.
+                        // The first report starts a timeout to bound the wait when some
+                        // parents are slow.
                         if piece.parents.len() < parents.len() {
+                            if piece.parents.len() == 1 {
+                                send_piece_after_timeout(
+                                    message.number,
+                                    collected_pieces.clone(),
+                                    collected_piece_tx.clone(),
+                                );
+                            }
+
                             continue;
                         }
                     } else {

@@ -30,6 +30,10 @@ use tracing::{error, info, instrument};
 
 use crate::storage_engine::{rocksdb::RocksdbStorageEngine, DatabaseObject, StorageEngineOwned};
 
+/// The default timeout for downloading tasks. The started task that exceeds the
+/// timeout will be garbage collected by disk usage.
+pub const DEFAULT_DOWNLOAD_TASK_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
+
 /// The metadata of the task.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Task {
@@ -89,6 +93,23 @@ impl Task {
     /// Returns whether the task is expired.
     pub fn is_expired(&self, ttl: Duration) -> bool {
         self.updated_at + ttl < Utc::now().naive_utc()
+    }
+
+    /// Returns whether the page cache of the task needs to be dropped:
+    /// downloads finished, not uploading and no download or upload activity
+    /// within the idle timeout.
+    pub fn need_drop_page_cache(&self, idle_timeout: Duration) -> bool {
+        self.is_finished()
+            && !self.is_uploading()
+            && self.updated_at + idle_timeout < Utc::now().naive_utc()
+    }
+
+    /// Returns whether the task needs to be evicted: the download is
+    /// finished, failed, or has exceeded the download timeout.
+    pub fn need_evict(&self) -> bool {
+        self.is_finished()
+            || self.is_failed()
+            || self.created_at + DEFAULT_DOWNLOAD_TASK_TIMEOUT < Utc::now().naive_utc()
     }
 
     /// Returns whether the task is prefetched.
@@ -195,6 +216,25 @@ impl PersistentTask {
         self.created_at + self.ttl < Utc::now().naive_utc()
     }
 
+    /// Returns whether the page cache of the persistent task needs to be
+    /// dropped: downloads finished, not uploading and no download or upload
+    /// activity within the idle timeout.
+    pub fn need_drop_page_cache(&self, idle_timeout: Duration) -> bool {
+        self.is_finished()
+            && !self.is_uploading()
+            && self.updated_at + idle_timeout < Utc::now().naive_utc()
+    }
+
+    /// Returns whether the persistent task needs to be evicted: not
+    /// persistent and the download is finished, failed, or has exceeded the
+    /// download timeout.
+    pub fn need_evict(&self) -> bool {
+        !self.is_persistent()
+            && (self.is_finished()
+                || self.is_failed()
+                || self.created_at + DEFAULT_DOWNLOAD_TASK_TIMEOUT < Utc::now().naive_utc())
+    }
+
     /// Returns whether the persistent task downloads failed.
     pub fn is_failed(&self) -> bool {
         self.failed_at.is_some()
@@ -292,6 +332,25 @@ impl PersistentCacheTask {
     /// Returns whether the persistent cache task is expired.
     pub fn is_expired(&self) -> bool {
         self.created_at + self.ttl < Utc::now().naive_utc()
+    }
+
+    /// Returns whether the page cache of the persistent cache task needs to
+    /// be dropped: downloads finished, not uploading and no download or
+    /// upload activity within the idle timeout.
+    pub fn need_drop_page_cache(&self, idle_timeout: Duration) -> bool {
+        self.is_finished()
+            && !self.is_uploading()
+            && self.updated_at + idle_timeout < Utc::now().naive_utc()
+    }
+
+    /// Returns whether the persistent cache task needs to be evicted: not
+    /// persistent and the download is finished, failed, or has exceeded the
+    /// download timeout.
+    pub fn need_evict(&self) -> bool {
+        !self.is_persistent()
+            && (self.is_finished()
+                || self.is_failed()
+                || self.created_at + DEFAULT_DOWNLOAD_TASK_TIMEOUT < Utc::now().naive_utc())
     }
 
     /// Returns whether the persistent cache task downloads failed.
@@ -1435,10 +1494,18 @@ impl<E: StorageEngineOwned> Metadata<E> {
 
     /// Updates the metadata of the piece when the piece downloads started.
     #[instrument(level = "debug", skip_all)]
-    pub fn download_piece_started(&self, piece_id: &str, number: u32) -> Result<Piece> {
+    pub fn download_piece_started(
+        &self,
+        piece_id: &str,
+        number: u32,
+        offset: u64,
+        length: u64,
+    ) -> Result<Piece> {
         // Construct the piece metadata.
         let piece = Piece {
             number,
+            offset,
+            length,
             updated_at: Utc::now().naive_utc(),
             created_at: Utc::now().naive_utc(),
             ..Default::default()
@@ -1601,11 +1668,11 @@ impl Metadata<RocksdbStorageEngine> {
             log_dir,
             &[
                 Task::NAMESPACE,
-                Piece::NAMESPACE,
                 PersistentTask::NAMESPACE,
                 PersistentCacheTask::NAMESPACE,
                 CacheTask::NAMESPACE,
             ],
+            &[Piece::NAMESPACE],
             config.storage.keep,
         )?;
 
@@ -1620,212 +1687,884 @@ impl Metadata<RocksdbStorageEngine> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use tempfile::tempdir;
 
-    #[test]
-    fn test_calculate_digest() {
-        let piece = Piece {
-            number: 1,
-            offset: 0,
-            length: 1024,
-            digest: "crc32:1929153120".to_string(),
-            ..Default::default()
-        };
+    const TASK_ID: &str = "d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c";
+    const OTHER_TASK_ID: &str = "a535b115f18d96870f0422ac891f91dd162f2f391e4778fb84279701fcd02dd1";
 
-        let digest = piece.calculate_digest();
-        assert_eq!(digest, "crc32:3299754941");
+    fn metadata(dir: &Path) -> Metadata {
+        Metadata::new(Arc::new(Config::default()), dir, &dir.join("log")).unwrap()
     }
 
     #[test]
-    fn should_create_metadata() {
+    fn task_need_drop_page_cache_on_finished_idle_task() {
+        let now = Utc::now().naive_utc();
+        let idle_timeout = Duration::from_secs(2_400);
+
+        let test_cases = vec![
+            (Some(now), 0, NaiveDateTime::default(), true),
+            (Some(now), 1, NaiveDateTime::default(), false),
+            (Some(now), 0, now, false),
+            (None, 0, NaiveDateTime::default(), false),
+        ];
+
+        for (finished_at, uploading_count, updated_at, expected) in test_cases {
+            let task = Task {
+                finished_at,
+                uploading_count,
+                updated_at,
+                ..Default::default()
+            };
+            assert_eq!(task.need_drop_page_cache(idle_timeout), expected);
+        }
+    }
+
+    #[test]
+    fn task_need_evict_on_finished_failed_or_timed_out() {
+        let now = Utc::now().naive_utc();
+
+        let test_cases = vec![
+            (now, None, None, false),
+            (now, Some(now), None, true),
+            (now, None, Some(now), true),
+            (NaiveDateTime::default(), None, None, true),
+        ];
+
+        for (created_at, failed_at, finished_at, expected) in test_cases {
+            let task = Task {
+                created_at,
+                failed_at,
+                finished_at,
+                ..Default::default()
+            };
+            assert_eq!(task.need_evict(), expected);
+        }
+    }
+
+    #[test]
+    fn persistent_tasks_need_evict_unless_persistent() {
+        let now = Utc::now().naive_utc();
+
+        let test_cases = vec![
+            (false, now, None, None, false),
+            (false, now, Some(now), None, true),
+            (false, now, None, Some(now), true),
+            (false, NaiveDateTime::default(), None, None, true),
+            (true, now, Some(now), Some(now), false),
+            (true, NaiveDateTime::default(), None, None, false),
+        ];
+
+        for (persistent, created_at, failed_at, finished_at, expected) in test_cases {
+            let persistent_task = PersistentTask {
+                persistent,
+                created_at,
+                failed_at,
+                finished_at,
+                ..Default::default()
+            };
+            let persistent_cache_task = PersistentCacheTask {
+                persistent,
+                created_at,
+                failed_at,
+                finished_at,
+                ..Default::default()
+            };
+            assert_eq!(persistent_task.need_evict(), expected);
+            assert_eq!(persistent_cache_task.need_evict(), expected);
+        }
+    }
+
+    #[test]
+    fn task_is_empty_and_piece_count_follow_the_lengths() {
+        let test_cases = vec![
+            (None, None, false, None),
+            (Some(0), Some(1024), true, Some(0)),
+            (Some(1024), Some(1024), false, Some(1)),
+            (Some(1025), Some(1024), false, Some(2)),
+            (Some(1024), None, false, None),
+            (None, Some(1024), false, None),
+        ];
+
+        for (content_length, piece_length, expected_empty, expected_piece_count) in test_cases {
+            let task = Task {
+                content_length,
+                piece_length,
+                ..Default::default()
+            };
+            let cache_task = CacheTask {
+                content_length,
+                piece_length,
+                ..Default::default()
+            };
+            assert_eq!(task.is_empty(), expected_empty);
+            assert_eq!(task.piece_count(), expected_piece_count);
+            assert_eq!(cache_task.is_empty(), expected_empty);
+            assert_eq!(cache_task.piece_count(), expected_piece_count);
+        }
+    }
+
+    #[test]
+    fn piece_cost_is_none_unless_finished_after_created() {
+        let created_at = Utc::now().naive_utc();
+
+        let test_cases = vec![
+            (None, None, None),
+            (
+                Some(created_at + Duration::from_secs(2)),
+                Some(Duration::from_secs(2)),
+                Some(prost_wkt_types::Duration {
+                    seconds: 2,
+                    nanos: 0,
+                }),
+            ),
+            (Some(created_at - Duration::from_secs(2)), None, None),
+        ];
+
+        for (finished_at, expected_cost, expected_prost_cost) in test_cases {
+            let piece = Piece {
+                created_at,
+                finished_at,
+                ..Default::default()
+            };
+            assert_eq!(piece.cost(), expected_cost);
+            assert_eq!(piece.prost_cost(), expected_prost_cost);
+        }
+    }
+
+    #[test]
+    fn calculate_digest_hashes_the_piece_metadata() {
+        let test_cases = vec![
+            (1, 0, 1024, "crc32:1929153120", "crc32:3299754941"),
+            (2, 1024, 512, "crc32:1929153120", "crc32:3142703347"),
+            (0, 0, 0, "", "crc32:265657229"),
+        ];
+
+        for (number, offset, length, digest, expected) in test_cases {
+            let piece = Piece {
+                number,
+                offset,
+                length,
+                digest: digest.to_string(),
+                ..Default::default()
+            };
+            assert_eq!(piece.calculate_digest(), expected);
+        }
+    }
+
+    #[test]
+    fn new_metadata_is_empty() {
         let dir = tempdir().unwrap();
-        let log_dir = dir.path().join("log");
-        let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
+        let metadata = metadata(dir.path());
         assert!(metadata.get_tasks().unwrap().is_empty());
-        assert!(metadata
-            .get_pieces("d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c")
-            .unwrap()
-            .is_empty());
+        assert!(metadata.get_persistent_tasks().unwrap().is_empty());
+        assert!(metadata.get_persistent_cache_tasks().unwrap().is_empty());
+        assert!(metadata.get_cache_tasks().unwrap().is_empty());
+        assert!(metadata.get_pieces(TASK_ID).unwrap().is_empty());
     }
 
     #[test]
-    fn test_task_lifecycle() {
+    fn prepare_download_task_reuses_only_complete_unfailed_tasks() {
+        let test_cases: Vec<(fn(&Metadata, &str), fn(&Task, bool))> = vec![
+            (
+                |_, _| {},
+                |task, reused| {
+                    assert!(!reused);
+                    assert_eq!(task.content_length(), None);
+                    assert_eq!(task.piece_length(), None);
+                    assert!(!task.is_failed());
+                },
+            ),
+            (
+                |metadata, id| {
+                    metadata
+                        .download_task_started(id, 1024, 4096, None)
+                        .unwrap();
+                },
+                |task, reused| {
+                    assert!(reused);
+                    assert_eq!(task.content_length(), Some(4096));
+                    assert_eq!(task.piece_length(), Some(1024));
+                },
+            ),
+            (
+                |metadata, id| {
+                    metadata
+                        .download_task_started(id, 1024, 4096, None)
+                        .unwrap();
+                    metadata.download_task_failed(id).unwrap();
+                },
+                |task, reused| {
+                    assert!(!reused);
+                    assert!(!task.is_failed());
+                    assert_eq!(task.content_length(), Some(4096));
+                },
+            ),
+            (
+                |metadata, id| {
+                    metadata.prepare_download_task(id).unwrap();
+                },
+                |task, reused| {
+                    assert!(!reused);
+                    assert_eq!(task.content_length(), None);
+                },
+            ),
+        ];
+
+        for (prepare, expect) in test_cases {
+            let dir = tempdir().unwrap();
+            let metadata = metadata(dir.path());
+            prepare(&metadata, TASK_ID);
+            let (task, reused) = metadata.prepare_download_task(TASK_ID).unwrap();
+            assert_eq!(task.id, TASK_ID);
+            assert_eq!(metadata.get_task(TASK_ID).unwrap(), Some(task.clone()));
+            expect(&task, reused);
+        }
+    }
+
+    #[test]
+    fn task_lifecycle_tracks_download_and_upload() {
         let dir = tempdir().unwrap();
-        let log_dir = dir.path().join("log");
-        let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
-        let task_id = "d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c";
+        let metadata = metadata(dir.path());
 
         metadata
-            .download_task_started(task_id, 1024, 1024, None)
+            .download_task_started(TASK_ID, 1024, 4096, None)
             .unwrap();
-        let task = metadata
-            .get_task(task_id)
-            .unwrap()
-            .expect("task should exist after download_task_started");
-        assert_eq!(task.id, task_id);
-        assert_eq!(task.piece_length, Some(1024));
-        assert_eq!(task.content_length, Some(1024));
+        let task = metadata.get_task(TASK_ID).unwrap().unwrap();
+        assert_eq!(task.id, TASK_ID);
+        assert_eq!(task.piece_length(), Some(1024));
+        assert_eq!(task.content_length(), Some(4096));
         assert!(task.response_header.is_empty());
         assert_eq!(task.uploading_count, 0);
         assert_eq!(task.uploaded_count, 0);
-        assert!(!task.is_finished());
+        assert!(task.is_started());
+        assert!(metadata.is_task_exists(TASK_ID).unwrap());
 
-        metadata.download_task_finished(task_id).unwrap();
-        let task = metadata.get_task(task_id).unwrap().unwrap();
+        let task = metadata.download_task_failed(TASK_ID).unwrap();
+        assert!(task.is_failed());
+
+        let mut response_header = HeaderMap::new();
+        response_header.insert("content-type", "text/plain".parse().unwrap());
+        let task = metadata
+            .download_task_started(TASK_ID, 2048, 4096, Some(response_header))
+            .unwrap();
+        assert!(!task.is_failed());
+        assert_eq!(task.piece_length(), Some(2048));
+        assert_eq!(
+            task.response_header.get("content-type").map(String::as_str),
+            Some("text/plain")
+        );
+
+        metadata.download_task_finished(TASK_ID).unwrap();
+        let task = metadata.get_task(TASK_ID).unwrap().unwrap();
         assert!(task.is_finished());
+        assert!(!task.is_failed());
 
-        metadata.upload_task_started(task_id);
-        let task = metadata.get_task(task_id).unwrap().unwrap();
+        metadata.upload_task_started(TASK_ID);
+        let task = metadata.get_task(TASK_ID).unwrap().unwrap();
         assert_eq!(task.uploading_count, 1);
+        assert!(task.is_uploading());
 
-        metadata.upload_task_finished(task_id);
-        let task = metadata.get_task(task_id).unwrap().unwrap();
+        metadata.upload_task_finished(TASK_ID);
+        let task = metadata.get_task(TASK_ID).unwrap().unwrap();
         assert_eq!(task.uploading_count, 0);
         assert_eq!(task.uploaded_count, 1);
 
-        metadata.upload_task_started(task_id);
-        let task = metadata.get_task(task_id).unwrap().unwrap();
+        metadata.upload_task_started(TASK_ID);
+        let task = metadata.get_task(TASK_ID).unwrap().unwrap();
         assert_eq!(task.uploading_count, 1);
-        metadata.upload_task_failed(task_id);
-        let task = metadata.get_task(task_id).unwrap().unwrap();
+
+        metadata.upload_task_failed(TASK_ID);
+        let task = metadata.get_task(TASK_ID).unwrap().unwrap();
         assert_eq!(task.uploading_count, 0);
         assert_eq!(task.uploaded_count, 1);
 
-        let task_id = "a535b115f18d96870f0422ac891f91dd162f2f391e4778fb84279701fcd02dd1";
         metadata
-            .download_task_started(task_id, 1024, 0, None)
+            .download_task_started(OTHER_TASK_ID, 1024, 0, None)
             .unwrap();
         let tasks = metadata.get_tasks().unwrap();
         assert_eq!(tasks.len(), 2);
 
-        metadata.delete_task(task_id).unwrap();
-        let task = metadata.get_task(task_id).unwrap();
-        assert!(task.is_none());
+        let uploaded_task = tasks.iter().find(|task| task.id == TASK_ID).unwrap();
+        assert_eq!(uploaded_task.uploaded_count, 1);
+
+        metadata.delete_task(OTHER_TASK_ID).unwrap();
+        assert_eq!(metadata.get_task(OTHER_TASK_ID).unwrap(), None);
+        assert!(!metadata.is_task_exists(OTHER_TASK_ID).unwrap());
     }
 
     #[test]
-    fn test_cache_task_lifecycle() {
+    fn prefetch_task_starts_once_and_resets_on_failure() {
         let dir = tempdir().unwrap();
-        let log_dir = dir.path().join("log");
-        let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
-        let task_id = "d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c";
+        let metadata = metadata(dir.path());
+        metadata
+            .download_task_started(TASK_ID, 1024, 4096, None)
+            .unwrap();
+
+        let task = metadata.prefetch_task_started(TASK_ID).unwrap();
+        assert!(task.is_prefetched());
+        assert!(!task.is_failed());
+
+        let result = metadata.prefetch_task_started(TASK_ID);
+        assert!(matches!(result, Err(Error::InvalidState(ref state)) if state == "prefetched"));
+
+        let task = metadata.prefetch_task_failed(TASK_ID).unwrap();
+        assert!(!task.is_prefetched());
+        assert!(task.is_failed());
+
+        let task = metadata.prefetch_task_started(TASK_ID).unwrap();
+        assert!(task.is_prefetched());
+        assert!(!task.is_failed());
+    }
+
+    #[test]
+    fn transitions_on_a_missing_task_fail_with_task_not_found() {
+        let dir = tempdir().unwrap();
+        let metadata = metadata(dir.path());
+
+        let test_cases: Vec<fn(&Metadata, &str) -> Result<()>> = vec![
+            |metadata, id| metadata.download_task_finished(id).map(|_| ()),
+            |metadata, id| metadata.download_task_failed(id).map(|_| ()),
+            |metadata, id| metadata.prefetch_task_started(id).map(|_| ()),
+            |metadata, id| metadata.prefetch_task_failed(id).map(|_| ()),
+            |metadata, id| metadata.create_persistent_task_finished(id).map(|_| ()),
+            |metadata, id| metadata.download_persistent_task_finished(id).map(|_| ()),
+            |metadata, id| metadata.download_persistent_task_failed(id).map(|_| ()),
+            |metadata, id| metadata.persist_persistent_task(id).map(|_| ()),
+            |metadata, id| {
+                metadata
+                    .create_persistent_cache_task_finished(id)
+                    .map(|_| ())
+            },
+            |metadata, id| {
+                metadata
+                    .download_persistent_cache_task_finished(id)
+                    .map(|_| ())
+            },
+            |metadata, id| {
+                metadata
+                    .download_persistent_cache_task_failed(id)
+                    .map(|_| ())
+            },
+            |metadata, id| metadata.persist_persistent_cache_task(id).map(|_| ()),
+            |metadata, id| metadata.download_cache_task_finished(id).map(|_| ()),
+            |metadata, id| metadata.download_cache_task_failed(id).map(|_| ()),
+            |metadata, id| metadata.upload_cache_task_started(id).map(|_| ()),
+            |metadata, id| metadata.upload_cache_task_finished(id).map(|_| ()),
+            |metadata, id| metadata.upload_cache_task_failed(id).map(|_| ()),
+        ];
+
+        for run in test_cases {
+            let result = run(&metadata, TASK_ID);
+            assert!(matches!(result, Err(Error::TaskNotFound(ref id)) if id == TASK_ID));
+        }
+    }
+
+    #[test]
+    fn persistent_task_transitions_update_the_stored_task() {
+        let test_cases: Vec<(
+            fn(&Metadata, &str) -> Result<PersistentTask>,
+            fn(&PersistentTask),
+        )> = vec![
+            (
+                |metadata, id| metadata.create_persistent_task_finished(id),
+                |task| {
+                    assert!(task.is_finished());
+                    assert!(!task.is_failed());
+                },
+            ),
+            (
+                |metadata, id| metadata.download_persistent_task_finished(id),
+                |task| {
+                    assert!(task.is_finished());
+                    assert!(!task.is_failed());
+                },
+            ),
+            (
+                |metadata, id| metadata.download_persistent_task_failed(id),
+                |task| {
+                    assert!(task.is_failed());
+                    assert!(task.is_started());
+                },
+            ),
+            (
+                |metadata, id| {
+                    metadata.download_persistent_task_failed(id)?;
+                    metadata.download_persistent_task_started(
+                        id,
+                        Duration::from_secs(7_200),
+                        true,
+                        2048,
+                        4096,
+                        NaiveDateTime::default(),
+                    )
+                },
+                |task| {
+                    assert!(!task.is_failed());
+                    assert!(task.is_persistent());
+                    assert_eq!(task.ttl, Duration::from_secs(7_200));
+                    assert_eq!(task.piece_length(), 2048);
+                    assert_eq!(task.content_length(), 4096);
+                },
+            ),
+            (
+                |metadata, id| metadata.persist_persistent_task(id),
+                |task| {
+                    assert!(task.is_persistent());
+                    assert!(task.is_started());
+                },
+            ),
+        ];
+
+        for (run, expect) in test_cases {
+            let dir = tempdir().unwrap();
+            let metadata = metadata(dir.path());
+            let created_at = Utc::now().naive_utc();
+            let started = metadata
+                .download_persistent_task_started(
+                    TASK_ID,
+                    Duration::from_secs(3_600),
+                    false,
+                    1024,
+                    4096,
+                    created_at,
+                )
+                .unwrap();
+            assert!(started.is_started());
+            assert!(!started.is_persistent());
+
+            let task = run(&metadata, TASK_ID).unwrap();
+            assert_eq!(task.id, TASK_ID);
+            assert_eq!(task.created_at, created_at);
+            assert_eq!(
+                metadata.get_persistent_task(TASK_ID).unwrap(),
+                Some(task.clone())
+            );
+            expect(&task);
+        }
+    }
+
+    #[test]
+    fn persistent_task_lifecycle_tracks_creation_and_upload() {
+        let dir = tempdir().unwrap();
+        let metadata = metadata(dir.path());
+
+        let task = metadata
+            .create_persistent_task_started(TASK_ID, Duration::from_secs(3_600), 1024, 4096)
+            .unwrap();
+        assert_eq!(task.id, TASK_ID);
+        assert!(task.is_persistent());
+        assert!(task.is_started());
+        assert_eq!(task.ttl, Duration::from_secs(3_600));
+        assert_eq!(task.piece_length(), 1024);
+        assert_eq!(task.content_length(), 4096);
+        assert_eq!(task.piece_count(), 4);
+        assert!(!task.is_empty());
+        assert!(metadata.is_persistent_task_exists(TASK_ID).unwrap());
+
+        let task = metadata.create_persistent_task_finished(TASK_ID).unwrap();
+        assert!(task.is_finished());
+
+        let finished_at = task.finished_at;
+        let task = metadata.create_persistent_task_finished(TASK_ID).unwrap();
+        assert_eq!(task.finished_at, finished_at);
+
+        metadata.upload_persistent_task_started(TASK_ID);
+        let task = metadata.get_persistent_task(TASK_ID).unwrap().unwrap();
+        assert_eq!(task.uploading_count, 1);
+        assert!(task.is_uploading());
+
+        metadata.upload_persistent_task_finished(TASK_ID);
+        let task = metadata.get_persistent_task(TASK_ID).unwrap().unwrap();
+        assert_eq!(task.uploading_count, 0);
+        assert_eq!(task.uploaded_count, 1);
+
+        metadata.upload_persistent_task_started(TASK_ID);
+        metadata.upload_persistent_task_failed(TASK_ID);
+        let task = metadata.get_persistent_task(TASK_ID).unwrap().unwrap();
+        assert_eq!(task.uploading_count, 0);
+        assert_eq!(task.uploaded_count, 1);
 
         metadata
-            .download_cache_task_started(task_id, 1024, 1024, None)
+            .create_persistent_task_started(OTHER_TASK_ID, Duration::from_secs(3_600), 1024, 0)
             .unwrap();
+        let tasks = metadata.get_persistent_tasks().unwrap();
+        assert_eq!(tasks.len(), 2);
+
+        let uploaded_task = tasks.iter().find(|task| task.id == TASK_ID).unwrap();
+        assert_eq!(uploaded_task.uploaded_count, 1);
+
+        metadata.delete_persistent_task(TASK_ID).unwrap();
+        assert_eq!(metadata.get_persistent_task(TASK_ID).unwrap(), None);
+        assert!(!metadata.is_persistent_task_exists(TASK_ID).unwrap());
+    }
+
+    #[test]
+    fn persistent_cache_task_transitions_update_the_stored_task() {
+        let test_cases: Vec<(
+            fn(&Metadata, &str) -> Result<PersistentCacheTask>,
+            fn(&PersistentCacheTask),
+        )> = vec![
+            (
+                |metadata, id| metadata.create_persistent_cache_task_finished(id),
+                |task| {
+                    assert!(task.is_finished());
+                    assert!(!task.is_failed());
+                },
+            ),
+            (
+                |metadata, id| metadata.download_persistent_cache_task_finished(id),
+                |task| {
+                    assert!(task.is_finished());
+                    assert!(!task.is_failed());
+                },
+            ),
+            (
+                |metadata, id| metadata.download_persistent_cache_task_failed(id),
+                |task| {
+                    assert!(task.is_failed());
+                    assert!(task.is_started());
+                },
+            ),
+            (
+                |metadata, id| {
+                    metadata.download_persistent_cache_task_failed(id)?;
+                    metadata.download_persistent_cache_task_started(
+                        id,
+                        Duration::from_secs(7_200),
+                        true,
+                        2048,
+                        4096,
+                        NaiveDateTime::default(),
+                    )
+                },
+                |task| {
+                    assert!(!task.is_failed());
+                    assert!(task.is_persistent());
+                    assert_eq!(task.ttl, Duration::from_secs(7_200));
+                    assert_eq!(task.piece_length(), 2048);
+                    assert_eq!(task.content_length(), 4096);
+                },
+            ),
+            (
+                |metadata, id| metadata.persist_persistent_cache_task(id),
+                |task| {
+                    assert!(task.is_persistent());
+                    assert!(task.is_started());
+                },
+            ),
+        ];
+
+        for (run, expect) in test_cases {
+            let dir = tempdir().unwrap();
+            let metadata = metadata(dir.path());
+            let created_at = Utc::now().naive_utc();
+            let started = metadata
+                .download_persistent_cache_task_started(
+                    TASK_ID,
+                    Duration::from_secs(3_600),
+                    false,
+                    1024,
+                    4096,
+                    created_at,
+                )
+                .unwrap();
+            assert!(started.is_started());
+            assert!(!started.is_persistent());
+
+            let task = run(&metadata, TASK_ID).unwrap();
+            assert_eq!(task.id, TASK_ID);
+            assert_eq!(task.created_at, created_at);
+            assert_eq!(
+                metadata.get_persistent_cache_task(TASK_ID).unwrap(),
+                Some(task.clone())
+            );
+            expect(&task);
+        }
+    }
+
+    #[test]
+    fn persistent_cache_task_lifecycle_tracks_creation_and_upload() {
+        let dir = tempdir().unwrap();
+        let metadata = metadata(dir.path());
+
         let task = metadata
-            .get_cache_task(task_id)
+            .create_persistent_cache_task_started(TASK_ID, Duration::from_secs(3_600), 1024, 4096)
+            .unwrap();
+        assert_eq!(task.id, TASK_ID);
+        assert!(task.is_persistent());
+        assert!(task.is_started());
+        assert_eq!(task.ttl, Duration::from_secs(3_600));
+        assert_eq!(task.piece_length(), 1024);
+        assert_eq!(task.content_length(), 4096);
+        assert_eq!(task.piece_count(), 4);
+        assert!(!task.is_empty());
+        assert!(metadata.is_persistent_cache_task_exists(TASK_ID).unwrap());
+
+        let task = metadata
+            .create_persistent_cache_task_finished(TASK_ID)
+            .unwrap();
+        assert!(task.is_finished());
+
+        let finished_at = task.finished_at;
+        let task = metadata
+            .create_persistent_cache_task_finished(TASK_ID)
+            .unwrap();
+        assert_eq!(task.finished_at, finished_at);
+
+        metadata.upload_persistent_cache_task_started(TASK_ID);
+        let task = metadata
+            .get_persistent_cache_task(TASK_ID)
             .unwrap()
-            .expect("task should exist after download_cache_task_started");
-        assert_eq!(task.id, task_id);
-        assert_eq!(task.piece_length, Some(1024));
-        assert_eq!(task.content_length, Some(1024));
+            .unwrap();
+        assert_eq!(task.uploading_count, 1);
+        assert!(task.is_uploading());
+
+        metadata.upload_persistent_cache_task_finished(TASK_ID);
+        let task = metadata
+            .get_persistent_cache_task(TASK_ID)
+            .unwrap()
+            .unwrap();
+        assert_eq!(task.uploading_count, 0);
+        assert_eq!(task.uploaded_count, 1);
+
+        metadata.upload_persistent_cache_task_started(TASK_ID);
+        metadata.upload_persistent_cache_task_failed(TASK_ID);
+        let task = metadata
+            .get_persistent_cache_task(TASK_ID)
+            .unwrap()
+            .unwrap();
+        assert_eq!(task.uploading_count, 0);
+        assert_eq!(task.uploaded_count, 1);
+
+        metadata
+            .create_persistent_cache_task_started(
+                OTHER_TASK_ID,
+                Duration::from_secs(3_600),
+                1024,
+                0,
+            )
+            .unwrap();
+        let tasks = metadata.get_persistent_cache_tasks().unwrap();
+        assert_eq!(tasks.len(), 2);
+
+        let uploaded_task = tasks.iter().find(|task| task.id == TASK_ID).unwrap();
+        assert_eq!(uploaded_task.uploaded_count, 1);
+
+        metadata.delete_persistent_cache_task(TASK_ID).unwrap();
+        assert_eq!(metadata.get_persistent_cache_task(TASK_ID).unwrap(), None);
+        assert!(!metadata.is_persistent_cache_task_exists(TASK_ID).unwrap());
+    }
+
+    #[test]
+    fn cache_task_lifecycle_tracks_download_and_upload() {
+        let dir = tempdir().unwrap();
+        let metadata = metadata(dir.path());
+
+        metadata
+            .download_cache_task_started(TASK_ID, 1024, 4096, None)
+            .unwrap();
+        let task = metadata.get_cache_task(TASK_ID).unwrap().unwrap();
+        assert_eq!(task.id, TASK_ID);
+        assert_eq!(task.piece_length(), Some(1024));
+        assert_eq!(task.content_length(), Some(4096));
         assert!(task.response_header.is_empty());
         assert_eq!(task.uploading_count, 0);
         assert_eq!(task.uploaded_count, 0);
-        assert!(!task.is_finished());
+        assert!(task.is_started());
+        assert!(metadata.is_cache_task_exists(TASK_ID).unwrap());
 
-        metadata.download_cache_task_finished(task_id).unwrap();
-        let task = metadata.get_cache_task(task_id).unwrap().unwrap();
+        let task = metadata.download_cache_task_failed(TASK_ID).unwrap();
+        assert!(task.is_failed());
+
+        let mut response_header = HeaderMap::new();
+        response_header.insert("content-type", "text/plain".parse().unwrap());
+        let task = metadata
+            .download_cache_task_started(TASK_ID, 2048, 4096, Some(response_header))
+            .unwrap();
+        assert!(!task.is_failed());
+        assert_eq!(task.piece_length(), Some(2048));
+        assert_eq!(
+            task.response_header.get("content-type").map(String::as_str),
+            Some("text/plain")
+        );
+
+        metadata.download_cache_task_finished(TASK_ID).unwrap();
+        let task = metadata.get_cache_task(TASK_ID).unwrap().unwrap();
         assert!(task.is_finished());
+        assert!(!task.is_failed());
 
-        metadata.upload_cache_task_started(task_id).unwrap();
-        let task = metadata.get_cache_task(task_id).unwrap().unwrap();
+        metadata.upload_cache_task_started(TASK_ID).unwrap();
+        let task = metadata.get_cache_task(TASK_ID).unwrap().unwrap();
         assert_eq!(task.uploading_count, 1);
+        assert!(task.is_uploading());
 
-        metadata.upload_cache_task_finished(task_id).unwrap();
-        let task = metadata.get_cache_task(task_id).unwrap().unwrap();
+        metadata.upload_cache_task_finished(TASK_ID).unwrap();
+        let task = metadata.get_cache_task(TASK_ID).unwrap().unwrap();
         assert_eq!(task.uploading_count, 0);
         assert_eq!(task.uploaded_count, 1);
 
-        let task = metadata.upload_cache_task_started(task_id).unwrap();
+        let task = metadata.upload_cache_task_started(TASK_ID).unwrap();
         assert_eq!(task.uploading_count, 1);
-        let task = metadata.upload_cache_task_failed(task_id).unwrap();
+
+        let task = metadata.upload_cache_task_failed(TASK_ID).unwrap();
         assert_eq!(task.uploading_count, 0);
         assert_eq!(task.uploaded_count, 1);
+        assert_eq!(metadata.get_cache_task(TASK_ID).unwrap(), Some(task));
 
-        let task_id = "a535b115f18d96870f0422ac891f91dd162f2f391e4778fb84279701fcd02dd1";
         metadata
-            .download_cache_task_started(task_id, 1024, 0, None)
+            .download_cache_task_started(OTHER_TASK_ID, 1024, 0, None)
             .unwrap();
-        let tasks = metadata.get_cache_tasks().unwrap();
-        assert_eq!(tasks.len(), 2);
+        assert_eq!(metadata.get_cache_tasks().unwrap().len(), 2);
 
-        metadata.delete_cache_task(task_id).unwrap();
-        let task = metadata.get_cache_task(task_id).unwrap();
-        assert!(task.is_none());
+        metadata.delete_cache_task(OTHER_TASK_ID).unwrap();
+        assert_eq!(metadata.get_cache_task(OTHER_TASK_ID).unwrap(), None);
+        assert!(!metadata.is_cache_task_exists(OTHER_TASK_ID).unwrap());
     }
 
     #[test]
-    fn test_piece_lifecycle() {
+    fn piece_lifecycle_tracks_download_and_deletion() {
         let dir = tempdir().unwrap();
-        let log_dir = dir.path().join("log");
-        let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
-        let task_id = "d3c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062c";
-        let piece_id = metadata.piece_id(task_id, 1);
+        let metadata = metadata(dir.path());
+        let piece_id = metadata.piece_id(TASK_ID, 1);
+        assert_eq!(piece_id, format!("{TASK_ID}-1"));
 
-        metadata
-            .download_piece_started(piece_id.as_str(), 1)
+        let result = metadata.download_piece_finished(&piece_id, 0, 1024, "crc32:1", None);
+        assert!(matches!(result, Err(Error::PieceNotFound(ref id)) if id == &piece_id));
+
+        let piece = metadata
+            .download_piece_started(&piece_id, 1, 1024, 1024)
             .unwrap();
-        let piece = metadata.get_piece(piece_id.as_str()).unwrap().unwrap();
         assert_eq!(piece.number, 1);
-
-        metadata
-            .download_piece_finished(piece_id.as_str(), 0, 1024, "digest1", None)
-            .unwrap();
-        let piece = metadata.get_piece(piece_id.as_str()).unwrap().unwrap();
+        assert_eq!(piece.offset, 1024);
         assert_eq!(piece.length, 1024);
-        assert_eq!(piece.digest, "digest1");
+        assert!(piece.is_started());
+        assert!(metadata.is_piece_exists(&piece_id).unwrap());
 
-        metadata
-            .download_piece_started(metadata.piece_id(task_id, 2).as_str(), 2)
+        let piece = metadata
+            .download_piece_finished(&piece_id, 0, 1024, "crc32:1", Some("parent-1".to_string()))
             .unwrap();
-        metadata
-            .download_piece_started(metadata.piece_id(task_id, 3).as_str(), 3)
-            .unwrap();
-        let pieces = metadata.get_pieces(task_id).unwrap();
-        assert_eq!(pieces.len(), 3);
+        assert!(piece.is_finished());
+        assert_eq!(piece.offset, 0);
+        assert_eq!(piece.length, 1024);
+        assert_eq!(piece.digest, "crc32:1");
+        assert_eq!(piece.parent_id.as_deref(), Some("parent-1"));
+        assert_eq!(metadata.get_piece(&piece_id).unwrap(), Some(piece.clone()));
 
-        let piece_id = metadata.piece_id(task_id, 2);
+        let second_piece_id = metadata.piece_id(TASK_ID, 2);
         metadata
-            .download_piece_started(piece_id.as_str(), 2)
+            .download_piece_started(&second_piece_id, 2, 2048, 1024)
             .unwrap();
         metadata
-            .download_piece_started(metadata.piece_id(task_id, 3).as_str(), 3)
+            .download_piece_started(&metadata.piece_id(TASK_ID, 3), 3, 3072, 1024)
             .unwrap();
-        metadata.download_piece_failed(piece_id.as_str()).unwrap();
-        let piece = metadata.get_piece(piece_id.as_str()).unwrap();
-        assert!(piece.is_none());
+        assert_eq!(metadata.get_pieces(TASK_ID).unwrap().len(), 3);
+        assert!(metadata.get_pieces(OTHER_TASK_ID).unwrap().is_empty());
 
-        metadata.delete_pieces(task_id).unwrap();
-        let pieces = metadata.get_pieces(task_id).unwrap();
-        assert!(pieces.is_empty());
+        let pieces = metadata
+            .get_pieces_by_ids(&[second_piece_id.as_str(), "missing", piece_id.as_str()])
+            .unwrap();
+        assert_eq!(pieces[0].as_ref().map(|piece| piece.number), Some(2));
+        assert_eq!(pieces[1], None);
+        assert_eq!(pieces[2].as_ref(), Some(&piece));
+
+        metadata.delete_piece(&second_piece_id).unwrap();
+        assert_eq!(metadata.get_piece(&second_piece_id).unwrap(), None);
+        assert_eq!(metadata.get_pieces(TASK_ID).unwrap().len(), 2);
+
+        metadata.delete_pieces(TASK_ID).unwrap();
+        assert!(metadata.get_pieces(TASK_ID).unwrap().is_empty());
     }
 
     #[test]
-    fn test_download_piece_failed_keeps_finished_piece() {
-        let dir = tempdir().unwrap();
-        let log_dir = dir.path().join("log");
-        let metadata = Metadata::new(Arc::new(Config::default()), dir.path(), &log_dir).unwrap();
-        let task_id = "e4c4e940ad06c47fc36ac67801e6f8e36cb400e2391708620bc7e865b102062d";
-        let piece_id = metadata.piece_id(task_id, 1);
+    fn piece_failures_delete_only_unfinished_pieces() {
+        let test_cases: Vec<(
+            fn(&Metadata, &str) -> Result<Piece>,
+            fn(&Metadata, &str) -> Result<()>,
+            fn(Piece, Option<Piece>),
+        )> = vec![
+            (
+                |metadata, id| metadata.download_piece_started(id, 1, 0, 1024),
+                Metadata::download_piece_failed,
+                |piece, stored| {
+                    assert!(!piece.is_finished());
+                    assert_eq!(stored, None);
+                },
+            ),
+            (
+                |metadata, id| {
+                    metadata.download_piece_started(id, 1, 0, 1024)?;
+                    metadata.download_piece_finished(id, 0, 1024, "crc32:1", None)
+                },
+                Metadata::download_piece_failed,
+                |piece, stored| {
+                    assert!(piece.is_finished());
+                    assert_eq!(stored, Some(piece));
+                },
+            ),
+            (
+                |metadata, id| metadata.create_persistent_piece(id, 1, 0, 1024, "crc32:1"),
+                Metadata::download_piece_failed,
+                |piece, stored| {
+                    assert!(piece.is_finished());
+                    assert_eq!(stored, Some(piece));
+                },
+            ),
+            (
+                |metadata, id| metadata.create_persistent_cache_piece(id, 1, 0, 1024, "crc32:1"),
+                Metadata::download_piece_failed,
+                |piece, stored| {
+                    assert!(piece.is_finished());
+                    assert_eq!(stored, Some(piece));
+                },
+            ),
+            (
+                |metadata, id| metadata.download_piece_started(id, 1, 0, 1024),
+                Metadata::wait_for_piece_finished_failed,
+                |piece, stored| {
+                    assert!(!piece.is_finished());
+                    assert_eq!(stored, None);
+                },
+            ),
+            (
+                |metadata, id| {
+                    metadata.download_piece_started(id, 1, 0, 1024)?;
+                    metadata.download_piece_finished(id, 0, 1024, "crc32:1", None)
+                },
+                Metadata::wait_for_piece_finished_failed,
+                |piece, stored| {
+                    assert!(piece.is_finished());
+                    assert_eq!(stored, Some(piece));
+                },
+            ),
+            (
+                |metadata, id| metadata.create_persistent_piece(id, 1, 0, 1024, "crc32:1"),
+                Metadata::wait_for_piece_finished_failed,
+                |piece, stored| {
+                    assert!(piece.is_finished());
+                    assert_eq!(stored, Some(piece));
+                },
+            ),
+            (
+                |metadata, id| metadata.create_persistent_cache_piece(id, 1, 0, 1024, "crc32:1"),
+                Metadata::wait_for_piece_finished_failed,
+                |piece, stored| {
+                    assert!(piece.is_finished());
+                    assert_eq!(stored, Some(piece));
+                },
+            ),
+        ];
 
-        metadata
-            .download_piece_started(piece_id.as_str(), 1)
-            .unwrap();
-        metadata
-            .download_piece_finished(piece_id.as_str(), 0, 1024, "digest1", None)
-            .unwrap();
-
-        metadata.download_piece_failed(piece_id.as_str()).unwrap();
-        let piece = metadata.get_piece(piece_id.as_str()).unwrap().unwrap();
-        assert!(piece.is_finished());
-
-        metadata
-            .wait_for_piece_finished_failed(piece_id.as_str())
-            .unwrap();
-        let piece = metadata.get_piece(piece_id.as_str()).unwrap().unwrap();
-        assert!(piece.is_finished());
+        for (setup, fail, expect) in test_cases {
+            let dir = tempdir().unwrap();
+            let metadata = metadata(dir.path());
+            let piece_id = metadata.piece_id(TASK_ID, 1);
+            let piece = setup(&metadata, &piece_id).unwrap();
+            let result = fail(&metadata, &piece_id);
+            assert!(result.is_ok());
+            expect(piece, metadata.get_piece(&piece_id).unwrap());
+        }
     }
 }

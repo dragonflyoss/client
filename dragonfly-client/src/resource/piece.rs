@@ -14,19 +14,21 @@
  * limitations under the License.
  */
 
+#[cfg(feature = "rdma")]
+mod rdma;
+
 use super::*;
 use chrono::Utc;
-// The concrete RDMADownloader needs the trait in scope for its persistent-piece methods; trait
-// objects such as tcp_downloader resolve them without it.
-#[cfg(feature = "rdma")]
-use crate::resource::piece_downloader::Downloader;
-use dragonfly_api::common::v2::{Hdfs, HuggingFace, ModelScope, ObjectStorage, Range, TrafficType};
+use dragonfly_api::common::v2::{
+    Hdfs, HuggingFace, ModelScope, ObjectStorage, OpenCsg, Range, TrafficType,
+};
 use dragonfly_client_backend::{BackendFactory, GetRequest};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{error::BackendError, Error, Result};
 use dragonfly_client_metric::{
     collect_backend_request_failure_metrics, collect_backend_request_finished_metrics,
-    collect_backend_request_started_metrics, collect_download_piece_traffic_metrics,
+    collect_backend_request_started_metrics, collect_download_piece_duration_metrics,
+    collect_download_piece_traffic_metrics,
 };
 use dragonfly_client_storage::{io::RangeReader, metadata, Storage};
 use dragonfly_client_util::net::format_socket_addr;
@@ -38,16 +40,11 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt};
+use tokio::sync::Notify;
 use tracing::{debug, error, instrument, warn, Span};
 
-/// The maximum piece count. If the piece count is upper
-/// than MAX_PIECE_COUNT, the piece length will be optimized by the file length.
-/// When piece length became the MAX_PIECE_LENGTH, the piece count
-/// probably will be upper than MAX_PIECE_COUNT.
-pub const MAX_PIECE_COUNT: u64 = 500;
-
 /// The minimum piece length.
-pub const MIN_PIECE_LENGTH: u64 = 4 * 1024 * 1024;
+pub use dragonfly_client_config::MIN_PIECE_LENGTH;
 
 /// The maximum piece length.
 pub const MAX_PIECE_LENGTH: u64 = 64 * 1024 * 1024;
@@ -62,6 +59,7 @@ pub enum PieceLengthStrategy {
 }
 
 /// Represents a piece manager.
+#[derive(Clone)]
 pub struct Piece {
     /// The configuration of the dfdaemon.
     config: Arc<Config>,
@@ -107,9 +105,12 @@ impl Piece {
     ) -> Result<Self> {
         #[cfg(feature = "rdma")]
         let rdma_downloader = if config.download.protocol == "rdma" {
-            Some(Arc::new(piece_downloader::rdma::RDMADownloader::new(
-                config.clone(),
-            )))
+            Some(Arc::new(
+                piece_downloader::rdma::RDMADownloader::new_with_budget(
+                    config.clone(),
+                    storage.rdma_memory_budget(),
+                ),
+            ))
         } else {
             None
         };
@@ -153,6 +154,12 @@ impl Piece {
     /// Gets all pieces of a task from the local storage.
     pub fn get_all(&self, task_id: &str) -> Result<Vec<metadata::Piece>> {
         self.storage.get_pieces(task_id)
+    }
+
+    /// Returns the completion notifier of the in-flight piece, or `None` if the
+    /// piece is not being downloaded by this process.
+    pub fn in_flight_notifier(&self, piece_id: &str) -> Option<Arc<Notify>> {
+        self.storage.in_flight_piece_notifier(piece_id)
     }
 
     /// Calculates the interested pieces by content_length and range.
@@ -315,6 +322,12 @@ impl Piece {
 
     /// Calculates the piece size by content_length.
     pub fn calculate_piece_length(&self, strategy: PieceLengthStrategy) -> u64 {
+        // The maximum piece count. If the piece count is upper than
+        // MAX_PIECE_COUNT, the piece length will be optimized by the file
+        // length. When piece length became the MAX_PIECE_LENGTH, the piece
+        // count probably will be upper than MAX_PIECE_COUNT.
+        const MAX_PIECE_COUNT: u64 = 500;
+
         match strategy {
             PieceLengthStrategy::OptimizeByFileLength(content_length) => {
                 let piece_length = (content_length as f64 / MAX_PIECE_COUNT as f64) as u64;
@@ -351,8 +364,14 @@ impl Piece {
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
 
+        // Record the start time.
+        let start_time = Instant::now();
+
         // Upload the piece content.
-        self.storage.upload_piece(piece_id, task_id, range).await
+        let (_, reader) = self.storage.upload_piece(piece_id, task_id, range).await?;
+        collect_download_piece_duration_metrics(&TrafficType::LocalPeer, start_time.elapsed());
+
+        Ok(reader)
     }
 
     /// Downloads a single piece from local cache. Fake the download piece
@@ -371,10 +390,34 @@ impl Piece {
         host_id: &str,
         task_id: &str,
         number: u32,
+        offset: u64,
         length: u64,
         parent: piece_collector::CollectedParent,
         is_prefetch: bool,
     ) -> Result<metadata::Piece> {
+        #[cfg(feature = "rdma")]
+        if self.rdma_downloader.is_some() {
+            if let (Some(ip), Some(port)) =
+                (parent.download_ip.as_deref(), parent.download_tcp_port)
+            {
+                let addr = format_socket_addr(IpAddr::from_str(ip)?, port as u16);
+                return self
+                    .download_from_parent_with_rdma(
+                        dragonfly_client_storage::rdma::rendezvous::PieceKind::Piece,
+                        piece_id,
+                        host_id,
+                        task_id,
+                        number,
+                        offset,
+                        length,
+                        parent.id.as_str(),
+                        &addr,
+                        is_prefetch,
+                    )
+                    .await;
+            }
+        }
+
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
@@ -382,13 +425,14 @@ impl Piece {
         // Record the start of downloading piece.
         let piece = self
             .storage
-            .download_piece_started(piece_id, number)
+            .download_piece_started(piece_id, number, offset, length)
             .await?;
 
         // If the piece is downloaded by the other thread,
         // return the piece directly.
         if piece.is_finished() {
             debug!("finished piece {} from local", piece_id);
+            collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
             return Ok(piece);
         }
 
@@ -410,45 +454,15 @@ impl Piece {
             .acquire(length as usize)
             .await;
 
-        // RDMA lands each receive window in content storage straight out of registered memory, so
-        // it never produces a piece content stream for the shared finish path below.
-        #[cfg(feature = "rdma")]
-        if let ("rdma", Some(ip), Some(port)) = (
-            self.config.download.protocol.as_str(),
-            parent.download_ip.as_deref(),
-            parent.download_tcp_port,
-        ) {
-            let tcp_addr = format_socket_addr(IpAddr::from_str(ip)?, port as u16);
-            match self
-                .download_piece_from_parent_over_rdma(
-                    piece_id,
-                    task_id,
-                    number,
-                    length,
-                    parent.id.as_str(),
-                    &tcp_addr,
-                )
-                .await
-            {
-                Ok(piece) => {
-                    collect_download_piece_traffic_metrics(&TrafficType::RemotePeer, length);
-
-                    scopeguard::ScopeGuard::into_inner(guard);
-                    return Ok(piece);
-                }
-                // RDMA is an optimization: any rendezvous, fabric, or write error re-downloads the
-                // piece from the parent's TCP piece server below.
-                Err(err) => warn!("rdma download failed, fall back to tcp downloader: {err}"),
-            }
-        }
-
+        // Record the start time.
+        let start_time = Instant::now();
         let (mut stream, offset, digest) = match (
             self.config.download.protocol.as_str(),
             parent.download_ip,
             parent.download_tcp_port,
             parent.download_quic_port,
         ) {
-            ("tcp", Some(ip), Some(port), _) => {
+            ("tcp" | "rdma", Some(ip), Some(port), _) => {
                 self.tcp_downloader
                     .download_piece(
                         &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
@@ -460,16 +474,6 @@ impl Piece {
             }
             ("quic", Some(ip), _, Some(port)) => {
                 self.quic_downloader
-                    .download_piece(
-                        &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
-                        number,
-                        host_id,
-                        task_id,
-                    )
-                    .await?
-            }
-            ("rdma", Some(ip), Some(port), _) => {
-                self.tcp_downloader
                     .download_piece(
                         &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
                         number,
@@ -500,7 +504,7 @@ impl Piece {
         };
 
         // Record the finish of downloading piece.
-        let piece = self
+        match self
             .storage
             .download_piece_from_parent_finished(
                 piece_id,
@@ -513,62 +517,19 @@ impl Piece {
                 self.config.storage.write_piece_timeout,
             )
             .await
-            .inspect_err(|err| {
-                error!("download piece finished: {}", err);
-            })?;
-
-        collect_download_piece_traffic_metrics(&TrafficType::RemotePeer, length);
-
-        scopeguard::ScopeGuard::into_inner(guard);
-        Ok(piece)
-    }
-
-    /// download_piece_from_parent_over_rdma downloads one piece over the fabric, writing every
-    /// completed receive window into content storage straight out of registered memory.
-    ///
-    /// Discovery is multiplexed on the parent's advertised TCP piece endpoint, which returns the
-    /// actual rendezvous port. On a write failure the piece metadata is restarted so the caller can
-    /// re-download the piece over TCP.
-    #[cfg(feature = "rdma")]
-    #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
-    async fn download_piece_from_parent_over_rdma(
-        &self,
-        piece_id: &str,
-        task_id: &str,
-        number: u32,
-        length: u64,
-        parent_id: &str,
-        tcp_addr: &str,
-    ) -> Result<metadata::Piece> {
-        let Some(rdma_downloader) = self.rdma_downloader.as_ref() else {
-            return Err(Error::Unknown("rdma downloader is disabled".to_string()));
-        };
-
-        let (mut reader, offset, digest) = rdma_downloader
-            .download_piece_stream(tcp_addr, number, task_id)
-            .await?;
-
-        match self
-            .storage
-            .download_piece_from_parent_finished_rdma(
-                piece_id,
-                task_id,
-                offset,
-                length,
-                digest.as_str(),
-                parent_id,
-                &mut reader,
-                self.config.storage.write_piece_timeout,
-            )
-            .await
         {
-            Ok(piece) => Ok(piece),
+            Ok(piece) => {
+                collect_download_piece_traffic_metrics(&TrafficType::RemotePeer, length);
+                collect_download_piece_duration_metrics(
+                    &TrafficType::RemotePeer,
+                    start_time.elapsed(),
+                );
+
+                scopeguard::ScopeGuard::into_inner(guard);
+                Ok(piece)
+            }
             Err(err) => {
-                self.storage.download_piece_failed(piece_id)?;
-                self.storage
-                    .download_piece_started(piece_id, number)
-                    .await?;
+                error!("download piece finished: {}", err);
                 Err(err)
             }
         }
@@ -591,6 +552,7 @@ impl Piece {
         hdfs: Option<Hdfs>,
         hugging_face: Option<HuggingFace>,
         model_scope: Option<ModelScope>,
+        open_csg: Option<OpenCsg>,
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
@@ -599,13 +561,14 @@ impl Piece {
         // Record the start of downloading piece.
         let piece = self
             .storage
-            .download_piece_started(piece_id, number)
+            .download_piece_started(piece_id, number, offset, length)
             .await?;
 
         // If the piece is downloaded by the other thread,
         // return the piece directly.
         if piece.is_finished() {
             debug!("finished piece {} from local", piece_id);
+            collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
             return Ok(piece);
         }
 
@@ -662,6 +625,7 @@ impl Piece {
                 hdfs,
                 hugging_face,
                 model_scope,
+                open_csg,
             })
             .await
             .inspect_err(|err| {
@@ -722,6 +686,10 @@ impl Piece {
         {
             Ok(piece) => {
                 collect_download_piece_traffic_metrics(&TrafficType::BackToSource, length);
+                collect_download_piece_duration_metrics(
+                    &TrafficType::BackToSource,
+                    start_time.elapsed(),
+                );
 
                 scopeguard::ScopeGuard::into_inner(guard);
                 Ok(piece)
@@ -787,10 +755,17 @@ impl Piece {
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
 
+        // Record the start time.
+        let start_time = Instant::now();
+
         // Upload the piece content.
-        self.storage
+        let (_, reader) = self
+            .storage
             .upload_persistent_piece(piece_id, task_id, range)
-            .await
+            .await?;
+        collect_download_piece_duration_metrics(&TrafficType::LocalPeer, start_time.elapsed());
+
+        Ok(reader)
     }
 
     /// Downloads a persistent piece from local cache. Fake the download
@@ -809,9 +784,33 @@ impl Piece {
         host_id: &str,
         task_id: &str,
         number: u32,
+        offset: u64,
         length: u64,
         parent: piece_collector::CollectedParent,
     ) -> Result<metadata::Piece> {
+        #[cfg(feature = "rdma")]
+        if self.rdma_downloader.is_some() {
+            if let (Some(ip), Some(port)) =
+                (parent.download_ip.as_deref(), parent.download_tcp_port)
+            {
+                let addr = format_socket_addr(IpAddr::from_str(ip)?, port as u16);
+                return self
+                    .download_from_parent_with_rdma(
+                        dragonfly_client_storage::rdma::rendezvous::PieceKind::PersistentPiece,
+                        piece_id,
+                        host_id,
+                        task_id,
+                        number,
+                        offset,
+                        length,
+                        parent.id.as_str(),
+                        &addr,
+                        false,
+                    )
+                    .await;
+            }
+        }
+
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
@@ -824,13 +823,14 @@ impl Piece {
         // Record the start of downloading piece.
         let piece = self
             .storage
-            .download_persistent_piece_started(piece_id, number)
+            .download_persistent_piece_started(piece_id, number, offset, length)
             .await?;
 
         // If the piece is downloaded by the other thread,
         // return the piece directly.
         if piece.is_finished() {
             debug!("finished persistent piece {} from local", piece_id);
+            collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
             return Ok(piece);
         }
 
@@ -840,32 +840,19 @@ impl Piece {
                 .download_persistent_piece_failed(piece_id)
                 .err()
             {
-                error!("set persistent piece metadata failed: {err}")
+                error!("set persistent piece metadata failed: {}", err)
             };
         });
 
-        let rdma_tcp_addr = if self.config.download.protocol == "rdma" {
-            match (parent.download_ip.as_deref(), parent.download_tcp_port) {
-                (Some(ip), Some(port)) => {
-                    Some(format_socket_addr(IpAddr::from_str(ip)?, port as u16))
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
-        // Only an rdma build can stream a piece, so only it can need the TCP restart below.
-        #[cfg(feature = "rdma")]
-        let mut streamed_rdma = false;
-        #[cfg(not(feature = "rdma"))]
-        let streamed_rdma = false;
+        // Record the start time.
+        let start_time = Instant::now();
         let (mut stream, offset, digest) = match (
             self.config.download.protocol.as_str(),
             parent.download_ip,
             parent.download_tcp_port,
             parent.download_quic_port,
         ) {
-            ("tcp", Some(ip), Some(port), _) => {
+            ("tcp" | "rdma", Some(ip), Some(port), _) => {
                 self.tcp_downloader
                     .download_persistent_piece(
                         &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
@@ -876,51 +863,7 @@ impl Piece {
                     .await?
             }
             ("quic", Some(ip), _, Some(port)) => {
-                let quic_downloader =
-                    piece_downloader::DownloaderFactory::new("quic", self.config.clone())?.build();
-                quic_downloader
-                    .download_persistent_piece(
-                        &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
-                        number,
-                        host_id,
-                        task_id,
-                    )
-                    .await?
-            }
-            #[cfg(feature = "rdma")]
-            ("rdma", Some(ip), Some(download_tcp_port), _) if self.rdma_downloader.is_some() => {
-                let ip = IpAddr::from_str(&ip)?;
-                let rdma_downloader = self.rdma_downloader.as_ref().unwrap();
-                match rdma_downloader
-                    .download_persistent_piece(
-                        &format_socket_addr(ip, download_tcp_port as u16),
-                        number,
-                        host_id,
-                        task_id,
-                    )
-                    .await
-                {
-                    Ok(downloaded) => {
-                        streamed_rdma = true;
-                        downloaded
-                    }
-                    // RDMA is an optimization: any rendezvous or fabric error falls back to
-                    // the parent's TCP piece server for this piece.
-                    Err(err) => {
-                        warn!("rdma download failed, fall back to tcp downloader: {}", err);
-                        self.tcp_downloader
-                            .download_persistent_piece(
-                                &format_socket_addr(ip, download_tcp_port as u16),
-                                number,
-                                host_id,
-                                task_id,
-                            )
-                            .await?
-                    }
-                }
-            }
-            ("rdma", Some(ip), Some(port), _) => {
-                self.tcp_downloader
+                self.quic_downloader
                     .download_persistent_piece(
                         &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
                         number,
@@ -966,42 +909,17 @@ impl Piece {
         {
             Ok(piece) => {
                 collect_download_piece_traffic_metrics(&TrafficType::RemotePeer, length);
+                collect_download_piece_duration_metrics(
+                    &TrafficType::RemotePeer,
+                    start_time.elapsed(),
+                );
 
                 scopeguard::ScopeGuard::into_inner(guard);
                 Ok(piece)
             }
             Err(err) => {
-                let Some(addr) = rdma_tcp_addr.filter(|_| streamed_rdma) else {
-                    error!("download persistent piece finished: {}", err);
-                    return Err(err);
-                };
-                warn!(
-                    "streaming rdma persistent piece failed while writing, restarting over tcp: {}",
-                    err
-                );
-                self.storage.download_persistent_piece_failed(piece_id)?;
-                self.storage
-                    .download_persistent_piece_started(piece_id, number)
-                    .await?;
-                let (mut reader, offset, digest) = self
-                    .tcp_downloader
-                    .download_persistent_piece(&addr, number, host_id, task_id)
-                    .await?;
-                let piece = self
-                    .storage
-                    .download_persistent_piece_from_parent_finished(
-                        piece_id,
-                        task_id,
-                        offset,
-                        length,
-                        digest.as_str(),
-                        parent.id.as_str(),
-                        &mut reader,
-                    )
-                    .await?;
-                collect_download_piece_traffic_metrics(&TrafficType::RemotePeer, length);
-                scopeguard::ScopeGuard::into_inner(guard);
-                Ok(piece)
+                error!("download persistent piece finished: {}", err);
+                Err(err)
             }
         }
     }
@@ -1022,6 +940,7 @@ impl Piece {
         hdfs: Option<Hdfs>,
         hugging_face: Option<HuggingFace>,
         model_scope: Option<ModelScope>,
+        open_csg: Option<OpenCsg>,
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
@@ -1030,13 +949,14 @@ impl Piece {
         // Record the start of downloading piece.
         let piece = self
             .storage
-            .download_persistent_piece_started(piece_id, number)
+            .download_persistent_piece_started(piece_id, number, offset, length)
             .await?;
 
         // If the piece is downloaded by the other thread,
         // return the piece directly.
         if piece.is_finished() {
             debug!("finished piece {} from local", piece_id);
+            collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
             return Ok(piece);
         }
 
@@ -1089,6 +1009,7 @@ impl Piece {
                 hdfs,
                 hugging_face,
                 model_scope,
+                open_csg,
             })
             .await
             .inspect_err(|err| {
@@ -1152,6 +1073,10 @@ impl Piece {
         {
             Ok(piece) => {
                 collect_download_piece_traffic_metrics(&TrafficType::BackToSource, length);
+                collect_download_piece_duration_metrics(
+                    &TrafficType::BackToSource,
+                    start_time.elapsed(),
+                );
 
                 scopeguard::ScopeGuard::into_inner(guard);
                 Ok(piece)
@@ -1217,10 +1142,17 @@ impl Piece {
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
 
+        // Record the start time.
+        let start_time = Instant::now();
+
         // Upload the piece content.
-        self.storage
+        let (_, reader) = self
+            .storage
             .upload_persistent_cache_piece(piece_id, task_id, range)
-            .await
+            .await?;
+        collect_download_piece_duration_metrics(&TrafficType::LocalPeer, start_time.elapsed());
+
+        Ok(reader)
     }
 
     /// Downloads a persistent cache piece from local cache. Fake the download
@@ -1239,9 +1171,33 @@ impl Piece {
         host_id: &str,
         task_id: &str,
         number: u32,
+        offset: u64,
         length: u64,
         parent: piece_collector::CollectedParent,
     ) -> Result<metadata::Piece> {
+        #[cfg(feature = "rdma")]
+        if self.rdma_downloader.is_some() {
+            if let (Some(ip), Some(port)) =
+                (parent.download_ip.as_deref(), parent.download_tcp_port)
+            {
+                let addr = format_socket_addr(IpAddr::from_str(ip)?, port as u16);
+                return self
+                    .download_from_parent_with_rdma(
+                        dragonfly_client_storage::rdma::rendezvous::PieceKind::PersistentCachePiece,
+                        piece_id,
+                        host_id,
+                        task_id,
+                        number,
+                        offset,
+                        length,
+                        parent.id.as_str(),
+                        &addr,
+                        false,
+                    )
+                    .await;
+            }
+        }
+
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
@@ -1254,13 +1210,14 @@ impl Piece {
         // Record the start of downloading piece.
         let piece = self
             .storage
-            .download_persistent_cache_piece_started(piece_id, number)
+            .download_persistent_cache_piece_started(piece_id, number, offset, length)
             .await?;
 
         // If the piece is downloaded by the other thread,
         // return the piece directly.
         if piece.is_finished() {
             debug!("finished persistent cache piece {} from local", piece_id);
+            collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
             return Ok(piece);
         }
 
@@ -1270,32 +1227,19 @@ impl Piece {
                 .download_persistent_cache_piece_failed(piece_id)
                 .err()
             {
-                error!("set persistent cache piece metadata failed: {err}")
+                error!("set persistent cache piece metadata failed: {}", err)
             };
         });
 
-        let rdma_tcp_addr = if self.config.download.protocol == "rdma" {
-            match (parent.download_ip.as_deref(), parent.download_tcp_port) {
-                (Some(ip), Some(port)) => {
-                    Some(format_socket_addr(IpAddr::from_str(ip)?, port as u16))
-                }
-                _ => None,
-            }
-        } else {
-            None
-        };
-        // Only an rdma build can stream a piece, so only it can need the TCP restart below.
-        #[cfg(feature = "rdma")]
-        let mut streamed_rdma = false;
-        #[cfg(not(feature = "rdma"))]
-        let streamed_rdma = false;
+        // Record the start time.
+        let start_time = Instant::now();
         let (mut stream, offset, digest) = match (
             self.config.download.protocol.as_str(),
             parent.download_ip,
             parent.download_tcp_port,
             parent.download_quic_port,
         ) {
-            ("tcp", Some(ip), Some(port), _) => {
+            ("tcp" | "rdma", Some(ip), Some(port), _) => {
                 self.tcp_downloader
                     .download_persistent_cache_piece(
                         &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
@@ -1306,51 +1250,7 @@ impl Piece {
                     .await?
             }
             ("quic", Some(ip), _, Some(port)) => {
-                let quic_downloader =
-                    piece_downloader::DownloaderFactory::new("quic", self.config.clone())?.build();
-                quic_downloader
-                    .download_persistent_cache_piece(
-                        &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
-                        number,
-                        host_id,
-                        task_id,
-                    )
-                    .await?
-            }
-            #[cfg(feature = "rdma")]
-            ("rdma", Some(ip), Some(download_tcp_port), _) if self.rdma_downloader.is_some() => {
-                let ip = IpAddr::from_str(&ip)?;
-                let rdma_downloader = self.rdma_downloader.as_ref().unwrap();
-                match rdma_downloader
-                    .download_persistent_cache_piece(
-                        &format_socket_addr(ip, download_tcp_port as u16),
-                        number,
-                        host_id,
-                        task_id,
-                    )
-                    .await
-                {
-                    Ok(downloaded) => {
-                        streamed_rdma = true;
-                        downloaded
-                    }
-                    // RDMA is an optimization: any rendezvous or fabric error falls back to
-                    // the parent's TCP piece server for this piece.
-                    Err(err) => {
-                        warn!("rdma download failed, fall back to tcp downloader: {}", err);
-                        self.tcp_downloader
-                            .download_persistent_cache_piece(
-                                &format_socket_addr(ip, download_tcp_port as u16),
-                                number,
-                                host_id,
-                                task_id,
-                            )
-                            .await?
-                    }
-                }
-            }
-            ("rdma", Some(ip), Some(port), _) => {
-                self.tcp_downloader
+                self.quic_downloader
                     .download_persistent_cache_piece(
                         &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
                         number,
@@ -1396,43 +1296,17 @@ impl Piece {
         {
             Ok(piece) => {
                 collect_download_piece_traffic_metrics(&TrafficType::RemotePeer, length);
+                collect_download_piece_duration_metrics(
+                    &TrafficType::RemotePeer,
+                    start_time.elapsed(),
+                );
 
                 scopeguard::ScopeGuard::into_inner(guard);
                 Ok(piece)
             }
             Err(err) => {
-                let Some(addr) = rdma_tcp_addr.filter(|_| streamed_rdma) else {
-                    error!("download persistent cache piece finished: {}", err);
-                    return Err(err);
-                };
-                warn!(
-                    "streaming rdma persistent cache piece failed while writing, restarting over tcp: {}",
-                    err
-                );
-                self.storage
-                    .download_persistent_cache_piece_failed(piece_id)?;
-                self.storage
-                    .download_persistent_cache_piece_started(piece_id, number)
-                    .await?;
-                let (mut reader, offset, digest) = self
-                    .tcp_downloader
-                    .download_persistent_cache_piece(&addr, number, host_id, task_id)
-                    .await?;
-                let piece = self
-                    .storage
-                    .download_persistent_cache_piece_from_parent_finished(
-                        piece_id,
-                        task_id,
-                        offset,
-                        length,
-                        digest.as_str(),
-                        parent.id.as_str(),
-                        &mut reader,
-                    )
-                    .await?;
-                collect_download_piece_traffic_metrics(&TrafficType::RemotePeer, length);
-                scopeguard::ScopeGuard::into_inner(guard);
-                Ok(piece)
+                error!("download persistent cache piece finished: {}", err);
+                Err(err)
             }
         }
     }
@@ -1441,53 +1315,43 @@ impl Piece {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use tempfile::tempdir;
 
+    async fn piece(dir: &Path) -> Piece {
+        let config = Arc::new(Config::default());
+        let storage = Arc::new(
+            Storage::new(config.clone(), dir, dir.to_path_buf())
+                .await
+                .unwrap(),
+        );
+        let backend_factory = Arc::new(BackendFactory::new(config.clone(), None).unwrap());
+        Piece::new(
+            config,
+            storage,
+            backend_factory,
+            Arc::new(RateLimiter::builder().build()),
+            Arc::new(RateLimiter::builder().build()),
+            Arc::new(RateLimiter::builder().build()),
+        )
+        .unwrap()
+    }
+
     #[tokio::test]
-    async fn test_calculate_interested() {
+    async fn calculate_interested_splits_the_content_into_pieces() {
         let temp_dir = tempdir().unwrap();
-
-        let config = Config::default();
-        let config = Arc::new(config);
-
-        let storage = Storage::new(
-            config.clone(),
-            temp_dir.path(),
-            temp_dir.path().to_path_buf(),
-        )
-        .await
-        .unwrap();
-        let storage = Arc::new(storage);
-
-        let backend_factory = BackendFactory::new(config.clone(), None).unwrap();
-        let backend_factory = Arc::new(backend_factory);
-
-        let download_bandwidth_limiter = Arc::new(RateLimiter::builder().build());
-        let prefetch_bandwidth_limiter = Arc::new(RateLimiter::builder().build());
-        let back_to_source_bandwidth_limiter = Arc::new(RateLimiter::builder().build());
-
-        let piece = Piece::new(
-            config.clone(),
-            storage.clone(),
-            backend_factory.clone(),
-            download_bandwidth_limiter,
-            prefetch_bandwidth_limiter,
-            back_to_source_bandwidth_limiter,
-        )
-        .unwrap();
+        let piece = piece(temp_dir.path()).await;
 
         let test_cases = vec![
-            (1000, 1, None, 1, vec![0], 0, 1),
-            (1000, 5000, None, 5, vec![0, 1, 2, 3, 4], 4000, 1000),
-            (5000, 1000, None, 1, vec![0], 0, 1000),
+            (1000, 1, None, vec![0], Some((0, 1))),
+            (1000, 5000, None, vec![0, 1, 2, 3, 4], Some((4000, 1000))),
+            (5000, 1000, None, vec![0], Some((0, 1000))),
             (
                 10,
                 101,
                 None,
-                11,
                 vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-                100,
-                1,
+                Some((100, 1)),
             ),
             (
                 1000,
@@ -1496,10 +1360,8 @@ mod tests {
                     start: 1500,
                     length: 2000,
                 }),
-                3,
                 vec![1, 2, 3],
-                3000,
-                1000,
+                Some((3000, 1000)),
             ),
             (
                 1000,
@@ -1508,38 +1370,74 @@ mod tests {
                     start: 0,
                     length: 1,
                 }),
-                1,
                 vec![0],
-                0,
-                1000,
+                Some((0, 1000)),
             ),
+            (1000, 0, None, vec![], None),
         ];
 
-        for (
-            piece_length,
-            content_length,
-            range,
-            expected_len,
-            expected_numbers,
-            expected_last_piece_offset,
-            expected_last_piece_length,
-        ) in test_cases
+        for (piece_length, content_length, range, expected_numbers, expected_last_piece) in
+            test_cases
         {
             let pieces = piece
                 .calculate_interested(piece_length, content_length, range)
                 .unwrap();
-            assert_eq!(pieces.len(), expected_len);
-            assert_eq!(
-                pieces
-                    .iter()
-                    .map(|piece| piece.number)
-                    .collect::<Vec<u32>>(),
-                expected_numbers
-            );
+            let numbers: Vec<u32> = pieces.iter().map(|piece| piece.number).collect();
+            assert_eq!(numbers, expected_numbers);
 
-            let last_piece = pieces.last().unwrap();
-            assert_eq!(last_piece.offset, expected_last_piece_offset);
-            assert_eq!(last_piece.length, expected_last_piece_length);
+            let last_piece = pieces.last().map(|piece| (piece.offset, piece.length));
+            assert_eq!(last_piece, expected_last_piece);
+        }
+    }
+
+    #[tokio::test]
+    async fn calculate_interested_rejects_a_zero_length_range() {
+        let temp_dir = tempdir().unwrap();
+        let piece = piece(temp_dir.path()).await;
+
+        let result = piece.calculate_interested(
+            1000,
+            5000,
+            Some(Range {
+                start: 0,
+                length: 0,
+            }),
+        );
+        assert!(matches!(result, Err(Error::InvalidParameter)));
+    }
+
+    #[tokio::test]
+    async fn calculate_piece_length_clamps_the_optimized_length() {
+        let temp_dir = tempdir().unwrap();
+        let piece = piece(temp_dir.path()).await;
+
+        let test_cases = vec![
+            (0, MIN_PIECE_LENGTH),
+            (500 * MIN_PIECE_LENGTH, MIN_PIECE_LENGTH),
+            (500 * 5 * 1024 * 1024, 8 * 1024 * 1024),
+            (500 * MAX_PIECE_LENGTH, MAX_PIECE_LENGTH),
+            (1000 * MAX_PIECE_LENGTH, MAX_PIECE_LENGTH),
+        ];
+
+        for (content_length, expected) in test_cases {
+            let piece_length = piece
+                .calculate_piece_length(PieceLengthStrategy::OptimizeByFileLength(content_length));
+            assert_eq!(piece_length, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn calculate_piece_count_rounds_up_to_whole_pieces() {
+        let temp_dir = tempdir().unwrap();
+        let piece = piece(temp_dir.path()).await;
+
+        let test_cases = vec![(1000, 5000, 5), (1000, 5001, 6), (1000, 1, 1), (1000, 0, 0)];
+
+        for (piece_length, content_length, expected) in test_cases {
+            assert_eq!(
+                piece.calculate_piece_count(piece_length, content_length),
+                expected
+            );
         }
     }
 }

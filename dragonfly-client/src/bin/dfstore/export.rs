@@ -20,6 +20,7 @@ use dragonfly_api::dfdaemon::v2::{
     download_persistent_task_response, DownloadPersistentTaskRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
+use dragonfly_client::terminal;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
@@ -31,7 +32,6 @@ use path_absolutize::*;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::{cmp::min, fmt::Write};
-use termion::{color, style};
 use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, BufWriter, SeekFrom};
 use tracing::{debug, error, info};
@@ -214,38 +214,10 @@ impl ExportCommand {
 
         // Validate the command line arguments.
         if let Err(err) = self.validate_args() {
-            println!(
-                "{}{}{}Validating Failed!{}",
-                color::Fg(color::Red),
-                style::Italic,
-                style::Bold,
-                style::Reset
-            );
-
-            println!(
-                "{}{}{}****************************************{}",
-                color::Fg(color::Black),
-                style::Italic,
-                style::Bold,
-                style::Reset
-            );
-
-            println!(
-                "{}{}{}Message:{} {}",
-                color::Fg(color::Cyan),
-                style::Italic,
-                style::Bold,
-                style::Reset,
-                err,
-            );
-
-            println!(
-                "{}{}{}****************************************{}",
-                color::Fg(color::Black),
-                style::Italic,
-                style::Bold,
-                style::Reset
-            );
+            terminal::error("Validating Failed!");
+            terminal::separator();
+            terminal::field("Message:", err);
+            terminal::separator();
 
             std::process::exit(1);
         }
@@ -255,39 +227,17 @@ impl ExportCommand {
             match get_dfdaemon_download_client(self.endpoint.to_path_buf()).await {
                 Ok(client) => client,
                 Err(err) => {
-                    println!(
-                        "{}{}{}Connect Dfdaemon Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
+                    terminal::error("Connect Dfdaemon Failed!");
+                    terminal::separator();
+                    terminal::field(
+                        "Message:",
+                        format!(
+                            "can not connect {}, please check the unix socket {}",
+                            err,
+                            self.endpoint.to_string_lossy()
+                        ),
                     );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{}, can not connect {}, please check the unix socket {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err,
-                        self.endpoint.to_string_lossy(),
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::separator();
 
                     std::process::exit(1);
                 }
@@ -299,197 +249,62 @@ impl ExportCommand {
                 Error::TonicStatus(status) => {
                     let details = status.details();
                     if let Ok(backend_err) = serde_json::from_slice::<Backend>(details) {
-                        println!(
-                            "{}{}{}Exporting Failed!{}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}****************************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::error("Exporting Failed!");
+                        terminal::separator();
 
                         if let Some(status_code) = backend_err.status_code {
-                            println!(
-                                "{}{}{}Bad Status Code:{} {}",
-                                color::Fg(color::Red),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset,
-                                status_code
-                            );
+                            terminal::error_field("Bad Status Code:", status_code);
                         }
 
-                        println!(
-                            "{}{}{}Message:{} {}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            backend_err.message
-                        );
+                        terminal::field("Message:", backend_err.message);
 
                         if !backend_err.header.is_empty() {
-                            println!(
-                                "{}{}{}Header:{}",
-                                color::Fg(color::Cyan),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset
+                            terminal::headers(
+                                backend_err
+                                    .header
+                                    .iter()
+                                    .map(|(key, value)| (key.as_str(), value.as_str())),
                             );
-                            for (key, value) in backend_err.header.iter() {
-                                println!("  [{}]: {}", key.as_str(), value.as_str());
-                            }
                         }
 
-                        println!(
-                            "{}{}{}****************************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::separator();
                     } else {
-                        println!(
-                            "{}{}{}Exporting Failed!{}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}*********************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}Bad Code:{} {}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            status.code()
-                        );
-
-                        println!(
-                            "{}{}{}Message:{} {}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            status.message()
-                        );
+                        terminal::error("Exporting Failed!");
+                        terminal::separator();
+                        terminal::error_field("Bad Code:", status.code());
+                        terminal::field("Message:", status.message());
 
                         if !status.details().is_empty() {
-                            println!(
-                                "{}{}{}Details:{} {}",
-                                color::Fg(color::Cyan),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset,
-                                std::str::from_utf8(status.details()).unwrap()
+                            terminal::field(
+                                "Details:",
+                                std::str::from_utf8(status.details()).unwrap(),
                             );
                         }
 
-                        println!(
-                            "{}{}{}*********************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::separator();
                     }
                 }
                 Error::BackendError(err) => {
-                    println!(
-                        "{}{}{}Exporting Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err.message
-                    );
+                    terminal::error("Exporting Failed!");
+                    terminal::separator();
+                    terminal::error_field("Message:", err.message);
 
                     if err.header.is_some() {
-                        println!(
-                            "{}{}{}Header:{}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
+                        terminal::headers(
+                            err.header
+                                .unwrap_or_default()
+                                .iter()
+                                .map(|(key, value)| (key.as_str(), value.to_str().unwrap())),
                         );
-                        for (key, value) in err.header.unwrap_or_default().iter() {
-                            println!("  [{}]: {}", key.as_str(), value.to_str().unwrap());
-                        }
                     }
 
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::separator();
                 }
                 err => {
-                    println!(
-                        "{}{}{}Exporting Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::error("Exporting Failed!");
+                    terminal::separator();
+                    terminal::error_field("Message:", err);
+                    terminal::separator();
                 }
             }
 
@@ -599,6 +414,7 @@ impl ExportCommand {
 
         //  Download file.
         let mut downloaded = 0;
+        let mut content_length = None;
         let mut out_stream = response.into_inner();
         loop {
             match out_stream.message().await {
@@ -618,6 +434,7 @@ impl ExportCommand {
                                 };
                             }
 
+                            content_length = Some(response.content_length);
                             progress_bar.set_length(response.content_length);
                         }
                         Some(download_persistent_task_response::Response::DownloadPieceFinishedResponse(
@@ -697,6 +514,20 @@ impl ExportCommand {
             }
         }
 
+        // Abort if the stream ended before all pieces were received.
+        if content_length != Some(downloaded) {
+            error!(
+                "download incomplete: received {} bytes, expected {} bytes",
+                downloaded,
+                content_length.unwrap_or_default()
+            );
+            fs::remove_file(&self.output).await.inspect_err(|err| {
+                error!("remove file {:?} failed: {}", self.output, err);
+            })?;
+
+            return Err(Error::Unknown("download incomplete".to_string()));
+        }
+
         if let Some(f) = &mut f {
             if let Err(err) = f.flush().await {
                 error!("flush {:?} failed: {}", self.output, err);
@@ -746,5 +577,66 @@ impl ExportCommand {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn validate_args_checks_output() {
+        let tempdir = tempdir().unwrap();
+        let dir = tempdir.path().to_str().unwrap();
+        let new_file = format!("{dir}/new.txt");
+        let existing_file = format!("{dir}/existing.txt");
+        let missing_dir = format!("{dir}/missing");
+        let file_in_missing_dir = format!("{missing_dir}/missing.txt");
+        std::fs::File::create(&existing_file).unwrap();
+
+        let test_cases: Vec<(Vec<&str>, Result<()>)> = vec![
+            (
+                vec!["s3://bucket/key", "--output", new_file.as_str()],
+                Ok(()),
+            ),
+            (
+                vec![
+                    "s3://bucket/key",
+                    "--output",
+                    existing_file.as_str(),
+                    "--overwrite",
+                ],
+                Ok(()),
+            ),
+            (
+                vec!["s3://bucket/key", "--output", file_in_missing_dir.as_str()],
+                Err(Error::ValidationError(format!(
+                    "output path {missing_dir} is not a directory"
+                ))),
+            ),
+            (
+                vec!["s3://bucket/key", "--output", existing_file.as_str()],
+                Err(Error::ValidationError(format!(
+                    "output path {existing_file} is already exist"
+                ))),
+            ),
+            (
+                vec!["s3://bucket/key", "--output", "/"],
+                Err(Error::ValidationError(
+                    "output path / is not exist".to_string(),
+                )),
+            ),
+        ];
+
+        for (argv, expected) in test_cases {
+            let command =
+                ExportCommand::parse_from(std::iter::once("dfstore").chain(argv.iter().copied()));
+            let result = command.validate_args();
+            assert_eq!(
+                result.map_err(|err| err.to_string()),
+                expected.map_err(|err| err.to_string())
+            );
+        }
     }
 }

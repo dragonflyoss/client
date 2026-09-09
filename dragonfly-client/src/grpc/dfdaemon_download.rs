@@ -61,9 +61,12 @@ use dragonfly_client_metric::{
     collect_upload_task_finished_metrics, collect_upload_task_started_metrics,
 };
 use dragonfly_client_util::{
-    digest::{is_blob_url, verify_file_digest, Digest},
+    digest::{is_blob_url, is_manifest_digest_url, verify_file_digest, Digest},
     http::{hashmap_to_headermap, headermap_to_hashmap, parse_range_header},
-    id_generator::{PersistentCacheTaskIDParameter, PersistentTaskIDParameter, TaskIDParameter},
+    id_generator::{
+        repository_revision, PersistentCacheTaskIDParameter, PersistentTaskIDParameter,
+        TaskIDParameter,
+    },
     ratelimiter::bbr::BBR,
     shutdown,
     types::redacted::{RedactedDownload, RedactedDownloadPersistentTaskRequest},
@@ -351,20 +354,18 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                     TaskIDParameter::Content(content)
                 } else if download.enable_task_id_based_blob_digest && is_blob_url(&download.url) {
                     TaskIDParameter::BlobDigestBased(download.url.clone())
+                } else if download.enable_task_id_based_blob_digest
+                    && is_manifest_digest_url(&download.url)
+                {
+                    TaskIDParameter::ManifestDigestBased(download.url.clone())
                 } else {
-                    let revision = download
-                        .hugging_face
-                        .as_ref()
-                        .map(|hf| hf.revision.clone())
-                        .or_else(|| download.model_scope.as_ref().map(|ms| ms.revision.clone()));
-
                     TaskIDParameter::URLBased {
                         url: download.url.clone(),
                         piece_length: download.piece_length,
                         tag: download.tag.clone(),
                         application: download.application.clone(),
                         filtered_query_params: download.filtered_query_params.clone(),
-                        revision,
+                        revision: repository_revision(&download),
                     }
                 },
             )
@@ -500,10 +501,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             err: impl std::error::Error,
         ) {
             out_stream_tx
-                .send_timeout(
-                    Err(Status::internal(err.to_string())),
-                    super::REQUEST_TIMEOUT,
-                )
+                .send(Err(Status::internal(err.to_string())))
                 .await
                 .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
         }
@@ -514,7 +512,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             err: Status,
         ) {
             out_stream_tx
-                .send_timeout(Err(err), super::REQUEST_TIMEOUT)
+                .send(Err(err))
                 .await
                 .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
         }
@@ -749,7 +747,9 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                     );
                 }
                 // If the task is already prefetched, ignore the error.
-                Err(ClientError::InvalidState(_)) => debug!("task is already prefetched"),
+                Err(err @ ClientError::InvalidState(_)) => {
+                    debug!("task is already prefetched: {}", err)
+                }
                 Err(err) => {
                     error!("prefetch task started: {}", err);
                 }
@@ -961,6 +961,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 hdfs: request.hdfs.clone(),
                 hugging_face: request.hugging_face.clone(),
                 model_scope: request.model_scope.clone(),
+                open_csg: request.open_csg.clone(),
             })
             .await
             .map_err(|err| {
@@ -1294,10 +1295,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             err: impl std::error::Error,
         ) {
             out_stream_tx
-                .send_timeout(
-                    Err(Status::internal(err.to_string())),
-                    super::REQUEST_TIMEOUT,
-                )
+                .send(Err(Status::internal(err.to_string())))
                 .await
                 .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
         }
@@ -1850,10 +1848,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             err: impl std::error::Error,
         ) {
             out_stream_tx
-                .send_timeout(
-                    Err(Status::internal(err.to_string())),
-                    super::REQUEST_TIMEOUT,
-                )
+                .send(Err(Status::internal(err.to_string())))
                 .await
                 .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
         }
@@ -2327,23 +2322,29 @@ impl DfdaemonDownloadClient {
             .load_client_tls_config(domain_name.as_str())
             .await?
         {
-            Some(client_tls_config) => {
-                Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
-                    .tls_config(client_tls_config)?
-                    .buffer_size(super::BUFFER_SIZE)
-                    .connect_timeout(super::CONNECT_TIMEOUT)
-                    .timeout(super::REQUEST_TIMEOUT)
-                    .tcp_keepalive(Some(super::TCP_KEEPALIVE))
-                    .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
-                    .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
-                    .connect()
-                    .await
-                    .inspect_err(|err| {
-                        error!("connect to {} failed: {}", addr, err);
-                    })
-                    .or_err(ErrorType::ConnectError)?
-            }
-            None => Channel::from_static(Box::leak(addr.clone().into_boxed_str()))
+            Some(client_tls_config) => Channel::from_shared(addr.clone())
+                .inspect_err(|err| {
+                    error!("invalid address {}: {}", addr, err);
+                })
+                .or_err(ErrorType::ParseError)?
+                .tls_config(client_tls_config)?
+                .buffer_size(super::BUFFER_SIZE)
+                .connect_timeout(super::CONNECT_TIMEOUT)
+                .timeout(super::REQUEST_TIMEOUT)
+                .tcp_keepalive(Some(super::TCP_KEEPALIVE))
+                .http2_keep_alive_interval(super::HTTP2_KEEP_ALIVE_INTERVAL)
+                .keep_alive_timeout(super::HTTP2_KEEP_ALIVE_TIMEOUT)
+                .connect()
+                .await
+                .inspect_err(|err| {
+                    error!("connect to {} failed: {}", addr, err);
+                })
+                .or_err(ErrorType::ConnectError)?,
+            None => Channel::from_shared(addr.clone())
+                .inspect_err(|err| {
+                    error!("invalid address {}: {}", addr, err);
+                })
+                .or_err(ErrorType::ParseError)?
                 .buffer_size(super::BUFFER_SIZE)
                 .connect_timeout(super::CONNECT_TIMEOUT)
                 .timeout(super::REQUEST_TIMEOUT)

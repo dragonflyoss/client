@@ -16,7 +16,7 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use dragonfly_api::common::v2::{Hdfs, HuggingFace, ModelScope, ObjectStorage, Range};
+use dragonfly_api::common::v2::{Hdfs, HuggingFace, ModelScope, ObjectStorage, OpenCsg, Range};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
@@ -42,6 +42,7 @@ pub mod hugging_face;
 pub mod model_scope;
 pub mod object_storage;
 pub mod oci;
+pub mod opencsg;
 
 /// The max idle connections per host.
 const POOL_MAX_IDLE_PER_HOST: usize = 1024;
@@ -105,6 +106,9 @@ pub struct StatRequest {
 
     /// Model Scope is the model scope related information.
     pub model_scope: Option<ModelScope>,
+
+    /// OpenCSG is the OpenCSG related information.
+    pub open_csg: Option<OpenCsg>,
 }
 
 /// The stat response for backend.
@@ -164,6 +168,9 @@ pub struct GetRequest {
 
     /// Model Scope is the model scope related information.
     pub model_scope: Option<ModelScope>,
+
+    /// OpenCSG is the OpenCSG related information.
+    pub open_csg: Option<OpenCsg>,
 }
 
 /// The get response for backend.
@@ -242,6 +249,9 @@ pub struct ExistsRequest {
 
     /// Model Scope is the model scope related information.
     pub model_scope: Option<ModelScope>,
+
+    /// OpenCSG is the OpenCSG related information.
+    pub open_csg: Option<OpenCsg>,
 }
 
 /// The put request for backend.
@@ -275,6 +285,9 @@ pub struct PutRequest {
 
     /// Model Scope is the model scope related information.
     pub model_scope: Option<ModelScope>,
+
+    /// OpenCSG is the OpenCSG related information.
+    pub open_csg: Option<OpenCsg>,
 }
 
 /// The put response for backend.
@@ -497,6 +510,12 @@ impl BackendFactory {
         );
         info!("load [hf] builtin backend");
 
+        self.backends.insert(
+            opencsg::SCHEME.to_string(),
+            Box::new(opencsg::OpenCsg::new(self.config.clone())?),
+        );
+        info!("load [opencsg] builtin backend");
+
         Ok(())
     }
 
@@ -546,136 +565,28 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    #[test]
-    fn should_create_backend_factory_without_plugin_dir() {
-        let result = BackendFactory::new(Arc::new(Config::default()), None);
-        assert!(result.is_ok());
+    const BUILTIN_SCHEMES: [&str; 12] = [
+        "http",
+        "https",
+        "s3",
+        "gs",
+        "abs",
+        "oss",
+        "obs",
+        "cos",
+        "hdfs",
+        "hf",
+        "modelscope",
+        "opencsg",
+    ];
+
+    fn plugin_dir(root: &Path) -> PathBuf {
+        let plugin_dir = root.join("plugin");
+        fs::create_dir_all(plugin_dir.join(NAME)).unwrap();
+        plugin_dir
     }
 
-    #[test]
-    fn should_load_builtin_backends() {
-        let factory = BackendFactory::new(Arc::new(Config::default()), None).unwrap();
-        let expected_backends = vec![
-            "http",
-            "https",
-            "s3",
-            "gs",
-            "abs",
-            "oss",
-            "obs",
-            "cos",
-            "hdfs",
-            "hf",
-            "modelscope",
-        ];
-        for backend in expected_backends {
-            assert!(factory.backends.contains_key(backend));
-        }
-    }
-
-    #[test]
-    fn should_load_plugin_backends() {
-        // Create plugin directory.
-        let dir = tempdir().unwrap();
-        let plugin_dir = dir.path().join("plugin");
-        std::fs::create_dir(&plugin_dir).unwrap();
-
-        let backend_dir = plugin_dir.join(NAME);
-        std::fs::create_dir(&backend_dir).unwrap();
-
-        build_example_plugin(&backend_dir);
-
-        let result = BackendFactory::new(Arc::new(Config::default()), Some(&plugin_dir));
-        assert!(result.is_ok());
-
-        let factory = result.unwrap();
-        assert!(factory.backends.contains_key("hdfs"));
-    }
-
-    #[test]
-    fn should_skip_loading_plugins_when_plugin_dir_is_invalid() {
-        let dir = tempdir().unwrap();
-        let plugin_dir = dir.path().join("non_existent_plugin_dir");
-
-        let factory = BackendFactory::new(Arc::new(Config::default()), Some(&plugin_dir)).unwrap();
-        assert_eq!(factory.backends.len(), 11);
-    }
-
-    #[test]
-    fn should_return_error_when_plugin_loading_fails() {
-        let dir = tempdir().unwrap();
-        let plugin_dir = dir.path().join("plugin");
-        std::fs::create_dir(&plugin_dir).unwrap();
-
-        let backend_dir = plugin_dir.join(NAME);
-        std::fs::create_dir(&backend_dir).unwrap();
-
-        // Invalid plugin that cannot be loaded.
-        let lib_path = backend_dir.join("libinvalid_plugin.so");
-        std::fs::write(&lib_path, b"invalid content").unwrap();
-
-        let result = BackendFactory::new(Arc::new(Config::default()), Some(&plugin_dir));
-        assert!(result.is_err());
-        let err_msg = format!("{}", result.err().unwrap());
-
-        assert!(
-            err_msg.starts_with("PluginError cause:"),
-            "error message should start with 'PluginError cause:'"
-        );
-        assert!(
-            err_msg.contains(&lib_path.display().to_string()),
-            "error message should contain library path"
-        );
-    }
-
-    #[test]
-    fn should_build_correct_backend() {
-        // Create plugin directory.
-        let dir = tempdir().unwrap();
-        let plugin_dir = dir.path().join("plugin");
-        std::fs::create_dir(&plugin_dir).unwrap();
-
-        let backend_dir = plugin_dir.join(NAME);
-        std::fs::create_dir(&backend_dir).unwrap();
-
-        build_example_plugin(&backend_dir);
-
-        let factory = BackendFactory::new(Arc::new(Config::default()), Some(&plugin_dir)).unwrap();
-        let schemes = vec![
-            "http", "https", "s3", "gs", "abs", "oss", "obs", "cos", "hdfs", "hf",
-        ];
-
-        for scheme in schemes {
-            let result = factory.build(&format!("{scheme}://example.com/key"));
-            assert!(result.is_ok());
-
-            let backend = result.unwrap();
-            assert_eq!(backend.scheme(), scheme);
-        }
-    }
-
-    #[test]
-    fn should_return_error_when_backend_scheme_is_not_support() {
-        let factory = BackendFactory::new(Arc::new(Config::default()), None).unwrap();
-        let result = factory.build("github://example.com");
-        assert!(result.is_err());
-        assert_eq!(format!("{}", result.err().unwrap()), "invalid parameter");
-    }
-
-    #[test]
-    fn should_return_error_when_backend_scheme_is_invalid() {
-        let factory = BackendFactory::new(Arc::new(Config::default()), None).unwrap();
-        let result = factory.build("invalid_scheme://example.com");
-        assert!(result.is_err());
-        assert_eq!(
-            format!("{}", result.err().unwrap()),
-            "ParseError cause: relative URL without a base",
-        );
-    }
-
-    // build_example_plugin builds the example plugin.
     fn build_example_plugin(backend_dir: &Path) {
-        // Build example plugin.
         let status = std::process::Command::new("cargo")
             .arg("build")
             .current_dir("./examples/plugin")
@@ -689,10 +600,110 @@ mod tests {
             "libhdfs.so"
         };
 
-        std::fs::rename(
-            format!("../target/debug/{plugin_file}"),
+        let target_dir =
+            std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| "../target".to_string());
+        fs::copy(
+            Path::new(&target_dir).join("debug").join(plugin_file),
             backend_dir.join(plugin_file),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn new_loads_builtin_backends_without_plugins() {
+        let dir = tempdir().unwrap();
+
+        let test_cases = vec![None, Some(dir.path().join("non_existent_plugin_dir"))];
+
+        for plugin_dir in test_cases {
+            let factory =
+                BackendFactory::new(Arc::new(Config::default()), plugin_dir.as_deref()).unwrap();
+            assert_eq!(factory.backends.len(), BUILTIN_SCHEMES.len());
+            assert!(factory.libraries.is_empty());
+
+            for scheme in BUILTIN_SCHEMES {
+                assert!(factory.backends.contains_key(scheme));
+            }
+        }
+    }
+
+    #[test]
+    fn new_loads_plugin_backends_from_plugin_dir() {
+        let dir = tempdir().unwrap();
+        let plugin_dir = plugin_dir(dir.path());
+        build_example_plugin(&plugin_dir.join(NAME));
+
+        let factory = BackendFactory::new(Arc::new(Config::default()), Some(&plugin_dir)).unwrap();
+        assert_eq!(factory.libraries.len(), 1);
+        assert_eq!(factory.backends.len(), BUILTIN_SCHEMES.len());
+        assert_eq!(
+            factory.build("hdfs://example.com/key").unwrap().scheme(),
+            "hdfs"
+        );
+    }
+
+    #[test]
+    fn new_fails_when_a_plugin_cannot_be_loaded() {
+        let dir = tempdir().unwrap();
+        let plugin_dir = plugin_dir(dir.path());
+        let lib_path = plugin_dir.join(NAME).join("libinvalid_plugin.so");
+        fs::write(&lib_path, b"invalid content").unwrap();
+
+        let err = BackendFactory::new(Arc::new(Config::default()), Some(&plugin_dir))
+            .err()
+            .unwrap();
+        let err_msg = err.to_string();
+        assert!(err_msg.starts_with("PluginError cause:"));
+        assert!(err_msg.contains(&lib_path.display().to_string()));
+    }
+
+    #[test]
+    fn build_resolves_backend_by_url_scheme() {
+        let test_cases = vec![
+            ("http://example.com/key", Ok("http")),
+            ("https://example.com/key", Ok("https")),
+            ("s3://example.com/key", Ok("s3")),
+            ("gs://example.com/key", Ok("gs")),
+            ("abs://example.com/key", Ok("abs")),
+            ("oss://example.com/key", Ok("oss")),
+            ("obs://example.com/key", Ok("obs")),
+            ("cos://example.com/key", Ok("cos")),
+            ("hdfs://example.com/key", Ok("hdfs")),
+            ("hf://example.com/key", Ok("hf")),
+            ("modelscope://example.com/key", Ok("modelscope")),
+            ("opencsg://example.com/key", Ok("opencsg")),
+            ("github://example.com", Err("invalid parameter")),
+            (
+                "invalid_scheme://example.com",
+                Err("ParseError cause: relative URL without a base"),
+            ),
+        ];
+
+        let factory = BackendFactory::new(Arc::new(Config::default()), None).unwrap();
+        for (url, expected) in test_cases {
+            let result = factory
+                .build(url)
+                .map(|backend| backend.scheme())
+                .map_err(|err| err.to_string());
+            assert_eq!(result.as_deref().map_err(String::as_str), expected);
+        }
+    }
+
+    #[test]
+    fn unsupported_download_directory_flags_http_schemes() {
+        let test_cases = vec![
+            ("http", true),
+            ("https", true),
+            ("s3", false),
+            ("hdfs", false),
+            ("hf", false),
+        ];
+
+        for (scheme, expected) in test_cases {
+            assert_eq!(
+                BackendFactory::unsupported_download_directory(scheme),
+                expected
+            );
+        }
     }
 }

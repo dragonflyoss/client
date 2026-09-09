@@ -271,6 +271,24 @@ size_t dfrdma_max_msg_size(dfrdma_fabric *f)
     return f->info->ep_attr->max_msg_size;
 }
 
+uint64_t dfrdma_usable_tag_mask(uint64_t tag)
+{
+    /* mem_tag_format describes fields, not a bit mask: internal zero bits are usable.
+     * Only the leading zero bits are reserved. We use exact matching (ignore=0). */
+    tag |= tag >> 1;
+    tag |= tag >> 2;
+    tag |= tag >> 4;
+    tag |= tag >> 8;
+    tag |= tag >> 16;
+    tag |= tag >> 32;
+    return tag;
+}
+
+uint64_t dfrdma_max_tag(dfrdma_fabric *f)
+{
+    return dfrdma_usable_tag_mask(f->info->ep_attr->mem_tag_format);
+}
+
 int dfrdma_mr_required(dfrdma_fabric *f)
 {
     return f->mr_required;

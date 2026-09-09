@@ -11,6 +11,7 @@ edition.workspace = true
 build = "build.rs"
 
 [dependencies]
+dragonfly-api.workspace = true
 dragonfly-client-core.workspace = true
 dragonfly-client-util.workspace = true
 local-ip-address.workspace = true
@@ -20,7 +21,6 @@ serde_regex.workspace = true
 serde.workspace = true
 tracing.workspace = true
 validator.workspace = true
-humantime.workspace = true
 serde_yaml.workspace = true
 tokio.workspace = true
 tempfile.workspace = true
@@ -32,7 +32,6 @@ rustls-pki-types.workspace = true
 rcgen.workspace = true
 reqwest.workspace = true
 hostname.workspace = true
-lazy_static.workspace = true
 humantime-serde.workspace = true
 home = "0.5.11"
 http-serde = "2.1.1"

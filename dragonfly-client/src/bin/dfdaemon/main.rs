@@ -30,6 +30,7 @@ use dragonfly_client::resource::{
     persistent_cache_task::PersistentCacheTask, persistent_task::PersistentTask, task::Task,
 };
 use dragonfly_client::stats::Stats;
+use dragonfly_client::terminal;
 use dragonfly_client::tracing::init_tracing;
 use dragonfly_client_backend::BackendFactory;
 use dragonfly_client_config::{dfdaemon, VersionValueParser};
@@ -44,7 +45,6 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use termion::{color, style};
 use tokio::sync::mpsc;
 use tokio::sync::Barrier;
 use tracing::{error, info, Level};
@@ -146,6 +146,9 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
+    // Install the default crypto provider for rustls.
+    dragonfly_client_util::tls::install_crypto_provider();
+
     // Parse command line arguments.
     let args = Args::parse();
 
@@ -153,25 +156,14 @@ async fn main() -> Result<(), anyhow::Error> {
     let config = match dfdaemon::Config::load(&args.config).await {
         Ok(config) => config,
         Err(err) => {
-            println!(
-                "{}{}Load config {} error: {}{}\n",
-                color::Fg(color::Red),
-                style::Bold,
+            terminal::error(format!(
+                "Load config {} error: {}",
                 args.config.display(),
-                err,
-                style::Reset
-            );
+                err
+            ));
+            println!();
 
-            println!(
-                "{}{}If the file does not exist, you need to new a default config file refer to: {}{}{}{}https://d7y.io/docs/next/reference/configuration/client/dfdaemon/{}",
-                color::Fg(color::Yellow),
-                style::Bold,
-                style::Reset,
-                color::Fg(color::Cyan),
-                style::Underline,
-                style::Italic,
-                style::Reset,
-            );
+            terminal::warn("If the file does not exist, you need to new a default config file refer to: https://d7y.io/docs/next/reference/configuration/client/dfdaemon/");
             std::process::exit(1);
         }
     };
@@ -389,14 +381,12 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown_complete_tx.clone(),
     );
 
-    // Initialize storage rdma server when the build and configuration enable it. The task
-    // never resolves when RDMA is disabled so the select! below is unaffected; RDMA is an
-    // optimization and the TCP storage server always remains available.
-    let storage_rdma_server_task: tokio::task::JoinHandle<()> = {
+    // RDMA is optional and recovers independently. Its task must not participate in the
+    // daemon's critical select, including when it panics; TCP/QUIC keep serving.
+    let _storage_rdma_server_task: Option<tokio::task::JoinHandle<()>> = {
         #[cfg(feature = "rdma")]
         {
             if config.storage.server.rdma.enable {
-                let mut rdma_shutdown = shutdown.clone();
                 let mut storage_rdma_server =
                     dragonfly_client_storage::server::rdma::RDMAServer::new(
                         config.clone(),
@@ -411,24 +401,23 @@ async fn main() -> Result<(), anyhow::Error> {
                         shutdown_complete_tx.clone(),
                     )
                     .with_capability_registry(rdma_capabilities.clone());
-                tokio::spawn(async move {
+                Some(tokio::spawn(async move {
                     if let Err(err) = storage_rdma_server.run().await {
-                        error!("storage rdma server disabled after failure: {}", err);
-                        // RDMA is optional. Keep this task alive so its failure cannot win the
-                        // daemon's critical select and shut down healthy TCP/QUIC services.
-                        rdma_shutdown.recv().await;
+                        error!("storage rdma server exited after failure: {}", err);
                     }
-                })
+                }))
             } else {
-                tokio::spawn(std::future::pending())
+                None
             }
         }
         #[cfg(not(feature = "rdma"))]
         {
             if config.storage.server.rdma.enable {
-                error!("storage.server.rdma.enable is set but this build lacks the rdma feature, rdma server disabled");
+                error!(
+                    "storage.server.rdma.enable is set but this build lacks the rdma feature, rdma server disabled"
+                );
             }
-            tokio::spawn(std::future::pending())
+            None
         }
     };
 
@@ -579,10 +568,6 @@ async fn main() -> Result<(), anyhow::Error> {
             info!("storage quic server exited");
         },
 
-        _ = storage_rdma_server_task => {
-            info!("storage rdma server exited");
-        },
-
         result = &mut dfdaemon_upload_grpc_handle => {
             result.context("dfdaemon upload grpc server failed")??;
             info!("dfdaemon upload grpc server exited");
@@ -639,13 +624,54 @@ mod tests {
     use tokio::sync::mpsc;
 
     #[test]
-    fn logging_uses_cli_defaults_when_options_are_omitted() {
-        let args = Args::try_parse_from(["dfdaemon"]).unwrap();
-        assert_eq!(args.log_level, Level::INFO);
-        assert_eq!(args.log_dir, dfdaemon::default_dfdaemon_log_dir());
-        assert_eq!(args.log_max_files, 6);
-        assert_eq!(args.log_max_file_size, ByteSize::gib(1));
-        assert!(!args.console);
+    fn args_parse_logging_options_and_defaults() {
+        let test_cases = vec![
+            (
+                vec!["dfdaemon"],
+                (
+                    Level::INFO,
+                    dfdaemon::default_dfdaemon_log_dir(),
+                    6,
+                    ByteSize::gib(1),
+                    false,
+                ),
+            ),
+            (
+                vec![
+                    "dfdaemon",
+                    "--log-level",
+                    "debug",
+                    "--log-dir",
+                    "/var/log/dfdaemon-test",
+                    "--log-max-files",
+                    "3",
+                    "--log-max-file-size",
+                    "512MiB",
+                    "--console",
+                ],
+                (
+                    Level::DEBUG,
+                    PathBuf::from("/var/log/dfdaemon-test"),
+                    3,
+                    ByteSize::mib(512),
+                    true,
+                ),
+            ),
+        ];
+
+        for (argv, expected) in test_cases {
+            let args = Args::try_parse_from(&argv).unwrap();
+            assert_eq!(
+                (
+                    args.log_level,
+                    args.log_dir,
+                    args.log_max_files,
+                    args.log_max_file_size,
+                    args.console,
+                ),
+                expected
+            );
+        }
     }
 
     #[tokio::test]

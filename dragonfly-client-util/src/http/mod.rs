@@ -16,10 +16,11 @@
 
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_core::{
-    error::{ErrorType, OrErr},
+    error::{BackendError, ErrorType, OrErr},
     Error, Result,
 };
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_RANGE};
+use reqwest::StatusCode;
 use std::collections::HashMap;
 
 pub mod basic_auth;
@@ -97,48 +98,159 @@ pub fn parse_range_header(range_header_value: &str, content_length: u64) -> Resu
     Ok(Range { start, length })
 }
 
+/// Validates that a ranged response satisfies the requested range, since the server may
+/// ignore the Range header or transfer a range different from the requested one, which is
+/// described by the Content-Range header, refer to RFC 9110 Section 15.3.7.
+pub fn validate_ranged_response(
+    range: Option<Range>,
+    status_code: StatusCode,
+    response_header: &HeaderMap,
+) -> Result<()> {
+    let Some(range) = range else {
+        return Ok(());
+    };
+
+    if !status_code.is_success() {
+        return Ok(());
+    }
+
+    let err = |message: String| {
+        Error::BackendError(Box::new(BackendError {
+            message,
+            status_code: Some(status_code),
+            header: Some(response_header.clone()),
+        }))
+    };
+
+    let expected_end = range.start + range.length - 1;
+    if status_code != StatusCode::PARTIAL_CONTENT {
+        if range.start == 0 {
+            return Ok(());
+        }
+
+        return Err(err(format!(
+            "expected 206 Partial Content for range bytes={}-{}, got {}",
+            range.start, expected_end, status_code
+        )));
+    }
+
+    let content_range = response_header
+        .get(CONTENT_RANGE)
+        .and_then(|content_range| content_range.to_str().ok())
+        .ok_or_else(|| {
+            err(format!(
+                "missing Content-Range for range bytes={}-{}",
+                range.start, expected_end
+            ))
+        })?;
+
+    // The Content-Range is formatted as "bytes <start>-<end>/<total>".
+    let (actual_start, actual_end) = content_range
+        .strip_prefix("bytes ")
+        .and_then(|content_range| content_range.split_once('/'))
+        .and_then(|(bytes_range, _)| bytes_range.split_once('-'))
+        .and_then(|(start, end)| Some((start.parse::<u64>().ok()?, end.parse::<u64>().ok()?)))
+        .ok_or_else(|| err(format!("invalid Content-Range {content_range}")))?;
+
+    if actual_start != range.start || actual_end != expected_end {
+        return Err(err(format!(
+            "Content-Range {} mismatches requested range bytes={}-{}",
+            content_range, range.start, expected_end
+        )));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
-    use reqwest::header::{HeaderMap, HeaderValue};
+    use reqwest::header::RANGE;
 
     #[test]
-    fn test_headermap_to_hashmap() {
+    fn headermap_to_hashmap_keeps_visible_ascii_values() {
         let mut header = HeaderMap::new();
         header.insert("Content-Type", HeaderValue::from_static("application/json"));
         header.insert("Authorization", HeaderValue::from_static("Bearer token"));
+        header.insert("X-Binary", HeaderValue::from_bytes(b"\xff").unwrap());
 
         let hashmap = headermap_to_hashmap(&header);
+        assert_eq!(hashmap.len(), 2);
         assert_eq!(hashmap.get("content-type").unwrap(), "application/json");
         assert_eq!(hashmap.get("authorization").unwrap(), "Bearer token");
-        assert_eq!(hashmap.get("foo"), None);
     }
 
     #[test]
-    fn test_hashmap_to_headermap() {
-        let mut hashmap = HashMap::new();
-        hashmap.insert("Content-Type".to_string(), "application/json".to_string());
-        hashmap.insert("Authorization".to_string(), "Bearer token".to_string());
-
-        let header = hashmap_to_headermap(&hashmap).unwrap();
-        assert_eq!(header.get("Content-Type").unwrap(), "application/json");
-        assert_eq!(header.get("Authorization").unwrap(), "Bearer token");
-    }
-
-    #[test]
-    fn test_header_vec_to_hashmap() {
-        let raw_header = vec![
-            "Content-Type: application/json".to_string(),
-            "Authorization: Bearer token".to_string(),
+    fn hashmap_to_headermap_rejects_invalid_names_and_values() {
+        let test_cases: Vec<(Vec<(&str, &str)>, fn(Result<HeaderMap>))> = vec![
+            (
+                vec![
+                    ("Content-Type", "application/json"),
+                    ("Authorization", "Bearer token"),
+                ],
+                |header| {
+                    let header = header.unwrap();
+                    assert_eq!(header.get("Content-Type").unwrap(), "application/json");
+                    assert_eq!(header.get("Authorization").unwrap(), "Bearer token");
+                },
+            ),
+            (vec![("Content Type", "application/json")], |header| {
+                assert!(matches!(header, Err(Error::ExternalError(_))))
+            }),
+            (vec![("Content-Type", "application/\njson")], |header| {
+                assert!(matches!(header, Err(Error::ExternalError(_))))
+            }),
         ];
 
-        let hashmap = header_vec_to_hashmap(raw_header).unwrap();
-        assert_eq!(hashmap.get("Content-Type").unwrap(), "application/json");
-        assert_eq!(hashmap.get("Authorization").unwrap(), "Bearer token");
+        for (header_pairs, expect) in test_cases {
+            let hashmap: HashMap<String, String> = header_pairs
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect();
+            expect(hashmap_to_headermap(&hashmap));
+        }
     }
 
     #[test]
-    fn test_header_vec_to_headermap() {
+    fn header_vec_to_hashmap_splits_on_the_first_colon_and_trims() {
+        let test_cases = vec![
+            (
+                vec![
+                    "Content-Type: application/json",
+                    "Authorization: Bearer token",
+                ],
+                vec![
+                    ("Content-Type", "application/json"),
+                    ("Authorization", "Bearer token"),
+                ],
+            ),
+            (
+                vec!["Host:localhost:8080"],
+                vec![("Host", "localhost:8080")],
+            ),
+            (
+                vec!["  Accept :  text/plain  "],
+                vec![("Accept", "text/plain")],
+            ),
+            (vec!["invalid header", ""], vec![]),
+        ];
+
+        for (raw_header, expected) in test_cases {
+            let hashmap =
+                header_vec_to_hashmap(raw_header.iter().map(|header| header.to_string()).collect())
+                    .unwrap();
+            let expected: HashMap<String, String> = expected
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect();
+            assert_eq!(hashmap, expected);
+        }
+    }
+
+    #[test]
+    fn header_vec_to_headermap_parses_raw_headers() {
         let raw_header = vec![
             "Content-Type: application/json".to_string(),
             "Authorization: Bearer token".to_string(),
@@ -150,22 +262,215 @@ mod tests {
     }
 
     #[test]
-    fn test_get_range() {
-        let mut header = HeaderMap::new();
-        header.insert(
-            reqwest::header::RANGE,
-            HeaderValue::from_static("bytes=0-100"),
-        );
+    fn get_range_parses_the_range_header_when_present() {
+        let test_cases: Vec<(Option<&str>, fn(Result<Option<Range>>))> = vec![
+            (None, |result| assert_eq!(result.unwrap(), None)),
+            (Some("bytes=0-100"), |result| {
+                assert_eq!(
+                    result.unwrap(),
+                    Some(Range {
+                        start: 0,
+                        length: 101
+                    })
+                )
+            }),
+            (Some("invalid"), |result| {
+                assert!(matches!(result, Err(Error::ExternalError(_))))
+            }),
+        ];
 
-        let range = get_range(&header, 200).unwrap().unwrap();
-        assert_eq!(range.start, 0);
-        assert_eq!(range.length, 101);
+        for (range_header, expect) in test_cases {
+            let mut header = HeaderMap::new();
+            if let Some(range_header) = range_header {
+                header.insert(RANGE, HeaderValue::from_str(range_header).unwrap());
+            }
+
+            expect(get_range(&header, 200));
+        }
     }
 
     #[test]
-    fn test_parse_range_header() {
-        let range = parse_range_header("bytes=0-100", 200).unwrap();
-        assert_eq!(range.start, 0);
-        assert_eq!(range.length, 101);
+    fn parse_range_header_returns_the_first_satisfiable_range() {
+        let test_cases: Vec<(&str, fn(Result<Range>))> = vec![
+            ("bytes=0-100", |result| {
+                assert_eq!(
+                    result.unwrap(),
+                    Range {
+                        start: 0,
+                        length: 101
+                    }
+                )
+            }),
+            ("bytes=-50", |result| {
+                assert_eq!(
+                    result.unwrap(),
+                    Range {
+                        start: 150,
+                        length: 50
+                    }
+                )
+            }),
+            ("bytes=150-", |result| {
+                assert_eq!(
+                    result.unwrap(),
+                    Range {
+                        start: 150,
+                        length: 50
+                    }
+                )
+            }),
+            ("bytes=0-0,-1", |result| {
+                assert_eq!(
+                    result.unwrap(),
+                    Range {
+                        start: 0,
+                        length: 1
+                    }
+                )
+            }),
+            ("bytes=100-300", |result| {
+                assert_eq!(
+                    result.unwrap(),
+                    Range {
+                        start: 100,
+                        length: 100
+                    }
+                )
+            }),
+            ("bytes=200-", |result| {
+                assert!(matches!(result, Err(Error::ExternalError(_))))
+            }),
+            ("invalid", |result| {
+                assert!(matches!(result, Err(Error::ExternalError(_))))
+            }),
+        ];
+
+        for (range_header, expect) in test_cases {
+            expect(parse_range_header(range_header, 200));
+        }
+    }
+
+    #[test]
+    fn validate_ranged_response_requires_a_matching_content_range() {
+        let test_cases: Vec<(Option<Range>, StatusCode, Option<&str>, fn(Result<()>))> = vec![
+            (None, StatusCode::OK, None, |result| assert!(result.is_ok())),
+            (
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                StatusCode::NOT_FOUND,
+                None,
+                |result| assert!(result.is_ok()),
+            ),
+            (
+                Some(Range {
+                    start: 0,
+                    length: 20,
+                }),
+                StatusCode::OK,
+                None,
+                |result| assert!(result.is_ok()),
+            ),
+            (
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                StatusCode::OK,
+                None,
+                |result| assert!(matches!(result, Err(Error::BackendError(_)))),
+            ),
+            (
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                StatusCode::PARTIAL_CONTENT,
+                Some("bytes 10-29/100"),
+                |result| assert!(result.is_ok()),
+            ),
+            (
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                StatusCode::PARTIAL_CONTENT,
+                None,
+                |result| assert!(matches!(result, Err(Error::BackendError(_)))),
+            ),
+            (
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                StatusCode::PARTIAL_CONTENT,
+                Some("bytes */100"),
+                |result| assert!(matches!(result, Err(Error::BackendError(_)))),
+            ),
+            (
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                StatusCode::PARTIAL_CONTENT,
+                Some("bytes 10-/100"),
+                |result| assert!(matches!(result, Err(Error::BackendError(_)))),
+            ),
+            (
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                StatusCode::PARTIAL_CONTENT,
+                Some("10-29/100"),
+                |result| assert!(matches!(result, Err(Error::BackendError(_)))),
+            ),
+            (
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                StatusCode::PARTIAL_CONTENT,
+                Some("bytes 10-29"),
+                |result| assert!(matches!(result, Err(Error::BackendError(_)))),
+            ),
+            (
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                StatusCode::PARTIAL_CONTENT,
+                Some("bytes 0-29/100"),
+                |result| assert!(matches!(result, Err(Error::BackendError(_)))),
+            ),
+            (
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                StatusCode::PARTIAL_CONTENT,
+                Some("bytes 10-30/100"),
+                |result| assert!(matches!(result, Err(Error::BackendError(_)))),
+            ),
+            (
+                Some(Range {
+                    start: 10,
+                    length: 20,
+                }),
+                StatusCode::PARTIAL_CONTENT,
+                Some("bytes 0-99/100"),
+                |result| assert!(matches!(result, Err(Error::BackendError(_)))),
+            ),
+        ];
+
+        for (range, status_code, content_range, expect) in test_cases {
+            let mut header = HeaderMap::new();
+            if let Some(content_range) = content_range {
+                header.insert(CONTENT_RANGE, HeaderValue::from_str(content_range).unwrap());
+            }
+
+            expect(validate_ranged_response(range, status_code, &header));
+        }
     }
 }

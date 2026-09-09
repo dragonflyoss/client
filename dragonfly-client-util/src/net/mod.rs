@@ -98,59 +98,41 @@ mod tests {
     use std::str::FromStr;
 
     #[test]
-    fn test_format_socket_addr_ipv4() {
-        assert_eq!(
-            format_socket_addr(IpAddr::from_str("127.0.0.1").unwrap(), 80),
-            "127.0.0.1:80"
-        );
+    fn format_socket_addr_brackets_ipv6() {
+        let test_cases = vec![
+            ("127.0.0.1", 80, "127.0.0.1:80"),
+            ("192.168.1.1", 8080, "192.168.1.1:8080"),
+            ("::1", 80, "[::1]:80"),
+            ("2001:db8::1", 8080, "[2001:db8::1]:8080"),
+        ];
 
-        assert_eq!(
-            format_socket_addr(IpAddr::from_str("192.168.1.1").unwrap(), 8080),
-            "192.168.1.1:8080"
-        );
+        for (ip, port, expected) in test_cases {
+            assert_eq!(
+                format_socket_addr(IpAddr::from_str(ip).unwrap(), port),
+                expected
+            );
+        }
     }
 
     #[test]
-    fn test_format_socket_addr_ipv6() {
-        assert_eq!(
-            format_socket_addr(IpAddr::from_str("::1").unwrap(), 80),
-            "[::1]:80"
-        );
+    fn format_url_brackets_ipv6() {
+        let test_cases = vec![
+            ("http", "127.0.0.1", 80, "http://127.0.0.1:80"),
+            ("https", "192.168.1.1", 443, "https://192.168.1.1:443"),
+            ("http", "::1", 80, "http://[::1]:80"),
+            ("https", "2001:db8::1", 443, "https://[2001:db8::1]:443"),
+        ];
 
-        assert_eq!(
-            format_socket_addr(IpAddr::from_str("2001:db8::1").unwrap(), 8080),
-            "[2001:db8::1]:8080"
-        );
+        for (scheme, ip, port, expected) in test_cases {
+            assert_eq!(
+                format_url(scheme, IpAddr::from_str(ip).unwrap(), port),
+                expected
+            );
+        }
     }
 
     #[test]
-    fn test_format_url_ipv4() {
-        assert_eq!(
-            format_url("http", IpAddr::from_str("127.0.0.1").unwrap(), 80),
-            "http://127.0.0.1:80"
-        );
-
-        assert_eq!(
-            format_url("https", IpAddr::from_str("192.168.1.1").unwrap(), 443),
-            "https://192.168.1.1:443"
-        );
-    }
-
-    #[test]
-    fn test_format_url_ipv6() {
-        assert_eq!(
-            format_url("http", IpAddr::from_str("::1").unwrap(), 80),
-            "http://[::1]:80"
-        );
-        assert_eq!(
-            format_url("https", IpAddr::from_str("2001:db8::1").unwrap(), 443),
-            "https://[2001:db8::1]:443"
-        );
-    }
-
-    #[test]
-    fn test_preferred_local_ip() {
-        let ip = preferred_local_ip();
-        assert!(ip.is_some());
+    fn preferred_local_ip_is_found() {
+        assert!(preferred_local_ip().is_some());
     }
 }

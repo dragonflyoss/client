@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::io::RangeReader;
 use crate::Storage;
 use bytes::{Bytes, BytesMut};
 use dragonfly_api::common::v2::TrafficType;
@@ -29,10 +30,13 @@ use dragonfly_client_util::{
     id_generator::IDGenerator, shutdown, tls::generate_simple_self_signed_certs,
 };
 use leaky_bucket::RateLimiter;
-use quinn::{congestion::BbrConfig, AckFrequencyConfig, Endpoint, ServerConfig, TransportConfig};
+use quinn::{
+    congestion::BbrConfig, AckFrequencyConfig, Endpoint, EndpointConfig, ServerConfig,
+    TokioRuntime, TransportConfig,
+};
+use socket2::{Domain, Protocol, Socket, Type};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{copy_buf, AsyncBufRead};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, instrument, Span};
 use vortex_protocol::{
@@ -104,21 +108,43 @@ impl QUICServer {
         transport.stream_receive_window((super::DEFAULT_RECV_BUFFER_SIZE as u32).into());
         server_config.transport_config(Arc::new(transport));
 
-        let endpoint = Endpoint::server(server_config, self.addr)?;
+        let socket = Socket::new(
+            Domain::for_address(self.addr),
+            Type::DGRAM,
+            Some(Protocol::UDP),
+        )?;
+        socket.set_nonblocking(true)?;
+        socket.set_send_buffer_size(super::DEFAULT_SEND_BUFFER_SIZE)?;
+        socket.set_recv_buffer_size(super::DEFAULT_RECV_BUFFER_SIZE)?;
+        socket.bind(&self.addr.into())?;
+
+        let endpoint = Endpoint::new(
+            EndpointConfig::default(),
+            Some(server_config),
+            socket.into(),
+            Arc::new(TokioRuntime),
+        )?;
         info!("storage quic server listening on {}", self.addr);
 
         loop {
             tokio::select! {
                 Some(quic_accepted) = endpoint.accept() => {
-                    let quic = quic_accepted.await.or_err(
-                        ErrorType::ConnectError
-                    )?;
-                    let remote_address = quic.remote_address();
-                    debug!("accepted connection from {}", remote_address);
-
                     let handler = self.handler.clone();
                     tokio::spawn(async move {
-                       if let Err(err) = handler.handle(quic, remote_address).await {
+                        // Await the handshake in the task, so a slow or failed
+                        // handshake does not block or kill the accept loop.
+                        let quic = match quic_accepted.await {
+                            Ok(quic) => quic,
+                            Err(err) => {
+                                error!("failed to accept connection: {}", err);
+                                return;
+                            }
+                        };
+
+                        let remote_address = quic.remote_address();
+                        debug!("accepted connection from {}", remote_address);
+
+                        if let Err(err) = handler.handle(quic, remote_address).await {
                             error!("failed to handle connection from {}: {}", remote_address, err);
                         }
                     });
@@ -228,7 +254,7 @@ impl QUICServerHandler {
 
                 // Collect upload piece started metrics.
                 collect_upload_piece_started_metrics();
-                info!("start upload piece content");
+                debug!("start upload piece content");
 
                 match self.handle_piece(piece_id.as_str(), task_id).await {
                     Ok((piece_content, mut content_reader)) => {
@@ -314,7 +340,7 @@ impl QUICServerHandler {
 
                 // Collect upload piece started metrics.
                 collect_upload_piece_started_metrics();
-                info!("start upload persistent piece content");
+                debug!("start upload persistent piece content");
 
                 match self
                     .handle_persistent_piece(piece_id.as_str(), task_id)
@@ -406,7 +432,7 @@ impl QUICServerHandler {
 
                 // Collect upload piece started metrics.
                 collect_upload_piece_started_metrics();
-                info!("start upload persistent cache piece content");
+                debug!("start upload persistent cache piece content");
 
                 match self
                     .handle_persistent_cache_piece(piece_id.as_str(), task_id)
@@ -500,7 +526,7 @@ impl QUICServerHandler {
         &self,
         piece_id: &str,
         task_id: &str,
-    ) -> Result<(PieceContent, impl AsyncBufRead), Error> {
+    ) -> Result<(PieceContent, RangeReader), Error> {
         // Get the piece metadata from the local storage.
         let piece = match self.storage.get_piece(piece_id) {
             Ok(Some(piece)) => piece,
@@ -525,8 +551,8 @@ impl QUICServerHandler {
             .acquire(piece.length as usize)
             .await;
 
-        // Upload the piece content.
-        let reader = self
+        // Upload the piece content with the piece metadata.
+        let (piece, reader) = self
             .storage
             .upload_piece(piece_id, task_id, None)
             .await
@@ -564,7 +590,7 @@ impl QUICServerHandler {
         &self,
         piece_id: &str,
         task_id: &str,
-    ) -> Result<(PersistentPieceContent, impl AsyncBufRead), Error> {
+    ) -> Result<(PersistentPieceContent, RangeReader), Error> {
         // Get the piece metadata from the local storage.
         let piece = match self.storage.get_persistent_piece(piece_id) {
             Ok(Some(piece)) => piece,
@@ -589,8 +615,8 @@ impl QUICServerHandler {
             .acquire(piece.length as usize)
             .await;
 
-        // Upload the piece content.
-        let reader = self
+        // Upload the piece content with the piece metadata.
+        let (piece, reader) = self
             .storage
             .upload_persistent_piece(piece_id, task_id, None)
             .await
@@ -628,7 +654,7 @@ impl QUICServerHandler {
         &self,
         piece_id: &str,
         task_id: &str,
-    ) -> Result<(PersistentCachePieceContent, impl AsyncBufRead), Error> {
+    ) -> Result<(PersistentCachePieceContent, RangeReader), Error> {
         // Get the piece metadata from the local storage.
         let piece = match self.storage.get_persistent_cache_piece(piece_id) {
             Ok(Some(piece)) => piece,
@@ -653,8 +679,8 @@ impl QUICServerHandler {
             .acquire(piece.length as usize)
             .await;
 
-        // Upload the piece content.
-        let reader = self
+        // Upload the piece content with the piece metadata.
+        let (piece, reader) = self
             .storage
             .upload_persistent_cache_piece(piece_id, task_id, None)
             .await
@@ -745,21 +771,29 @@ impl QUICServerHandler {
 
     /// Streams data from a reader directly to the QUIC writer.
     ///
-    /// This function efficiently copies all data from the provided stream
-    /// to the QUIC connection using tokio's copy_buf utility, which writes the
-    /// reader's internal buffer directly without an intermediate copy buffer.
-    /// It's designed for streaming large piece content without loading
-    /// everything into memory. The operation is flushed to ensure data delivery.
+    /// This function reads owned chunks from the range reader and hands them
+    /// to quinn's write_chunk, so the piece content is queued for sending
+    /// without being copied into the stream's internal send buffer.
     #[instrument(skip_all)]
-    async fn write_stream<R: AsyncBufRead + Unpin + ?Sized>(
+    async fn write_stream(
         &self,
-        stream: &mut R,
+        reader: &mut RangeReader,
         writer: &mut quinn::SendStream,
     ) -> ClientResult<()> {
-        copy_buf(stream, writer)
-            .await
-            .inspect_err(|err| error!("copy failed: {}", err))?;
+        loop {
+            let chunk = reader
+                .read_chunk()
+                .await
+                .inspect_err(|err| error!("failed to read chunk: {}", err))?;
+            if chunk.is_empty() {
+                return Ok(());
+            }
 
-        Ok(())
+            writer
+                .write_chunk(chunk)
+                .await
+                .inspect_err(|err| error!("failed to send chunk: {}", err))
+                .or_err(ErrorType::ConnectError)?;
+        }
     }
 }

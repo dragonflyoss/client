@@ -28,7 +28,7 @@ use dragonfly_client_storage::client::rdma::{discover, RDMAClient};
 use dragonfly_client_storage::rdma::fabric::Fabric;
 use dragonfly_client_storage::rdma::rendezvous::{
     read_frame, write_frame, CapabilityRegistry, Frame, PieceKind, PieceReady, PieceRequest,
-    RendezvousError, WireCapability, ERROR_CODE_BUSY, ERROR_CODE_INTERNAL,
+    RendezvousError, WireCapability, ERROR_CODE_BUSY, ERROR_CODE_INCOMPATIBLE, ERROR_CODE_INTERNAL,
 };
 use dragonfly_client_storage::server::{rdma::RDMAServer, tcp::TCPServer};
 use dragonfly_client_storage::Storage;
@@ -96,7 +96,7 @@ async fn write_piece(storage: &Storage, task_id: &str, number: u32, content: &[u
         .unwrap();
     let piece_id = storage.piece_id(task_id, number);
     storage
-        .download_piece_started(&piece_id, number)
+        .download_piece_started(&piece_id, number, 0, content.len() as u64)
         .await
         .unwrap();
     let piece = storage
@@ -135,7 +135,7 @@ async fn write_persistent_piece(
         .unwrap();
     let piece_id = storage.persistent_piece_id(task_id, number);
     storage
-        .download_persistent_piece_started(&piece_id, number)
+        .download_persistent_piece_started(&piece_id, number, 0, content.len() as u64)
         .await
         .unwrap();
     let piece = storage
@@ -178,7 +178,7 @@ async fn write_persistent_cache_piece(
         .unwrap();
     let piece_id = storage.persistent_cache_piece_id(task_id, number);
     storage
-        .download_persistent_cache_piece_started(&piece_id, number)
+        .download_persistent_cache_piece_started(&piece_id, number, 0, content.len() as u64)
         .await
         .unwrap();
     let piece = storage
@@ -499,7 +499,7 @@ async fn downloads_piece_across_window_boundaries() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn falls_back_when_fabric_tags_mismatch() {
+async fn rejects_incompatible_fabric_tags() {
     let temp_dir = tempfile::tempdir().unwrap();
     let mut config = test_config();
     assign_free_ports(&mut config);
@@ -527,8 +527,14 @@ async fn falls_back_when_fabric_tags_mismatch() {
     let client = RDMAClient::new(config.clone(), fabric, capability, addr.clone());
     let err = client.download_piece(0, task_id).await.unwrap_err();
     assert!(
-        matches!(err, Error::Unsupported(_)),
-        "expected Unsupported, got: {err:?}"
+        matches!(
+            err,
+            Error::RdmaRejected {
+                code: ERROR_CODE_INCOMPATIBLE,
+                ..
+            }
+        ),
+        "expected typed incompatibility, got: {err:?}"
     );
 
     shutdown.trigger();
@@ -587,7 +593,7 @@ async fn reports_control_error_while_receive_is_pending() {
             &Frame::Ready(PieceReady {
                 offset: 0,
                 length: 4096,
-                digest: "crc32:00000000".to_string(),
+                digest: "crc32:0".to_string(),
                 server_endpoint: vec![1],
                 chunk_size: request.chunk_size.min(4096),
                 max_inflight_chunks: 1,
@@ -750,7 +756,7 @@ async fn rejects_a_wrapping_transfer_tag_range() {
     match frame {
         Frame::Error(err) => {
             assert_eq!(err.code, ERROR_CODE_INTERNAL);
-            assert!(err.message.contains("tag range wraps around"));
+            assert!(err.message.contains("unsupported fabric tags"));
         }
         frame => panic!("expected Error, got {frame:?}"),
     }

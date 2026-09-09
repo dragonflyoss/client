@@ -16,16 +16,19 @@
 
 use bytesize::ByteSize;
 use clap::Parser;
-use dragonfly_api::common::v2::{Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, TaskType};
+use dragonfly_api::common::v2::{
+    Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, OpenCsg, SchedulingPolicy, TaskType,
+};
 use dragonfly_api::dfdaemon::v2::{
     download_task_response, DownloadTaskRequest, ListTaskEntriesRequest,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient;
 use dragonfly_client::resource::piece::MIN_PIECE_LENGTH;
+use dragonfly_client::terminal;
 use dragonfly_client::tracing::init_command_tracing;
 use dragonfly_client_backend::{
-    hdfs, hugging_face, model_scope, object_storage, BackendFactory, DirEntry,
+    hdfs, hugging_face, model_scope, object_storage, opencsg, BackendFactory, DirEntry,
 };
 use dragonfly_client_config::VersionValueParser;
 use dragonfly_client_config::{self, dfdaemon, dfget};
@@ -45,7 +48,6 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use std::{cmp::min, fmt::Write};
-use termion::{color, style};
 use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, BufWriter, SeekFrom};
 use tokio::sync::Semaphore;
@@ -110,6 +112,18 @@ Examples:
 
   # Download from ModelScope Hub with authentication token.
   $ dfget modelscope://<owner>/<repo>/<path> -O /tmp/model.safetensors --ms-token=<token>
+
+  # Download a single file from OpenCSG Hub.
+  $ dfget opencsg://<owner>/<repo>/<path> -O /tmp/model.safetensors
+
+  # Download an entire repository from OpenCSG Hub.
+  $ dfget opencsg://<owner>/<repo> -O /tmp/repo/ -r
+
+  # Download an OpenCSG repository at a specified revision.
+  $ dfget opencsg://<owner>/<repo> --csg-revision main -O /tmp/repo/ -r
+
+  # Download from OpenCSG Hub with authentication token.
+  $ dfget opencsg://<owner>/<repo>/<path> -O /tmp/model.safetensors --csg-token=<token>
 "#;
 
 #[derive(Debug, Parser, Clone)]
@@ -251,6 +265,15 @@ struct Args {
     disable_back_to_source: bool,
 
     #[arg(
+        long = "scheduling-policy",
+        default_value = "auto",
+        value_parser = ["auto", "always"],
+        env = "DFGET_SCHEDULING_POLICY",
+        help = "Specify how the download interacts with the scheduler, 'auto' downloads small files from the source directly, 'always' downloads through the scheduler even for small files, so the peer announces the task and other peers can discover it as a parent"
+    )]
+    scheduling_policy: String,
+
+    #[arg(
         long,
         env = "DFGET_STORAGE_REGION",
         help = "Specify the region for the Object Storage Service (e.g., us-east-1)"
@@ -346,6 +369,28 @@ struct Args {
     #[arg(
         long,
         default_value = "main",
+        env = "DFGET_CSG_REVISION",
+        help = "Specify the revision version for OpenCSG Hub"
+    )]
+    csg_revision: String,
+
+    #[arg(
+        long,
+        env = "DFGET_CSG_TOKEN",
+        help = "Specify the authentication token for OpenCSG Hub"
+    )]
+    csg_token: Option<String>,
+
+    #[arg(
+        long,
+        env = "DFGET_CSG_BASE_URL",
+        help = "Specify the base URL of the OpenCSG Hub endpoint (e.g., https://hub-mirror.example.com/csg). If unspecified, it defaults to https://hub.opencsg.com/csg/"
+    )]
+    csg_base_url: Option<String>,
+
+    #[arg(
+        long,
+        default_value = "main",
         env = "DFGET_HF_REVISION",
         help = "Specify the revision version for Hugging Face Hub"
     )]
@@ -431,6 +476,9 @@ const TRANSFER_WRITE_BUFFER_SIZE: usize = 8 * 1024 * 1024;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Install the default crypto provider for rustls.
+    dragonfly_client_util::tls::install_crypto_provider();
+
     // Parse command line arguments.
     let args = convert_args(Args::parse());
 
@@ -439,38 +487,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Validate command line arguments.
     if let Err(err) = validate_args(&args) {
-        println!(
-            "{}{}{}Validating Failed!{}",
-            color::Fg(color::Red),
-            style::Italic,
-            style::Bold,
-            style::Reset
-        );
-
-        println!(
-            "{}{}{}****************************************{}",
-            color::Fg(color::Black),
-            style::Italic,
-            style::Bold,
-            style::Reset
-        );
-
-        println!(
-            "{}{}{}Message:{} {}",
-            color::Fg(color::Cyan),
-            style::Italic,
-            style::Bold,
-            style::Reset,
-            err,
-        );
-
-        println!(
-            "{}{}{}****************************************{}",
-            color::Fg(color::Black),
-            style::Italic,
-            style::Bold,
-            style::Reset
-        );
+        terminal::error("Validating Failed!");
+        terminal::separator();
+        terminal::field("Message:", err);
+        terminal::separator();
 
         std::process::exit(1);
     }
@@ -480,39 +500,17 @@ async fn main() -> anyhow::Result<()> {
         match get_dfdaemon_download_client(args.endpoint.to_path_buf()).await {
             Ok(client) => client,
             Err(err) => {
-                println!(
-                    "{}{}{}Connect Dfdaemon Failed!{}",
-                    color::Fg(color::Red),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
+                terminal::error("Connect Dfdaemon Failed!");
+                terminal::separator();
+                terminal::field(
+                    "Message:",
+                    format!(
+                        "can not connect {}, please check the unix socket {}",
+                        err,
+                        args.endpoint.to_string_lossy()
+                    ),
                 );
-
-                println!(
-                    "{}{}{}****************************************{}",
-                    color::Fg(color::Black),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
-                );
-
-                println!(
-                    "{}{}{}Message:{}, can not connect {}, please check the unix socket {}",
-                    color::Fg(color::Cyan),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset,
-                    err,
-                    args.endpoint.to_string_lossy(),
-                );
-
-                println!(
-                    "{}{}{}****************************************{}",
-                    color::Fg(color::Black),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
-                );
+                terminal::separator();
 
                 std::process::exit(1);
             }
@@ -524,197 +522,59 @@ async fn main() -> anyhow::Result<()> {
             Error::TonicStatus(status) => {
                 let details = status.details();
                 if let Ok(backend_err) = serde_json::from_slice::<Backend>(details) {
-                    println!(
-                        "{}{}{}Downloading Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::error("Downloading Failed!");
+                    terminal::separator();
 
                     if let Some(status_code) = backend_err.status_code {
-                        println!(
-                            "{}{}{}Bad Status Code:{} {}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            status_code
-                        );
+                        terminal::error_field("Bad Status Code:", status_code);
                     }
 
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        backend_err.message
-                    );
+                    terminal::field("Message:", backend_err.message);
 
                     if !backend_err.header.is_empty() {
-                        println!(
-                            "{}{}{}Header:{}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
+                        terminal::headers(
+                            backend_err
+                                .header
+                                .iter()
+                                .map(|(key, value)| (key.as_str(), value.as_str())),
                         );
-                        for (key, value) in backend_err.header.iter() {
-                            println!("  [{}]: {}", key.as_str(), value.as_str());
-                        }
                     }
 
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::separator();
                 } else {
-                    println!(
-                        "{}{}{}Downloading Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}*********************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Bad Code:{} {}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        status.code()
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        status.message()
-                    );
+                    terminal::error("Downloading Failed!");
+                    terminal::separator();
+                    terminal::error_field("Bad Code:", status.code());
+                    terminal::field("Message:", status.message());
 
                     if !status.details().is_empty() {
-                        println!(
-                            "{}{}{}Details:{} {}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            std::str::from_utf8(status.details()).unwrap()
-                        );
+                        terminal::field("Details:", std::str::from_utf8(status.details()).unwrap());
                     }
 
-                    println!(
-                        "{}{}{}*********************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::separator();
                 }
             }
             Error::BackendError(err) => {
-                println!(
-                    "{}{}{}Downloading Failed!{}",
-                    color::Fg(color::Red),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
-                );
-
-                println!(
-                    "{}{}{}****************************************{}",
-                    color::Fg(color::Black),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
-                );
-
-                println!(
-                    "{}{}{}Message:{} {}",
-                    color::Fg(color::Red),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset,
-                    err.message
-                );
+                terminal::error("Downloading Failed!");
+                terminal::separator();
+                terminal::error_field("Message:", err.message);
 
                 if err.header.is_some() {
-                    println!(
-                        "{}{}{}Header:{}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
+                    terminal::headers(
+                        err.header
+                            .unwrap_or_default()
+                            .iter()
+                            .map(|(key, value)| (key.as_str(), value.to_str().unwrap())),
                     );
-                    for (key, value) in err.header.unwrap_or_default().iter() {
-                        println!("  [{}]: {}", key.as_str(), value.to_str().unwrap());
-                    }
                 }
 
-                println!(
-                    "{}{}{}****************************************{}",
-                    color::Fg(color::Black),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
-                );
+                terminal::separator();
             }
             err => {
-                println!(
-                    "{}{}{}Downloading Failed!{}",
-                    color::Fg(color::Red),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
-                );
-
-                println!(
-                    "{}{}{}****************************************{}",
-                    color::Fg(color::Black),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
-                );
-
-                println!(
-                    "{}{}{}Message:{} {}",
-                    color::Fg(color::Red),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset,
-                    err
-                );
-
-                println!(
-                    "{}{}{}****************************************{}",
-                    color::Fg(color::Black),
-                    style::Italic,
-                    style::Bold,
-                    style::Reset
-                );
+                terminal::error("Downloading Failed!");
+                terminal::separator();
+                terminal::error_field("Message:", err);
+                terminal::separator();
             }
         }
 
@@ -808,6 +668,16 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         None
     };
 
+    let open_csg = if url.scheme() == opencsg::SCHEME {
+        Some(OpenCsg {
+            revision: args.csg_revision.clone(),
+            token: args.csg_token.clone(),
+            base_url: args.csg_base_url.clone(),
+        })
+    } else {
+        None
+    };
+
     // Get all entries in the directory with include files filter.
     let entries: Vec<DirEntry> = get_all_entries(
         &args.url,
@@ -817,6 +687,7 @@ async fn download_dir(args: Args, download_client: DfdaemonDownloadClient) -> Re
         hdfs,
         hugging_face,
         model_scope,
+        open_csg,
         download_client.clone(),
     )
     .await?;
@@ -905,6 +776,7 @@ async fn get_all_entries(
     hdfs: Option<Hdfs>,
     hugging_face: Option<HuggingFace>,
     model_scope: Option<ModelScope>,
+    open_csg: Option<OpenCsg>,
     download_client: DfdaemonDownloadClient,
 ) -> Result<Vec<DirEntry>> {
     let urls: HashSet<Url> = match include_files {
@@ -957,6 +829,7 @@ async fn get_all_entries(
             hdfs.clone(),
             hugging_face.clone(),
             model_scope.clone(),
+            open_csg.clone(),
             download_client.clone(),
         )
         .await
@@ -1055,6 +928,16 @@ async fn download(
         None
     };
 
+    let open_csg = if url.scheme() == opencsg::SCHEME {
+        Some(OpenCsg {
+            revision: args.csg_revision.clone(),
+            token: args.csg_token.clone(),
+            base_url: args.csg_base_url.clone(),
+        })
+    } else {
+        None
+    };
+
     // If the `filtered_query_params` is not provided, then use the default value.
     let filtered_query_params = args
         .filtered_query_params
@@ -1090,6 +973,11 @@ async fn download(
                         .or_err(ErrorType::ParseError)?,
                 ),
                 need_back_to_source: false,
+                scheduling_policy: if args.scheduling_policy.eq_ignore_ascii_case("always") {
+                    SchedulingPolicy::Always as i32
+                } else {
+                    SchedulingPolicy::Auto as i32
+                },
                 disable_back_to_source: args.disable_back_to_source,
                 certificate_chain: Vec::new(),
                 prefetch: false,
@@ -1099,6 +987,7 @@ async fn download(
                 hdfs,
                 hugging_face,
                 model_scope,
+                open_csg,
                 force_hard_link: args.force_hard_link,
                 content_for_calculating_task_id: args.content_for_calculating_task_id,
                 remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
@@ -1159,6 +1048,8 @@ async fn download(
 
     // Download file.
     let mut downloaded = 0;
+    let mut initialized = false;
+    let mut remaining_pieces = HashSet::new();
     let mut out_stream = response.into_inner();
     loop {
         match out_stream.message().await {
@@ -1179,6 +1070,9 @@ async fn download(
                             }
                         }
 
+                        initialized = true;
+                        remaining_pieces =
+                            response.pieces.iter().map(|piece| piece.number).collect();
                         progress_bar.set_length(response.content_length);
                     }
                     Some(download_task_response::Response::DownloadPieceFinishedResponse(
@@ -1235,6 +1129,7 @@ async fn download(
                             debug!("copy piece {} to {:?} success", piece.number, args.output);
                         }
 
+                        remaining_pieces.remove(&piece.number);
                         downloaded += piece.length;
                         let position = min(
                             downloaded + piece.length,
@@ -1264,6 +1159,19 @@ async fn download(
         }
     }
 
+    // Abort if the stream ended before all pieces were received.
+    if !initialized || !remaining_pieces.is_empty() {
+        error!(
+            "download incomplete: {} pieces not received",
+            remaining_pieces.len()
+        );
+        fs::remove_file(&args.output).await.inspect_err(|err| {
+            error!("remove file {:?} failed: {}", args.output, err);
+        })?;
+
+        return Err(Error::Unknown("download incomplete".to_string()));
+    }
+
     if let Some(f) = &mut f {
         if let Err(err) = f.flush().await {
             error!("flush {:?} failed: {}", args.output, err);
@@ -1287,6 +1195,7 @@ async fn download(
 /// various storage backends including object storage and HDFS by passing
 /// the appropriate credentials and configuration. The function converts
 /// the gRPC response into a local `DirEntry` format for further processing.
+#[allow(clippy::too_many_arguments)]
 async fn get_entries(
     url: &Url,
     header: Vec<String>,
@@ -1294,6 +1203,7 @@ async fn get_entries(
     hdfs: Option<Hdfs>,
     hugging_face: Option<HuggingFace>,
     model_scope: Option<ModelScope>,
+    open_csg: Option<OpenCsg>,
     download_client: DfdaemonDownloadClient,
 ) -> Result<Vec<DirEntry>> {
     info!("list task entries: {:?}", url);
@@ -1308,6 +1218,7 @@ async fn get_entries(
             hdfs,
             hugging_face,
             model_scope,
+            open_csg,
             remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
         })
         .await
@@ -1469,541 +1380,515 @@ fn is_normal_relative_path(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use dragonfly_api::dfdaemon::v2::{Entry, ListTaskEntriesResponse};
     use mocktail::prelude::*;
     use std::collections::HashMap;
     use tempfile::tempdir;
 
-    #[test]
-    fn should_convert_args() {
-        let tempdir = tempfile::tempdir().unwrap();
+    async fn mock_server(entries: Vec<Entry>) -> MockServer {
+        let mut mocks = MockSet::new();
+        mocks.mock(|when, then| {
+            when.path("/dfdaemon.v2.DfdaemonDownload/ListTaskEntries");
+            then.pb(ListTaskEntriesResponse {
+                content_length: 0,
+                response_header: HashMap::new(),
+                status_code: None,
+                entries,
+            });
+        });
 
+        let server = MockServer::new_grpc("dfdaemon.v2.DfdaemonDownload").with_mocks(mocks);
+        server.start().await.unwrap();
+        server
+    }
+
+    async fn download_client(server: &MockServer) -> DfdaemonDownloadClient {
+        DfdaemonDownloadClient::new(
+            Arc::new(dfdaemon::Config::default()),
+            format!("http://0.0.0.0:{}", server.port().unwrap()),
+        )
+        .await
+        .unwrap()
+    }
+
+    #[test]
+    fn args_parse_hub_options_with_default_revisions() {
+        let test_cases: Vec<(Vec<&str>, fn(&Args))> = vec![
+            (
+                vec![
+                    "hf://owner/repo/model.bin",
+                    "--output",
+                    "model.bin",
+                    "--hf-revision",
+                    "release-v1",
+                    "--hf-token",
+                    "secret",
+                    "--hf-base-url",
+                    "https://hf-mirror.com/",
+                ],
+                |args| {
+                    assert_eq!(args.hf_revision, "release-v1");
+                    assert_eq!(args.hf_token.as_deref(), Some("secret"));
+                    assert_eq!(args.hf_base_url.as_deref(), Some("https://hf-mirror.com/"));
+                },
+            ),
+            (
+                vec!["hf://owner/repo/model.bin", "--output", "model.bin"],
+                |args| {
+                    assert_eq!(args.hf_revision, "main");
+                    assert!(args.hf_token.is_none());
+                    assert!(args.hf_base_url.is_none());
+                },
+            ),
+            (
+                vec![
+                    "modelscope://owner/repo/model.bin",
+                    "--output",
+                    "model.bin",
+                    "--ms-revision",
+                    "release-v1",
+                    "--ms-token",
+                    "secret",
+                    "--ms-base-url",
+                    "https://modelscope-mirror.example.com/",
+                ],
+                |args| {
+                    assert_eq!(args.ms_revision, "release-v1");
+                    assert_eq!(args.ms_token.as_deref(), Some("secret"));
+                    assert_eq!(
+                        args.ms_base_url.as_deref(),
+                        Some("https://modelscope-mirror.example.com/")
+                    );
+                },
+            ),
+            (
+                vec!["modelscope://owner/repo/model.bin", "--output", "model.bin"],
+                |args| {
+                    assert_eq!(args.ms_revision, "master");
+                    assert!(args.ms_token.is_none());
+                    assert!(args.ms_base_url.is_none());
+                },
+            ),
+            (
+                vec![
+                    "opencsg://owner/repo/model.bin",
+                    "--output",
+                    "model.bin",
+                    "--csg-revision",
+                    "release-v1",
+                    "--csg-token",
+                    "secret",
+                    "--csg-base-url",
+                    "https://mirror.example/private/csg/",
+                ],
+                |args| {
+                    assert_eq!(args.csg_revision, "release-v1");
+                    assert_eq!(args.csg_token.as_deref(), Some("secret"));
+                    assert_eq!(
+                        args.csg_base_url.as_deref(),
+                        Some("https://mirror.example/private/csg/")
+                    );
+                },
+            ),
+            (
+                vec!["opencsg://owner/repo/model.bin", "--output", "model.bin"],
+                |args| {
+                    assert_eq!(args.csg_revision, "main");
+                    assert!(args.csg_token.is_none());
+                    assert!(args.csg_base_url.is_none());
+                },
+            ),
+        ];
+
+        for (argv, expect) in test_cases {
+            expect(&Args::parse_from(std::iter::once("dfget").chain(argv)));
+        }
+    }
+
+    #[test]
+    fn convert_args_appends_slash_to_recursive_url() {
         let test_cases = vec![
             (
-                Args::parse_from(vec![
-                    "dfget",
-                    "http://test.local/test.txt",
-                    "--output",
-                    tempdir
-                        .path()
-                        .join("test.txt")
-                        .as_os_str()
-                        .to_str()
-                        .unwrap(),
-                ]),
+                vec!["http://test.local/test.txt", "--output", "test.txt"],
                 "http://test.local/test.txt",
             ),
             (
-                Args::parse_from(vec![
-                    "dfget",
+                vec![
                     "http://test.local/test-dir",
                     "--recursive",
                     "--output",
-                    tempdir.path().as_os_str().to_str().unwrap(),
-                ]),
+                    "test-dir",
+                ],
                 "http://test.local/test-dir/",
             ),
             (
-                Args::parse_from(vec![
-                    "dfget",
+                vec![
                     "http://test.local/test-dir/",
                     "--recursive",
                     "--output",
-                    tempdir.path().as_os_str().to_str().unwrap(),
-                ]),
+                    "test-dir",
+                ],
                 "http://test.local/test-dir/",
             ),
             (
-                Args::parse_from(vec![
-                    "dfget",
-                    "http://test.local/test-dir/",
-                    "--output",
-                    tempdir.path().as_os_str().to_str().unwrap(),
-                ]),
+                vec!["http://test.local/test-dir/", "--output", "test-dir"],
                 "http://test.local/test-dir/",
             ),
         ];
 
-        for (args, expected_url) in test_cases {
-            let args = convert_args(args);
-            assert!(args.url.to_string() == expected_url);
+        for (argv, expected) in test_cases {
+            let args = convert_args(Args::parse_from(std::iter::once("dfget").chain(argv)));
+            assert_eq!(args.url.as_str(), expected);
         }
     }
 
     #[test]
-    fn should_validate_args() {
-        let tempdir = tempfile::tempdir().unwrap();
+    fn validate_args_checks_output_piece_length_and_include_files() {
+        let tempdir = tempdir().unwrap();
+        let output_dir = tempdir.path().to_str().unwrap();
+        let new_file = format!("{output_dir}/new.txt");
+        let existing_file = format!("{output_dir}/existing.txt");
+        let missing_dir = format!("{output_dir}/missing");
+        let file_in_missing_dir = format!("{missing_dir}/missing.txt");
+        std::fs::File::create(&existing_file).unwrap();
 
-        // Download file.
-        let output_file_path = tempdir.path().join("test.txt");
-        let args = Args::parse_from(vec![
-            "dfget",
-            "http://test.local/test.txt",
-            "--output",
-            output_file_path.as_os_str().to_str().unwrap(),
-        ]);
+        let test_cases: Vec<(Vec<&str>, Result<()>)> = vec![
+            (
+                vec!["http://test.local/test.txt", "--output", new_file.as_str()],
+                Ok(()),
+            ),
+            (
+                vec!["http://test.local/test-dir/", "--output", output_dir],
+                Ok(()),
+            ),
+            (
+                vec![
+                    "http://test.local/test.txt",
+                    "--output",
+                    existing_file.as_str(),
+                    "--overwrite",
+                ],
+                Ok(()),
+            ),
+            (
+                vec![
+                    "http://test.local/test.txt",
+                    "--output",
+                    new_file.as_str(),
+                    "--piece-length",
+                    "4mib",
+                ],
+                Ok(()),
+            ),
+            (
+                vec![
+                    "http://test.local/test-dir/",
+                    "--output",
+                    output_dir,
+                    "--include-files",
+                    "subdir/file.txt",
+                ],
+                Ok(()),
+            ),
+            (
+                vec!["http://test.local/test-dir/", "--output", existing_file.as_str()],
+                Err(Error::ValidationError(format!(
+                    "output path {existing_file} is not a directory"
+                ))),
+            ),
+            (
+                vec!["http://test.local/test-dir/", "--output", missing_dir.as_str()],
+                Err(Error::ValidationError(format!(
+                    "output path {missing_dir} is not a directory"
+                ))),
+            ),
+            (
+                vec!["http://test.local/test.txt", "--output", existing_file.as_str()],
+                Err(Error::ValidationError(format!(
+                    "output path {existing_file} is already exist"
+                ))),
+            ),
+            (
+                vec!["http://test.local/test.txt", "--output", file_in_missing_dir.as_str()],
+                Err(Error::ValidationError(format!(
+                    "output path {missing_dir} is not a directory"
+                ))),
+            ),
+            (
+                vec!["http://test.local/test.txt", "--output", "/"],
+                Err(Error::ValidationError("output path / is not exist".to_string())),
+            ),
+            (
+                vec![
+                    "http://test.local/test.txt",
+                    "--output",
+                    new_file.as_str(),
+                    "--piece-length",
+                    "1mib",
+                ],
+                Err(Error::ValidationError(format!(
+                    "piece length 1048576 bytes is less than the minimum piece length {MIN_PIECE_LENGTH} bytes"
+                ))),
+            ),
+            (
+                vec![
+                    "http://test.local/test-dir/",
+                    "--output",
+                    output_dir,
+                    "--include-files",
+                    "[invalid",
+                ],
+                Err(Error::ValidationError(
+                    "invalid glob pattern in include_files: '[invalid'".to_string(),
+                )),
+            ),
+            (
+                vec![
+                    "http://test.local/test-dir/",
+                    "--output",
+                    output_dir,
+                    "--include-files",
+                    "../file.txt",
+                ],
+                Err(Error::ValidationError(
+                    "path is not a normal relative path in include_files: '../file.txt'. It must not contain '..', '.', or start with '/'.".to_string(),
+                )),
+            ),
+            (
+                vec![
+                    "http://test.local/test-dir/",
+                    "--output",
+                    output_dir,
+                    "--include-files",
+                    "./file.txt",
+                ],
+                Err(Error::ValidationError(
+                    "path is not a normal relative path in include_files: './file.txt'. It must not contain '..', '.', or start with '/'.".to_string(),
+                )),
+            ),
+            (
+                vec![
+                    "http://test.local/test-dir/",
+                    "--output",
+                    output_dir,
+                    "--include-files",
+                    "/file.txt",
+                ],
+                Err(Error::ValidationError(
+                    "path is not a normal relative path in include_files: '/file.txt'. It must not contain '..', '.', or start with '/'.".to_string(),
+                )),
+            ),
+        ];
 
-        let result = validate_args(&args);
-        assert!(result.is_ok());
-
-        // Download directory.
-        let output_dir_path = tempdir.path();
-        let args = Args::parse_from(vec![
-            "dfget",
-            "http://test.local/test-dir/",
-            "--output",
-            output_dir_path.as_os_str().to_str().unwrap(),
-        ]);
-
-        let result = validate_args(&args);
-        assert!(result.is_ok());
+        for (argv, expected) in test_cases {
+            let result = validate_args(&Args::parse_from(std::iter::once("dfget").chain(argv)));
+            assert_eq!(
+                result.map_err(|err| err.to_string()),
+                expected.map_err(|err| err.to_string())
+            );
+        }
     }
 
     #[test]
-    fn should_return_error_when_args_is_not_valid() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let non_exist_dir_path = tempdir.path().join("non_exist");
-        let non_exist_file_path = non_exist_dir_path.join("non_exist.txt");
+    fn make_output_by_entry_maps_entry_url_under_output() {
+        let tempdir = tempdir().unwrap();
+        let output_dir = tempdir.path();
+        let output_dir_with_slash = PathBuf::from(format!("{}/", output_dir.display()));
 
-        let file_path = tempdir.path().join("test.txt");
-        std::fs::File::create(&file_path).unwrap();
+        let test_cases: Vec<(&str, &Path, &str, fn(Result<PathBuf>, &Path))> = vec![
+            (
+                "http://example.com/root/",
+                output_dir,
+                "http://example.com/root/dir/file.txt",
+                |output, output_dir| {
+                    assert_eq!(output.unwrap(), output_dir.join("dir/file.txt"));
+                },
+            ),
+            (
+                "http://example.com/root/",
+                output_dir_with_slash.as_path(),
+                "http://example.com/root/dir/file.txt",
+                |output, output_dir| {
+                    assert_eq!(output.unwrap(), output_dir.join("dir/file.txt"));
+                },
+            ),
+            (
+                "http://example.com/root/",
+                output_dir,
+                "http://example.com/root/dir/file%20name.txt",
+                |output, output_dir| {
+                    assert_eq!(output.unwrap(), output_dir.join("dir/file name.txt"));
+                },
+            ),
+            (
+                "hf://datasets/owner/repo/",
+                output_dir,
+                "hf://datasets/owner/repo/nested/train.json",
+                |output, output_dir| {
+                    assert_eq!(output.unwrap(), output_dir.join("nested/train.json"));
+                },
+            ),
+            (
+                "modelscope://datasets/owner/repo/",
+                output_dir,
+                "modelscope://datasets/owner/repo/nested/train.json",
+                |output, output_dir| {
+                    assert_eq!(output.unwrap(), output_dir.join("nested/train.json"));
+                },
+            ),
+            (
+                "opencsg://datasets/owner/repo/",
+                output_dir,
+                "opencsg://datasets/owner/repo/nested/train.json",
+                |output, output_dir| {
+                    assert_eq!(output.unwrap(), output_dir.join("nested/train.json"));
+                },
+            ),
+            (
+                "http://example.com/root/dir/file.txt",
+                output_dir,
+                "invalid_url",
+                |output, _output_dir| {
+                    assert!(
+                        matches!(output, Err(Error::ExternalError(ref err)) if err.etype == ErrorType::ParseError)
+                    );
+                },
+            ),
+        ];
+
+        for (root_url, output_dir, entry_url, expect) in test_cases {
+            expect(
+                make_output_by_entry(
+                    Url::parse(root_url).unwrap(),
+                    output_dir,
+                    DirEntry {
+                        url: entry_url.to_string(),
+                        content_length: 100,
+                        is_dir: false,
+                    },
+                ),
+                output_dir,
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn get_all_entries_collects_files_and_parent_dirs() {
+        let base_url = Url::parse("http://example.com/root/").unwrap();
 
         let test_cases = vec![
+            (None, vec![], vec![]),
             (
-                Args::parse_from(vec![
-                    "dfget",
-                    "http://test.local/test-dir/",
-                    "--output",
-                    file_path.as_os_str().to_str().unwrap(),
-                ]),
-                format!("output path {} is not a directory", file_path.display()),
+                None,
+                vec![
+                    ("http://example.com/root/file1.txt", 100),
+                    ("http://example.com/root/file2.txt", 200),
+                ],
+                vec![
+                    ("http://example.com/root/file1.txt", 100, false),
+                    ("http://example.com/root/file2.txt", 200, false),
+                ],
             ),
             (
-                Args::parse_from(vec![
-                    "dfget",
-                    "http://test.local/test-dir/",
-                    "--output",
-                    non_exist_dir_path.as_os_str().to_str().unwrap(),
-                ]),
-                format!(
-                    "output path {} is not a directory",
-                    non_exist_dir_path.display()
-                ),
+                None,
+                vec![
+                    ("http://example.com/root/dir1/file1.txt", 100),
+                    ("http://example.com/root/dir1/file2.txt", 100),
+                    ("http://example.com/root/dir2/file1.txt", 200),
+                    ("http://example.com/root/dir2/file2.txt", 200),
+                ],
+                vec![
+                    ("http://example.com/root/dir1/", 0, true),
+                    ("http://example.com/root/dir1/file1.txt", 100, false),
+                    ("http://example.com/root/dir1/file2.txt", 100, false),
+                    ("http://example.com/root/dir2/", 0, true),
+                    ("http://example.com/root/dir2/file1.txt", 200, false),
+                    ("http://example.com/root/dir2/file2.txt", 200, false),
+                ],
             ),
             (
-                Args::parse_from(vec![
-                    "dfget",
-                    "http://test.local/test.txt",
-                    "--output",
-                    file_path.as_os_str().to_str().unwrap(),
-                ]),
-                format!("output path {} is already exist", file_path.display()),
+                None,
+                vec![
+                    ("http://example.com/root/file1.txt", 100),
+                    ("http://example.com/root/file2.txt", 200),
+                    ("http://example.com/root/dir1/file1.txt", 100),
+                    ("http://example.com/root/dir1/file2.txt", 100),
+                    ("http://example.com/root/dir2/file1.txt", 200),
+                    ("http://example.com/root/dir2/file2.txt", 200),
+                ],
+                vec![
+                    ("http://example.com/root/file1.txt", 100, false),
+                    ("http://example.com/root/file2.txt", 200, false),
+                    ("http://example.com/root/dir1/", 0, true),
+                    ("http://example.com/root/dir1/file1.txt", 100, false),
+                    ("http://example.com/root/dir1/file2.txt", 100, false),
+                    ("http://example.com/root/dir2/", 0, true),
+                    ("http://example.com/root/dir2/file1.txt", 200, false),
+                    ("http://example.com/root/dir2/file2.txt", 200, false),
+                ],
             ),
             (
-                Args::parse_from(vec![
-                    "dfget",
-                    "http://test.local/test.txt",
-                    "--output",
-                    non_exist_file_path.as_os_str().to_str().unwrap(),
-                ]),
-                format!(
-                    "output path {} is not a directory",
-                    non_exist_dir_path.display()
-                ),
+                Some(vec!["file1.txt", "dir1/file1.txt"]),
+                vec![],
+                vec![
+                    ("http://example.com/root/file1.txt", 0, false),
+                    ("http://example.com/root/dir1/", 0, true),
+                    ("http://example.com/root/dir1/file1.txt", 0, false),
+                ],
             ),
             (
-                Args::parse_from(vec!["dfget", "http://test.local/test.txt", "--output", "/"]),
-                "output path / is not exist".to_string(),
+                Some(vec!["dir1/"]),
+                vec![("http://example.com/root/dir1/file1.txt", 100)],
+                vec![
+                    ("http://example.com/root/dir1/", 0, true),
+                    ("http://example.com/root/dir1/file1.txt", 100, false),
+                ],
             ),
         ];
 
-        for (args, error_message) in test_cases {
-            let result = validate_args(&args);
-            assert!(result.is_err());
-            assert_eq!(
-                result.unwrap_err().to_string(),
-                Error::ValidationError(error_message).to_string()
+        for (include_files, listed_entries, expected) in test_cases {
+            let listed_entries = listed_entries
+                .into_iter()
+                .map(|(url, content_length)| Entry {
+                    url: url.to_string(),
+                    content_length,
+                    is_dir: false,
+                })
+                .collect();
+            let expected: Vec<DirEntry> = expected
+                .into_iter()
+                .map(|(url, content_length, is_dir)| DirEntry {
+                    url: url.to_string(),
+                    content_length,
+                    is_dir,
+                })
+                .collect();
+            let server = mock_server(listed_entries).await;
+            let download_client = download_client(&server).await;
+            let entries = get_all_entries(
+                &base_url,
+                Vec::new(),
+                include_files
+                    .as_ref()
+                    .map(|files| files.iter().map(|file| file.to_string()).collect()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                download_client,
             )
-        }
-    }
-
-    #[test]
-    fn should_make_output_by_entry() {
-        let url = Url::parse("http://example.com/root/").unwrap();
-        let temp_dir = tempdir().unwrap();
-        let output_path = temp_dir.path();
-
-        let entry = DirEntry {
-            url: Url::parse("http://example.com/root/dir/file.txt")
-                .unwrap()
-                .to_string(),
-            content_length: 100,
-            is_dir: false,
-        };
-
-        let result = make_output_by_entry(url, output_path, entry);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), output_path.join("dir/file.txt"));
-    }
-
-    #[test]
-    fn should_make_output_by_entry_no_trailing_slash_in_output() {
-        let url = Url::parse("http://example.com/root/").unwrap();
-        let temp_dir = tempdir().unwrap();
-        let output_path: PathBuf = temp_dir
-            .path()
-            .to_string_lossy()
-            .to_string()
-            .trim_end_matches('/')
-            .parse()
+            .await
             .unwrap();
 
-        let entry = DirEntry {
-            url: Url::parse("http://example.com/root/dir/file.txt")
-                .unwrap()
-                .to_string(),
-            content_length: 100,
-            is_dir: false,
-        };
-
-        let result = make_output_by_entry(url, &output_path, entry);
-        assert!(result.is_ok());
-
-        let path = result.unwrap();
-        assert_eq!(path, output_path.join("dir/file.txt"));
-    }
-
-    #[test]
-    fn should_return_error_when_make_output_with_invalid_url() {
-        let url = Url::parse("http://example.com/root/dir/file.txt").unwrap();
-        let temp_dir = tempdir().unwrap();
-        let output = temp_dir.path();
-
-        let entry = DirEntry {
-            url: "invalid_url".to_string(),
-            content_length: 100,
-            is_dir: false,
-        };
-
-        let result = make_output_by_entry(url, output, entry);
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn should_get_empty_entries() {
-        let mut mocks = MockSet::new();
-        mocks.mock(|when, then| {
-            when.path("/dfdaemon.v2.DfdaemonDownload/ListTaskEntries");
-            then.pb(ListTaskEntriesResponse {
-                content_length: 0,
-                response_header: HashMap::new(),
-                status_code: None,
-                entries: vec![],
-            });
-        });
-
-        let server = MockServer::new_grpc("dfdaemon.v2.DfdaemonDownload").with_mocks(mocks);
-        server.start().await.unwrap();
-
-        let dfdaemon_download_client = DfdaemonDownloadClient::new(
-            Arc::new(dfdaemon::Config::default()),
-            format!("http://0.0.0.0:{}", server.port().unwrap()),
-        )
-        .await
-        .unwrap();
-
-        let entries = get_all_entries(
-            &Url::parse("http://example.com/root/").unwrap(),
-            Vec::new(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            dfdaemon_download_client,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(entries.len(), 0);
-    }
-
-    #[tokio::test]
-    async fn should_get_all_entries_in_subdir() {
-        let mut mocks = MockSet::new();
-        mocks.mock(|when, then| {
-            when.path("/dfdaemon.v2.DfdaemonDownload/ListTaskEntries");
-            then.pb(ListTaskEntriesResponse {
-                content_length: 0,
-                response_header: HashMap::new(),
-                status_code: None,
-                entries: vec![
-                    Entry {
-                        url: "http://example.com/root/dir1/file1.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    Entry {
-                        url: "http://example.com/root/dir1/file2.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    Entry {
-                        url: "http://example.com/root/dir2/file1.txt".to_string(),
-                        content_length: 200,
-                        is_dir: false,
-                    },
-                    Entry {
-                        url: "http://example.com/root/dir2/file2.txt".to_string(),
-                        content_length: 200,
-                        is_dir: false,
-                    },
-                ],
-            });
-        });
-
-        let server = MockServer::new_grpc("dfdaemon.v2.DfdaemonDownload").with_mocks(mocks);
-        server.start().await.unwrap();
-
-        let dfdaemon_download_client = DfdaemonDownloadClient::new(
-            Arc::new(dfdaemon::Config::default()),
-            format!("http://0.0.0.0:{}", server.port().unwrap()),
-        )
-        .await
-        .unwrap();
-
-        let entries = get_all_entries(
-            &Url::parse("http://example.com/root/").unwrap(),
-            Vec::new(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            dfdaemon_download_client,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(
-            entries.into_iter().collect::<HashSet<_>>(),
-            vec![
-                DirEntry {
-                    url: "http://example.com/root/dir1/file1.txt".to_string(),
-                    content_length: 100,
-                    is_dir: false,
-                },
-                DirEntry {
-                    url: "http://example.com/root/dir1/file2.txt".to_string(),
-                    content_length: 100,
-                    is_dir: false,
-                },
-                DirEntry {
-                    url: "http://example.com/root/dir1/".to_string(),
-                    content_length: 0,
-                    is_dir: true,
-                },
-                DirEntry {
-                    url: "http://example.com/root/dir2/file1.txt".to_string(),
-                    content_length: 200,
-                    is_dir: false,
-                },
-                DirEntry {
-                    url: "http://example.com/root/dir2/file2.txt".to_string(),
-                    content_length: 200,
-                    is_dir: false,
-                },
-                DirEntry {
-                    url: "http://example.com/root/dir2/".to_string(),
-                    content_length: 0,
-                    is_dir: true,
-                },
-            ]
-            .into_iter()
-            .collect::<HashSet<_>>()
-        );
-    }
-
-    #[tokio::test]
-    async fn should_get_all_entries_in_rootdir() {
-        let mut mocks = MockSet::new();
-        mocks.mock(|when, then| {
-            when.path("/dfdaemon.v2.DfdaemonDownload/ListTaskEntries");
-            then.pb(ListTaskEntriesResponse {
-                content_length: 0,
-                response_header: HashMap::new(),
-                status_code: None,
-                entries: vec![
-                    Entry {
-                        url: "http://example.com/root/file1.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    Entry {
-                        url: "http://example.com/root/file2.txt".to_string(),
-                        content_length: 200,
-                        is_dir: false,
-                    },
-                ],
-            });
-        });
-
-        let server = MockServer::new_grpc("dfdaemon.v2.DfdaemonDownload").with_mocks(mocks);
-        server.start().await.unwrap();
-
-        let dfdaemon_download_client = DfdaemonDownloadClient::new(
-            Arc::new(dfdaemon::Config::default()),
-            format!("http://0.0.0.0:{}", server.port().unwrap()),
-        )
-        .await
-        .unwrap();
-
-        let entries = get_all_entries(
-            &Url::parse("http://example.com/root/").unwrap(),
-            Vec::new(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            dfdaemon_download_client,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(
-            entries.into_iter().collect::<HashSet<_>>(),
-            vec![
-                DirEntry {
-                    url: "http://example.com/root/file1.txt".to_string(),
-                    content_length: 100,
-                    is_dir: false,
-                },
-                DirEntry {
-                    url: "http://example.com/root/file2.txt".to_string(),
-                    content_length: 200,
-                    is_dir: false,
-                },
-            ]
-            .into_iter()
-            .collect::<HashSet<_>>()
-        );
-    }
-
-    #[tokio::test]
-    async fn should_get_all_entries_in_rootdir_and_subdir() {
-        let mut mocks = MockSet::new();
-        mocks.mock(|when, then| {
-            when.path("/dfdaemon.v2.DfdaemonDownload/ListTaskEntries");
-            then.pb(ListTaskEntriesResponse {
-                content_length: 0,
-                response_header: HashMap::new(),
-                status_code: None,
-                entries: vec![
-                    Entry {
-                        url: "http://example.com/root/file1.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    Entry {
-                        url: "http://example.com/root/file2.txt".to_string(),
-                        content_length: 200,
-                        is_dir: false,
-                    },
-                    Entry {
-                        url: "http://example.com/root/dir1/file1.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    Entry {
-                        url: "http://example.com/root/dir1/file2.txt".to_string(),
-                        content_length: 100,
-                        is_dir: false,
-                    },
-                    Entry {
-                        url: "http://example.com/root/dir2/file1.txt".to_string(),
-                        content_length: 200,
-                        is_dir: false,
-                    },
-                    Entry {
-                        url: "http://example.com/root/dir2/file2.txt".to_string(),
-                        content_length: 200,
-                        is_dir: false,
-                    },
-                ],
-            });
-        });
-
-        let server = MockServer::new_grpc("dfdaemon.v2.DfdaemonDownload").with_mocks(mocks);
-        server.start().await.unwrap();
-
-        let dfdaemon_download_client = DfdaemonDownloadClient::new(
-            Arc::new(dfdaemon::Config::default()),
-            format!("http://0.0.0.0:{}", server.port().unwrap()),
-        )
-        .await
-        .unwrap();
-
-        let entries = get_all_entries(
-            &Url::parse("http://example.com/root/").unwrap(),
-            Vec::new(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            dfdaemon_download_client,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(
-            entries.into_iter().collect::<HashSet<_>>(),
-            vec![
-                DirEntry {
-                    url: "http://example.com/root/file1.txt".to_string(),
-                    content_length: 100,
-                    is_dir: false,
-                },
-                DirEntry {
-                    url: "http://example.com/root/file2.txt".to_string(),
-                    content_length: 200,
-                    is_dir: false,
-                },
-                DirEntry {
-                    url: "http://example.com/root/dir1/file1.txt".to_string(),
-                    content_length: 100,
-                    is_dir: false,
-                },
-                DirEntry {
-                    url: "http://example.com/root/dir1/file2.txt".to_string(),
-                    content_length: 100,
-                    is_dir: false,
-                },
-                DirEntry {
-                    url: "http://example.com/root/dir1/".to_string(),
-                    content_length: 0,
-                    is_dir: true,
-                },
-                DirEntry {
-                    url: "http://example.com/root/dir2/file1.txt".to_string(),
-                    content_length: 200,
-                    is_dir: false,
-                },
-                DirEntry {
-                    url: "http://example.com/root/dir2/file2.txt".to_string(),
-                    content_length: 200,
-                    is_dir: false,
-                },
-                DirEntry {
-                    url: "http://example.com/root/dir2/".to_string(),
-                    content_length: 0,
-                    is_dir: true,
-                },
-            ]
-            .into_iter()
-            .collect::<HashSet<_>>()
-        );
+            assert!(entries.iter().is_sorted_by_key(|entry| !entry.is_dir));
+            assert_eq!(
+                entries.into_iter().collect::<HashSet<_>>(),
+                expected.into_iter().collect::<HashSet<_>>()
+            );
+        }
     }
 }

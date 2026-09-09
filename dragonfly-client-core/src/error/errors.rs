@@ -187,43 +187,84 @@ mod tests {
     use super::*;
 
     #[test]
-    fn should_create_error() {
-        let error = ExternalError::new(ErrorType::StorageError).with_context("error message");
-        assert_eq!(format!("{error}"), "StorageError context: error message");
+    fn as_str_names_each_error_type() {
+        let test_cases = vec![
+            (ErrorType::StorageError, "StorageError"),
+            (ErrorType::ConfigError, "ConfigError"),
+            (ErrorType::SerializeError, "SerializeError"),
+            (ErrorType::ValidationError, "ValidationError"),
+            (ErrorType::ParseError, "ParseError"),
+            (ErrorType::CertificateError, "CertificateError"),
+            (ErrorType::TLSConfigError, "TLSConfigError"),
+            (ErrorType::AsyncRuntimeError, "AsyncRuntimeError"),
+            (ErrorType::StreamError, "StreamError"),
+            (ErrorType::ConnectError, "ConnectError"),
+            (ErrorType::PluginError, "PluginError"),
+        ];
 
-        let error = ExternalError::new(ErrorType::StorageError)
-            .with_context(format!("error message {}", "with owned string"));
-        assert_eq!(
-            format!("{error}"),
-            "StorageError context: error message with owned string"
-        );
-
-        let error = ExternalError::new(ErrorType::StorageError)
-            .with_context(format!("error message {}", "with owned string"))
-            .with_cause(Box::new(std::io::Error::other("inner error")));
-
-        assert_eq!(
-            format!("{error}"),
-            "StorageError context: error message with owned string cause: inner error"
-        );
+        for (etype, expected) in test_cases {
+            assert_eq!(etype.as_str(), expected);
+        }
     }
 
     #[test]
-    fn should_extend_result_with_error() {
-        let result: Result<(), std::io::Error> = Err(std::io::Error::other("inner error"));
+    fn display_chains_type_context_and_cause() {
+        let test_cases = vec![
+            (
+                ExternalError::new(ErrorType::StorageError).with_context("error message"),
+                "StorageError context: error message",
+            ),
+            (
+                ExternalError::new(ErrorType::StorageError)
+                    .with_context("error message with owned string".to_string()),
+                "StorageError context: error message with owned string",
+            ),
+            (
+                ExternalError::new(ErrorType::StorageError)
+                    .with_context("error message with owned string".to_string())
+                    .with_cause(Box::new(std::io::Error::other("inner error"))),
+                "StorageError context: error message with owned string cause: inner error",
+            ),
+            (
+                ExternalError::new(ErrorType::StorageError)
+                    .with_context("outer")
+                    .with_cause(Box::new(Box::new(
+                        ExternalError::new(ErrorType::ConfigError).with_context("inner"),
+                    ))),
+                "StorageError context: outer cause: ConfigError context: inner",
+            ),
+            (
+                ExternalError::new(ErrorType::StorageError)
+                    .with_context("outer")
+                    .with_cause(Box::new(Box::new(
+                        ExternalError::new(ErrorType::StorageError).with_context("inner"),
+                    ))),
+                "StorageError context: outer cause:  context: inner",
+            ),
+        ];
 
-        let error = result.or_err(ErrorType::StorageError).unwrap_err();
-        assert_eq!(format!("{error}"), "StorageError cause: inner error");
+        for (error, expected) in test_cases {
+            assert_eq!(error.to_string(), expected);
+        }
+    }
 
-        let result: Result<(), std::io::Error> = Err(std::io::Error::other("inner error"));
+    #[test]
+    fn or_err_and_or_context_wrap_the_cause() {
+        let test_cases = vec![
+            (
+                Err::<(), _>(std::io::Error::other("inner error")).or_err(ErrorType::StorageError),
+                "StorageError cause: inner error",
+            ),
+            (
+                Err::<(), _>(std::io::Error::other("inner error"))
+                    .or_context(ErrorType::StorageError, "error message"),
+                "StorageError context: error message cause: inner error",
+            ),
+        ];
 
-        let error = result
-            .or_context(ErrorType::StorageError, "error message")
-            .unwrap_err();
-
-        assert_eq!(
-            format!("{error}"),
-            "StorageError context: error message cause: inner error"
-        );
+        for (result, expected) in test_cases {
+            let error = result.unwrap_err();
+            assert_eq!(error.to_string(), expected);
+        }
     }
 }

@@ -16,7 +16,7 @@
 
 use crate::dynconfig::block_list::DownloadBlockListCheckParams;
 use crate::dynconfig::Dynconfig;
-use crate::grpc::{DOWNLOAD_STREAM_BUFFER_SIZE, REQUEST_TIMEOUT};
+use crate::grpc::DOWNLOAD_STREAM_BUFFER_SIZE;
 use crate::resource::task::Task;
 use dragonfly_api::common::v2::TaskType;
 use dragonfly_api::dfdaemon::v2::{DownloadTaskRequest, DownloadTaskResponse};
@@ -29,9 +29,9 @@ use dragonfly_client_metric::{
     collect_prefetch_task_failure_metrics, collect_prefetch_task_started_metrics,
 };
 use dragonfly_client_util::{
-    digest::is_blob_url,
+    digest::{is_blob_url, is_manifest_digest_url},
     http::{headermap_to_hashmap, parse_range_header},
-    id_generator::TaskIDParameter,
+    id_generator::{repository_revision, TaskIDParameter},
     types::redacted::RedactedDownload,
 };
 use std::sync::Arc;
@@ -91,20 +91,18 @@ pub async fn download(
                 TaskIDParameter::Content(content)
             } else if download.enable_task_id_based_blob_digest && is_blob_url(&download.url) {
                 TaskIDParameter::BlobDigestBased(download.url.clone())
+            } else if download.enable_task_id_based_blob_digest
+                && is_manifest_digest_url(&download.url)
+            {
+                TaskIDParameter::ManifestDigestBased(download.url.clone())
             } else {
-                let revision = download
-                    .hugging_face
-                    .as_ref()
-                    .map(|hf| hf.revision.clone())
-                    .or_else(|| download.model_scope.as_ref().map(|ms| ms.revision.clone()));
-
                 TaskIDParameter::URLBased {
                     url: download.url.clone(),
                     piece_length: download.piece_length,
                     tag: download.tag.clone(),
                     application: download.application.clone(),
                     filtered_query_params: download.filtered_query_params.clone(),
-                    revision,
+                    revision: repository_revision(&download),
                 }
             },
         )
@@ -214,7 +212,7 @@ pub async fn download(
         err: impl std::error::Error,
     ) {
         out_stream_tx
-            .send_timeout(Err(Status::internal(err.to_string())), REQUEST_TIMEOUT)
+            .send(Err(Status::internal(err.to_string())))
             .await
             .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
     }
@@ -225,7 +223,7 @@ pub async fn download(
         err: Status,
     ) {
         out_stream_tx
-            .send_timeout(Err(err), REQUEST_TIMEOUT)
+            .send(Err(err))
             .await
             .unwrap_or_else(|err| error!("send download progress error: {:?}", err));
     }

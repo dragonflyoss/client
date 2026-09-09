@@ -114,6 +114,10 @@ pub enum DFError {
     #[error{"unexpected response"}]
     UnexpectedResponse,
 
+    /// An RDMA peer declined a request with a protocol-level reason.
+    #[error("rdma request rejected ({code}): {message}")]
+    RdmaRejected { code: u32, message: String },
+
     /// The error when the digest is mismatch.
     #[error{"digest mismatch expected: {0}, actual: {1}"}]
     DigestMismatch(String, String),
@@ -205,10 +209,6 @@ pub enum DFError {
     // TokioTimeErrorElapsed is the error for tokio time elapsed.
     #[error(transparent)]
     TokioTimeErrorElapsed(#[from] tokio::time::error::Elapsed),
-
-    /// The error for headers.
-    #[error(transparent)]
-    HeadersError(#[from] headers::Error),
 
     // InvalidHeaderName is the error for invalid header name.
     #[error(transparent)]
@@ -305,22 +305,44 @@ impl<T> From<tokio::sync::mpsc::error::SendTimeoutError<T>> for DFError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::PoisonError;
+    use tokio::sync::mpsc::error::{SendError, SendTimeoutError};
 
     #[test]
-    fn should_convert_externalerror_to_dferror() {
-        fn function_return_inner_error() -> Result<(), std::io::Error> {
-            let inner_error = std::io::Error::other("inner error");
-            Err(inner_error)
-        }
+    fn from_conversions_map_source_errors_to_variants() {
+        let test_cases: Vec<(DFError, fn(DFError))> = vec![
+            (
+                ExternalError::new(ErrorType::StorageError)
+                    .with_cause(Box::new(std::io::Error::other("inner error")))
+                    .into(),
+                |err| {
+                    assert!(matches!(err, DFError::ExternalError(_)));
+                    assert_eq!(err.to_string(), "StorageError cause: inner error");
+                },
+            ),
+            (SendError(()).into(), |err| {
+                assert!(matches!(err, DFError::MpscSend(_)));
+                assert_eq!(err.to_string(), "mpsc send: channel closed");
+            }),
+            (PoisonError::new(()).into(), |err| {
+                assert!(matches!(err, DFError::MutexPoisoned(_)));
+                assert_eq!(
+                    err.to_string(),
+                    "mutex poisoned: poisoned lock: another task failed inside"
+                );
+            }),
+            (SendTimeoutError::Timeout(()).into(), |err| {
+                assert!(matches!(err, DFError::SendTimeout));
+                assert_eq!(err.to_string(), "send timeout");
+            }),
+            (SendTimeoutError::Closed(()).into(), |err| {
+                assert!(matches!(err, DFError::SendTimeout));
+                assert_eq!(err.to_string(), "send timeout");
+            }),
+        ];
 
-        fn do_sth_with_error() -> Result<(), DFError> {
-            function_return_inner_error().map_err(|err| {
-                ExternalError::new(crate::error::ErrorType::StorageError).with_cause(err.into())
-            })?;
-            Ok(())
+        for (err, expect) in test_cases {
+            expect(err);
         }
-
-        let err = do_sth_with_error().err().unwrap();
-        assert_eq!(format!("{err}"), "StorageError cause: inner error");
     }
 }

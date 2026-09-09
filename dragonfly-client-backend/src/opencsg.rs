@@ -14,23 +14,24 @@
  * limitations under the License.
  */
 
-//! Hugging Face backend implementation for downloading models and datasets.
+//! OpenCSG backend implementation for downloading models and datasets.
 //!
-//! This module provides support for the `hf://` URL scheme to download files from
-//! Hugging Face Hub repositories. It handles both regular files and Git LFS files
-//! (large model files) through the Hugging Face HTTP API.
+//! This module provides support for the `opencsg://` URL scheme to download files
+//! from OpenCSG Hub repositories through its Hugging Face compatible SDK API. It
+//! handles both regular files and Git LFS files.
 //!
 //! # URL Format
 //!
-//! The URL format is: `hf://<repo_id>[/<path>]`
+//! The URL format is: `opencsg://[<repository_type>/]<owner>/<repository>[/<path>]`
 //!
 //! Examples:
-//! - `hf://deepseek-ai/DeepSeek-OCR` - Download entire repository
-//! - `hf://deepseek-ai/DeepSeek-OCR/model.safetensors` - Download specific file
+//! - `opencsg://OpenCSG/csg-wukong-1B` - Download entire repository
+//! - `opencsg://OpenCSG/csg-wukong-1B/model.safetensors` - Download specific file
+//! - `opencsg://datasets/OpenCSG/chinese-fineweb-edu` - Download a dataset repository
 //!
 //! # Authentication
 //!
-//! For private repositories or to increase rate limits, use the `--hf-token` flag.
+//! For private repositories, use the `--csg-token` flag.
 
 use crate::{
     empty_body, Backend, Body, DirEntry, ExistsRequest, GetRequest, GetResponse, PutRequest,
@@ -56,63 +57,56 @@ use tokio_util::io::StreamReader;
 use tracing::{debug, error, instrument};
 use url::Url;
 
-/// The URL scheme for Hugging Face backend.
-pub const SCHEME: &str = "hf";
+/// The URL scheme for OpenCSG backend.
+pub const SCHEME: &str = "opencsg";
 
-/// The base URL for Hugging Face Hub.
-const HUGGING_FACE_BASE_URL: &str = "https://huggingface.co";
+/// The base URL for OpenCSG Hub, the `/csg/` path prefix routes to the SDK API.
+const OPEN_CSG_BASE_URL: &str = "https://hub.opencsg.com/csg/";
 
-/// Represents the Hugging Face repository information returned by the API.
+/// Represents the OpenCSG repository information returned by the API.
 #[derive(Default, Debug, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-#[allow(dead_code)]
+#[serde(default)]
 struct Repository {
-    #[serde(rename = "_id")]
-    id: String,
-    model_id: Option<String>,
-    private: bool,
     siblings: Option<Vec<Sibling>>,
 }
 
-/// Represents a file or directory in the Hugging Face repository.
+/// Represents a file or directory in the OpenCSG repository.
 #[derive(Default, Debug, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(default)]
 struct Sibling {
     rfilename: String,
     size: Option<u64>,
     lfs: Option<Lfs>,
+    r#type: Option<String>,
 }
 
-/// Represents Git LFS metadata for large files in the Hugging Face repository.
+/// Represents Git LFS metadata for large files in the OpenCSG repository.
 #[derive(Default, Debug, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-#[allow(dead_code)]
+#[serde(default)]
 struct Lfs {
-    size: u64,
-    sha256: Option<String>,
-    pointer_size: Option<u64>,
+    size: Option<u64>,
 }
 
-/// A parsed representation of a Hugging Face URL.
+/// A parsed representation of an OpenCSG URL.
 ///
-/// Format: `hf://[<repository_type>/]<owner>/<repository>[/<path>]`
+/// Format: `opencsg://[<repository_type>/]<owner>/<repository>[/<path>]`
 #[derive(Debug, Clone)]
 pub struct ParsedURL {
     /// The original, unparsed URL.
     pub url: Url,
 
-    /// The repository identifier in `<owner>/<repository>` format (e.g., `"deepseek-ai/DeepSeek-OCR"`).
+    /// The repository identifier in `<owner>/<repository>` format (e.g., `"OpenCSG/csg-wukong-1B"`).
     pub repository_id: String,
 
-    /// The type of repository: model, dataset, or space.
+    /// The type of repository: model, dataset, space, code, mcp, or skill.
     pub repository_type: RepositoryType,
 
     /// An optional file path within the repository (e.g., `"path/to/weights.bin"`).
     pub file_path: Option<String>,
 }
 
-/// The type of a Hugging Face repository.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// The type of an OpenCSG repository.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RepositoryType {
     /// A model repository. This is the default when no type prefix is specified,
     /// or when explicitly prefixed with `models/`.
@@ -123,26 +117,38 @@ pub enum RepositoryType {
 
     /// A space repository, prefixed with `spaces/`.
     Space,
+
+    /// A code repository, prefixed with `codes/`.
+    Code,
+
+    /// An MCP server repository, prefixed with `mcps/`.
+    Mcp,
+
+    /// A skill repository, prefixed with `skills/`.
+    Skill,
 }
 
 /// Implements methods for getting string representations and API paths.
 impl RepositoryType {
-    /// Returns the canonical string identifier (e.g., `"models"`, `"datasets"`, `"spaces"`).
-    #[allow(dead_code)]
+    /// Returns the canonical route segment (e.g., `"models"`, `"datasets"`).
     pub fn as_str(&self) -> &'static str {
         match self {
             RepositoryType::Model => "models",
             RepositoryType::Dataset => "datasets",
             RepositoryType::Space => "spaces",
+            RepositoryType::Code => "codes",
+            RepositoryType::Mcp => "mcps",
+            RepositoryType::Skill => "skills",
         }
     }
 }
 
-/// Parses a Hugging Face URL into its constituent components.
+/// Parses an OpenCSG URL into its constituent components.
 ///
-/// URL Format: hf://[<repository_type>/]<owner>/<repository>[/<path>]
-/// - repository_type  Optional. One of "models" (default), "datasets", or "spaces".
-/// - owner/repository Required. For example, "meta-llama/Llama-2-7b".
+/// URL Format: opencsg://[<repository_type>/]<owner>/<repository>[/<path>]
+/// - repository_type  Optional. One of "models" (default), "datasets", "spaces",
+///   "codes", "mcps", or "skills".
+/// - owner/repository Required. For example, "OpenCSG/csg-wukong-1B".
 /// - path             Optional file path within the repository.
 impl TryFrom<Url> for ParsedURL {
     type Error = Error;
@@ -157,6 +163,9 @@ impl TryFrom<Url> for ParsedURL {
         let (repository_type, offset) = match segments.first() {
             Some(&"datasets") => (RepositoryType::Dataset, 1),
             Some(&"spaces") => (RepositoryType::Space, 1),
+            Some(&"codes") => (RepositoryType::Code, 1),
+            Some(&"mcps") => (RepositoryType::Mcp, 1),
+            Some(&"skills") => (RepositoryType::Skill, 1),
             Some(&"models") => (RepositoryType::Model, 1),
             _ => (RepositoryType::Model, 0),
         };
@@ -195,18 +204,18 @@ impl TryFrom<&str> for ParsedURL {
     }
 }
 
-/// The Hugging Face backend implementation.
-pub struct HuggingFace {
-    /// The scheme of the Hugging Face backend.
+/// The OpenCSG backend implementation.
+pub struct OpenCsg {
+    /// The scheme of the OpenCSG backend.
     scheme: String,
 
     /// HTTP client for making requests.
     client: Client,
 }
 
-/// Implements the hugging face interface.
-impl HuggingFace {
-    /// Create a new HuggingFace backend.
+/// Implements the OpenCSG interface.
+impl OpenCsg {
+    /// Create a new OpenCsg backend.
     pub fn new(config: Arc<Config>) -> Result<Self> {
         // Default TLS client config with no validation.
         let client_config_builder = rustls::ClientConfig::builder()
@@ -232,10 +241,11 @@ impl HuggingFace {
         })
     }
 
-    /// Resolves the base URLs from gRPC Hugging Face options.
+    /// Resolves the base URLs from gRPC OpenCSG options. The API is nested under
+    /// the endpoint's path prefix (e.g., `/csg/api/`), so the join is relative.
     fn resolve_base_urls(base_url: Option<&str>) -> Result<(Url, Url)> {
-        let base_url = Url::parse(base_url.unwrap_or(HUGGING_FACE_BASE_URL))?;
-        let api_base_url = base_url.join("/api/")?;
+        let base_url = Url::parse(base_url.unwrap_or(OPEN_CSG_BASE_URL))?;
+        let api_base_url = base_url.join("api/")?;
         Ok((base_url, api_base_url))
     }
 
@@ -265,20 +275,27 @@ impl HuggingFace {
                     parsed_url.repository_id, revision, file_path
                 )
             }
+            RepositoryType::Code => {
+                format!(
+                    "codes/{}/resolve/{}/{}",
+                    parsed_url.repository_id, revision, file_path
+                )
+            }
+            RepositoryType::Mcp => {
+                format!(
+                    "mcps/{}/resolve/{}/{}",
+                    parsed_url.repository_id, revision, file_path
+                )
+            }
+            RepositoryType::Skill => {
+                format!(
+                    "skills/{}/resolve/{}/{}",
+                    parsed_url.repository_id, revision, file_path
+                )
+            }
         };
 
         Ok(base_url.join(&path)?)
-    }
-
-    /// Builds the API URL for fetching repository information based on the repository type and ID.
-    fn build_repository_url(parsed_url: &ParsedURL, api_base_url: &Url) -> Result<Url> {
-        let path = format!(
-            "{}/{}",
-            parsed_url.repository_type.as_str(),
-            parsed_url.repository_id
-        );
-
-        Ok(api_base_url.join(&path)?)
     }
 
     /// Builds the API URL for fetching repository information at a specific revision.
@@ -287,22 +304,45 @@ impl HuggingFace {
         revision: &str,
         api_base_url: &Url,
     ) -> Result<Url> {
-        let path = format!(
-            "{}/{}?revision={}",
-            parsed_url.repository_type.as_str(),
-            parsed_url.repository_id,
-            revision
-        );
+        let path = match parsed_url.repository_type {
+            RepositoryType::Model => {
+                format!(
+                    "models/{}/revision/{}?blobs=true",
+                    parsed_url.repository_id, revision
+                )
+            }
+            RepositoryType::Dataset => {
+                format!(
+                    "datasets/{}/revision/{}",
+                    parsed_url.repository_id, revision
+                )
+            }
+            RepositoryType::Space => {
+                format!("spaces/{}/revision/{}", parsed_url.repository_id, revision)
+            }
+            RepositoryType::Code => {
+                format!("codes/{}/revision/{}", parsed_url.repository_id, revision)
+            }
+            RepositoryType::Mcp => {
+                format!("mcps/{}/revision/{}", parsed_url.repository_id, revision)
+            }
+            RepositoryType::Skill => {
+                format!("skills/{}/revision/{}", parsed_url.repository_id, revision)
+            }
+        };
 
         Ok(api_base_url.join(&path)?)
     }
 
-    /// Builds an `hf://` URL for a file so downstream downloads continue to
-    /// use the HF backend (preserving auth and URL semantics).
-    fn build_hf_url(parsed_url: &ParsedURL, filename: &str) -> Result<Url> {
+    /// Builds an `opencsg://` URL for a file so downstream downloads continue to
+    /// use the OpenCSG backend (preserving auth and URL semantics).
+    fn build_opencsg_url(parsed_url: &ParsedURL, filename: &str) -> Result<Url> {
         let url = match parsed_url.repository_type {
             RepositoryType::Model => {
-                format!("{}://{}/{}", SCHEME, parsed_url.repository_id, filename)
+                format!(
+                    "{}://models/{}/{}",
+                    SCHEME, parsed_url.repository_id, filename
+                )
             }
             RepositoryType::Dataset => {
                 format!(
@@ -316,13 +356,31 @@ impl HuggingFace {
                     SCHEME, parsed_url.repository_id, filename
                 )
             }
+            RepositoryType::Code => {
+                format!(
+                    "{}://codes/{}/{}",
+                    SCHEME, parsed_url.repository_id, filename
+                )
+            }
+            RepositoryType::Mcp => {
+                format!(
+                    "{}://mcps/{}/{}",
+                    SCHEME, parsed_url.repository_id, filename
+                )
+            }
+            RepositoryType::Skill => {
+                format!(
+                    "{}://skills/{}/{}",
+                    SCHEME, parsed_url.repository_id, filename
+                )
+            }
         };
 
         Ok(Url::parse(&url)?)
     }
 
-    /// Build the request headers for Hugging Face API requests, including authentication if a
-    /// token is provided by the `--hf-token` CLI flag.
+    /// Build the request headers for OpenCSG API requests, including authentication if a
+    /// token is provided by the `--csg-token` CLI flag.
     fn build_request_headers(token: Option<String>, range: Option<Range>) -> Result<HeaderMap> {
         let mut request_header = HeaderMap::new();
 
@@ -339,7 +397,7 @@ impl HuggingFace {
             .entry(USER_AGENT)
             .or_insert(HeaderValue::from_static(DEFAULT_USER_AGENT));
 
-        // Add the Authorization header for Hugging Face API authentication.
+        // Add the Authorization header for OpenCSG API authentication.
         if let Some(token) = token {
             request_header.insert(
                 AUTHORIZATION,
@@ -351,15 +409,15 @@ impl HuggingFace {
     }
 }
 
-/// Backend implementation for Hugging Face.
+/// Backend implementation for OpenCSG.
 #[async_trait]
-impl Backend for HuggingFace {
+impl Backend for OpenCsg {
     /// Returns the scheme of the backend.
     fn scheme(&self) -> String {
         self.scheme.clone()
     }
 
-    /// Stat the metadata from the backend.
+    /// Stat the file or repository information.
     #[instrument(skip_all)]
     async fn stat(&self, request: StatRequest) -> Result<StatResponse> {
         debug!(
@@ -367,20 +425,17 @@ impl Backend for HuggingFace {
             request.task_id, request.url, request.http_header
         );
 
-        // Build request headers, including authentication if provided hugging face token.
+        // Build request headers, including authentication if provided OpenCSG token.
         let request_header = Self::build_request_headers(
-            request
-                .hugging_face
-                .as_ref()
-                .and_then(|hf| hf.token.clone()),
+            request.open_csg.as_ref().and_then(|csg| csg.token.clone()),
             None,
         )?;
 
-        // Get the Hugging Face information from the request, request must contain Hugging Face
+        // Get the OpenCSG information from the request, request must contain OpenCSG
         // information for stat request, otherwise return error.
-        let hugging_face = request.hugging_face.as_ref().ok_or_else(|| {
+        let open_csg = request.open_csg.as_ref().ok_or_else(|| {
             error!(
-                "stat request {} {}: missing Hugging Face information",
+                "stat request {} {}: missing OpenCSG information",
                 request.task_id, request.url
             );
 
@@ -388,13 +443,13 @@ impl Backend for HuggingFace {
         })?;
 
         let parsed_url = ParsedURL::try_from(request.url.as_str())?;
-        let (base_url, api_base_url) = Self::resolve_base_urls(hugging_face.base_url.as_deref())?;
+        let (base_url, api_base_url) = Self::resolve_base_urls(open_csg.base_url.as_deref())?;
         match &parsed_url.file_path {
             Some(file_path) => {
                 let download_url = Self::build_download_url(
                     &parsed_url,
                     file_path,
-                    &hugging_face.revision,
+                    &open_csg.revision,
                     &base_url,
                 )?;
 
@@ -459,7 +514,7 @@ impl Backend for HuggingFace {
             None => {
                 let repository_revision_url = Self::build_repository_revision_url(
                     &parsed_url,
-                    &hugging_face.revision,
+                    &open_csg.revision,
                     &api_base_url,
                 )?;
 
@@ -533,19 +588,21 @@ impl Backend for HuggingFace {
                     .siblings
                     .unwrap_or_default()
                     .into_iter()
+                    // OpenCSG lists files recursively, skip directory placeholders.
+                    .filter(|sibling: &Sibling| sibling.r#type.as_deref() != Some("tree"))
                     .map(|sibling: Sibling| -> Result<DirEntry> {
-                        // Return hf:// URLs so downstream downloads continue to use the HF
-                        // backend (preserving auth headers and URL semantics).
-                        let hf_url: Url = Self::build_hf_url(&parsed_url, &sibling.rfilename)?;
+                        // Return opencsg:// URLs so downstream downloads continue to use the
+                        // OpenCSG backend (preserving auth and URL semantics).
+                        let opencsg_url: Url =
+                            Self::build_opencsg_url(&parsed_url, &sibling.rfilename)?;
                         let content_length: u64 = sibling
                             .lfs
-                            .as_ref()
-                            .map(|lfs: &Lfs| lfs.size)
+                            .and_then(|lfs: Lfs| lfs.size)
                             .or(sibling.size)
                             .unwrap_or(0);
 
                         Ok(DirEntry {
-                            url: hf_url.to_string(),
+                            url: opencsg_url.to_string(),
                             content_length: content_length as usize,
                             is_dir: false,
                         })
@@ -581,20 +638,17 @@ impl Backend for HuggingFace {
             request.task_id, request.piece_id, request.url, request.http_header
         );
 
-        // Build request headers, including authentication if provided hugging face token.
+        // Build request headers, including authentication if provided OpenCSG token.
         let request_header = Self::build_request_headers(
-            request
-                .hugging_face
-                .as_ref()
-                .and_then(|hf| hf.token.clone()),
+            request.open_csg.as_ref().and_then(|csg| csg.token.clone()),
             request.range,
         )?;
 
-        // Get the Hugging Face information from the request, request must contain Hugging Face
+        // Get the OpenCSG information from the request, request must contain OpenCSG
         // information for get request, otherwise return error.
-        let hugging_face = request.hugging_face.as_ref().ok_or_else(|| {
+        let open_csg = request.open_csg.as_ref().ok_or_else(|| {
             error!(
-                "get request {} {}: missing Hugging Face information",
+                "get request {} {}: missing OpenCSG information",
                 request.task_id, request.url
             );
 
@@ -612,9 +666,9 @@ impl Backend for HuggingFace {
             return Err(Error::InvalidParameter);
         };
 
-        let (base_url, _) = Self::resolve_base_urls(hugging_face.base_url.as_deref())?;
+        let (base_url, _) = Self::resolve_base_urls(open_csg.base_url.as_deref())?;
         let download_url =
-            Self::build_download_url(&parsed_url, file_path, &hugging_face.revision, &base_url)?;
+            Self::build_download_url(&parsed_url, file_path, &open_csg.revision, &base_url)?;
         let response = match self
             .client
             .get(download_url.as_str())
@@ -695,7 +749,7 @@ impl Backend for HuggingFace {
         unimplemented!()
     }
 
-    /// Exists checks whether the file exists in the backend.
+    /// Exists checks whether the file or the repository exists in the backend.
     #[instrument(skip_all)]
     async fn exists(&self, request: ExistsRequest) -> Result<bool> {
         debug!(
@@ -703,20 +757,17 @@ impl Backend for HuggingFace {
             request.task_id, request.url, request.http_header
         );
 
-        // Build request headers, including authentication if provided hugging face token.
+        // Build request headers, including authentication if provided OpenCSG token.
         let request_header = Self::build_request_headers(
-            request
-                .hugging_face
-                .as_ref()
-                .and_then(|hf| hf.token.clone()),
+            request.open_csg.as_ref().and_then(|csg| csg.token.clone()),
             None,
         )?;
 
-        // Get the Hugging Face information from the request, request must contain Hugging Face
+        // Get the OpenCSG information from the request, request must contain OpenCSG
         // information for exists request, otherwise return error.
-        let hugging_face = request.hugging_face.as_ref().ok_or_else(|| {
+        let open_csg = request.open_csg.as_ref().ok_or_else(|| {
             error!(
-                "exists request {} {}: missing Hugging Face information",
+                "exists request {} {}: missing OpenCSG information",
                 request.task_id, request.url
             );
 
@@ -724,13 +775,13 @@ impl Backend for HuggingFace {
         })?;
 
         let parsed_url = ParsedURL::try_from(request.url.as_str())?;
-        let (base_url, api_base_url) = Self::resolve_base_urls(hugging_face.base_url.as_deref())?;
+        let (base_url, api_base_url) = Self::resolve_base_urls(open_csg.base_url.as_deref())?;
         match &parsed_url.file_path {
             Some(file_path) => {
                 let download_url = Self::build_download_url(
                     &parsed_url,
                     file_path,
-                    &hugging_face.revision,
+                    &open_csg.revision,
                     &base_url,
                 )?;
 
@@ -760,10 +811,15 @@ impl Backend for HuggingFace {
                 Ok(response_status_code.is_success())
             }
             None => {
-                let repository_url = Self::build_repository_url(&parsed_url, &api_base_url)?;
+                let repository_revision_url = Self::build_repository_revision_url(
+                    &parsed_url,
+                    &open_csg.revision,
+                    &api_base_url,
+                )?;
+
                 let response = self
                     .client
-                    .head(repository_url.as_str())
+                    .head(repository_revision_url.as_str())
                     .headers(request_header)
                     .timeout(request.timeout)
                     .send()
@@ -795,7 +851,7 @@ mod tests {
     #![allow(clippy::type_complexity)]
 
     use super::*;
-    use dragonfly_api::common::v2::HuggingFace as HuggingFaceOptions;
+    use dragonfly_api::common::v2::OpenCsg as OpenCsgOptions;
     use reqwest::StatusCode;
     use std::time::Duration;
     use wiremock::{
@@ -807,51 +863,69 @@ mod tests {
     fn parse_url_extracts_type_id_and_path() {
         let test_cases = vec![
             (
-                "hf://deepseek-ai/DeepSeek-OCR",
+                "opencsg://OpenCSG/csg-wukong-1B",
                 RepositoryType::Model,
-                "deepseek-ai/DeepSeek-OCR",
+                "OpenCSG/csg-wukong-1B",
                 None,
             ),
             (
-                "hf://deepseek-ai/DeepSeek-OCR/",
+                "opencsg://OpenCSG/csg-wukong-1B/",
                 RepositoryType::Model,
-                "deepseek-ai/DeepSeek-OCR",
+                "OpenCSG/csg-wukong-1B",
                 None,
             ),
             (
-                "hf://deepseek-ai/DeepSeek-OCR/model.safetensors",
+                "opencsg://OpenCSG/csg-wukong-1B/model.safetensors",
                 RepositoryType::Model,
-                "deepseek-ai/DeepSeek-OCR",
+                "OpenCSG/csg-wukong-1B",
                 Some("model.safetensors"),
             ),
             (
-                "hf://deepseek-ai/DeepSeek-OCR/models/v1/model.bin",
+                "opencsg://OpenCSG/csg-wukong-1B/models/v1/model.bin",
                 RepositoryType::Model,
-                "deepseek-ai/DeepSeek-OCR",
+                "OpenCSG/csg-wukong-1B",
                 Some("models/v1/model.bin"),
             ),
             (
-                "hf://models/deepseek-ai/DeepSeek-OCR/model.safetensors",
+                "opencsg://models/OpenCSG/csg-wukong-1B/model.safetensors",
                 RepositoryType::Model,
-                "deepseek-ai/DeepSeek-OCR",
+                "OpenCSG/csg-wukong-1B",
                 Some("model.safetensors"),
             ),
             (
-                "hf://datasets/huggingface/squad",
+                "opencsg://datasets/OpenCSG/chinese-fineweb-edu",
                 RepositoryType::Dataset,
-                "huggingface/squad",
+                "OpenCSG/chinese-fineweb-edu",
                 None,
             ),
             (
-                "hf://datasets/huggingface/squad/train.json",
+                "opencsg://datasets/OpenCSG/chinese-fineweb-edu/train.json",
                 RepositoryType::Dataset,
-                "huggingface/squad",
+                "OpenCSG/chinese-fineweb-edu",
                 Some("train.json"),
             ),
             (
-                "hf://spaces/huggingface/transformers-demo",
+                "opencsg://spaces/owner/repo",
                 RepositoryType::Space,
-                "huggingface/transformers-demo",
+                "owner/repo",
+                None,
+            ),
+            (
+                "opencsg://codes/owner/repo",
+                RepositoryType::Code,
+                "owner/repo",
+                None,
+            ),
+            (
+                "opencsg://mcps/owner/repo",
+                RepositoryType::Mcp,
+                "owner/repo",
+                None,
+            ),
+            (
+                "opencsg://skills/owner/repo",
+                RepositoryType::Skill,
+                "owner/repo",
                 None,
             ),
         ];
@@ -866,7 +940,7 @@ mod tests {
 
     #[test]
     fn parse_url_rejects_missing_owner_or_repository() {
-        let test_cases = vec!["hf://deepseek-ai", "hf://datasets/huggingface"];
+        let test_cases = vec!["opencsg://owner", "opencsg://datasets/owner"];
 
         for url in test_cases {
             let result = ParsedURL::try_from(url);
@@ -880,6 +954,9 @@ mod tests {
             (RepositoryType::Model, "models"),
             (RepositoryType::Dataset, "datasets"),
             (RepositoryType::Space, "spaces"),
+            (RepositoryType::Code, "codes"),
+            (RepositoryType::Mcp, "mcps"),
+            (RepositoryType::Skill, "skills"),
         ];
 
         for (repository_type, expected) in test_cases {
@@ -892,19 +969,18 @@ mod tests {
         let test_cases = vec![
             (
                 None,
-                "https://huggingface.co/",
-                "https://huggingface.co/api/",
+                "https://hub.opencsg.com/csg/",
+                "https://hub.opencsg.com/csg/api/",
             ),
             (
-                Some("https://hf-mirror.com/"),
-                "https://hf-mirror.com/",
-                "https://hf-mirror.com/api/",
+                Some("https://hub-mirror.example.com/csg/"),
+                "https://hub-mirror.example.com/csg/",
+                "https://hub-mirror.example.com/csg/api/",
             ),
         ];
 
         for (base_url, expected_base_url, expected_api_base_url) in test_cases {
-            let (resolved_base_url, api_base_url) =
-                HuggingFace::resolve_base_urls(base_url).unwrap();
+            let (resolved_base_url, api_base_url) = OpenCsg::resolve_base_urls(base_url).unwrap();
             assert_eq!(resolved_base_url.as_str(), expected_base_url);
             assert_eq!(api_base_url.as_str(), expected_api_base_url);
         }
@@ -912,125 +988,145 @@ mod tests {
 
     #[test]
     fn build_download_url_routes_by_repository_type() {
-        let base_url = Url::parse(HUGGING_FACE_BASE_URL).unwrap();
+        let base_url = Url::parse(OPEN_CSG_BASE_URL).unwrap();
 
         let test_cases = vec![
             (
-                "hf://deepseek-ai/DeepSeek-OCR/model.safetensors",
+                "opencsg://OpenCSG/csg-wukong-1B/model.safetensors",
                 "model.safetensors",
                 "main",
-                "https://huggingface.co/deepseek-ai/DeepSeek-OCR/resolve/main/model.safetensors",
+                "https://hub.opencsg.com/csg/OpenCSG/csg-wukong-1B/resolve/main/model.safetensors",
             ),
             (
-                "hf://datasets/huggingface/squad/train.json",
+                "opencsg://datasets/OpenCSG/chinese-fineweb-edu/train.json",
                 "train.json",
                 "main",
-                "https://huggingface.co/datasets/huggingface/squad/resolve/main/train.json",
+                "https://hub.opencsg.com/csg/datasets/OpenCSG/chinese-fineweb-edu/resolve/main/train.json",
             ),
             (
-                "hf://spaces/huggingface/transformers-demo/app.py",
+                "opencsg://spaces/owner/repo/app.py",
                 "app.py",
                 "v1.0",
-                "https://huggingface.co/spaces/huggingface/transformers-demo/resolve/v1.0/app.py",
+                "https://hub.opencsg.com/csg/spaces/owner/repo/resolve/v1.0/app.py",
+            ),
+            (
+                "opencsg://codes/owner/repo/main.rs",
+                "main.rs",
+                "main",
+                "https://hub.opencsg.com/csg/codes/owner/repo/resolve/main/main.rs",
+            ),
+            (
+                "opencsg://mcps/owner/repo/server.json",
+                "server.json",
+                "main",
+                "https://hub.opencsg.com/csg/mcps/owner/repo/resolve/main/server.json",
+            ),
+            (
+                "opencsg://skills/owner/repo/SKILL.md",
+                "SKILL.md",
+                "main",
+                "https://hub.opencsg.com/csg/skills/owner/repo/resolve/main/SKILL.md",
             ),
         ];
 
         for (url, file_path, revision, expected) in test_cases {
             let parsed_url = ParsedURL::try_from(url).unwrap();
             let download_url =
-                HuggingFace::build_download_url(&parsed_url, file_path, revision, &base_url)
-                    .unwrap();
+                OpenCsg::build_download_url(&parsed_url, file_path, revision, &base_url).unwrap();
             assert_eq!(download_url.as_str(), expected);
         }
     }
 
     #[test]
-    fn build_repository_url_routes_by_repository_type() {
-        let api_base_url = Url::parse("https://huggingface.co/api/").unwrap();
-
-        let test_cases = vec![
-            (
-                "hf://deepseek-ai/DeepSeek-OCR",
-                "https://huggingface.co/api/models/deepseek-ai/DeepSeek-OCR",
-            ),
-            (
-                "hf://datasets/huggingface/squad",
-                "https://huggingface.co/api/datasets/huggingface/squad",
-            ),
-            (
-                "hf://spaces/huggingface/transformers-demo",
-                "https://huggingface.co/api/spaces/huggingface/transformers-demo",
-            ),
-        ];
-
-        for (url, expected) in test_cases {
-            let parsed_url = ParsedURL::try_from(url).unwrap();
-            let repository_url =
-                HuggingFace::build_repository_url(&parsed_url, &api_base_url).unwrap();
-            assert_eq!(repository_url.as_str(), expected);
-        }
-    }
-
-    #[test]
     fn build_repository_revision_url_routes_by_repository_type() {
-        let api_base_url = Url::parse("https://huggingface.co/api/").unwrap();
+        let api_base_url = Url::parse("https://hub.opencsg.com/csg/api/").unwrap();
 
         let test_cases = vec![
             (
-                "hf://deepseek-ai/DeepSeek-OCR",
+                "opencsg://OpenCSG/csg-wukong-1B",
                 "main",
-                "https://huggingface.co/api/models/deepseek-ai/DeepSeek-OCR?revision=main",
+                "https://hub.opencsg.com/csg/api/models/OpenCSG/csg-wukong-1B/revision/main?blobs=true",
             ),
             (
-                "hf://datasets/huggingface/squad",
+                "opencsg://datasets/OpenCSG/chinese-fineweb-edu",
+                "main",
+                "https://hub.opencsg.com/csg/api/datasets/OpenCSG/chinese-fineweb-edu/revision/main",
+            ),
+            (
+                "opencsg://spaces/owner/repo",
                 "v1.0",
-                "https://huggingface.co/api/datasets/huggingface/squad?revision=v1.0",
+                "https://hub.opencsg.com/csg/api/spaces/owner/repo/revision/v1.0",
             ),
             (
-                "hf://spaces/huggingface/transformers-demo",
+                "opencsg://codes/owner/repo",
                 "main",
-                "https://huggingface.co/api/spaces/huggingface/transformers-demo?revision=main",
+                "https://hub.opencsg.com/csg/api/codes/owner/repo/revision/main",
+            ),
+            (
+                "opencsg://mcps/owner/repo",
+                "main",
+                "https://hub.opencsg.com/csg/api/mcps/owner/repo/revision/main",
+            ),
+            (
+                "opencsg://skills/owner/repo",
+                "main",
+                "https://hub.opencsg.com/csg/api/skills/owner/repo/revision/main",
             ),
         ];
 
         for (url, revision, expected) in test_cases {
             let parsed_url = ParsedURL::try_from(url).unwrap();
             let repository_revision_url =
-                HuggingFace::build_repository_revision_url(&parsed_url, revision, &api_base_url)
+                OpenCsg::build_repository_revision_url(&parsed_url, revision, &api_base_url)
                     .unwrap();
             assert_eq!(repository_revision_url.as_str(), expected);
         }
     }
 
     #[test]
-    fn build_hf_url_routes_by_repository_type() {
+    fn build_opencsg_url_routes_by_repository_type() {
         let test_cases = vec![
             (
-                "hf://deepseek-ai/DeepSeek-OCR",
+                "opencsg://OpenCSG/csg-wukong-1B",
                 "model.safetensors",
-                "hf://deepseek-ai/DeepSeek-OCR/model.safetensors",
+                "opencsg://models/OpenCSG/csg-wukong-1B/model.safetensors",
             ),
             (
-                "hf://deepseek-ai/DeepSeek-OCR",
+                "opencsg://OpenCSG/csg-wukong-1B",
                 "models/v1/model.bin",
-                "hf://deepseek-ai/DeepSeek-OCR/models/v1/model.bin",
+                "opencsg://models/OpenCSG/csg-wukong-1B/models/v1/model.bin",
             ),
             (
-                "hf://datasets/huggingface/squad",
+                "opencsg://datasets/OpenCSG/chinese-fineweb-edu",
                 "train.json",
-                "hf://datasets/huggingface/squad/train.json",
+                "opencsg://datasets/OpenCSG/chinese-fineweb-edu/train.json",
             ),
             (
-                "hf://spaces/huggingface/transformers-demo",
+                "opencsg://spaces/owner/repo",
                 "app.py",
-                "hf://spaces/huggingface/transformers-demo/app.py",
+                "opencsg://spaces/owner/repo/app.py",
+            ),
+            (
+                "opencsg://codes/owner/repo",
+                "main.rs",
+                "opencsg://codes/owner/repo/main.rs",
+            ),
+            (
+                "opencsg://mcps/owner/repo",
+                "server.json",
+                "opencsg://mcps/owner/repo/server.json",
+            ),
+            (
+                "opencsg://skills/owner/repo",
+                "SKILL.md",
+                "opencsg://skills/owner/repo/SKILL.md",
             ),
         ];
 
         for (url, filename, expected) in test_cases {
             let parsed_url = ParsedURL::try_from(url).unwrap();
-            let hf_url = HuggingFace::build_hf_url(&parsed_url, filename).unwrap();
-            assert_eq!(hf_url.as_str(), expected);
+            let opencsg_url = OpenCsg::build_opencsg_url(&parsed_url, filename).unwrap();
+            assert_eq!(opencsg_url.as_str(), expected);
         }
     }
 
@@ -1061,7 +1157,7 @@ mod tests {
 
         for (token, range, expected_authorization, expected_range) in test_cases {
             let request_header =
-                HuggingFace::build_request_headers(token.map(str::to_string), range).unwrap();
+                OpenCsg::build_request_headers(token.map(str::to_string), range).unwrap();
             assert_eq!(request_header.get(USER_AGENT).unwrap(), DEFAULT_USER_AGENT);
             assert_eq!(
                 request_header
@@ -1082,7 +1178,7 @@ mod tests {
     async fn stat_maps_file_and_repository_responses() {
         let test_cases: Vec<(&str, Mock, fn(Result<StatResponse>))> = vec![
             (
-                "hf://owner/repo/model.bin",
+                "opencsg://owner/repo/model.bin",
                 Mock::given(method("HEAD"))
                     .and(path("/owner/repo/resolve/main/model.bin"))
                     .and(header("authorization", "Bearer secret"))
@@ -1097,7 +1193,7 @@ mod tests {
                 },
             ),
             (
-                "hf://owner/repo/model.bin",
+                "opencsg://owner/repo/model.bin",
                 Mock::given(method("HEAD"))
                     .and(path("/owner/repo/resolve/main/model.bin"))
                     .respond_with(ResponseTemplate::new(404)),
@@ -1108,17 +1204,18 @@ mod tests {
                 },
             ),
             (
-                "hf://owner/repo",
+                "opencsg://owner/repo",
                 Mock::given(method("GET"))
-                    .and(path("/api/models/owner/repo"))
-                    .and(query_param("revision", "main"))
+                    .and(path("/api/models/owner/repo/revision/main"))
+                    .and(query_param("blobs", "true"))
                     .and(header("authorization", "Bearer secret"))
                     .and(header("user-agent", DEFAULT_USER_AGENT))
                     .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                         "siblings": [
                             {"rfilename": "nested/config file.json", "size": 12},
                             {"rfilename": "model.bin", "size": 128, "lfs": {"size": 4096}},
-                            {"rfilename": "README.md"}
+                            {"rfilename": "README.md"},
+                            {"rfilename": "ignored", "type": "tree"}
                         ]
                     }))),
                 |result| {
@@ -1128,7 +1225,8 @@ mod tests {
                     assert_eq!(
                         response.entries[0],
                         DirEntry {
-                            url: "hf://owner/repo/nested/config%20file.json".to_string(),
+                            url: "opencsg://models/owner/repo/nested/config%20file.json"
+                                .to_string(),
                             content_length: 12,
                             is_dir: false,
                         }
@@ -1138,9 +1236,9 @@ mod tests {
                 },
             ),
             (
-                "hf://datasets/owner/repo",
+                "opencsg://datasets/owner/repo",
                 Mock::given(method("GET"))
-                    .and(path("/api/datasets/owner/repo"))
+                    .and(path("/api/datasets/owner/repo/revision/main"))
                     .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                         "siblings": [
                             {"rfilename": "nested/train.json"},
@@ -1154,7 +1252,7 @@ mod tests {
                     assert_eq!(
                         response.entries[0],
                         DirEntry {
-                            url: "hf://datasets/owner/repo/nested/train.json".to_string(),
+                            url: "opencsg://datasets/owner/repo/nested/train.json".to_string(),
                             content_length: 0,
                             is_dir: false,
                         }
@@ -1162,9 +1260,9 @@ mod tests {
                 },
             ),
             (
-                "hf://owner/repo",
+                "opencsg://owner/repo",
                 Mock::given(method("GET"))
-                    .and(path("/api/models/owner/repo"))
+                    .and(path("/api/models/owner/repo/revision/main"))
                     .respond_with(
                         ResponseTemplate::new(200)
                             .set_body_json(serde_json::json!({"siblings": null})),
@@ -1176,9 +1274,9 @@ mod tests {
                 },
             ),
             (
-                "hf://owner/repo",
+                "opencsg://owner/repo",
                 Mock::given(method("GET"))
-                    .and(path("/api/models/owner/repo"))
+                    .and(path("/api/models/owner/repo/revision/main"))
                     .respond_with(ResponseTemplate::new(401)),
                 |result| {
                     assert!(
@@ -1187,9 +1285,9 @@ mod tests {
                 },
             ),
             (
-                "hf://owner/repo",
+                "opencsg://owner/repo",
                 Mock::given(method("GET"))
-                    .and(path("/api/models/owner/repo"))
+                    .and(path("/api/models/owner/repo/revision/main"))
                     .respond_with(ResponseTemplate::new(200).set_body_string("not json")),
                 |result| {
                     assert!(
@@ -1199,7 +1297,7 @@ mod tests {
             ),
         ];
 
-        let backend = HuggingFace::new(Arc::new(Config::default())).unwrap();
+        let backend = OpenCsg::new(Arc::new(Config::default())).unwrap();
         for (url, mock, expect) in test_cases {
             let server = MockServer::start().await;
             mock.mount(&server).await;
@@ -1213,13 +1311,13 @@ mod tests {
                         client_cert: None,
                         object_storage: None,
                         hdfs: None,
-                        hugging_face: Some(HuggingFaceOptions {
+                        hugging_face: None,
+                        model_scope: None,
+                        open_csg: Some(OpenCsgOptions {
                             revision: "main".to_string(),
                             token: Some("secret".to_string()),
                             base_url: Some(server.uri()),
                         }),
-                        model_scope: None,
-                        open_csg: None,
                     })
                     .await,
             );
@@ -1251,12 +1349,12 @@ mod tests {
                     .respond_with(
                         ResponseTemplate::new(206)
                             .insert_header("content-range", "bytes 10-29/100")
-                            .set_body_string("partial content"),
+                            .set_body_string("partial content here"),
                     ),
                 |response, text| {
                     assert!(response.success);
                     assert_eq!(response.http_status_code, Some(StatusCode::PARTIAL_CONTENT));
-                    assert_eq!(text, "partial content");
+                    assert_eq!(text, "partial content here");
                 },
             ),
             (
@@ -1292,7 +1390,7 @@ mod tests {
             ),
         ];
 
-        let backend = HuggingFace::new(Arc::new(Config::default())).unwrap();
+        let backend = OpenCsg::new(Arc::new(Config::default())).unwrap();
         for (range, mock, expect) in test_cases {
             let server = MockServer::start().await;
             mock.mount(&server).await;
@@ -1300,20 +1398,20 @@ mod tests {
                 .get(GetRequest {
                     task_id: "task".to_string(),
                     piece_id: "piece".to_string(),
-                    url: "hf://owner/repo/model.bin".to_string(),
+                    url: "opencsg://owner/repo/model.bin".to_string(),
                     range,
                     http_header: None,
                     timeout: Duration::from_secs(5),
                     client_cert: None,
                     object_storage: None,
                     hdfs: None,
-                    hugging_face: Some(HuggingFaceOptions {
+                    hugging_face: None,
+                    model_scope: None,
+                    open_csg: Some(OpenCsgOptions {
                         revision: "main".to_string(),
                         token: None,
                         base_url: Some(server.uri()),
                     }),
-                    model_scope: None,
-                    open_csg: None,
                 })
                 .await
                 .unwrap();
@@ -1346,12 +1444,12 @@ mod tests {
             .mount(&object_server)
             .await;
 
-        let mut response = HuggingFace::new(Arc::new(Config::default()))
+        let mut response = OpenCsg::new(Arc::new(Config::default()))
             .unwrap()
             .get(GetRequest {
                 task_id: "task".to_string(),
                 piece_id: "piece".to_string(),
-                url: "hf://owner/repo/model.bin".to_string(),
+                url: "opencsg://owner/repo/model.bin".to_string(),
                 range: Some(Range {
                     start: 10,
                     length: 20,
@@ -1361,13 +1459,13 @@ mod tests {
                 client_cert: None,
                 object_storage: None,
                 hdfs: None,
-                hugging_face: Some(HuggingFaceOptions {
+                hugging_face: None,
+                model_scope: None,
+                open_csg: Some(OpenCsgOptions {
                     revision: "main".to_string(),
                     token: Some("secret".to_string()),
                     base_url: Some(server.uri()),
                 }),
-                model_scope: None,
-                open_csg: None,
             })
             .await
             .unwrap();
@@ -1383,12 +1481,12 @@ mod tests {
     #[tokio::test]
     async fn get_rejects_missing_options_or_file_path() {
         let test_cases = vec![
-            ("hf://owner/repo/model.bin", None),
-            ("hf://owner/repo", Some(HuggingFaceOptions::default())),
+            ("opencsg://owner/repo/model.bin", None),
+            ("opencsg://owner/repo", Some(OpenCsgOptions::default())),
         ];
 
-        let backend = HuggingFace::new(Arc::new(Config::default())).unwrap();
-        for (url, hugging_face) in test_cases {
+        let backend = OpenCsg::new(Arc::new(Config::default())).unwrap();
+        for (url, open_csg) in test_cases {
             let result = backend
                 .get(GetRequest {
                     task_id: "task".to_string(),
@@ -1400,9 +1498,9 @@ mod tests {
                     client_cert: None,
                     object_storage: None,
                     hdfs: None,
-                    hugging_face,
+                    hugging_face: None,
                     model_scope: None,
-                    open_csg: None,
+                    open_csg,
                 })
                 .await;
             assert!(matches!(result, Err(Error::InvalidParameter)));
@@ -1418,18 +1516,19 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(method("HEAD"))
-            .and(path("/api/models/owner/repo"))
+            .and(path("/api/models/owner/repo/revision/main"))
+            .and(query_param("blobs", "true"))
             .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
 
-        let backend = HuggingFace::new(Arc::new(Config::default())).unwrap();
+        let backend = OpenCsg::new(Arc::new(Config::default())).unwrap();
 
         let test_cases = vec![
-            ("hf://owner/repo/model.bin", true),
-            ("hf://owner/repo", true),
-            ("hf://owner/repo/missing.bin", false),
-            ("hf://owner/missing", false),
+            ("opencsg://owner/repo/model.bin", true),
+            ("opencsg://owner/repo", true),
+            ("opencsg://owner/repo/missing.bin", false),
+            ("opencsg://owner/missing", false),
         ];
 
         for (url, expected) in test_cases {
@@ -1442,13 +1541,13 @@ mod tests {
                     client_cert: None,
                     object_storage: None,
                     hdfs: None,
-                    hugging_face: Some(HuggingFaceOptions {
+                    hugging_face: None,
+                    model_scope: None,
+                    open_csg: Some(OpenCsgOptions {
                         revision: "main".to_string(),
                         token: None,
                         base_url: Some(server.uri()),
                     }),
-                    model_scope: None,
-                    open_csg: None,
                 })
                 .await
                 .unwrap();

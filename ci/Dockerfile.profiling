@@ -2,8 +2,8 @@ FROM rust:1.88.0 AS builder
 
 WORKDIR /app/client
 
-RUN apt-get update && apt-get install -y \
-    openssl libclang-dev pkg-config protobuf-compiler git \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake libclang-dev pkg-config protobuf-compiler libprotobuf-dev git \
     && rm -rf /var/lib/apt/lists/*
 
 COPY .git ./.git
@@ -33,14 +33,9 @@ COPY dragonfly-client-backend/examples/plugin/src ./dragonfly-client-backend/exa
 COPY dragonfly-client-metric/Cargo.toml ./dragonfly-client-metric/Cargo.toml
 COPY dragonfly-client-metric/src ./dragonfly-client-metric/src
 
-COPY dragonfly-client-request/Cargo.toml ./dragonfly-client-request/Cargo.toml
-COPY dragonfly-client-request/src ./dragonfly-client-request/src
 
 COPY dragonfly-client-util/Cargo.toml ./dragonfly-client-util/Cargo.toml
 COPY dragonfly-client-util/src ./dragonfly-client-util/src
-
-COPY dragonfly-client-util/examples/request/Cargo.toml ./dragonfly-client-util/examples/request/Cargo.toml
-COPY dragonfly-client-util/examples/request/src ./dragonfly-client-util/examples/request/src
 
 COPY dragonfly-client-init/Cargo.toml ./dragonfly-client-init/Cargo.toml
 COPY dragonfly-client-init/src ./dragonfly-client-init/src
@@ -58,7 +53,7 @@ RUN cargo install tokio-console --version 0.1.13 --locked --root /usr/local
 
 FROM alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11 AS health
 
-ENV GRPC_HEALTH_PROBE_VERSION=v0.4.24
+ENV GRPC_HEALTH_PROBE_VERSION=v0.4.53
 
 RUN if [ "$(uname -m)" = "ppc64le" ]; then \
     wget -qO/bin/grpc_health_probe https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/${GRPC_HEALTH_PROBE_VERSION}/grpc_health_probe-linux-ppc64le; \

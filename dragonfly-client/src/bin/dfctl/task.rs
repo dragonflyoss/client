@@ -24,6 +24,7 @@ use dragonfly_api::scheduler::v2::{
     scheduler_client::SchedulerClient as SchedulerGRPCClient, PreheatFileRequest,
     PreheatImageRequest,
 };
+use dragonfly_client::terminal;
 use dragonfly_client_backend::{hdfs, object_storage, oci};
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
@@ -44,7 +45,6 @@ use tabled::{
     settings::{object::Rows, Alignment, Modify, Style},
     Table, Tabled,
 };
-use termion::{color, style};
 use tonic::transport::Channel;
 use tracing::Level;
 use url::Url;
@@ -147,39 +147,17 @@ impl LsCommand {
             match get_dfdaemon_download_client(self.endpoint.clone()).await {
                 Ok(client) => client,
                 Err(err) => {
-                    println!(
-                        "{}{}{}Connect Dfdaemon Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
+                    terminal::error("Connect Dfdaemon Failed!");
+                    terminal::separator();
+                    terminal::field(
+                        "Message:",
+                        format!(
+                            "can not connect {}, please check the unix socket {}",
+                            err,
+                            self.endpoint.to_string_lossy()
+                        ),
                     );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} can not connect {}, please check the unix socket {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err,
-                        self.endpoint.to_string_lossy(),
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::separator();
 
                     std::process::exit(1);
                 }
@@ -191,197 +169,62 @@ impl LsCommand {
                 Error::TonicStatus(status) => {
                     let details = status.details();
                     if let Ok(backend_err) = serde_json::from_slice::<Backend>(details) {
-                        println!(
-                            "{}{}{}Listing Tasks Failed!{}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}****************************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::error("Listing Tasks Failed!");
+                        terminal::separator();
 
                         if let Some(status_code) = backend_err.status_code {
-                            println!(
-                                "{}{}{}Bad Status Code:{} {}",
-                                color::Fg(color::Red),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset,
-                                status_code
-                            );
+                            terminal::error_field("Bad Status Code:", status_code);
                         }
 
-                        println!(
-                            "{}{}{}Message:{} {}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            backend_err.message
-                        );
+                        terminal::field("Message:", backend_err.message);
 
                         if !backend_err.header.is_empty() {
-                            println!(
-                                "{}{}{}Header:{}",
-                                color::Fg(color::Cyan),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset
+                            terminal::headers(
+                                backend_err
+                                    .header
+                                    .iter()
+                                    .map(|(key, value)| (key.as_str(), value.as_str())),
                             );
-                            for (key, value) in backend_err.header.iter() {
-                                println!("  [{}]: {}", key.as_str(), value.as_str());
-                            }
                         }
 
-                        println!(
-                            "{}{}{}****************************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::separator();
                     } else {
-                        println!(
-                            "{}{}{}Listing Tasks Failed!{}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}*********************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}Bad Code:{} {}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            status.code()
-                        );
-
-                        println!(
-                            "{}{}{}Message:{} {}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            status.message()
-                        );
+                        terminal::error("Listing Tasks Failed!");
+                        terminal::separator();
+                        terminal::error_field("Bad Code:", status.code());
+                        terminal::field("Message:", status.message());
 
                         if !status.details().is_empty() {
-                            println!(
-                                "{}{}{}Details:{} {}",
-                                color::Fg(color::Cyan),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset,
-                                std::str::from_utf8(status.details()).unwrap()
+                            terminal::field(
+                                "Details:",
+                                std::str::from_utf8(status.details()).unwrap(),
                             );
                         }
 
-                        println!(
-                            "{}{}{}*********************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::separator();
                     }
                 }
                 Error::BackendError(err) => {
-                    println!(
-                        "{}{}{}Listing Tasks Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err.message
-                    );
+                    terminal::error("Listing Tasks Failed!");
+                    terminal::separator();
+                    terminal::error_field("Message:", err.message);
 
                     if err.header.is_some() {
-                        println!(
-                            "{}{}{}Header:{}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
+                        terminal::headers(
+                            err.header
+                                .unwrap_or_default()
+                                .iter()
+                                .map(|(key, value)| (key.as_str(), value.to_str().unwrap())),
                         );
-                        for (key, value) in err.header.unwrap_or_default().iter() {
-                            println!("  [{}]: {}", key.as_str(), value.to_str().unwrap());
-                        }
                     }
 
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::separator();
                 }
                 err => {
-                    println!(
-                        "{}{}{}Listing Tasks Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::error("Listing Tasks Failed!");
+                    terminal::separator();
+                    terminal::error_field("Message:", err);
+                    terminal::separator();
                 }
             }
 
@@ -535,39 +378,17 @@ impl RmCommand {
             match get_dfdaemon_download_client(self.endpoint.clone()).await {
                 Ok(client) => client,
                 Err(err) => {
-                    println!(
-                        "{}{}{}Connect Dfdaemon Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
+                    terminal::error("Connect Dfdaemon Failed!");
+                    terminal::separator();
+                    terminal::field(
+                        "Message:",
+                        format!(
+                            "can not connect {}, please check the unix socket {}",
+                            err,
+                            self.endpoint.to_string_lossy()
+                        ),
                     );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} can not connect {}, please check the unix socket {}",
-                        color::Fg(color::Cyan),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err,
-                        self.endpoint.to_string_lossy(),
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::separator();
 
                     std::process::exit(1);
                 }
@@ -579,197 +400,62 @@ impl RmCommand {
                 Error::TonicStatus(status) => {
                     let details = status.details();
                     if let Ok(backend_err) = serde_json::from_slice::<Backend>(details) {
-                        println!(
-                            "{}{}{}Removing Task Failed!{}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}****************************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::error("Removing Task Failed!");
+                        terminal::separator();
 
                         if let Some(status_code) = backend_err.status_code {
-                            println!(
-                                "{}{}{}Bad Status Code:{} {}",
-                                color::Fg(color::Red),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset,
-                                status_code
-                            );
+                            terminal::error_field("Bad Status Code:", status_code);
                         }
 
-                        println!(
-                            "{}{}{}Message:{} {}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            backend_err.message
-                        );
+                        terminal::field("Message:", backend_err.message);
 
                         if !backend_err.header.is_empty() {
-                            println!(
-                                "{}{}{}Header:{}",
-                                color::Fg(color::Cyan),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset
+                            terminal::headers(
+                                backend_err
+                                    .header
+                                    .iter()
+                                    .map(|(key, value)| (key.as_str(), value.as_str())),
                             );
-                            for (key, value) in backend_err.header.iter() {
-                                println!("  [{}]: {}", key.as_str(), value.as_str());
-                            }
                         }
 
-                        println!(
-                            "{}{}{}****************************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::separator();
                     } else {
-                        println!(
-                            "{}{}{}Removing Task Failed!{}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}*********************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}Bad Code:{} {}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            status.code()
-                        );
-
-                        println!(
-                            "{}{}{}Message:{} {}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            status.message()
-                        );
+                        terminal::error("Removing Task Failed!");
+                        terminal::separator();
+                        terminal::error_field("Bad Code:", status.code());
+                        terminal::field("Message:", status.message());
 
                         if !status.details().is_empty() {
-                            println!(
-                                "{}{}{}Details:{} {}",
-                                color::Fg(color::Cyan),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset,
-                                std::str::from_utf8(status.details()).unwrap()
+                            terminal::field(
+                                "Details:",
+                                std::str::from_utf8(status.details()).unwrap(),
                             );
                         }
 
-                        println!(
-                            "{}{}{}*********************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::separator();
                     }
                 }
                 Error::BackendError(err) => {
-                    println!(
-                        "{}{}{}Removing Task Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err.message
-                    );
+                    terminal::error("Removing Task Failed!");
+                    terminal::separator();
+                    terminal::error_field("Message:", err.message);
 
                     if err.header.is_some() {
-                        println!(
-                            "{}{}{}Header:{}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
+                        terminal::headers(
+                            err.header
+                                .unwrap_or_default()
+                                .iter()
+                                .map(|(key, value)| (key.as_str(), value.to_str().unwrap())),
                         );
-                        for (key, value) in err.header.unwrap_or_default().iter() {
-                            println!("  [{}]: {}", key.as_str(), value.to_str().unwrap());
-                        }
                     }
 
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::separator();
                 }
                 err => {
-                    println!(
-                        "{}{}{}Removing Task Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::error("Removing Task Failed!");
+                    terminal::separator();
+                    terminal::error_field("Message:", err);
+                    terminal::separator();
                 }
             }
 
@@ -791,13 +477,7 @@ impl RmCommand {
             })
             .await?;
 
-        println!(
-            "{}{}{}Task Removed!{}",
-            color::Fg(color::Green),
-            style::Italic,
-            style::Bold,
-            style::Reset
-        );
+        terminal::success("Task Removed!");
 
         Ok(())
     }
@@ -822,7 +502,7 @@ pub struct PreheatCommand {
         long,
         default_value_t = false,
         env = "DFCTL_TASK_PREHEAT_REQUEST_SDK",
-        help = "Specify whether to use request SDK mode for preheat. If not set, uses gRPC mode to call the scheduler directly. \
+        help = "Specify whether to use request SDK mode for preheat. If not set, uses scheduler gRPC mode to call the scheduler's preheat API directly. \
          If set, uses the request SDK to trigger the seed peers to download the task without streaming the content back to dfctl, \
          refer to https://github.com/dragonflyoss/client/tree/main/dragonfly-client-request"
     )]
@@ -831,12 +511,12 @@ pub struct PreheatCommand {
     #[arg(
         long,
         default_value_t = true,
-        env = "DFCTL_TASK_ENABLE_TASK_ID_BASED_BLOB_DIGEST",
-        help = "Specify whether to generate task id based blob digest. It indicates whether to use the blob digest for task ID calculation \
+        env = "DFCTL_TASK_PREHEAT_ENABLE_TASK_ID_BASED_BLOB_DIGEST",
+        help = "Specify whether to generate task id based blob digest, used in both scheduler gRPC mode and request SDK mode \
+         (scheduler gRPC mode applies it to image preheat only). It indicates whether to use the blob digest for task ID calculation \
          when downloading from OCI registries. When enabled for OCI blob URLs (e.g., /v2/<name>/blobs/sha256:<digest>), \
-         the task ID is derived from the blob digest rather than the full URL. This enables deduplication across \
-         registries - the same blob from different registries shares one task ID, eliminating redundant downloads \
-         and storage"
+         the task ID is derived from the blob digest rather than the full URL, so the same blob from different registries \
+         shares one task ID. This enables deduplication across registries and eliminates redundant downloads and storage"
     )]
     enable_task_id_based_blob_digest: bool,
 
@@ -844,7 +524,7 @@ pub struct PreheatCommand {
         long,
         env = "DFCTL_TASK_PREHEAT_SCOPE",
         default_value = "all_seed_peers",
-        help = "Specify the scope for preheating, only used in gRPC mode (non-request-sdk). Possible values: 'single_seed_peer' (preheat from a single seed peer), \
+        help = "Specify the scope for preheating, only used in scheduler gRPC mode (non-request-sdk). Possible values: 'single_seed_peer' (preheat from a single seed peer), \
          'all_peers' (preheat from all available peers), 'all_seed_peers' (preheat from all seed peers)."
     )]
     scope: String,
@@ -853,7 +533,7 @@ pub struct PreheatCommand {
         long = "ip",
         required = false,
         env = "DFCTL_TASK_PREHEAT_IPS",
-        help = "Specify a list of specific peer IPs for preheating, only used in gRPC mode (non-request-sdk). This field has the highest priority: if provided, \
+        help = "Specify a list of specific peer IPs for preheating, only used in scheduler gRPC mode (non-request-sdk). This field has the highest priority: if provided, \
          both 'count' and 'percentage' will be ignored. Applies to 'all_peers' and 'all_seed_peers' scopes. \
          Examples: --ip='192.168.1.1' --ip='192.168.1.2'"
     )]
@@ -864,7 +544,7 @@ pub struct PreheatCommand {
         required = false,
         env = "DFCTL_TASK_PREHEAT_PERCENTAGE",
         value_parser = clap::value_parser!(u32).range(1..=100),
-        help = "Specify the percentage of available peers to preheat, only used in gRPC mode (non-request-sdk). This field has the lowest priority and is only used \
+        help = "Specify the percentage of available peers to preheat, only used in scheduler gRPC mode (non-request-sdk). This field has the lowest priority and is only used \
          if both 'ips' and 'count' are not provided. Must be a value between 1 and 100 (inclusive). \
          Applies to 'all_peers' and 'all_seed_peers' scopes"
     )]
@@ -875,7 +555,7 @@ pub struct PreheatCommand {
         required = false,
         env = "DFCTL_TASK_PREHEAT_COUNT",
         value_parser = clap::value_parser!(u32).range(1..=200),
-        help = "Specify the desired number of peers to preheat, only used in gRPC mode (non-request-sdk). This field is used only when 'ips' is not specified and \
+        help = "Specify the desired number of peers to preheat, only used in scheduler gRPC mode (non-request-sdk). This field is used only when 'ips' is not specified and \
          has priority over 'percentage'. Must be a value between 1 and 200 (inclusive). \
          Applies to 'all_peers' and 'all_seed_peers' scopes"
     )]
@@ -883,24 +563,37 @@ pub struct PreheatCommand {
 
     #[arg(
         long = "concurrent-task-count",
-        required = false,
+        default_value_t = 4,
         env = "DFCTL_TASK_PREHEAT_CONCURRENT_TASK_COUNT",
         value_parser = clap::value_parser!(i64).range(1..=100),
-        help = "Specify the maximum number of tasks (e.g., image layers) to preheat concurrently, only used in gRPC mode (non-request-sdk). For example, if preheating \
-         100 layers with concurrent-task-count set to 10, up to 10 layers are processed simultaneously. Default is 8, maximum is 100"
+        help = "Specify the maximum number of tasks (e.g., image layers) to preheat concurrently, used in both scheduler gRPC mode and request SDK mode \
+         (request SDK mode applies it to image preheat only). For example, if preheating 100 layers with concurrent-task-count set to 10, \
+         up to 10 layers are processed simultaneously. Default is 4, maximum is 100"
     )]
-    concurrent_task_count: Option<i64>,
+    concurrent_task_count: i64,
 
     #[arg(
         long = "concurrent-peer-count",
         required = false,
         env = "DFCTL_TASK_PREHEAT_CONCURRENT_PEER_COUNT",
         value_parser = clap::value_parser!(i64).range(1..=1000),
-        help = "Specify the maximum number of peers to preheat concurrently for a single task (e.g., an image layer), only used in gRPC mode (non-request-sdk). \
+        help = "Specify the maximum number of peers to preheat concurrently for a single task (e.g., an image layer), only used in scheduler gRPC mode (non-request-sdk). \
          For example, if preheating a layer with concurrent-peer-count set to 10, up to 10 peers process that layer simultaneously. \
          Default is 500, maximum is 1000"
     )]
     concurrent_peer_count: Option<i64>,
+
+    #[arg(
+        long,
+        default_value_t = 2,
+        env = "DFCTL_TASK_PREHEAT_REPLICAS",
+        value_parser = clap::value_parser!(u32).range(1..),
+        help = "Specify the number of seed peers serving the task, only used in request SDK mode. Preheat selects the replicas of seed peers \
+         by consistent hashing on the task ID and triggers each of them to download the task. A later GET request via the request SDK \
+         selects seed peers with the same consistent hashing, so it hits the preheated seed peers when both use the same replicas. \
+         Must be a positive value, default is 2"
+    )]
+    replicas: u32,
 
     #[arg(
         long,
@@ -957,7 +650,8 @@ pub struct PreheatCommand {
     #[arg(
         short = 'H',
         long = "header",
-        help = "Specify the header for downloading file. Examples: --header='Content-Type: application/json' --header='Accept: application/json'"
+        help = "Specify the header for downloading file, used in both scheduler gRPC mode and request SDK mode \
+         (request SDK mode applies it to file preheat only). Examples: --header='Content-Type: application/json' --header='Accept: application/json'"
     )]
     header: Vec<String>,
 
@@ -974,63 +668,63 @@ pub struct PreheatCommand {
         long,
         default_value_t = false,
         env = "DFCTL_TASK_PREHEAT_INSECURE_SKIP_VERIFY",
-        help = "Specify whether to skip verify TLS certification for origin server"
+        help = "Specify whether to skip verify TLS certification for origin server, only used in scheduler gRPC mode (non-request-sdk)"
     )]
     insecure_skip_verify: bool,
 
     #[arg(
         long,
         env = "DFCTL_TASK_PREHEAT_STORAGE_REGION",
-        help = "Specify the region for the Object Storage Service (e.g., us-east-1)"
+        help = "Specify the region for the Object Storage Service (e.g., us-east-1), only used in scheduler gRPC mode (non-request-sdk)"
     )]
     storage_region: Option<String>,
 
     #[arg(
         long,
         env = "DFCTL_TASK_PREHEAT_STORAGE_ENDPOINT",
-        help = "Specify the endpoint URL for the Object Storage Service (e.g., https://s3.amazonaws.com)"
+        help = "Specify the endpoint URL for the Object Storage Service (e.g., https://s3.amazonaws.com), only used in scheduler gRPC mode (non-request-sdk)"
     )]
     storage_endpoint: Option<String>,
 
     #[arg(
         long,
         env = "DFCTL_TASK_PREHEAT_STORAGE_ACCESS_KEY_ID",
-        help = "Specify the access key ID for authenticating with the Object Storage Service"
+        help = "Specify the access key ID for authenticating with the Object Storage Service, only used in scheduler gRPC mode (non-request-sdk)"
     )]
     storage_access_key_id: Option<String>,
 
     #[arg(
         long,
         env = "DFCTL_TASK_PREHEAT_STORAGE_ACCESS_KEY_SECRET",
-        help = "Specify the secret access key for authenticating with the Object Storage Service"
+        help = "Specify the secret access key for authenticating with the Object Storage Service, only used in scheduler gRPC mode (non-request-sdk)"
     )]
     storage_access_key_secret: Option<String>,
 
     #[arg(
         long,
         env = "DFCTL_TASK_PREHEAT_STORAGE_SECURITY_TOKEN",
-        help = "Specify the security token for the Object Storage Service"
+        help = "Specify the security token for the Object Storage Service, only used in scheduler gRPC mode (non-request-sdk)"
     )]
     storage_security_token: Option<String>,
 
     #[arg(
         long,
         env = "DFCTL_TASK_PREHEAT_STORAGE_INSECURE_SKIP_VERIFY",
-        help = "Specify whether to skip verify TLS certification for object storage service"
+        help = "Specify whether to skip verify TLS certification for object storage service, only used in scheduler gRPC mode (non-request-sdk)"
     )]
     storage_insecure_skip_verify: Option<bool>,
 
     #[arg(
         long,
         env = "DFCTL_TASK_PREHEAT_STORAGE_SESSION_TOKEN",
-        help = "Specify the session token for Amazon Simple Storage Service(S3)"
+        help = "Specify the session token for Amazon Simple Storage Service(S3), only used in scheduler gRPC mode (non-request-sdk)"
     )]
     storage_session_token: Option<String>,
 
     #[arg(
         long,
         env = "DFCTL_TASK_PREHEAT_STORAGE_CREDENTIAL_PATH",
-        help = "Specify the local path to the credential file which is used for OAuth2 authentication for Google Cloud Storage Service(GCS)"
+        help = "Specify the local path to the credential file which is used for OAuth2 authentication for Google Cloud Storage Service(GCS), only used in scheduler gRPC mode (non-request-sdk)"
     )]
     storage_credential_path: Option<String>,
 
@@ -1038,14 +732,14 @@ pub struct PreheatCommand {
         long,
         default_value = "publicRead",
         env = "DFCTL_TASK_PREHEAT_STORAGE_PREDEFINED_ACL",
-        help = "Specify the predefined ACL for Google Cloud Storage Service(GCS)"
+        help = "Specify the predefined ACL for Google Cloud Storage Service(GCS), only used in scheduler gRPC mode (non-request-sdk)"
     )]
     storage_predefined_acl: Option<String>,
 
     #[arg(
         long,
         env = "DFCTL_TASK_PREHEAT_HDFS_DELEGATION_TOKEN",
-        help = "Specify the delegation token for Hadoop Distributed File System(HDFS)"
+        help = "Specify the delegation token for Hadoop Distributed File System(HDFS), only used in scheduler gRPC mode (non-request-sdk)"
     )]
     hdfs_delegation_token: Option<String>,
 
@@ -1081,7 +775,7 @@ impl PreheatCommand {
     /// Executes the preheat command to preheat an image or file.
     ///
     /// This function preheats content via the Dragonfly scheduler. It supports two modes:
-    /// - gRPC mode (default): directly calls the scheduler's preheat RPC.
+    /// - Scheduler gRPC mode (default): directly calls the scheduler's preheat RPC.
     /// - Request SDK mode (--request-sdk): uses the request SDK proxy for preheat.
     pub async fn execute(&self) -> Result<()> {
         // Initialize tracing.
@@ -1093,150 +787,46 @@ impl PreheatCommand {
                 Error::TonicStatus(status) => {
                     let details = status.details();
                     if let Ok(backend_err) = serde_json::from_slice::<Backend>(details) {
-                        println!(
-                            "{}{}{}Preheating Task Failed!{}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}****************************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::error("Preheating Task Failed!");
+                        terminal::separator();
 
                         if let Some(status_code) = backend_err.status_code {
-                            println!(
-                                "{}{}{}Bad Status Code:{} {}",
-                                color::Fg(color::Red),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset,
-                                status_code
-                            );
+                            terminal::error_field("Bad Status Code:", status_code);
                         }
 
-                        println!(
-                            "{}{}{}Message:{} {}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            backend_err.message
-                        );
+                        terminal::field("Message:", backend_err.message);
 
                         if !backend_err.header.is_empty() {
-                            println!(
-                                "{}{}{}Header:{}",
-                                color::Fg(color::Cyan),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset
+                            terminal::headers(
+                                backend_err
+                                    .header
+                                    .iter()
+                                    .map(|(key, value)| (key.as_str(), value.as_str())),
                             );
-                            for (key, value) in backend_err.header.iter() {
-                                println!("  [{}]: {}", key.as_str(), value.as_str());
-                            }
                         }
 
-                        println!(
-                            "{}{}{}****************************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::separator();
                     } else {
-                        println!(
-                            "{}{}{}Preheating Task Failed!{}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}*********************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
-
-                        println!(
-                            "{}{}{}Bad Code:{} {}",
-                            color::Fg(color::Red),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            status.code()
-                        );
-
-                        println!(
-                            "{}{}{}Message:{} {}",
-                            color::Fg(color::Cyan),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset,
-                            status.message()
-                        );
+                        terminal::error("Preheating Task Failed!");
+                        terminal::separator();
+                        terminal::error_field("Bad Code:", status.code());
+                        terminal::field("Message:", status.message());
 
                         if !status.details().is_empty() {
-                            println!(
-                                "{}{}{}Details:{} {}",
-                                color::Fg(color::Cyan),
-                                style::Italic,
-                                style::Bold,
-                                style::Reset,
-                                std::str::from_utf8(status.details()).unwrap()
+                            terminal::field(
+                                "Details:",
+                                std::str::from_utf8(status.details()).unwrap(),
                             );
                         }
 
-                        println!(
-                            "{}{}{}*********************************{}",
-                            color::Fg(color::Black),
-                            style::Italic,
-                            style::Bold,
-                            style::Reset
-                        );
+                        terminal::separator();
                     }
                 }
                 err => {
-                    println!(
-                        "{}{}{}Preheating Task Failed!{}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
-
-                    println!(
-                        "{}{}{}Message:{} {}",
-                        color::Fg(color::Red),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset,
-                        err
-                    );
-
-                    println!(
-                        "{}{}{}****************************************{}",
-                        color::Fg(color::Black),
-                        style::Italic,
-                        style::Bold,
-                        style::Reset
-                    );
+                    terminal::error("Preheating Task Failed!");
+                    terminal::separator();
+                    terminal::error_field("Message:", err);
+                    terminal::separator();
                 }
             }
 
@@ -1246,7 +836,7 @@ impl PreheatCommand {
         Ok(())
     }
 
-    /// Run the preheat logic based on the URL type (image or file) and mode (gRPC or request SDK).
+    /// Run the preheat logic based on the URL type (image or file) and mode (scheduler gRPC or request SDK).
     async fn run(&self) -> Result<()> {
         match (self.url.starts_with(oci::SCHEME), self.request_sdk) {
             (true, true) => self.preheat_image_by_request_sdk().await,
@@ -1298,11 +888,12 @@ impl PreheatCommand {
             ips: self.ips.clone().unwrap_or_default(),
             percentage: self.percentage,
             count: self.count,
-            concurrent_task_count: self.concurrent_task_count,
+            concurrent_task_count: Some(self.concurrent_task_count),
             concurrent_peer_count: self.concurrent_peer_count,
             timeout: Some(
                 prost_wkt_types::Duration::try_from(self.timeout).or_err(ErrorType::ParseError)?,
             ),
+            enable_task_id_based_blob_digest: self.enable_task_id_based_blob_digest,
 
             // TODO: Support certificate chain.
             certificate_chain: Vec::new(),
@@ -1310,12 +901,7 @@ impl PreheatCommand {
         };
 
         client.preheat_image(request).await?;
-        println!(
-            "{}{}Preheat Succeeded!{}",
-            color::Fg(color::Green),
-            style::Bold,
-            style::Reset
-        );
+        terminal::success("Preheat Succeeded!");
 
         Ok(())
     }
@@ -1370,7 +956,7 @@ impl PreheatCommand {
             ips: self.ips.clone().unwrap_or_default(),
             percentage: self.percentage,
             count: self.count,
-            concurrent_task_count: self.concurrent_task_count,
+            concurrent_task_count: Some(self.concurrent_task_count),
             concurrent_peer_count: self.concurrent_peer_count,
             timeout: Some(
                 prost_wkt_types::Duration::try_from(self.timeout).or_err(ErrorType::ParseError)?,
@@ -1385,12 +971,7 @@ impl PreheatCommand {
         };
 
         client.preheat_file(request).await?;
-        println!(
-            "{}{}Preheat Succeeded!{}",
-            color::Fg(color::Green),
-            style::Bold,
-            style::Reset
-        );
+        terminal::success("Preheat Succeeded!");
 
         Ok(())
     }
@@ -1428,7 +1009,9 @@ impl PreheatCommand {
             content_for_calculating_task_id: None,
             enable_task_id_based_blob_digest: self.enable_task_id_based_blob_digest,
             priority: Some(self.priority),
+            replicas: self.replicas as usize,
             timeout: self.timeout,
+            concurrent_task_count: self.concurrent_task_count as usize,
 
             // TODO: Support certificate chain.
             client_cert: None,
@@ -1439,12 +1022,7 @@ impl PreheatCommand {
             .await
             .map_err(|err| Error::Unknown(format!("preheat failed: {err}")))?;
 
-        println!(
-            "{}{}Preheat Succeeded!{}",
-            color::Fg(color::Green),
-            style::Bold,
-            style::Reset
-        );
+        terminal::success("Preheat Succeeded!");
 
         Ok(())
     }
@@ -1474,6 +1052,7 @@ impl PreheatCommand {
             content_for_calculating_task_id: None,
             enable_task_id_based_blob_digest: self.enable_task_id_based_blob_digest,
             priority: Some(self.priority),
+            replicas: self.replicas as usize,
             timeout: self.timeout,
 
             // TODO: Support certificate chain.
@@ -1485,12 +1064,7 @@ impl PreheatCommand {
             .await
             .map_err(|err| Error::Unknown(format!("preheat failed: {err}")))?;
 
-        println!(
-            "{}{}Preheat Succeeded!{}",
-            color::Fg(color::Green),
-            style::Bold,
-            style::Reset
-        );
+        terminal::success("Preheat Succeeded!");
 
         Ok(())
     }

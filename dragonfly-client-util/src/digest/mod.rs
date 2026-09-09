@@ -15,26 +15,36 @@
  */
 
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
-use lazy_static::lazy_static;
 use regex::Regex;
 use sha2::Digest as Sha2Digest;
 use std::fmt;
 use std::io::{self, Read};
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::LazyLock;
 use tracing::instrument;
 
 /// The separator character for digest formatting.
 pub const SEPARATOR: &str = ":";
 
-lazy_static! {
-    /// Regex pattern for OCI blob URLs, e.g. http(s)://<registry>/v2/<repository>/blobs/<digest>.
-    static ref BLOB_URL_REGEX: Regex = Regex::new(r"^(.*)://(.*)/v2/(.*)/blobs/([^?]+)(?:\?.*)?$").unwrap();
-}
+/// Regex pattern for OCI blob URLs, e.g. http(s)://<registry>/v2/<repository>/blobs/<digest>.
+static BLOB_URL_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(.*)://(.*)/v2/(.*)/blobs/([^?]+)(?:\?.*)?$").unwrap());
 
 /// Checks if the URL is an OCI blob URL.
 pub fn is_blob_url(url: &str) -> bool {
     BLOB_URL_REGEX.is_match(url)
+}
+
+/// Regex pattern for OCI manifest URLs, e.g. http(s)://<registry>/v2/<repository>/manifests/<reference>.
+static MANIFEST_URL_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(.*)://(.*)/v2/(.*)/manifests/([^?]+)(?:\?.*)?$").unwrap());
+
+/// Checks if the URL is an OCI manifest URL whose reference is a digest with a
+/// supported algorithm. A manifest URL referenced by a tag returns false, so it
+/// falls back to the url based task id.
+pub fn is_manifest_digest_url(url: &str) -> bool {
+    Digest::extract_from_manifest_url(url).is_some()
 }
 
 /// Algorithm for generating digests.
@@ -103,6 +113,16 @@ impl Digest {
             .ok()
     }
 
+    /// Extracts the digest from an OCI manifest URL, e.g. http(s)://<registry>/v2/<repository>/manifests/<digest>.
+    pub fn extract_from_manifest_url(url: &str) -> Option<Self> {
+        MANIFEST_URL_REGEX
+            .captures(url)
+            .and_then(|caps| caps.get(4))
+            .map(|m| m.as_str())?
+            .parse()
+            .ok()
+    }
+
     /// Returns the algorithm of the digest.
     pub fn algorithm(&self) -> Algorithm {
         self.algorithm
@@ -135,11 +155,8 @@ impl FromStr for Digest {
 
         let algorithm = match parts[0] {
             "crc32" => {
-                if parts[1].len() != 10 {
-                    return Err(format!(
-                        "invalid crc32 digest length: {}, expected 10",
-                        parts[1].len()
-                    ));
+                if parts[1].is_empty() {
+                    return Err(format!("invalid crc32 digest: {s}"));
                 }
 
                 Algorithm::Crc32
@@ -225,144 +242,354 @@ pub fn verify_file_digest(expected_digest: Digest, file_path: &Path) -> ClientRe
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
-    use std::fs::File;
-    use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
-    fn test_extract_from_blob_url() {
-        let url = "http://registry.example.com/v2/library/ubuntu/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e";
-        let digest = Digest::extract_from_blob_url(url);
-        assert!(digest.is_some());
-        let digest = digest.unwrap();
-        assert_eq!(digest.algorithm(), Algorithm::Sha256);
-        assert_eq!(
-            digest.encoded(),
-            "b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e"
-        );
-
-        let url = "https://registry.example.com/v2/myorg/myrepo/blobs/sha512:94381a28e8c039fedfa78de025158a068226c3ccd041b22c2c8e73fc993584e9b167d9ae32bc8b372c66701c808ab134e0768c8f16b9a3e61eec1ccf8faa9db8";
-        let digest = Digest::extract_from_blob_url(url);
-        assert!(digest.is_some());
-        let digest = digest.unwrap();
-        assert_eq!(digest.algorithm(), Algorithm::Sha512);
-        assert_eq!(digest.encoded(), "94381a28e8c039fedfa78de025158a068226c3ccd041b22c2c8e73fc993584e9b167d9ae32bc8b372c66701c808ab134e0768c8f16b9a3e61eec1ccf8faa9db8");
-
-        let url = "https://registry.io/v2/org/team/project/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e";
-        let digest = Digest::extract_from_blob_url(url);
-        assert!(digest.is_some());
-
-        let url = "http://localhost:5000/v2/myrepo/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e";
-        let digest = Digest::extract_from_blob_url(url);
-        assert!(digest.is_some());
-        let digest = digest.unwrap();
-        assert_eq!(digest.algorithm(), Algorithm::Sha256);
-        assert_eq!(
-            digest.encoded(),
-            "b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e"
-        );
-
-        let url = "https://index.docker.io/v2/library/alpine/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e?ns=docker.io";
-        let digest = Digest::extract_from_blob_url(url);
-        assert!(digest.is_some());
-        let digest = digest.unwrap();
-        assert_eq!(digest.algorithm(), Algorithm::Sha256);
-        assert_eq!(
-            digest.encoded(),
-            "b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e"
-        );
-
-        let url = "http://localhost:5000/v2/myrepo/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e?id=12345";
-        let digest = Digest::extract_from_blob_url(url);
-        assert!(digest.is_some());
-        let digest = digest.unwrap();
-        assert_eq!(digest.algorithm(), Algorithm::Sha256);
-        assert_eq!(
-            digest.encoded(),
-            "b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e"
-        );
-
-        let invalid_urls = vec![
-            "http://registry.example.com/blobs/sha256:abc",
-            "http://registry.example.com/v2/repo/manifests/sha256:abc",
-            "registry.example.com/v2/repo/blobs/sha256:abc",
-            "http://registry.example.com/v2/blobs/sha256:abc",
-            "",
-            "not-a-url",
-            "http://registry.example.com/v2/repo/blobs/invalid-digest",
+    fn is_blob_url_matches_oci_blob_urls() {
+        let test_cases = vec![
+            (
+                "http://registry.example.com/v2/library/ubuntu/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e",
+                true,
+            ),
+            (
+                "http://localhost:5000/v2/myrepo/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e?ns=docker.io",
+                true,
+            ),
+            (
+                "http://registry.example.com/v2/library/ubuntu/manifests/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e",
+                false,
+            ),
+            ("http://registry.example.com/blobs/sha256:abc", false),
+            ("https://example.com/file.txt", false),
         ];
 
-        for url in invalid_urls {
-            assert!(Digest::extract_from_blob_url(url).is_none());
+        for (url, expected) in test_cases {
+            assert_eq!(is_blob_url(url), expected);
         }
     }
 
     #[test]
-    fn test_algorithm_display() {
-        assert_eq!(Algorithm::Crc32.to_string(), "crc32");
-        assert_eq!(Algorithm::Sha256.to_string(), "sha256");
-        assert_eq!(Algorithm::Sha512.to_string(), "sha512");
+    fn extract_from_blob_url_parses_oci_blob_digests() {
+        let test_cases: Vec<(&str, fn(Option<Digest>))> = vec![
+            (
+                "http://registry.example.com/v2/library/ubuntu/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e",
+                |digest| {
+                    let digest = digest.unwrap();
+                    assert_eq!(digest.algorithm(), Algorithm::Sha256);
+                    assert_eq!(
+                        digest.encoded(),
+                        "b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e"
+                    );
+                },
+            ),
+            (
+                "https://registry.example.com/v2/myorg/myrepo/blobs/sha512:94381a28e8c039fedfa78de025158a068226c3ccd041b22c2c8e73fc993584e9b167d9ae32bc8b372c66701c808ab134e0768c8f16b9a3e61eec1ccf8faa9db8",
+                |digest| {
+                    let digest = digest.unwrap();
+                    assert_eq!(digest.algorithm(), Algorithm::Sha512);
+                    assert_eq!(
+                        digest.encoded(),
+                        "94381a28e8c039fedfa78de025158a068226c3ccd041b22c2c8e73fc993584e9b167d9ae32bc8b372c66701c808ab134e0768c8f16b9a3e61eec1ccf8faa9db8"
+                    );
+                },
+            ),
+            (
+                "https://registry.io/v2/org/team/project/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e",
+                |digest| {
+                    let digest = digest.unwrap();
+                    assert_eq!(digest.algorithm(), Algorithm::Sha256);
+                    assert_eq!(
+                        digest.encoded(),
+                        "b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e"
+                    );
+                },
+            ),
+            (
+                "http://localhost:5000/v2/myrepo/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e",
+                |digest| {
+                    let digest = digest.unwrap();
+                    assert_eq!(digest.algorithm(), Algorithm::Sha256);
+                    assert_eq!(
+                        digest.encoded(),
+                        "b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e"
+                    );
+                },
+            ),
+            (
+                "https://index.docker.io/v2/library/alpine/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e?ns=docker.io",
+                |digest| {
+                    let digest = digest.unwrap();
+                    assert_eq!(digest.algorithm(), Algorithm::Sha256);
+                    assert_eq!(
+                        digest.encoded(),
+                        "b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e"
+                    );
+                },
+            ),
+            (
+                "http://localhost:5000/v2/myrepo/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e?id=12345",
+                |digest| {
+                    let digest = digest.unwrap();
+                    assert_eq!(digest.algorithm(), Algorithm::Sha256);
+                    assert_eq!(
+                        digest.encoded(),
+                        "b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e"
+                    );
+                },
+            ),
+            ("http://registry.example.com/blobs/sha256:abc", |digest| {
+                assert!(digest.is_none())
+            }),
+            (
+                "http://registry.example.com/v2/repo/manifests/sha256:abc",
+                |digest| assert!(digest.is_none()),
+            ),
+            ("registry.example.com/v2/repo/blobs/sha256:abc", |digest| {
+                assert!(digest.is_none())
+            }),
+            ("http://registry.example.com/v2/blobs/sha256:abc", |digest| {
+                assert!(digest.is_none())
+            }),
+            ("", |digest| assert!(digest.is_none())),
+            ("not-a-url", |digest| assert!(digest.is_none())),
+            (
+                "http://registry.example.com/v2/repo/blobs/invalid-digest",
+                |digest| assert!(digest.is_none()),
+            ),
+        ];
+
+        for (url, expect) in test_cases {
+            expect(Digest::extract_from_blob_url(url));
+        }
     }
 
     #[test]
-    fn test_algorithm_from_str() {
-        assert_eq!("crc32".parse::<Algorithm>(), Ok(Algorithm::Crc32));
-        assert_eq!("sha256".parse::<Algorithm>(), Ok(Algorithm::Sha256));
-        assert_eq!("sha512".parse::<Algorithm>(), Ok(Algorithm::Sha512));
-        assert!("invalid".parse::<Algorithm>().is_err());
+    fn is_manifest_digest_url_requires_a_supported_digest() {
+        let test_cases = vec![
+            (
+                "http://registry.example.com/v2/library/ubuntu/manifests/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e",
+                true,
+            ),
+            (
+                "http://localhost:5000/v2/myrepo/manifests/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e?ns=docker.io",
+                true,
+            ),
+            (
+                "http://registry.example.com/v2/library/ubuntu/manifests/latest",
+                false,
+            ),
+            (
+                "http://registry.example.com/v2/library/ubuntu/manifests/md5:8a04994a666b4e4b20a2fd9e5a44f44c",
+                false,
+            ),
+            (
+                "http://registry.example.com/v2/library/ubuntu/manifests/sha256:abc",
+                false,
+            ),
+            (
+                "http://registry.example.com/v2/library/ubuntu/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e",
+                false,
+            ),
+            ("https://example.com/file.txt", false),
+        ];
+
+        for (url, expected) in test_cases {
+            assert_eq!(is_manifest_digest_url(url), expected);
+        }
     }
 
     #[test]
-    fn test_digest_display() {
-        let digest = Digest::new(Algorithm::Sha256, "encoded_hash".to_string());
-        assert_eq!(digest.to_string(), "sha256:encoded_hash");
+    fn extract_from_manifest_url_parses_oci_manifest_digests() {
+        let test_cases: Vec<(&str, fn(Option<Digest>))> = vec![
+            (
+                "http://registry.example.com/v2/library/ubuntu/manifests/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e",
+                |digest| {
+                    let digest = digest.unwrap();
+                    assert_eq!(digest.algorithm(), Algorithm::Sha256);
+                    assert_eq!(
+                        digest.encoded(),
+                        "b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e"
+                    );
+                },
+            ),
+            (
+                "http://localhost:5000/v2/myrepo/manifests/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e?ns=docker.io",
+                |digest| {
+                    let digest = digest.unwrap();
+                    assert_eq!(digest.algorithm(), Algorithm::Sha256);
+                    assert_eq!(
+                        digest.encoded(),
+                        "b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e"
+                    );
+                },
+            ),
+            (
+                "http://registry.example.com/v2/library/ubuntu/manifests/latest",
+                |digest| assert!(digest.is_none()),
+            ),
+            (
+                "http://registry.example.com/v2/library/ubuntu/manifests/sha256:abc",
+                |digest| assert!(digest.is_none()),
+            ),
+            (
+                "http://registry.example.com/v2/library/ubuntu/manifests/md5:8a04994a666b4e4b20a2fd9e5a44f44c",
+                |digest| assert!(digest.is_none()),
+            ),
+            (
+                "http://registry.example.com/v2/library/ubuntu/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e",
+                |digest| assert!(digest.is_none()),
+            ),
+            ("https://example.com/file.txt", |digest| {
+                assert!(digest.is_none())
+            }),
+        ];
+
+        for (url, expect) in test_cases {
+            expect(Digest::extract_from_manifest_url(url));
+        }
     }
 
     #[test]
-    fn test_calculate_file_digest() {
-        let content = b"test content";
-        let temp_file = tempfile::NamedTempFile::new().expect("failed to create temp file");
-        let path = temp_file.path();
-        let mut file = File::create(path).expect("failed to create file");
-        file.write_all(content).expect("failed to write to file");
+    fn algorithm_formats_as_its_name() {
+        let test_cases = vec![
+            (Algorithm::Crc32, "crc32"),
+            (Algorithm::Sha256, "sha256"),
+            (Algorithm::Sha512, "sha512"),
+        ];
 
-        let expected_sha256 = "6ae8a75555209fd6c44157c0aed8016e763ff435a19cf186f76863140143ff72";
-        let digest = calculate_file_digest(Algorithm::Sha256, path)
-            .expect("failed to calculate Sha256 hash");
-        assert_eq!(digest.encoded(), expected_sha256);
-
-        let expected_sha512 = "0cbf4caef38047bba9a24e621a961484e5d2a92176a859e7eb27df343dd34eb98d538a6c5f4da1ce302ec250b821cc001e46cc97a704988297185a4df7e99602";
-        let digest = calculate_file_digest(Algorithm::Sha512, path)
-            .expect("failed to calculate Sha512 hash");
-        assert_eq!(digest.encoded(), expected_sha512);
-
-        let expected_crc32 = "1475635037";
-        let digest =
-            calculate_file_digest(Algorithm::Crc32, path).expect("failed to calculate Crc32 hash");
-        assert_eq!(digest.encoded(), expected_crc32);
+        for (algorithm, expected) in test_cases {
+            assert_eq!(algorithm.to_string(), expected);
+        }
     }
 
     #[test]
-    fn test_verify_file_digest() {
-        let content = b"test content";
-        let temp_file = tempfile::NamedTempFile::new().expect("failed to create temp file");
-        let path = temp_file.path();
-        let mut file = File::create(path).expect("failed to create file");
-        file.write_all(content).expect("failed to write to file");
+    fn algorithm_from_str_accepts_known_names() {
+        let test_cases = vec![
+            ("crc32", Ok(Algorithm::Crc32)),
+            ("sha256", Ok(Algorithm::Sha256)),
+            ("sha512", Ok(Algorithm::Sha512)),
+            (
+                "invalid",
+                Err("invalid digest algorithm: invalid".to_string()),
+            ),
+        ];
 
-        let expected_sha256_digest = Digest::new(
-            Algorithm::Sha256,
-            "6ae8a75555209fd6c44157c0aed8016e763ff435a19cf186f76863140143ff72".to_string(),
-        );
-        assert!(verify_file_digest(expected_sha256_digest, path).is_ok());
+        for (name, expected) in test_cases {
+            assert_eq!(name.parse::<Algorithm>(), expected);
+        }
+    }
 
-        let expected_sha512_digest = Digest::new(
-            Algorithm::Sha512,
-            "0cbf4caef38047bba9a24e621a961484e5d2a92176a859e7eb27df343dd34eb98d538a6c5f4da1ce302ec250b821cc001e46cc97a704988297185a4df7e99602".to_string(),
-        );
-        assert!(verify_file_digest(expected_sha512_digest, path).is_ok());
+    #[test]
+    fn digest_formats_as_algorithm_and_encoded() {
+        let test_cases = vec![
+            (Algorithm::Crc32, "1475635037", "crc32:1475635037"),
+            (Algorithm::Sha256, "encoded_hash", "sha256:encoded_hash"),
+            (Algorithm::Sha512, "encoded_hash", "sha512:encoded_hash"),
+        ];
 
-        let expected_crc32_digest = Digest::new(Algorithm::Crc32, "1475635037".to_string());
-        assert!(verify_file_digest(expected_crc32_digest, path).is_ok());
+        for (algorithm, encoded, expected) in test_cases {
+            assert_eq!(
+                Digest::new(algorithm, encoded.to_string()).to_string(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn digest_from_str_validates_algorithm_and_encoded_length() {
+        let test_cases: Vec<(&str, fn(Result<Digest, String>))> = vec![
+            ("crc32:1475635037", |digest| {
+                let digest = digest.unwrap();
+                assert_eq!(digest.algorithm(), Algorithm::Crc32);
+                assert_eq!(digest.encoded(), "1475635037");
+            }),
+            ("sha256", |digest| {
+                assert_eq!(digest.err().unwrap(), "invalid digest: sha256")
+            }),
+            ("md5:8a04994a666b4e4b20a2fd9e5a44f44c", |digest| {
+                assert_eq!(digest.err().unwrap(), "invalid digest algorithm: md5")
+            }),
+            ("crc32:", |digest| {
+                assert_eq!(digest.err().unwrap(), "invalid crc32 digest: crc32:")
+            }),
+            ("sha256:abc", |digest| {
+                assert_eq!(
+                    digest.err().unwrap(),
+                    "invalid sha256 digest length: 3, expected 64"
+                )
+            }),
+            ("sha512:abc", |digest| {
+                assert_eq!(
+                    digest.err().unwrap(),
+                    "invalid sha512 digest length: 3, expected 128"
+                )
+            }),
+        ];
+
+        for (raw_digest, expect) in test_cases {
+            expect(raw_digest.parse::<Digest>());
+        }
+    }
+
+    #[test]
+    fn calculate_file_digest_hashes_the_file_per_algorithm() {
+        let temp_file = NamedTempFile::new().unwrap();
+        std::fs::write(temp_file.path(), b"test content").unwrap();
+
+        let test_cases = vec![
+            (Algorithm::Crc32, "1475635037"),
+            (
+                Algorithm::Sha256,
+                "6ae8a75555209fd6c44157c0aed8016e763ff435a19cf186f76863140143ff72",
+            ),
+            (
+                Algorithm::Sha512,
+                "0cbf4caef38047bba9a24e621a961484e5d2a92176a859e7eb27df343dd34eb98d538a6c5f4da1ce302ec250b821cc001e46cc97a704988297185a4df7e99602",
+            ),
+        ];
+
+        for (algorithm, expected) in test_cases {
+            let digest = calculate_file_digest(algorithm, temp_file.path()).unwrap();
+            assert_eq!(digest.encoded(), expected);
+        }
+    }
+
+    #[test]
+    fn verify_file_digest_accepts_only_the_matching_digest() {
+        let temp_file = NamedTempFile::new().unwrap();
+        std::fs::write(temp_file.path(), b"test content").unwrap();
+
+        let test_cases: Vec<(Algorithm, &str, fn(ClientResult<()>))> = vec![
+            (Algorithm::Crc32, "1475635037", |result| {
+                assert!(result.is_ok())
+            }),
+            (
+                Algorithm::Sha256,
+                "6ae8a75555209fd6c44157c0aed8016e763ff435a19cf186f76863140143ff72",
+                |result| assert!(result.is_ok()),
+            ),
+            (
+                Algorithm::Sha512,
+                "0cbf4caef38047bba9a24e621a961484e5d2a92176a859e7eb27df343dd34eb98d538a6c5f4da1ce302ec250b821cc001e46cc97a704988297185a4df7e99602",
+                |result| assert!(result.is_ok()),
+            ),
+            (
+                Algorithm::Sha256,
+                "b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e",
+                |result| {
+                    assert!(matches!(result, Err(ClientError::DigestMismatch(..))))
+                },
+            ),
+        ];
+
+        for (algorithm, encoded, expect) in test_cases {
+            expect(verify_file_digest(
+                Digest::new(algorithm, encoded.to_string()),
+                temp_file.path(),
+            ));
+        }
     }
 }

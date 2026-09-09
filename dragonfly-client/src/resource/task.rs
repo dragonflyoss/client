@@ -17,8 +17,8 @@
 use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
 use crate::resource::parent_selector::ParentSelector;
 use dragonfly_api::common::v2::{
-    Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, Peer, Piece, Task as CommonTask,
-    TrafficType,
+    Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, OpenCsg, Peer, Piece, SchedulingPolicy,
+    Task as CommonTask, TrafficType,
 };
 use dragonfly_api::dfdaemon::{
     self,
@@ -214,6 +214,7 @@ impl Task {
                 hdfs: request.hdfs,
                 hugging_face: request.hugging_face,
                 model_scope: request.model_scope,
+                open_csg: request.open_csg,
             })
             .await
             .inspect_err(|_err| {
@@ -333,6 +334,28 @@ impl Task {
     #[instrument(skip_all)]
     pub async fn copy_task(&self, id: &str, to: &Path) -> ClientResult<()> {
         self.storage.copy_task(id, to).await
+    }
+
+    /// Returns whether the download should bypass the scheduler and download the
+    /// pieces from the source directly. It returns true only if all of the
+    /// following conditions are met:
+    ///
+    /// 1. The scheduling policy is AUTO, which decides by the size heuristic below.
+    ///    If the policy is ALWAYS, the download always goes through the scheduler,
+    ///    so that the peer announces the task to the scheduler and other peers can
+    ///    discover it as a parent.
+    /// 2. The back-to-source download is allowed, since bypassing the scheduler
+    ///    downloads from the source directly.
+    /// 3. The task is small enough that the scheduling overhead outweighs the
+    ///    transfer: the requested range length or the content length is less than
+    ///    or equal to the min piece length, i.e. a single-piece task.
+    fn should_bypass_scheduler(&self, request: &Download, content_length: u64) -> bool {
+        request.scheduling_policy() == SchedulingPolicy::Auto
+            && !request.disable_back_to_source
+            && (request
+                .range
+                .is_some_and(|range| range.length <= piece::MIN_PIECE_LENGTH)
+                || content_length <= piece::MIN_PIECE_LENGTH)
     }
 
     /// Downloads a task.
@@ -509,17 +532,10 @@ impl Task {
             interested_pieces
         };
 
-        // If the range length is less than or equal to the min piece
-        // length, download the pieces from the source directly.
-        if !request.disable_back_to_source
-            && (request
-                .range
-                .is_some_and(|range| range.length <= super::piece::MIN_PIECE_LENGTH)
-                || content_length <= super::piece::MIN_PIECE_LENGTH)
-        {
-            debug!(
-                "seed peer downloads the range task from source directly, skipping the scheduler"
-            );
+        // Download the pieces from the source directly, skipping the scheduler,
+        // if the task is small enough and the scheduling policy allows it.
+        if self.should_bypass_scheduler(&request, content_length) {
+            debug!("peer downloads the range task from source directly, skipping the scheduler");
 
             if let Err(err) = self
                 .download_partial_from_source(
@@ -1298,6 +1314,7 @@ impl Task {
                 host_id: String,
                 peer_id: String,
                 number: u32,
+                offset: u64,
                 length: u64,
                 parents: Vec<piece_collector::CollectedParent>,
                 piece_manager: Arc<piece::Piece>,
@@ -1311,37 +1328,51 @@ impl Task {
                 parent_selector: Arc<ParentSelector>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
-                let parent = parent_selector.select(parents);
+                let mut collected_parents = parents;
+                let metadata = loop {
+                    let parent = parent_selector.select(&collected_parents);
 
-                debug!(
-                    "start to download piece {} from parent {:?}",
-                    piece_id,
-                    parent.id.clone()
-                );
+                    debug!(
+                        "start to download piece {} from parent {:?}",
+                        piece_id,
+                        parent.id.clone()
+                    );
 
-                let metadata = piece_manager
-                    .download_from_parent(
-                        piece_id.as_str(),
-                        host_id.as_str(),
-                        task_id.as_str(),
-                        number,
-                        length,
-                        parent.clone(),
-                        is_prefetch,
-                    )
-                    .await
-                    .map_err(|err| {
-                        error!(
-                            "download piece {} from parent {:?} error: {:?}",
-                            piece_id,
-                            parent.id.clone(),
-                            err
-                        );
-                        Error::DownloadFromParentFailed(DownloadFromParentFailed {
-                            piece_number: number,
-                            parent_id: parent.id.clone(),
-                        })
-                    })?;
+                    match piece_manager
+                        .download_from_parent(
+                            piece_id.as_str(),
+                            host_id.as_str(),
+                            task_id.as_str(),
+                            number,
+                            offset,
+                            length,
+                            parent.clone(),
+                            is_prefetch,
+                        )
+                        .await
+                    {
+                        Ok(metadata) => break metadata,
+                        Err(err) => {
+                            error!(
+                                "download piece {} from parent {:?} error: {:?}",
+                                piece_id,
+                                parent.id.clone(),
+                                err
+                            );
+
+                            collected_parents
+                                .retain(|collected_parent| collected_parent.id != parent.id);
+                            if collected_parents.is_empty() {
+                                return Err(Error::DownloadFromParentFailed(
+                                    DownloadFromParentFailed {
+                                        piece_number: number,
+                                        parent_id: parent.id.clone(),
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                };
 
                 // Construct the piece.
                 let piece = Piece {
@@ -1410,21 +1441,18 @@ impl Task {
                         })?;
                 } else {
                     download_progress_tx
-                        .send_timeout(
-                            Ok(DownloadTaskResponse {
-                                host_id: host_id.to_string(),
-                                task_id: task_id.to_string(),
-                                peer_id: peer_id.to_string(),
-                                response: Some(
-                                    download_task_response::Response::DownloadPieceFinishedResponse(
-                                        dfdaemon::v2::DownloadPieceFinishedResponse {
-                                            piece: Some(piece.clone()),
-                                        },
-                                    ),
+                        .send(Ok(DownloadTaskResponse {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.to_string(),
+                            peer_id: peer_id.to_string(),
+                            response: Some(
+                                download_task_response::Response::DownloadPieceFinishedResponse(
+                                    dfdaemon::v2::DownloadPieceFinishedResponse {
+                                        piece: Some(piece.clone()),
+                                    },
                                 ),
-                            }),
-                            REQUEST_TIMEOUT,
-                        )
+                            ),
+                        }))
                         .await
                         .unwrap_or_else(|err| {
                             error!(
@@ -1491,6 +1519,7 @@ impl Task {
                         host_id,
                         peer_id,
                         collect_piece.number,
+                        collect_piece.offset,
                         collect_piece.length,
                         collect_piece.parents,
                         piece_manager,
@@ -1603,7 +1632,7 @@ impl Task {
         // Download the piece from the local.
         let mut join_set = JoinSet::new();
         let semaphore = Arc::new(Semaphore::new(
-            self.config.download.concurrent_piece_count as usize,
+            self.config.download.back_to_source_concurrent_piece_count as usize,
         ));
         for interested_piece in interested_pieces {
             async fn download_from_source(
@@ -1624,6 +1653,7 @@ impl Task {
                 hdfs: Option<Hdfs>,
                 hugging_face: Option<HuggingFace>,
                 model_scope: Option<ModelScope>,
+                open_csg: Option<OpenCsg>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 debug!("start to download piece {} from source", piece_id);
@@ -1642,6 +1672,7 @@ impl Task {
                         hdfs,
                         hugging_face,
                         model_scope,
+                        open_csg,
                     )
                     .await?;
 
@@ -1709,21 +1740,18 @@ impl Task {
                         })?;
                 } else {
                     download_progress_tx
-                        .send_timeout(
-                            Ok(DownloadTaskResponse {
-                                host_id: host_id.to_string(),
-                                task_id: task_id.to_string(),
-                                peer_id: peer_id.to_string(),
-                                response: Some(
-                                    download_task_response::Response::DownloadPieceFinishedResponse(
-                                        dfdaemon::v2::DownloadPieceFinishedResponse {
-                                            piece: Some(piece.clone()),
-                                        },
-                                    ),
+                        .send(Ok(DownloadTaskResponse {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.to_string(),
+                            peer_id: peer_id.to_string(),
+                            response: Some(
+                                download_task_response::Response::DownloadPieceFinishedResponse(
+                                    dfdaemon::v2::DownloadPieceFinishedResponse {
+                                        piece: Some(piece.clone()),
+                                    },
                                 ),
-                            }),
-                            REQUEST_TIMEOUT,
-                        )
+                            ),
+                        }))
                         .await
                         .unwrap_or_else(|err| {
                             error!(
@@ -1770,6 +1798,7 @@ impl Task {
             let hdfs = request.hdfs.clone();
             let hugging_face = request.hugging_face.clone();
             let model_scope = request.model_scope.clone();
+            let open_csg = request.open_csg.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
@@ -1792,6 +1821,7 @@ impl Task {
                         hdfs,
                         hugging_face,
                         model_scope,
+                        open_csg,
                     )
                     .await
                 }
@@ -2017,21 +2047,16 @@ impl Task {
                     })?;
             } else {
                 download_progress_tx
-                    .send_timeout(
-                        Ok(DownloadTaskResponse {
-                            host_id: host_id.to_string(),
-                            task_id: task_id.to_string(),
-                            peer_id: peer_id.to_string(),
-                            response: Some(
-                                download_task_response::Response::DownloadPieceFinishedResponse(
-                                    dfdaemon::v2::DownloadPieceFinishedResponse {
-                                        piece: Some(piece),
-                                    },
-                                ),
+                    .send(Ok(DownloadTaskResponse {
+                        host_id: host_id.to_string(),
+                        task_id: task_id.to_string(),
+                        peer_id: peer_id.to_string(),
+                        response: Some(
+                            download_task_response::Response::DownloadPieceFinishedResponse(
+                                dfdaemon::v2::DownloadPieceFinishedResponse { piece: Some(piece) },
                             ),
-                        }),
-                        REQUEST_TIMEOUT,
-                    )
+                        ),
+                    }))
                     .await
                     .unwrap_or_else(|err| {
                         error!(
@@ -2180,7 +2205,7 @@ impl Task {
         // Download the pieces.
         let mut join_set = JoinSet::new();
         let semaphore = Arc::new(Semaphore::new(
-            self.config.download.concurrent_piece_count as usize,
+            self.config.download.back_to_source_concurrent_piece_count as usize,
         ));
         for interested_piece in interested_pieces.clone() {
             async fn download_from_source(
@@ -2200,6 +2225,7 @@ impl Task {
                 hdfs: Option<Hdfs>,
                 hugging_face: Option<HuggingFace>,
                 model_scope: Option<ModelScope>,
+                open_csg: Option<OpenCsg>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 debug!("start to download piece {} from source", piece_id);
@@ -2218,6 +2244,7 @@ impl Task {
                         hdfs,
                         hugging_face,
                         model_scope,
+                        open_csg,
                     )
                     .await?;
 
@@ -2285,21 +2312,18 @@ impl Task {
                         })?;
                 } else {
                     download_progress_tx
-                        .send_timeout(
-                            Ok(DownloadTaskResponse {
-                                host_id: host_id.to_string(),
-                                task_id: task_id.to_string(),
-                                peer_id: peer_id.to_string(),
-                                response: Some(
-                                    download_task_response::Response::DownloadPieceFinishedResponse(
-                                        dfdaemon::v2::DownloadPieceFinishedResponse {
-                                            piece: Some(piece),
-                                        },
-                                    ),
+                        .send(Ok(DownloadTaskResponse {
+                            host_id: host_id.to_string(),
+                            task_id: task_id.to_string(),
+                            peer_id: peer_id.to_string(),
+                            response: Some(
+                                download_task_response::Response::DownloadPieceFinishedResponse(
+                                    dfdaemon::v2::DownloadPieceFinishedResponse {
+                                        piece: Some(piece),
+                                    },
                                 ),
-                            }),
-                            REQUEST_TIMEOUT,
-                        )
+                            ),
+                        }))
                         .await
                         .unwrap_or_else(|err| {
                             error!(
@@ -2324,6 +2348,7 @@ impl Task {
             let hdfs = request.hdfs.clone();
             let hugging_face = request.hugging_face.clone();
             let model_scope = request.model_scope.clone();
+            let open_csg = request.open_csg.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
@@ -2345,6 +2370,7 @@ impl Task {
                         hdfs,
                         hugging_face,
                         model_scope,
+                        open_csg,
                     )
                     .await
                 }
@@ -2506,26 +2532,24 @@ impl Task {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use tempfile::tempdir;
 
     #[tokio::test]
-    async fn test_delete_task_not_found() {
+    async fn delete_task_removes_the_task_from_storage() {
         let temp_dir = tempdir().unwrap();
         let log_dir = temp_dir.path().join("log");
         std::fs::create_dir_all(&log_dir).unwrap();
 
-        let config = Config::default();
-        let config = Arc::new(config);
-
-        let storage = Storage::new(config.clone(), temp_dir.path(), log_dir)
-            .await
-            .unwrap();
-        let storage = Arc::new(storage);
+        let config = Arc::new(Config::default());
+        let storage = Arc::new(
+            Storage::new(config.clone(), temp_dir.path(), log_dir)
+                .await
+                .unwrap(),
+        );
 
         let task_id = "non-existent-task-id";
         let task = storage.get_task(task_id).unwrap();
-        assert!(task.is_none(), "non-existent tasks should return None");
+        assert!(task.is_none());
 
         let task_id = "test-task-id";
         storage
@@ -2534,10 +2558,10 @@ mod tests {
             .unwrap();
 
         let task = storage.get_task(task_id).unwrap();
-        assert!(task.is_some(), "task should exist");
+        assert!(task.is_some());
 
         storage.delete_task(task_id).await;
         let task = storage.get_task(task_id).unwrap();
-        assert!(task.is_none(), "task should be deleted");
+        assert!(task.is_none());
     }
 }

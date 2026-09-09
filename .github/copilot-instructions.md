@@ -19,7 +19,6 @@ The repository is a Cargo workspace (resolver `"2"`) containing nine crates:
 | `dragonfly-client-backend`                 | Download backends: HTTP, S3/object-storage, HDFS, HuggingFace, plugins     |
 | `dragonfly-client-util`                    | Utilities: crypto, TLS, networking, ID generation, rate limiting, shutdown |
 | `dragonfly-client-metric`                  | Prometheus metrics                                                         |
-| `dragonfly-client-request`                 | Request library for downloading files via Dragonfly HTTP Proxy             |
 | `dragonfly-client-init`                    | `dfinit` binary — bootstraps the runtime environment                       |
 | `dragonfly-client-backend/examples/plugin` | Example backend plugin                                                     |
 
@@ -183,15 +182,28 @@ Write unit tests in the same file as the code being tested, inside a `#[cfg(test
 ```rust
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
 
     #[test]
-    fn test_synchronous_behavior() { ... }
+    fn parse_rejects_invalid_input() {
+        let test_cases: Vec<(&str, fn(Result<()>))> = vec![
+            ("valid", |result| assert!(result.is_ok())),
+            ("", |result| assert!(matches!(result, Err(Error::InvalidArgument(_))))),
+        ];
+
+        for (input, expect) in test_cases {
+            expect(parse(input));
+        }
+    }
 
     #[tokio::test]
-    async fn test_async_behavior() { ... }
+    async fn download_reads_the_whole_body() { ... }
 }
 ```
+
+Name tests as `<subject>_<behavior>` without a `test_` or `should_` prefix. Prefer table-driven tests: a `test_cases` vector of input tuples ending in an `expected` value compared with one `assert_eq!`, or an `expect` fn that holds every case-specific assertion. Write the fn pointer type inline in the `Vec<(...)>` annotation and never as a `type` alias; add `#![allow(clippy::type_complexity)]` at the top of the module when clippy complains. Keep the loop body straight-line: build inputs, call the function, run the shared assertions, call `expect`. Build inputs inline at each call site instead of through helper fns; keep helpers only for real I/O such as writing temp files or starting a mock server. Use `.unwrap()` rather than `.expect("...")`, put no custom message arguments on assertions, and do not write comments inside tests.
 
 ### Test Dependencies
 
@@ -212,7 +224,7 @@ cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
 cargo test -p dragonfly-client-storage
 
 # Run a specific test
-cargo test -p dragonfly-client-storage test_lru_cache
+cargo test -p dragonfly-client-storage cache::lru_cache::
 ```
 
 ### Benchmarks

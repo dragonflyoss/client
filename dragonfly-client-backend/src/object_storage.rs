@@ -907,498 +907,401 @@ mod tests {
     use super::*;
     use dragonfly_api::common::v2::ObjectStorage as ObjectStorageInfo;
 
-    #[test]
-    fn should_return_true_for_supported_schemes() {
-        let supported = vec!["s3", "gs", "abs", "oss", "obs", "cos"];
-        for scheme in supported {
-            assert!(Scheme::is_supported(scheme));
-        }
-    }
-    #[test]
-    fn should_return_false_for_unsupported_schemes() {
-        let unsupported = vec!["http", "https", "ftp", "hdfs", "file", "", "S3", "GCS"];
-        for scheme in unsupported {
-            assert!(!Scheme::is_supported(scheme));
-        }
-    }
+    const SCHEMES: [Scheme; 6] = [
+        Scheme::S3,
+        Scheme::GCS,
+        Scheme::ABS,
+        Scheme::OSS,
+        Scheme::OBS,
+        Scheme::COS,
+    ];
 
     #[test]
-    fn should_get_parsed_url() {
-        let file_key = "test-bucket/file";
-        let dir_key = "test-bucket/path/to/dir/";
-        let schemes = vec![
-            Scheme::OBS,
-            Scheme::S3,
-            Scheme::ABS,
-            Scheme::OSS,
-            Scheme::COS,
-            Scheme::GCS,
+    fn scheme_is_supported_only_for_object_storage_schemes() {
+        let test_cases = vec![
+            ("s3", true),
+            ("gs", true),
+            ("abs", true),
+            ("oss", true),
+            ("obs", true),
+            ("cos", true),
+            ("http", false),
+            ("https", false),
+            ("ftp", false),
+            ("hdfs", false),
+            ("file", false),
+            ("", false),
+            ("S3", false),
+            ("GCS", false),
         ];
 
-        // Test each scheme for both file and directory URLs.
-        for scheme in schemes {
-            let file_url = format!("{scheme}://{file_key}");
-            let url: Url = file_url.parse().unwrap();
-            let parsed_url: ParsedURL = url.try_into().unwrap();
-
-            assert!(!parsed_url.is_dir());
-            assert_eq!(parsed_url.bucket, "test-bucket");
-            assert_eq!(parsed_url.key, "file");
-            assert_eq!(parsed_url.scheme, scheme);
-
-            let dir_url = format!("{scheme}://{dir_key}");
-            let url: Url = dir_url.parse().unwrap();
-            let parsed_url: ParsedURL = url.try_into().unwrap();
-
-            assert!(parsed_url.is_dir());
-            assert_eq!(parsed_url.bucket, "test-bucket");
-            assert_eq!(parsed_url.key, "path/to/dir/");
-            assert_eq!(parsed_url.scheme, scheme);
+        for (scheme, expected) in test_cases {
+            assert_eq!(Scheme::is_supported(scheme), expected);
         }
     }
 
     #[test]
-    fn should_get_url_with_the_same_prefix() {
-        let file_key = "test-bucket/file";
-        let schemes = vec![
-            Scheme::OBS,
-            Scheme::S3,
-            Scheme::ABS,
-            Scheme::OSS,
-            Scheme::COS,
-            Scheme::GCS,
+    fn parsed_url_splits_bucket_and_decoded_key() {
+        let test_cases = vec![
+            ("test-bucket/file", "file", false),
+            ("test-bucket/path/to/dir/", "path/to/dir/", true),
+            ("test-bucket/path%20to/file", "path to/file", false),
+            ("test-bucket/", "", true),
         ];
 
-        // Test each scheme for both file and directory URLs.
-        for scheme in schemes {
-            let file_url = format!("{scheme}://{file_key}");
-            let url: Url = file_url.parse().unwrap();
-            let parsed_url: ParsedURL = url.try_into().unwrap();
-
-            let new_url = parsed_url.make_url_by_entry_path("test-entry");
-            let new_parsed_url: ParsedURL = new_url.try_into().unwrap();
-
-            assert_eq!(parsed_url.bucket, new_parsed_url.bucket);
-            assert_eq!(parsed_url.scheme, new_parsed_url.scheme);
-            assert_eq!(new_parsed_url.key, "test-entry");
+        for (location, expected_key, expected_is_dir) in test_cases {
+            for scheme in SCHEMES {
+                let url = format!("{scheme}://{location}");
+                let parsed_url: ParsedURL = url.parse::<Url>().unwrap().try_into().unwrap();
+                assert_eq!(parsed_url.scheme, scheme);
+                assert_eq!(parsed_url.bucket, "test-bucket");
+                assert_eq!(parsed_url.key, expected_key);
+                assert_eq!(parsed_url.is_dir(), expected_is_dir);
+            }
         }
     }
 
     #[test]
-    fn should_return_error_when_scheme_not_valid() {
-        let url: Url = "github://test-bucket/file".parse().unwrap();
-        let result = TryInto::<ParsedURL>::try_into(url);
-
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ClientError::InvalidURI(..)));
-    }
-
-    #[test]
-    fn should_return_error_when_bucket_not_valid() {
-        let schemes = vec![
-            Scheme::OBS,
-            Scheme::S3,
-            Scheme::ABS,
-            Scheme::OSS,
-            Scheme::COS,
-            Scheme::GCS,
+    fn parsed_url_rejects_malformed_urls() {
+        let test_cases = vec![
+            "github://test-bucket/file",
+            "s3:///file",
+            "gs:///file",
+            "abs:///file",
+            "oss:///file",
+            "obs:///file",
+            "cos:///file",
+            "s3://test-bucket",
         ];
 
-        for scheme in schemes {
-            let url: Url = format!("{scheme}:///file").parse().unwrap();
-            let result = TryInto::<ParsedURL>::try_into(url);
-
-            assert!(result.is_err());
-            assert!(matches!(result.unwrap_err(), ClientError::InvalidURI(..)));
+        for url in test_cases {
+            let result: Result<ParsedURL, ClientError> = url.parse::<Url>().unwrap().try_into();
+            assert!(matches!(result, Err(ClientError::InvalidURI(_))));
         }
     }
 
     #[test]
-    fn should_get_operator() {
+    fn make_url_by_entry_path_replaces_the_key() {
+        let test_cases = vec![
+            ("test-bucket/file", "test-entry", false),
+            ("test-bucket/path/to/dir/", "path/to/dir/file", false),
+            ("test-bucket/path/to/dir/", "path/to/dir/sub/", true),
+        ];
+
+        for (location, entry_path, expected_is_dir) in test_cases {
+            for scheme in SCHEMES {
+                let url = format!("{scheme}://{location}");
+                let parsed_url: ParsedURL = url.parse::<Url>().unwrap().try_into().unwrap();
+                let entry_url: ParsedURL = parsed_url
+                    .make_url_by_entry_path(entry_path)
+                    .try_into()
+                    .unwrap();
+                assert_eq!(entry_url.scheme, parsed_url.scheme);
+                assert_eq!(entry_url.bucket, parsed_url.bucket);
+                assert_eq!(entry_url.key, entry_path);
+                assert_eq!(entry_url.is_dir(), expected_is_dir);
+            }
+        }
+    }
+
+    #[test]
+    fn operator_builds_with_scheme_specific_fields() {
+        dragonfly_client_util::tls::install_crypto_provider();
+        let credentials = ObjectStorageInfo {
+            access_key_id: Some("access-key-id".into()),
+            access_key_secret: Some("access-key-secret".into()),
+            ..Default::default()
+        };
+        let endpoint_credentials = ObjectStorageInfo {
+            endpoint: Some("test-endpoint.local".into()),
+            ..credentials.clone()
+        };
+
         let test_cases = vec![
             (
                 Scheme::S3,
                 ObjectStorageInfo {
                     region: Some("test-region".into()),
-                    access_key_id: Some("access-key-id".into()),
-                    access_key_secret: Some("access-key-secret".into()),
+                    ..credentials.clone()
+                },
+                "s3",
+            ),
+            (Scheme::S3, credentials.clone(), "s3"),
+            (
+                Scheme::S3,
+                ObjectStorageInfo {
+                    region: Some("test-region".into()),
+                    ..endpoint_credentials.clone()
+                },
+                "s3",
+            ),
+            (
+                Scheme::S3,
+                ObjectStorageInfo {
+                    region: Some("test-region".into()),
+                    session_token: Some("session-token".into()),
+                    ..credentials.clone()
+                },
+                "s3",
+            ),
+            (
+                Scheme::S3,
+                ObjectStorageInfo {
+                    region: Some("test-region".into()),
+                    session_token: Some("session-token".into()),
+                    ..endpoint_credentials.clone()
+                },
+                "s3",
+            ),
+            (Scheme::GCS, ObjectStorageInfo::default(), "gcs"),
+            (
+                Scheme::GCS,
+                ObjectStorageInfo {
+                    credential_path: Some("credential-path".into()),
                     ..Default::default()
                 },
+                "gcs",
             ),
-            (Scheme::GCS, ObjectStorageInfo::default()),
+            (
+                Scheme::GCS,
+                ObjectStorageInfo {
+                    endpoint: Some("test-endpoint.local".into()),
+                    ..Default::default()
+                },
+                "gcs",
+            ),
+            (
+                Scheme::GCS,
+                ObjectStorageInfo {
+                    predefined_acl: Some("predefined-acl".into()),
+                    ..Default::default()
+                },
+                "gcs",
+            ),
+            (
+                Scheme::GCS,
+                ObjectStorageInfo {
+                    credential_path: Some("credential-path".into()),
+                    endpoint: Some("test-endpoint.local".into()),
+                    ..Default::default()
+                },
+                "gcs",
+            ),
+            (
+                Scheme::GCS,
+                ObjectStorageInfo {
+                    credential_path: Some("credential-path".into()),
+                    predefined_acl: Some("predefined-acl".into()),
+                    ..Default::default()
+                },
+                "gcs",
+            ),
+            (
+                Scheme::GCS,
+                ObjectStorageInfo {
+                    endpoint: Some("test-endpoint.local".into()),
+                    predefined_acl: Some("predefined-acl".into()),
+                    ..Default::default()
+                },
+                "gcs",
+            ),
+            (
+                Scheme::GCS,
+                ObjectStorageInfo {
+                    credential_path: Some("credential-path".into()),
+                    endpoint: Some("test-endpoint.local".into()),
+                    predefined_acl: Some("predefined-acl".into()),
+                    ..Default::default()
+                },
+                "gcs",
+            ),
             (
                 Scheme::ABS,
                 ObjectStorageInfo {
-                    endpoint: Some("test-endpoint.local".into()),
-                    access_key_id: Some("access-key-id".into()),
                     access_key_secret: Some("YWNjZXNzLWtleS1zZWNyZXQK".into()),
-                    ..Default::default()
+                    ..endpoint_credentials.clone()
                 },
+                "azblob",
+            ),
+            (Scheme::OSS, endpoint_credentials.clone(), "oss"),
+            (
+                Scheme::OSS,
+                ObjectStorageInfo {
+                    security_token: Some("security-token".into()),
+                    ..endpoint_credentials.clone()
+                },
+                "oss",
             ),
             (
                 Scheme::OSS,
                 ObjectStorageInfo {
-                    endpoint: Some("test-endpoint.local".into()),
-                    access_key_id: Some("access-key-id".into()),
-                    access_key_secret: Some("access-key-secret".into()),
-                    ..Default::default()
+                    endpoint: Some("https://oss-cn-beijing.aliyuncs.com".into()),
+                    insecure_skip_verify: Some(true),
+                    ..credentials.clone()
                 },
+                "oss",
+            ),
+            (
+                Scheme::OSS,
+                ObjectStorageInfo {
+                    endpoint: Some("https://oss-cn-beijing.aliyuncs.com".into()),
+                    insecure_skip_verify: Some(false),
+                    ..credentials.clone()
+                },
+                "oss",
+            ),
+            (
+                Scheme::OSS,
+                ObjectStorageInfo {
+                    endpoint: Some("https://oss-cn-beijing.aliyuncs.com".into()),
+                    insecure_skip_verify: None,
+                    ..credentials.clone()
+                },
+                "oss",
+            ),
+            (Scheme::OBS, endpoint_credentials.clone(), "obs"),
+            (Scheme::COS, endpoint_credentials.clone(), "cos"),
+        ];
+
+        let config = Arc::new(Config::default());
+        for (scheme, object_storage, expected_service) in test_cases {
+            let parsed_url: ParsedURL = format!("{scheme}://test-bucket/file")
+                .parse::<Url>()
+                .unwrap()
+                .try_into()
+                .unwrap();
+            let result = ObjectStorage::new(scheme, config.clone())
+                .unwrap()
+                .operator(
+                    &parsed_url,
+                    Some(object_storage.clone()),
+                    Duration::from_secs(3),
+                );
+            assert!(result.is_ok());
+
+            let info = result.unwrap().info();
+            assert_eq!(info.scheme(), expected_service);
+            assert_eq!(info.name(), "test-bucket");
+        }
+    }
+
+    #[test]
+    fn operator_rejects_missing_required_fields() {
+        dragonfly_client_util::tls::install_crypto_provider();
+        let access_key_id = ObjectStorageInfo {
+            access_key_id: Some("access-key-id".into()),
+            ..Default::default()
+        };
+        let access_key_secret = ObjectStorageInfo {
+            access_key_secret: Some("access-key-secret".into()),
+            ..Default::default()
+        };
+        let credentials = ObjectStorageInfo {
+            access_key_id: Some("access-key-id".into()),
+            access_key_secret: Some("access-key-secret".into()),
+            ..Default::default()
+        };
+
+        let test_cases = vec![
+            (
+                Scheme::S3,
+                None,
+                "backend error: s3 need object_storage parameter",
+            ),
+            (
+                Scheme::ABS,
+                Some(ObjectStorageInfo::default()),
+                "backend error: abs need endpoint",
+            ),
+            (
+                Scheme::ABS,
+                Some(access_key_id.clone()),
+                "backend error: abs need endpoint",
+            ),
+            (
+                Scheme::ABS,
+                Some(access_key_secret.clone()),
+                "backend error: abs need endpoint",
+            ),
+            (
+                Scheme::ABS,
+                Some(credentials.clone()),
+                "backend error: abs need endpoint",
+            ),
+            (
+                Scheme::OSS,
+                Some(ObjectStorageInfo::default()),
+                "backend error: oss need endpoint",
+            ),
+            (
+                Scheme::OSS,
+                Some(access_key_id.clone()),
+                "backend error: oss need endpoint",
+            ),
+            (
+                Scheme::OSS,
+                Some(access_key_secret.clone()),
+                "backend error: oss need endpoint",
+            ),
+            (
+                Scheme::OSS,
+                Some(credentials.clone()),
+                "backend error: oss need endpoint",
             ),
             (
                 Scheme::OBS,
-                ObjectStorageInfo {
-                    endpoint: Some("test-endpoint.local".into()),
-                    access_key_id: Some("access-key-id".into()),
-                    access_key_secret: Some("access-key-secret".into()),
-                    ..Default::default()
-                },
+                Some(ObjectStorageInfo::default()),
+                "backend error: obs need endpoint",
+            ),
+            (
+                Scheme::OBS,
+                Some(access_key_id.clone()),
+                "backend error: obs need endpoint",
+            ),
+            (
+                Scheme::OBS,
+                Some(access_key_secret.clone()),
+                "backend error: obs need endpoint",
+            ),
+            (
+                Scheme::OBS,
+                Some(credentials.clone()),
+                "backend error: obs need endpoint",
             ),
             (
                 Scheme::COS,
-                ObjectStorageInfo {
-                    endpoint: Some("test-endpoint.local".into()),
-                    access_key_id: Some("access-key-id".into()),
-                    access_key_secret: Some("access-key-secret".into()),
-                    ..Default::default()
-                },
-            ),
-        ];
-
-        for (scheme, object_storage) in test_cases {
-            let url: Url = format!("{scheme}://test-bucket/file").parse().unwrap();
-            let parsed_url: ParsedURL = url.try_into().unwrap();
-
-            let result = ObjectStorage::new(scheme, Arc::new(Config::default()))
-                .unwrap()
-                .operator(&parsed_url, Some(object_storage), Duration::from_secs(3));
-
-            assert!(
-                result.is_ok(),
-                "can not get {} operator, due to: {}",
-                scheme,
-                result.unwrap_err()
-            );
-        }
-    }
-
-    #[test]
-    fn should_get_s3_operator_with_extra_info() {
-        let test_cases = vec![
-            ObjectStorageInfo {
-                access_key_id: Some("access_key_id".into()),
-                access_key_secret: Some("access_key_secret".into()),
-                region: Some("test-region".into()),
-                endpoint: Some("test-endpoint.local".into()),
-                ..Default::default()
-            },
-            ObjectStorageInfo {
-                access_key_id: Some("access_key_id".into()),
-                access_key_secret: Some("access_key_secret".into()),
-                region: Some("test-region".into()),
-                session_token: Some("session_token".into()),
-                ..Default::default()
-            },
-            ObjectStorageInfo {
-                access_key_id: Some("access_key_id".into()),
-                access_key_secret: Some("access_key_secret".into()),
-                region: Some("test-region".into()),
-                endpoint: Some("test-endpoint.local".into()),
-                session_token: Some("session_token".into()),
-                ..Default::default()
-            },
-        ];
-
-        for object_storage in test_cases {
-            let url: Url = "s3://test-bucket/file".parse().unwrap();
-            let parsed_url: ParsedURL = url.try_into().unwrap();
-
-            let result = ObjectStorage::new(Scheme::S3, Arc::new(Config::default()))
-                .unwrap()
-                .operator(&parsed_url, Some(object_storage), Duration::from_secs(3));
-
-            assert!(result.is_ok());
-            assert_eq!(result.unwrap().info().scheme().to_string(), "s3");
-        }
-    }
-
-    #[test]
-    fn should_get_gcs_operator_with_extra_info() {
-        let test_cases = vec![
-            ObjectStorageInfo {
-                credential_path: Some("credential_path".into()),
-                ..Default::default()
-            },
-            ObjectStorageInfo {
-                endpoint: Some("test-endpoint".into()),
-                ..Default::default()
-            },
-            ObjectStorageInfo {
-                predefined_acl: Some("predefine_acl".into()),
-                ..Default::default()
-            },
-            ObjectStorageInfo {
-                credential_path: Some("credential_path".into()),
-                endpoint: Some("test-endpoint".into()),
-                ..Default::default()
-            },
-            ObjectStorageInfo {
-                credential_path: Some("credential_path".into()),
-                predefined_acl: Some("predefine_acl".into()),
-                ..Default::default()
-            },
-            ObjectStorageInfo {
-                endpoint: Some("test-endpoint".into()),
-                predefined_acl: Some("predefine_acl".into()),
-                ..Default::default()
-            },
-            ObjectStorageInfo {
-                credential_path: Some("credential_path".into()),
-                endpoint: Some("test-endpoint".into()),
-                predefined_acl: Some("predefine_acl".into()),
-                ..Default::default()
-            },
-        ];
-
-        for object_storage in test_cases {
-            let url: Url = "gs://test-bucket/file".parse().unwrap();
-            let parsed_url: ParsedURL = url.try_into().unwrap();
-
-            let result = ObjectStorage::new(Scheme::GCS, Arc::new(Config::default()))
-                .unwrap()
-                .operator(&parsed_url, Some(object_storage), Duration::from_secs(3));
-
-            assert!(result.is_ok());
-            assert_eq!(result.unwrap().info().scheme().to_string(), "gcs");
-        }
-    }
-
-    #[test]
-    fn should_return_error_when_lacks_of_info() {
-        let url: Url = "s3://test-bucket/file".parse().unwrap();
-        let parsed_url: ParsedURL = url.try_into().unwrap();
-
-        let result = ObjectStorage::new(Scheme::S3, Arc::new(Config::default()))
-            .unwrap()
-            .operator(&parsed_url, None, Duration::from_secs(3));
-
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "backend error: s3 need object_storage parameter"
-        )
-    }
-
-    #[test]
-    fn should_return_error_when_abs_lacks_of_info() {
-        let test_cases = vec![
-            (
-                ObjectStorageInfo::default(),
-                "backend error: abs need endpoint",
-            ),
-            (
-                ObjectStorageInfo {
-                    access_key_id: Some("access_key_id".into()),
-                    ..Default::default()
-                },
-                "backend error: abs need endpoint",
-            ),
-            (
-                ObjectStorageInfo {
-                    access_key_secret: Some("access_key_secret".into()),
-                    ..Default::default()
-                },
-                "backend error: abs need endpoint",
-            ),
-            (
-                ObjectStorageInfo {
-                    access_key_id: Some("access_key_id".into()),
-                    access_key_secret: Some("access_key_secret".into()),
-                    ..Default::default()
-                },
-                "backend error: abs need endpoint",
-            ),
-        ];
-
-        for (object_storage, error_message) in test_cases {
-            let url: Url = "abs://test-bucket/file".parse().unwrap();
-            let parsed_url: ParsedURL = url.try_into().unwrap();
-
-            let result = ObjectStorage::new(Scheme::ABS, Arc::new(Config::default()))
-                .unwrap()
-                .operator(&parsed_url, Some(object_storage), Duration::from_secs(3));
-
-            assert!(result.is_err());
-            assert_eq!(result.unwrap_err().to_string(), error_message);
-        }
-    }
-
-    #[test]
-    fn should_return_error_when_oss_lacks_of_info() {
-        let test_cases = vec![
-            (
-                ObjectStorageInfo::default(),
-                "backend error: oss need endpoint",
-            ),
-            (
-                ObjectStorageInfo {
-                    access_key_id: Some("access_key_id".into()),
-                    ..Default::default()
-                },
-                "backend error: oss need endpoint",
-            ),
-            (
-                ObjectStorageInfo {
-                    access_key_secret: Some("access_key_secret".into()),
-                    ..Default::default()
-                },
-                "backend error: oss need endpoint",
-            ),
-            (
-                ObjectStorageInfo {
-                    access_key_id: Some("access_key_id".into()),
-                    access_key_secret: Some("access_key_secret".into()),
-                    ..Default::default()
-                },
-                "backend error: oss need endpoint",
-            ),
-        ];
-
-        for (object_storage, error_message) in test_cases {
-            let url: Url = "oss://test-bucket/file".parse().unwrap();
-            let parsed_url: ParsedURL = url.try_into().unwrap();
-
-            let result = ObjectStorage::new(Scheme::OSS, Arc::new(Config::default()))
-                .unwrap()
-                .operator(&parsed_url, Some(object_storage), Duration::from_secs(3));
-
-            assert!(result.is_err());
-            assert_eq!(result.unwrap_err().to_string(), error_message);
-        }
-    }
-
-    #[test]
-    fn should_return_error_when_obs_lacks_of_info() {
-        let test_cases = vec![
-            (
-                ObjectStorageInfo::default(),
-                "backend error: obs need endpoint",
-            ),
-            (
-                ObjectStorageInfo {
-                    access_key_id: Some("access_key_id".into()),
-                    ..Default::default()
-                },
-                "backend error: obs need endpoint",
-            ),
-            (
-                ObjectStorageInfo {
-                    access_key_secret: Some("access_key_secret".into()),
-                    ..Default::default()
-                },
-                "backend error: obs need endpoint",
-            ),
-            (
-                ObjectStorageInfo {
-                    access_key_id: Some("access_key_id".into()),
-                    access_key_secret: Some("access_key_secret".into()),
-                    ..Default::default()
-                },
-                "backend error: obs need endpoint",
-            ),
-        ];
-
-        for (object_storage, error_message) in test_cases {
-            let url: Url = "obs://test-bucket/file".parse().unwrap();
-            let parsed_url: ParsedURL = url.try_into().unwrap();
-
-            let result = ObjectStorage::new(Scheme::OBS, Arc::new(Config::default()))
-                .unwrap()
-                .operator(&parsed_url, Some(object_storage), Duration::from_secs(3));
-
-            assert!(result.is_err());
-            assert_eq!(result.unwrap_err().to_string(), error_message);
-        }
-    }
-
-    #[test]
-    fn should_return_error_when_cos_lacks_of_info() {
-        let test_cases = vec![
-            (
-                ObjectStorageInfo::default(),
+                Some(ObjectStorageInfo::default()),
                 "backend error: cos need endpoint",
             ),
             (
-                ObjectStorageInfo {
-                    access_key_id: Some("access_key_id".into()),
-                    ..Default::default()
-                },
+                Scheme::COS,
+                Some(access_key_id.clone()),
                 "backend error: cos need endpoint",
             ),
             (
-                ObjectStorageInfo {
-                    access_key_secret: Some("access_key_secret".into()),
-                    ..Default::default()
-                },
+                Scheme::COS,
+                Some(access_key_secret.clone()),
                 "backend error: cos need endpoint",
             ),
             (
-                ObjectStorageInfo {
-                    access_key_id: Some("access_key_id".into()),
-                    access_key_secret: Some("access_key_secret".into()),
-                    ..Default::default()
-                },
+                Scheme::COS,
+                Some(credentials.clone()),
                 "backend error: cos need endpoint",
             ),
         ];
 
-        for (object_storage, error_message) in test_cases {
-            let url: Url = "cos://test-bucket/file".parse().unwrap();
-            let parsed_url: ParsedURL = url.try_into().unwrap();
-
-            let result = ObjectStorage::new(Scheme::COS, Arc::new(Config::default()))
+        let config = Arc::new(Config::default());
+        for (scheme, object_storage, expected) in test_cases {
+            let parsed_url: ParsedURL = format!("{scheme}://test-bucket/file")
+                .parse::<Url>()
                 .unwrap()
-                .operator(&parsed_url, Some(object_storage), Duration::from_secs(3));
-
-            assert!(result.is_err());
-            assert_eq!(result.unwrap_err().to_string(), error_message);
-        }
-    }
-
-    #[test]
-    fn should_handle_insecure_skip_verify_parameter() {
-        let test_cases = vec![
-            ObjectStorageInfo {
-                endpoint: Some("https://oss-cn-beijing.aliyuncs.com".into()),
-                access_key_id: Some("test-access-key-id".into()),
-                access_key_secret: Some("test-access-key-secret".into()),
-                insecure_skip_verify: Some(true),
-                ..Default::default()
-            },
-            ObjectStorageInfo {
-                endpoint: Some("https://oss-cn-beijing.aliyuncs.com".into()),
-                access_key_id: Some("test-access-key-id".into()),
-                access_key_secret: Some("test-access-key-secret".into()),
-                insecure_skip_verify: Some(false),
-                ..Default::default()
-            },
-            ObjectStorageInfo {
-                endpoint: Some("https://oss-cn-beijing.aliyuncs.com".into()),
-                access_key_id: Some("test-access-key-id".into()),
-                access_key_secret: Some("test-access-key-secret".into()),
-                insecure_skip_verify: None,
-                ..Default::default()
-            },
-        ];
-
-        for object_storage in test_cases {
-            let config = Arc::new(Config::default());
-            let backend = ObjectStorage::new(Scheme::OSS, config).unwrap();
-            let url: Url = "oss://test-bucket/file".parse().unwrap();
-            let parsed_url: ParsedURL = url.try_into().unwrap();
-
-            let result =
-                backend.operator(&parsed_url, Some(object_storage), Duration::from_secs(3));
-            assert!(result.is_ok());
+                .try_into()
+                .unwrap();
+            let err = ObjectStorage::new(scheme, config.clone())
+                .unwrap()
+                .operator(&parsed_url, object_storage.clone(), Duration::from_secs(3))
+                .unwrap_err();
+            assert_eq!(err.to_string(), expected);
         }
     }
 }

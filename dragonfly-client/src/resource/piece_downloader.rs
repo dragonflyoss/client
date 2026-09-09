@@ -122,9 +122,9 @@ struct QUICClientFactory {
 impl Factory<String, QUICClient> for QUICClientFactory {
     type Error = Error;
 
-    /// Creates a new QUICClient for the given address.
+    /// Creates a new QUICClient connected to the given address.
     async fn make_client(&self, addr: &String) -> Result<QUICClient> {
-        Ok(QUICClient::new(self.config.clone(), addr.clone()))
+        QUICClient::new(self.config.clone(), addr.clone()).await
     }
 }
 
@@ -145,8 +145,15 @@ impl QUICDownloader {
         }
     }
 
-    /// Returns a client entry by the address.
+    /// Returns a client entry by the address, recreating the client if its
+    /// connection is closed.
     async fn get_client_entry(&self, key: String, addr: String) -> Result<Entry<QUICClient>> {
+        let entry = self.client_pool.entry(&key, &addr).await?;
+        if !entry.client.is_closed() {
+            return Ok(entry);
+        }
+
+        self.client_pool.remove_entry(&key).await;
         self.client_pool.entry(&key, &addr).await
     }
 
@@ -415,8 +422,11 @@ pub mod rdma {
     use super::*;
     use dragonfly_client_config::dfdaemon::RdmaProvider;
     use dragonfly_client_storage::client::rdma::{discover, RDMAClient};
-    use dragonfly_client_storage::rdma::fabric::Fabric;
-    use dragonfly_client_storage::rdma::rendezvous::{RdmaAdvertisement, WireCapability};
+    use dragonfly_client_storage::rdma::fabric::{Fabric, RegisteredMemoryBudget};
+    use dragonfly_client_storage::rdma::rendezvous::{
+        PieceKind, RdmaAdvertisement, WireCapability, ERROR_CODE_BUSY, ERROR_CODE_INCOMPATIBLE,
+        ERROR_CODE_NOT_FOUND, ERROR_CODE_TOO_LARGE,
+    };
     use futures::StreamExt;
     use std::collections::HashMap;
     use std::net::SocketAddr;
@@ -446,6 +456,9 @@ pub mod rdma {
     /// CAPABLE_PARENT_TTL bounds how long a successful discovery result is reused.
     const CAPABLE_PARENT_TTL: Duration = Duration::from_secs(60);
 
+    /// Bound daemon memory even when scheduling sees continual parent churn.
+    const MAX_CACHED_PARENTS: usize = 4096;
+
     /// Failure says why RDMA to a parent did not work, which decides how long to avoid it.
     ///
     /// This is passed in rather than recovered from the error, because the two cases are not
@@ -474,12 +487,16 @@ pub mod rdma {
 
         /// backoff is the penalty applied on the most recent failure, and the basis for the next.
         backoff: Duration,
+        recorded_at: Instant,
     }
 
     /// FabricState tracks the lazily initialized process-shared fabric endpoint.
     enum FabricState {
         /// Uninitialized means no initialization has been attempted yet.
         Uninitialized,
+
+        /// Initialization remains owned here when the requesting piece is cancelled.
+        Initializing(tokio::task::JoinHandle<Result<(Arc<Fabric>, WireCapability)>>),
 
         /// Failed records when initialization last failed, for retry backoff.
         Failed(Instant),
@@ -494,6 +511,8 @@ pub mod rdma {
     pub struct RDMADownloader {
         /// config is the configuration of the dfdaemon.
         config: Arc<Config>,
+
+        memory_budget: Arc<RegisteredMemoryBudget>,
 
         /// fabric is the lazily initialized shared endpoint.
         fabric: tokio::sync::Mutex<FabricState>,
@@ -511,8 +530,20 @@ pub mod rdma {
     impl RDMADownloader {
         /// new returns a new RDMADownloader.
         pub fn new(config: Arc<Config>) -> Self {
+            let budget = Arc::new(RegisteredMemoryBudget::new(
+                config.storage.server.rdma.max_registered_bytes.as_u64(),
+            ));
+            Self::new_with_budget(config, budget)
+        }
+
+        /// Shares one registered-memory cap with the serving endpoint and retired generations.
+        pub fn new_with_budget(
+            config: Arc<Config>,
+            memory_budget: Arc<RegisteredMemoryBudget>,
+        ) -> Self {
             Self {
                 config,
+                memory_budget,
                 fabric: tokio::sync::Mutex::new(FabricState::Uninitialized),
                 unhealthy_parents: std::sync::Mutex::new(HashMap::new()),
                 capable_parents: std::sync::Mutex::new(HashMap::new()),
@@ -528,46 +559,57 @@ pub mod rdma {
                     return Ok((fabric.clone(), capability.clone()))
                 }
                 FabricState::Ready(_, _) => {
-                    // A retired endpoint cannot recover by returning errors forever. Drop it
-                    // and let the normal initialization path create a fresh provider endpoint.
-                    *state = FabricState::Uninitialized;
+                    *state = FabricState::Failed(Instant::now());
+                    return Err(Error::Unsupported(
+                        "rdma fabric is cooling down after failure".to_string(),
+                    ));
                 }
                 FabricState::Failed(at) if at.elapsed() < FABRIC_RETRY_INTERVAL => {
                     return Err(Error::Unsupported(
                         "rdma fabric initialization failed recently".to_string(),
-                    ));
+                    ))
                 }
                 _ => {}
             }
-
-            let rdma_config = &self.config.storage.server.rdma;
-            let Some(fabric_tag) = rdma_config
-                .fabric_tag
-                .as_deref()
-                .filter(|tag| !tag.is_empty())
-            else {
-                *state = FabricState::Failed(Instant::now());
-                return Err(Error::Unsupported(
-                    "rdma requires storage.server.rdma.fabricTag".to_string(),
-                ));
-            };
-
-            let provider = match rdma_config.provider {
-                RdmaProvider::Auto => None,
-                provider => Some(provider.to_string()),
-            };
-            match Fabric::new(
-                provider.as_deref(),
-                rdma_config.device.as_deref(),
-                rdma_config.max_registered_bytes.as_u64(),
-                rdma_config.allow_software_provider,
-            ) {
-                Ok(fabric) => {
-                    let fabric = Arc::new(fabric);
+            if !matches!(&*state, FabricState::Initializing(_)) {
+                let rdma_config = &self.config.storage.server.rdma;
+                let Some(fabric_tag) = rdma_config.fabric_tag.clone().filter(|tag| !tag.is_empty())
+                else {
+                    *state = FabricState::Failed(Instant::now());
+                    return Err(Error::Unsupported(
+                        "rdma requires storage.server.rdma.fabricTag".to_string(),
+                    ));
+                };
+                let provider = match rdma_config.provider {
+                    RdmaProvider::Auto => None,
+                    provider => Some(provider.to_string()),
+                };
+                let device = rdma_config.device.clone();
+                let budget = self.memory_budget.clone();
+                let allow_software = rdma_config.allow_software_provider;
+                *state = FabricState::Initializing(tokio::task::spawn_blocking(move || {
+                    let fabric = Arc::new(Fabric::new_with_budget(
+                        provider.as_deref(),
+                        device.as_deref(),
+                        budget,
+                        allow_software,
+                    )?);
                     let capability = WireCapability {
                         provider: fabric.provider().to_string(),
-                        fabric_tag: fabric_tag.to_string(),
+                        fabric_tag,
                     };
+                    Ok((fabric, capability))
+                }));
+            }
+            let FabricState::Initializing(handle) = &mut *state else {
+                unreachable!()
+            };
+            match handle
+                .await
+                .map_err(Error::TokioJoinError)
+                .and_then(|result| result)
+            {
+                Ok((fabric, capability)) => {
                     info!(
                         "rdma downloader ready: provider {}, fabric tag {}",
                         capability.provider, capability.fabric_tag
@@ -576,7 +618,7 @@ pub mod rdma {
                     Ok((fabric, capability))
                 }
                 Err(err) => {
-                    warn!("rdma fabric initialization failed: {}", err);
+                    warn!("rdma fabric initialization failed: {err}");
                     *state = FabricState::Failed(Instant::now());
                     Err(err)
                 }
@@ -588,7 +630,7 @@ pub mod rdma {
         async fn retire_failed_fabric(&self) {
             let mut state = self.fabric.lock().await;
             if matches!(&*state, FabricState::Ready(fabric, _) if fabric.is_failed()) {
-                *state = FabricState::Uninitialized;
+                *state = FabricState::Failed(Instant::now());
             }
         }
 
@@ -620,17 +662,29 @@ pub mod rdma {
                     .unwrap_or(UNHEALTHY_PARENT_MIN_BACKOFF),
             };
 
+            if unhealthy_parents.len() >= MAX_CACHED_PARENTS
+                && !unhealthy_parents.contains_key(addr)
+            {
+                if let Some(oldest) = unhealthy_parents
+                    .iter()
+                    .min_by_key(|(_, penalty)| penalty.recorded_at)
+                    .map(|(addr, _)| addr.clone())
+                {
+                    unhealthy_parents.remove(&oldest);
+                }
+            }
             unhealthy_parents.insert(
                 addr.to_string(),
                 ParentPenalty {
                     until: Instant::now() + backoff,
                     backoff,
+                    recorded_at: Instant::now(),
                 },
             );
         }
 
         /// record_success clears a parent's penalty once an attempt against it works again.
-        fn record_success(&self, addr: &str) {
+        pub(crate) fn record_success(&self, addr: &str) {
             self.unhealthy_parents.lock().unwrap().remove(addr);
         }
 
@@ -640,6 +694,7 @@ pub mod rdma {
             &self,
             addr: &str,
             local: &WireCapability,
+            deadline: tokio::time::Instant,
         ) -> Result<RdmaAdvertisement> {
             let cached = self.capable_parents.lock().unwrap().get(addr).cloned();
             if let Some((at, advertisement)) = cached {
@@ -649,32 +704,50 @@ pub mod rdma {
                 self.capable_parents.lock().unwrap().remove(addr);
             }
 
-            let advertisement = discover(addr, self.config.storage.server.rdma.transfer_timeout)
-                .await
-                .map_err(|err| {
-                    self.record_failure(addr, Failure::Transport);
-                    Error::Unsupported(format!("rdma discovery from {addr} failed: {err}"))
-                })?;
+            let advertisement = discover(
+                addr,
+                self.config
+                    .storage
+                    .server
+                    .rdma
+                    .transfer_timeout
+                    .min(deadline.saturating_duration_since(tokio::time::Instant::now())),
+            )
+            .await
+            .inspect_err(|err| {
+                self.record_request_failure(addr, err);
+            })?;
             local
                 .compatible(&advertisement.capability)
                 .map_err(|reason| {
                     self.record_failure(addr, Failure::Incompatible);
                     Error::Unsupported(format!("rdma incompatible: {reason}"))
                 })?;
-            self.capable_parents
-                .lock()
-                .unwrap()
-                .insert(addr.to_string(), (Instant::now(), advertisement.clone()));
+            self.cache_advertisement(addr, advertisement.clone());
             Ok(advertisement)
         }
 
+        fn cache_advertisement(&self, addr: &str, advertisement: RdmaAdvertisement) {
+            let mut parents = self.capable_parents.lock().unwrap();
+            if parents.len() >= MAX_CACHED_PARENTS && !parents.contains_key(addr) {
+                if let Some(oldest) = parents
+                    .iter()
+                    .min_by_key(|(_, (at, _))| *at)
+                    .map(|(addr, _)| addr.clone())
+                {
+                    parents.remove(&oldest);
+                }
+            }
+            parents.insert(addr.to_owned(), (Instant::now(), advertisement));
+        }
+
         /// client builds an RDMAClient for one parent address.
-        async fn client(&self, addr: &str) -> Result<RDMAClient> {
+        async fn client(&self, addr: &str, deadline: tokio::time::Instant) -> Result<RDMAClient> {
             self.check_parent(addr)?;
             let (fabric, capability) = self.fabric().await?;
             // advertisement records its own failures, since only it can tell an unreachable
             // parent apart from one that answered and is incompatible.
-            let advertisement = self.advertisement(addr, &capability).await?;
+            let advertisement = self.advertisement(addr, &capability, deadline).await?;
             let mut rendezvous_addr: SocketAddr = addr.parse().map_err(|err| {
                 Error::Unsupported(format!("invalid parent piece address {addr}: {err}"))
             })?;
@@ -684,15 +757,13 @@ pub mod rdma {
                 fabric,
                 capability,
                 rendezvous_addr.to_string(),
-            ))
+            )
+            .with_deadline(deadline))
         }
     }
 
-    /// RDMADownloader implements the Downloader trait.
     #[async_trait]
     impl Downloader for RDMADownloader {
-        /// download_piece downloads a piece from the other peer over the fabric.
-        #[instrument(skip_all)]
         async fn download_piece(
             &self,
             addr: &str,
@@ -700,14 +771,22 @@ pub mod rdma {
             _host_id: &str,
             task_id: &str,
         ) -> Result<(PieceContentStream, u64, String)> {
-            let (reader, offset, digest) =
-                self.download_piece_stream(addr, number, task_id).await?;
-            Ok((self.content_stream(reader), offset, digest))
+            self.open_stream(
+                PieceKind::Piece,
+                addr,
+                number,
+                task_id,
+                tokio::time::Instant::now()
+                    + self
+                        .config
+                        .download
+                        .piece_timeout
+                        .min(self.config.storage.server.rdma.transfer_timeout),
+            )
+            .await
+            .map(|(reader, offset, digest)| (self.content_stream(reader), offset, digest))
         }
 
-        /// download_persistent_piece downloads a persistent piece from the other peer over
-        /// the fabric.
-        #[instrument(skip_all)]
         async fn download_persistent_piece(
             &self,
             addr: &str,
@@ -715,25 +794,22 @@ pub mod rdma {
             _host_id: &str,
             task_id: &str,
         ) -> Result<(PieceContentStream, u64, String)> {
-            let client = self.client(addr).await?;
-            match client.download_persistent_piece(number, task_id).await {
-                Ok((reader, offset, digest)) => {
-                    self.record_success(addr);
-                    Ok((self.content_stream(reader), offset, digest))
-                }
-                Err(err) => {
-                    if client.fabric_failed() {
-                        self.retire_failed_fabric().await;
-                    }
-                    self.record_failure(addr, Failure::Transport);
-                    Err(err)
-                }
-            }
+            self.open_stream(
+                PieceKind::PersistentPiece,
+                addr,
+                number,
+                task_id,
+                tokio::time::Instant::now()
+                    + self
+                        .config
+                        .download
+                        .piece_timeout
+                        .min(self.config.storage.server.rdma.transfer_timeout),
+            )
+            .await
+            .map(|(reader, offset, digest)| (self.content_stream(reader), offset, digest))
         }
 
-        /// download_persistent_cache_piece downloads a persistent cache piece from the
-        /// other peer over the fabric.
-        #[instrument(skip_all)]
         async fn download_persistent_cache_piece(
             &self,
             addr: &str,
@@ -741,30 +817,24 @@ pub mod rdma {
             _host_id: &str,
             task_id: &str,
         ) -> Result<(PieceContentStream, u64, String)> {
-            let client = self.client(addr).await?;
-            match client
-                .download_persistent_cache_piece(number, task_id)
-                .await
-            {
-                Ok((reader, offset, digest)) => {
-                    self.record_success(addr);
-                    Ok((self.content_stream(reader), offset, digest))
-                }
-                Err(err) => {
-                    if client.fabric_failed() {
-                        self.retire_failed_fabric().await;
-                    }
-                    self.record_failure(addr, Failure::Transport);
-                    Err(err)
-                }
-            }
+            self.open_stream(
+                PieceKind::PersistentCachePiece,
+                addr,
+                number,
+                task_id,
+                tokio::time::Instant::now()
+                    + self
+                        .config
+                        .download
+                        .piece_timeout
+                        .min(self.config.storage.server.rdma.transfer_timeout),
+            )
+            .await
+            .map(|(reader, offset, digest)| (self.content_stream(reader), offset, digest))
         }
     }
 
     impl RDMADownloader {
-        /// content_stream adapts an RDMA reader to the chunk stream the Downloader trait returns.
-        /// The piece path uses [`Self::download_piece_stream`] instead, which keeps the windows in
-        /// registered memory; the paths reached through the trait still stage each window here.
         fn content_stream(
             &self,
             reader: dragonfly_client_storage::client::rdma::RDMAStreamReader,
@@ -772,33 +842,87 @@ pub mod rdma {
             ReaderStream::with_capacity(reader, self.config.storage.write_buffer_size).boxed()
         }
 
-        /// download_piece_stream returns the concrete RDMA reader so callers can write registered
-        /// windows without a staging buffer.
-        #[instrument(skip_all)]
-        pub async fn download_piece_stream(
+        fn record_request_failure(&self, addr: &str, err: &Error) {
+            match err {
+                Error::RdmaRejected {
+                    code: ERROR_CODE_INCOMPATIBLE,
+                    ..
+                } => self.record_failure(addr, Failure::Incompatible),
+                Error::RdmaRejected {
+                    code: ERROR_CODE_BUSY | ERROR_CODE_NOT_FOUND | ERROR_CODE_TOO_LARGE,
+                    ..
+                }
+                | Error::InvalidParameter
+                | Error::Unsupported(_) => {}
+                _ => self.record_failure(addr, Failure::Transport),
+            }
+        }
+
+        /// Called only for a failed receive or integrity check, never a local storage error.
+        pub(crate) async fn record_transfer_failure(&self, addr: &str) {
+            let local_failure = matches!(&*self.fabric.lock().await, FabricState::Ready(fabric, _) if fabric.is_failed());
+            self.retire_failed_fabric().await;
+            if !local_failure {
+                self.record_failure(addr, Failure::Transport);
+            }
+        }
+
+        /// Opens a stream without claiming success. Only the caller that has stored and
+        /// verified the complete piece may clear the parent's accumulated penalty.
+        async fn open_stream(
             &self,
+            kind: PieceKind,
             addr: &str,
             number: u32,
             task_id: &str,
+            deadline: tokio::time::Instant,
         ) -> Result<(
             dragonfly_client_storage::client::rdma::RDMAStreamReader,
             u64,
             String,
         )> {
-            let client = self.client(addr).await?;
-            match client.download_piece(number, task_id).await {
-                Ok(downloaded) => {
-                    self.record_success(addr);
-                    Ok(downloaded)
+            let client = tokio::time::timeout_at(deadline, self.client(addr, deadline)).await??;
+            let result = match kind {
+                PieceKind::Piece => client.download_piece(number, task_id).await,
+                PieceKind::PersistentPiece => {
+                    client.download_persistent_piece(number, task_id).await
                 }
-                Err(err) => {
-                    if client.fabric_failed() {
-                        self.retire_failed_fabric().await;
-                    }
-                    self.record_failure(addr, Failure::Transport);
-                    Err(err)
+                PieceKind::PersistentCachePiece => {
+                    client
+                        .download_persistent_cache_piece(number, task_id)
+                        .await
+                }
+            };
+            if let Err(err) = &result {
+                if client.fabric_failed() {
+                    self.retire_failed_fabric().await;
+                } else {
+                    self.record_request_failure(addr, err);
                 }
             }
+            result
+        }
+
+        /// Reject metadata mismatches before any write can target the task file.
+        #[allow(clippy::too_many_arguments)]
+        pub(crate) async fn download_stream(
+            &self,
+            kind: PieceKind,
+            addr: &str,
+            number: u32,
+            task_id: &str,
+            expected_offset: u64,
+            expected_length: u64,
+            deadline: tokio::time::Instant,
+        ) -> Result<(PieceContentStream, u64, String)> {
+            let (reader, offset, digest) = self
+                .open_stream(kind, addr, number, task_id, deadline)
+                .await?;
+            if offset != expected_offset || reader.length() != expected_length {
+                self.record_failure(addr, Failure::Transport);
+                return Err(Error::Unknown(format!("rdma piece range mismatch: expected {expected_offset}+{expected_length}, got {offset}+{}", reader.length())));
+            }
+            Ok((self.content_stream(reader), offset, digest))
         }
     }
 
@@ -826,6 +950,66 @@ pub mod rdma {
 
         fn backoff_of(downloader: &RDMADownloader, addr: &str) -> Duration {
             downloader.unhealthy_parents.lock().unwrap()[addr].backoff
+        }
+
+        #[test]
+        fn parent_churn_keeps_both_caches_bounded() {
+            let downloader = test_downloader();
+            for index in 0..MAX_CACHED_PARENTS + 10 {
+                downloader.record_failure(&format!("failed-{index}"), Failure::Transport);
+                downloader.cache_advertisement(
+                    &format!("capable-{index}"),
+                    RdmaAdvertisement {
+                        port: 1,
+                        capability: WireCapability {
+                            provider: "efa".to_string(),
+                            fabric_tag: "test".to_string(),
+                        },
+                    },
+                );
+            }
+            assert_eq!(
+                downloader.unhealthy_parents.lock().unwrap().len(),
+                MAX_CACHED_PARENTS
+            );
+            assert_eq!(
+                downloader.capable_parents.lock().unwrap().len(),
+                MAX_CACHED_PARENTS
+            );
+            assert!(!downloader
+                .unhealthy_parents
+                .lock()
+                .unwrap()
+                .contains_key("failed-0"));
+            assert!(!downloader
+                .capable_parents
+                .lock()
+                .unwrap()
+                .contains_key("capable-0"));
+        }
+
+        #[test]
+        fn capacity_and_missing_pieces_do_not_penalize_the_parent() {
+            let downloader = test_downloader();
+            let addr = "127.0.0.1:4001";
+            for code in [ERROR_CODE_BUSY, ERROR_CODE_NOT_FOUND, ERROR_CODE_TOO_LARGE] {
+                downloader.record_request_failure(
+                    addr,
+                    &Error::RdmaRejected {
+                        code,
+                        message: "declined".to_string(),
+                    },
+                );
+                assert!(downloader.unhealthy_parents.lock().unwrap().is_empty());
+            }
+            downloader.record_request_failure(
+                addr,
+                &Error::RdmaRejected {
+                    code: ERROR_CODE_INCOMPATIBLE,
+                    message: "incompatible".to_string(),
+                },
+            );
+            assert_eq!(backoff_of(&downloader, addr), INCOMPATIBLE_PARENT_TTL);
         }
 
         #[test]

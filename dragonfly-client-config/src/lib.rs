@@ -15,9 +15,9 @@
  */
 
 use clap::{Arg, Command};
-use lazy_static::lazy_static;
 use std::env;
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 pub mod dfcache;
 pub mod dfctl;
@@ -31,6 +31,9 @@ pub const SERVICE_NAME: &str = "dragonfly";
 
 /// The name of the package.
 pub const NAME: &str = "client";
+
+/// The minimum piece length.
+pub const MIN_PIECE_LENGTH: u64 = 4 * 1024 * 1024;
 
 /// The version of the cargo package.
 pub const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -60,22 +63,16 @@ pub const GIT_COMMIT_DATE: &str = {
     }
 };
 
-lazy_static! {
-    /// The name of the instance, formatted as {POD_NAMESPACE}-{POD_NAME}.
-    pub static ref INSTANCE_NAME: String = {
-        if let (Some(pod_namespace), Some(pod_name)) = (
-            env::var("POD_NAMESPACE").ok(),
-            env::var("POD_NAME").ok()
-        ) {
-            format!("{pod_namespace}-{pod_name}")
-        } else {
-            hostname::get()
-                .unwrap()
-                .to_string_lossy()
-                .to_string()
-        }
-    };
-}
+/// The name of the instance, formatted as {POD_NAMESPACE}-{POD_NAME}.
+pub static INSTANCE_NAME: LazyLock<String> = LazyLock::new(|| {
+    if let (Some(pod_namespace), Some(pod_name)) =
+        (env::var("POD_NAMESPACE").ok(), env::var("POD_NAME").ok())
+    {
+        format!("{pod_namespace}-{pod_name}")
+    } else {
+        hostname::get().unwrap().to_string_lossy().to_string()
+    }
+});
 
 /// Returns the default root directory for client.
 pub fn default_root_dir() -> PathBuf {
@@ -177,12 +174,10 @@ mod tests {
     use std::ffi::OsStr;
 
     #[test]
-    fn version_value_parser_references_non_real_values() {
+    fn version_value_parser_returns_false_for_non_true_value() {
         let parser = VersionValueParser;
         let cmd = Command::new("test_app");
-        let value = OsStr::new("false");
-        let result = parser.parse_ref(&cmd, None, value);
-        assert!(result.is_ok());
+        let result = parser.parse_ref(&cmd, None, OsStr::new("false"));
         assert!(!result.unwrap());
     }
 }

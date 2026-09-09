@@ -49,11 +49,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_message() {
-        let message: Message = "hello".into();
-        assert_eq!(message.as_str(), "hello");
+    fn from_str_and_string_preserve_text() {
+        let test_cases: Vec<(Message, &str)> = vec![
+            ("hello".into(), "hello"),
+            ("world".to_string().into(), "world"),
+        ];
 
-        let message: Message = "world".to_string().into();
-        assert_eq!(message.as_str(), "world");
+        for (message, expected) in test_cases {
+            assert_eq!(message.as_str(), expected);
+        }
     }
 }

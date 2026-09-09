@@ -1,13 +1,12 @@
 # RDMA Peer-to-Peer Piece Transport
 
-Peers normally fetch pieces from each other over the TCP piece server. On a host with an RDMA
-fabric — AWS EFA, or RoCE/InfiniBand — a single TCP flow leaves most of that fabric idle, and the
-piece protocol opens one connection per piece, so the shortfall shows up as slow model and image
-distribution exactly where the hardware was bought to avoid it.
+This experimental, opt-in Linux transport carries peer piece bytes over libfabric while keeping
+TCP available for compatible fallback. It targets large immutable artifacts distributed among
+hosts already provisioned with a reachable RDMA fabric. Its value depends on the actual network,
+storage, CPU load, and peer fan-out; an RDMA-capable NIC alone does not establish a benefit.
 
-This document describes an optional transport that carries piece bytes over the fabric instead.
-It is disabled by default, requires a build flag, and always keeps the TCP piece server as a
-per-piece fallback.
+The design is under discussion in [RFC #2041](https://github.com/dragonflyoss/client/pull/2041).
+Provider support and production readiness require the validation gates in that RFC.
 
 ## Design
 
@@ -24,10 +23,10 @@ The transport splits into two planes:
 - **Data plane** — the bulk piece bytes — travels over **two-sided tagged messaging** on a shared
   `FI_EP_RDM` endpoint.
 
-Two-sided messaging is deliberate. One-sided RDMA READ/WRITE would require exposing remote-access
-memory keys to peers, which in a P2P system means exposing them to whoever can reach the daemon.
-With two-sided tagged messages the receiver posts its own buffers and no remote key ever leaves
-the process, so a peer can at worst write into a buffer the receiver already offered it.
+The application uses two-sided tagged messages and does not expose application memory keys.
+Providers can still use RDMA internally. This choice does not authenticate peers or isolate
+mutually untrusted tenants; deployment requires a trusted fabric and appropriate network policy.
+CRC32 detects accidental corruption, not malicious substitution.
 
 ### Discovery
 
@@ -38,8 +37,8 @@ with its RDMA capability instead of the piece protocol.
 
 Discovery is **fail-closed**: the client uses RDMA only when it gets a positive, current answer.
 Anything else — an older peer that does not understand the discriminator, a peer built without the
-feature, a peer whose fabric has failed — leaves the client on TCP. Capability answers are cached
-for 60 seconds so discovery costs one extra round trip per parent per minute, not per piece.
+feature, a peer whose fabric has failed — leaves the client on TCP. Successful capability answers are cached for 60 seconds. Concurrent cache misses can
+still issue multiple probes; coalescing remains an RFC requirement.
 
 ### Capability negotiation
 
@@ -80,8 +79,8 @@ client                                                     parent
 ```
 
 The `RecvPosted` frame is the flow control. The parent may not send a window until the client says
-its receives are posted, which is what makes unsolicited traffic impossible and keeps the parent
-from staging bytes the client has nowhere to put. The parent computes each window itself and
+its receives are posted. This bounds cooperative senders and avoids staging bytes the client
+has nowhere to put; it is not an access-control mechanism. The parent computes each window itself and
 requires the client's frame to match exactly, so a peer cannot replay a window, skip ahead, or
 claim more chunks than the piece contains.
 
@@ -91,39 +90,39 @@ the transfer continues at one window at a time rather than failing.
 
 ### Receive path
 
-Received windows are handed to storage **still resident in registered memory**. The digest and the
-`pwrite` both read the window in place, so a piece goes from the NIC to the page cache without an
-intermediate bounce buffer.
+Completed receive windows feed the existing storage stream writer, preserving its writeback,
+length, and digest behavior. The transfer owns the piece until any outstanding positional write
+has finished, including on receive failure or caller cancellation. TCP fallback starts only after
+that cleanup; it retains the same piece claim.
 
-Two consequences are worth knowing, because they constrain the code:
-
-- The window write loop must never be wrapped in a cancelling timeout. It hands each window to
-  blocking threads that cannot be aborted, and a write abandoned between spawn and join could land
-  after a TCP fallback had already rewritten the same range. The timeout instead bounds the wait
-  for each window.
-- A window is published to the consumer only after every receive completion over it has been
-  reaped, which is what makes it safe for the digest and the write to read it concurrently.
+One absolute deadline covers discovery, setup, buffer admission, and RDMA reception. It is not
+reset for each window. Disk writes must drain before ownership is released, so an unresponsive
+filesystem can exceed the network deadline. RDMA requires a supported, well-formed parent digest;
+pieces registered without one use the existing TCP path.
 
 ### Upload path
 
 By default the parent streams piece bytes through the existing upload path, so cache-resident
 pieces and every other storage nicety keep working. With `mmapContent: true` the parent instead
 memory-maps the finished on-disk piece and fills the registered send ring straight from that
-mapping, removing the read-buffer copy. Mapping or registration failures fall back to the
-streaming reader, and cache-resident pieces always use the reader.
+mapping, removing the read-buffer copy. Mapping failures fall back to the
+streaming reader, and cache-resident pieces always use the reader. Registered-buffer admission
+or registration failure follows the normal RDMA failure/TCP fallback path.
 
 ### Registered memory
 
 Pinning memory for the NIC is expensive, and pinning too much of it is antisocial on a shared
 node. Registrations are therefore pooled and bounded by `maxRegisteredBytes`, with buffers reused
-across transfers on a best-fit basis. Exhausting the budget degrades a transfer to a single window
-or defers it; it never fails a download outright.
+across transfers on a best-fit basis. One shared budget covers upload and download endpoints,
+idle pools, and retained buffers from retired endpoints. Idle buffers can be reclaimed across
+pools under pressure. Provider-internal allocations are additional and require headroom.
+Exhaustion reduces pipelining or triggers bounded TCP fallback.
 
 ### Failure handling
 
-Every RDMA failure falls back to the TCP piece server for that piece. That is the invariant the
-rest of the design is arranged around, and it is why the feature can be enabled without changing
-the availability story.
+RDMA transport failure falls back to a whole-piece TCP attempt after safe cleanup. Local disk
+errors and caller cancellation propagate without penalizing the parent or starting a TCP retry.
+Parent success is recorded only after receiving, verifying, and committing the complete piece.
 
 Beyond per-piece fallback:
 
@@ -131,10 +130,10 @@ Beyond per-piece fallback:
 - A parent whose transfers fail is backed off, doubling from 2 seconds to a 60-second ceiling.
 - A local fabric that suffers an unrecoverable completion-queue or cancellation failure is retired
   and rebuilt no more often than every 5 minutes; until then the daemon simply uses TCP.
-- On teardown, `fi_close` is not assumed to be a DMA barrier. If the provider does not promise that
-  the device has stopped, buffers with operations still outstanding are quarantined for the
-  process lifetime rather than returned to the allocator, because handing memory a NIC may still
-  write into back to the heap is worse than leaking it.
+- Teardown serializes endpoint close with posting and completion handling. After successful
+  `fi_close`, outstanding operations release their buffers according to the libfabric API
+  contract. If close fails, buffers, contexts, registrations, and shared-budget charges remain
+  retained. Provider/version failure-path validation is still required.
 
 ## Enabling it
 
@@ -175,18 +174,18 @@ daemon is downloading over RDMA.
 | `allowSoftwareProvider` | bool | `false` | Permit software providers such as `tcp` under `auto`. Development and CI only. |
 | `device` | string | unset | Pin a libfabric domain, for example `efa_0-rdm` or `rdmap16s27`. |
 | `fabricTag` | string | unset | Reachability-domain label. RDMA is attempted only when both peers advertise the same non-empty value. Required to serve. |
-| `maxRegisteredBytes` | size | `512MiB` | Ceiling on memory pinned by active and pooled transfer buffers. Must be at least `chunkSize × maxInflightChunks`. |
+| `maxRegisteredBytes` | size | `512MiB` | Daemon-wide ceiling on active, idle, and retained application buffer capacities; excludes provider internals. Must be at least `chunkSize × maxInflightChunks`. |
 | `chunkSize` | size | `4MiB` | Size of one tagged message. Between 64KiB and 1GiB; clamped to the provider maximum at runtime. |
 | `maxInflightChunks` | u32 | `16` | Chunks posted concurrently for one piece; 1–4096. Peers negotiate the lower value. |
 | `maxConcurrentTransfers` | u32 | `64` | Concurrent rendezvous transfers served. Excess peers are told the parent is busy and fall back to TCP. |
-| `transferTimeout` | duration | `10s` | Maximum life of one fabric operation before cancellation and TCP fallback. Between 1s and 10m. |
+| `transferTimeout` | duration | `10s` | Absolute RDMA attempt budget covering discovery, setup, admission and reception; disk cleanup may take longer. Between 1s and 10m. |
 | `mmapContent` | bool | `false` | Fill send windows from a memory map of the piece instead of streaming through a reader. |
 
 Settings that parse individually but cannot work together are rejected at load time. The one worth
 calling out is a registration budget smaller than a single window: it admits no transfer at all, so
 every piece would pay a rendezvous round trip and a rejection before falling back to TCP.
 
-## Measured behaviour
+## Historical prototype measurements
 
 Two `p6-b200.48xlarge` nodes on EFA, one rail, 24 GiB of 512 MiB pieces served from tmpfs, best of
 three runs at each concurrency:
@@ -200,14 +199,12 @@ three runs at each concurrency:
 | TCP, CRC32 + write | 3.5 | 6.8 | 13.1 | 24.2 | 42.3 | 61.0 |
 | **Speedup** | **6.2×** | **5.7×** | **5.5×** | **4.9×** | **3.3×** | **2.1×** |
 
-Figures are Gbps. "CRC32 + write" is the work `dfdaemon` actually does per piece; "transport only"
-isolates the wire.
-
-The advantage is largest where it matters most and narrows as concurrency grows. A single TCP flow
-on this network tops out near 5 Gbps, so TCP scales almost linearly with the number of piece
-connections while RDMA is already close to saturated. Above roughly 16 streams the RDMA side is
-bounded by receive-side CPU — the digest and the write — not by the fabric, which accounts for well
-under 1% of a transfer.
+Figures are Gbps, reported for the original prototype before the receive-path changes above.
+They have not been reproduced for this revision and do not establish a fleet-level speedup.
+The baseline predates current TCP improvements, excludes QUIC and scheduler fan-out, uses large
+pieces on tmpfs, and can be affected by EFA-versus-IP capacity differences. Re-run comparisons
+against tuned current TCP and QUIC, realistic piece sizes, cold/warm NVMe caches, concurrent
+upload/download, and active training workloads before making performance claims.
 
 ## Limitations
 
@@ -216,6 +213,9 @@ under 1% of a transfer.
 - `fabricTag` is an operator assertion. There is no automatic verification that two peers tagged
   alike can actually reach each other; a wrong tag produces a rendezvous failure and a TCP
   fallback rather than a hang.
-- The fabric is unauthenticated, as fabrics generally are. A peer on the same fabric could aim
-  bytes at another peer's endpoint; the digest check catches it, so the effect is a failed
-  download and a TCP retry rather than corruption.
+- No peer authentication, confidentiality, or adversarial integrity guarantee. Use only within
+  an operator-controlled trust domain; a matching fabric tag is not a security boundary.
+- RDMA traffic may bypass IP-interface counters used for parent load selection. Fabric-aware
+  telemetry and an explicit behavior when those counters are unavailable remain RFC gates.
+- Kubernetes device allocation, memory-lock limits, and coexistence with training Pods must be
+  validated for each deployment; this change does not install a device plugin or DRA driver.

@@ -14,9 +14,11 @@ edition.workspace = true
 dragonfly-api.workspace = true
 dragonfly-client-config.workspace = true
 dragonfly-client-util.workspace = true
-lazy_static.workspace = true
+bytes.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-warp.workspace = true
 fs2.workspace = true
 prometheus = { version = "0.13", features = ["process"] }

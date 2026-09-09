@@ -1184,6 +1184,7 @@ impl PersistentCacheTask {
                 host_id: String,
                 peer_id: String,
                 number: u32,
+                offset: u64,
                 length: u64,
                 need_piece_content: bool,
                 parents: Vec<piece_collector::CollectedParent>,
@@ -1196,36 +1197,50 @@ impl PersistentCacheTask {
                 parent_selector: Arc<PersistentCacheParentSelector>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.persistent_cache_id(task_id.as_str(), number);
-                let parent = parent_selector.select(parents);
+                let mut collected_parents = parents;
+                let metadata = loop {
+                    let parent = parent_selector.select(&collected_parents);
 
-                debug!(
-                    "start to download persistent cache piece {} from parent {:?}",
-                    piece_id,
-                    parent.id.clone()
-                );
+                    debug!(
+                        "start to download persistent cache piece {} from parent {:?}",
+                        piece_id,
+                        parent.id.clone()
+                    );
 
-                let metadata = piece_manager
-                    .download_persistent_cache_from_parent(
-                        piece_id.as_str(),
-                        host_id.as_str(),
-                        task_id.as_str(),
-                        number,
-                        length,
-                        parent.clone(),
-                    )
-                    .await
-                    .map_err(|err| {
-                        error!(
-                            "download persistent cache piece {} from parent {:?} error: {:?}",
-                            piece_id,
-                            parent.id.clone(),
-                            err
-                        );
-                        Error::DownloadFromParentFailed(DownloadFromParentFailed {
-                            piece_number: number,
-                            parent_id: parent.id.clone(),
-                        })
-                    })?;
+                    match piece_manager
+                        .download_persistent_cache_from_parent(
+                            piece_id.as_str(),
+                            host_id.as_str(),
+                            task_id.as_str(),
+                            number,
+                            offset,
+                            length,
+                            parent.clone(),
+                        )
+                        .await
+                    {
+                        Ok(metadata) => break metadata,
+                        Err(err) => {
+                            error!(
+                                "download persistent cache piece {} from parent {:?} error: {:?}",
+                                piece_id,
+                                parent.id.clone(),
+                                err
+                            );
+
+                            collected_parents
+                                .retain(|collected_parent| collected_parent.id != parent.id);
+                            if collected_parents.is_empty() {
+                                return Err(Error::DownloadFromParentFailed(
+                                    DownloadFromParentFailed {
+                                        piece_number: number,
+                                        parent_id: parent.id.clone(),
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                };
 
                 // Construct the piece.
                 let piece = Piece {
@@ -1296,7 +1311,7 @@ impl PersistentCacheTask {
                     })?;
                 } else {
                     download_progress_tx
-                    .send_timeout(
+                    .send(
                         Ok(DownloadPersistentCacheTaskResponse {
                             host_id: host_id.to_string(),
                             task_id: task_id.clone(),
@@ -1309,7 +1324,6 @@ impl PersistentCacheTask {
                                 ),
                             ),
                         }),
-                        REQUEST_TIMEOUT,
                     )
                     .await
                     .unwrap_or_else(|err| {
@@ -1378,6 +1392,7 @@ impl PersistentCacheTask {
                         host_id,
                         peer_id,
                         collect_piece.number,
+                        collect_piece.offset,
                         collect_piece.length,
                         need_piece_content,
                         collect_piece.parents,
@@ -1434,12 +1449,12 @@ impl PersistentCacheTask {
 
                     return Err(Error::DownloadFromParentFailed(err));
                 }
-                Err(Error::SendTimeout) => {
+                Err(err @ Error::SendTimeout) => {
                     join_set.shutdown().await;
 
                     // If the send timeout with scheduler or download progress, return the error
                     // and interrupt the collector.
-                    return Err(Error::SendTimeout);
+                    return Err(err);
                 }
                 Err(err) => {
                     join_set.shutdown().await;
@@ -1568,7 +1583,7 @@ impl PersistentCacheTask {
                 })?;
             } else {
                 download_progress_tx
-                .send_timeout(
+                .send(
                     Ok(DownloadPersistentCacheTaskResponse {
                         host_id: host_id.to_string(),
                         task_id: task_id.to_string(),
@@ -1581,7 +1596,6 @@ impl PersistentCacheTask {
                             ),
                         ),
                     }),
-                    REQUEST_TIMEOUT,
                 )
                 .await
                 .unwrap_or_else(|err| {

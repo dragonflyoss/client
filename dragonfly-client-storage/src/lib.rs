@@ -84,6 +84,10 @@ pub struct Storage {
     /// Notifies the waiters of the in-flight pieces when their downloads
     /// complete.
     piece_notifier: PieceNotifier,
+
+    /// Shares the registered-memory ceiling across uploads, downloads, and endpoint recovery.
+    #[cfg(feature = "rdma")]
+    rdma_memory_budget: Arc<rdma::fabric::RegisteredMemoryBudget>,
 }
 
 /// Implements the storage.
@@ -97,12 +101,22 @@ impl Storage {
         // Create temporary directory for output operations.
         fs::create_dir_all(&dir.join(DEFAULT_TMP_DIR)).await?;
         Ok(Storage {
+            #[cfg(feature = "rdma")]
+            rdma_memory_budget: Arc::new(rdma::fabric::RegisteredMemoryBudget::new(
+                config.storage.server.rdma.max_registered_bytes.as_u64(),
+            )),
             config,
             metadata,
             content,
             cache,
             piece_notifier: PieceNotifier::default(),
         })
+    }
+
+    /// Returns the daemon-wide RDMA application buffer budget.
+    #[cfg(feature = "rdma")]
+    pub fn rdma_memory_budget(&self) -> Arc<rdma::fabric::RegisteredMemoryBudget> {
+        self.rdma_memory_budget.clone()
     }
 
     /// Returns the total space of the disk.
@@ -130,6 +144,12 @@ impl Storage {
     #[instrument(skip_all)]
     pub async fn copy_task(&self, id: &str, to: &Path) -> Result<()> {
         self.content.copy_task(id, to).await
+    }
+
+    /// Drops the cached pages of the task content.
+    #[instrument(level = "debug", skip_all)]
+    pub async fn fadvise_dontneed_task(&self, id: &str) -> Result<()> {
+        self.content.fadvise_dontneed_task(id).await
     }
 
     /// Checks if the task content is on the same device inode as the
@@ -361,6 +381,12 @@ impl Storage {
         self.metadata.get_persistent_tasks()
     }
 
+    /// Drops the cached pages of the persistent task content.
+    #[instrument(level = "debug", skip_all)]
+    pub async fn fadvise_dontneed_persistent_task(&self, id: &str) -> Result<()> {
+        self.content.fadvise_dontneed_persistent_task(id).await
+    }
+
     /// Deletes the persistent task metadatas, persistent task content and piece metadatas.
     #[instrument(level = "debug", skip_all)]
     pub async fn delete_persistent_task(&self, id: &str) {
@@ -537,6 +563,14 @@ impl Storage {
     #[instrument(level = "debug", skip_all)]
     pub fn get_persistent_cache_tasks(&self) -> Result<Vec<metadata::PersistentCacheTask>> {
         self.metadata.get_persistent_cache_tasks()
+    }
+
+    /// Drops the cached pages of the persistent cache task content.
+    #[instrument(level = "debug", skip_all)]
+    pub async fn fadvise_dontneed_persistent_cache_task(&self, id: &str) -> Result<()> {
+        self.content
+            .fadvise_dontneed_persistent_cache_task(id)
+            .await
     }
 
     /// Deletes the persistent cache task metadatas, persistent cache task content and piece metadatas.
@@ -731,6 +765,8 @@ impl Storage {
         &self,
         piece_id: &str,
         number: u32,
+        offset: u64,
+        length: u64,
     ) -> Result<metadata::Piece> {
         loop {
             // Wait for the piece to be finished.
@@ -752,7 +788,7 @@ impl Storage {
                             _ => {
                                 return self
                                     .metadata
-                                    .download_piece_started(piece_id, number)
+                                    .download_piece_started(piece_id, number, offset, length)
                                     .inspect_err(|_| {
                                         self.piece_notifier.remove_and_notify(piece_id)
                                     })
@@ -883,18 +919,12 @@ impl Storage {
         self.finish_parent_piece(piece_id, offset, expected_digest, parent_id, response)
     }
 
-    /// download_piece_from_parent_finished_rdma writes an RDMA stream directly from registered
-    /// receive windows into content storage without a staging buffer.
-    ///
-    /// `timeout` bounds the wait for each receive window rather than the whole write, so unlike
-    /// [`Self::download_piece_from_parent_finished`] the write is not wrapped in a cancelling
-    /// select. The write loop must not be cancelled part way: it hands each window to blocking
-    /// threads that cannot be aborted, and a write abandoned there could land after the caller has
-    /// fallen back to TCP and rewritten the same range.
+    /// Completes a parent piece without cancelling an in-flight disk write.
+    /// The caller must bound stream reads and retain piece ownership until this
+    /// future completes, including when its own requester is cancelled.
     #[cfg(feature = "rdma")]
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip_all)]
-    pub async fn download_piece_from_parent_finished_rdma(
+    pub async fn download_piece_from_parent_finished_without_timeout<S>(
         &self,
         piece_id: &str,
         task_id: &str,
@@ -902,16 +932,22 @@ impl Storage {
         length: u64,
         expected_digest: &str,
         parent_id: &str,
-        reader: &mut crate::client::rdma::RDMAStreamReader,
-        timeout: Duration,
-    ) -> Result<metadata::Piece> {
-        let response = self
-            .content
-            .write_piece_from_rdma_stream(piece_id, task_id, offset, length, reader, timeout)
+        stream: &mut S,
+    ) -> Result<metadata::Piece>
+    where
+        S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
+    {
+        let piece = self
+            .handle_downloaded_piece_from_parent_finished(
+                piece_id,
+                task_id,
+                offset,
+                length,
+                expected_digest,
+                parent_id,
+                stream,
+            )
             .await?;
-        let piece =
-            self.finish_parent_piece(piece_id, offset, expected_digest, parent_id, response)?;
-
         self.piece_notifier.remove_and_notify(piece_id);
         Ok(piece)
     }
@@ -964,22 +1000,22 @@ impl Storage {
         self.piece_notifier.get(piece_id)
     }
 
-    /// Updates the metadata of the piece and
-    /// returns the data of the piece.
+    /// Updates the metadata of the piece and returns the finished piece
+    /// metadata with the data of the piece.
     #[instrument(skip_all)]
     pub async fn upload_piece(
         &self,
         piece_id: &str,
         task_id: &str,
         range: Option<Range>,
-    ) -> Result<io::RangeReader> {
+    ) -> Result<(metadata::Piece, io::RangeReader)> {
         // Wait for the piece to be finished and get the piece metadata.
         let piece = self.wait_for_piece_finished(piece_id).await?;
 
         // Start uploading the task.
         self.metadata.upload_task_started(task_id);
 
-        // Return the content of the piece.
+        // Return the piece metadata and the content of the piece.
         match self
             .content
             .read_piece(task_id, piece.offset, piece.length, range)
@@ -988,7 +1024,7 @@ impl Storage {
             Ok(reader) => {
                 // Finish uploading the task.
                 self.metadata.upload_task_finished(task_id);
-                Ok(reader)
+                Ok((piece, reader))
             }
             Err(err) => {
                 // Failed uploading the task.
@@ -1116,6 +1152,8 @@ impl Storage {
         &self,
         piece_id: &str,
         number: u32,
+        offset: u64,
+        length: u64,
     ) -> Result<metadata::Piece> {
         loop {
             // Wait for the piece to be finished.
@@ -1137,7 +1175,7 @@ impl Storage {
                             _ => {
                                 return self
                                     .metadata
-                                    .download_piece_started(piece_id, number)
+                                    .download_piece_started(piece_id, number, offset, length)
                                     .inspect_err(|_| {
                                         self.piece_notifier.remove_and_notify(piece_id)
                                     })
@@ -1272,22 +1310,22 @@ impl Storage {
         result
     }
 
-    /// Updates the metadata of the piece and_then
-    /// returns the data of the piece.
+    /// Updates the metadata of the persistent piece and returns the finished
+    /// piece metadata with the data of the piece.
     #[instrument(skip_all)]
     pub async fn upload_persistent_piece(
         &self,
         piece_id: &str,
         task_id: &str,
         range: Option<Range>,
-    ) -> Result<io::RangeReader> {
+    ) -> Result<(metadata::Piece, io::RangeReader)> {
         // Wait for the persistent piece to be finished and get the piece metadata.
         let piece = self.wait_for_persistent_piece_finished(piece_id).await?;
 
         // Start uploading the persistent task.
         self.metadata.upload_persistent_task_started(task_id);
 
-        // Return the content of the persistent piece.
+        // Return the piece metadata and the content of the persistent piece.
         match self
             .content
             .read_persistent_piece(task_id, piece.offset, piece.length, range)
@@ -1296,7 +1334,7 @@ impl Storage {
             Ok(reader) => {
                 // Finish uploading the persistent task.
                 self.metadata.upload_persistent_task_finished(task_id);
-                Ok(reader)
+                Ok((piece, reader))
             }
             Err(err) => {
                 // Failed uploading the persistent task.
@@ -1336,6 +1374,8 @@ impl Storage {
         &self,
         piece_id: &str,
         number: u32,
+        offset: u64,
+        length: u64,
     ) -> Result<metadata::Piece> {
         loop {
             // Wait for the piece to be finished.
@@ -1360,7 +1400,7 @@ impl Storage {
                             _ => {
                                 return self
                                     .metadata
-                                    .download_piece_started(piece_id, number)
+                                    .download_piece_started(piece_id, number, offset, length)
                                     .inspect_err(|_| {
                                         self.piece_notifier.remove_and_notify(piece_id)
                                     })
@@ -1439,15 +1479,15 @@ impl Storage {
         result
     }
 
-    /// Updates the metadata of the piece and_then
-    /// returns the data of the piece.
+    /// Updates the metadata of the persistent cache piece and returns the finished
+    /// piece metadata with the data of the piece.
     #[instrument(skip_all)]
     pub async fn upload_persistent_cache_piece(
         &self,
         piece_id: &str,
         task_id: &str,
         range: Option<Range>,
-    ) -> Result<io::RangeReader> {
+    ) -> Result<(metadata::Piece, io::RangeReader)> {
         // Wait for the persistent cache piece to be finished and get the piece.
         let piece = self
             .wait_for_persistent_cache_piece_finished(piece_id)
@@ -1456,7 +1496,7 @@ impl Storage {
         // Start uploading the persistent cache task.
         self.metadata.upload_persistent_cache_task_started(task_id);
 
-        // Return the content of the persistent cache piece.
+        // Return the piece metadata and the content of the persistent cache piece.
         match self
             .content
             .read_persistent_cache_piece(task_id, piece.offset, piece.length, range)
@@ -1465,7 +1505,7 @@ impl Storage {
             Ok(reader) => {
                 // Finish uploading the persistent cache task.
                 self.metadata.upload_persistent_cache_task_finished(task_id);
-                Ok(reader)
+                Ok((piece, reader))
             }
             Err(err) => {
                 // Failed uploading the persistent cache task.
@@ -1742,6 +1782,8 @@ impl Storage {
         &self,
         piece_id: &str,
         number: u32,
+        offset: u64,
+        length: u64,
     ) -> Result<metadata::Piece> {
         loop {
             // Wait for the piece to be finished.
@@ -1763,7 +1805,7 @@ impl Storage {
                             _ => {
                                 return self
                                     .metadata
-                                    .download_piece_started(piece_id, number)
+                                    .download_piece_started(piece_id, number, offset, length)
                                     .inspect_err(|_| {
                                         self.piece_notifier.remove_and_notify(piece_id)
                                     })
@@ -2070,26 +2112,27 @@ impl Storage {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    #![allow(clippy::type_complexity)]
 
-    fn content_stream(
-        content: &'static [u8],
-    ) -> impl Stream<Item = std::io::Result<Bytes>> + Unpin {
-        futures::stream::iter([Ok(Bytes::from_static(content))])
+    use super::*;
+    use tempfile::tempdir;
+
+    const TASK_ID: &str = "d3add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14a";
+    const CONTENT: &[u8] = b"piece content";
+    const CONTENT_DIGEST: &str = "crc32:2533597436";
+
+    async fn storage(dir: &Path) -> Arc<Storage> {
+        Arc::new(
+            Storage::new(Arc::new(Config::default()), dir, dir.to_path_buf())
+                .await
+                .unwrap(),
+        )
     }
 
     #[tokio::test]
-    async fn test_wait_for_piece_finished_wakes_on_notification() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = Arc::new(Config::default());
-        let storage = Arc::new(
-            Storage::new(config, dir.path(), dir.path().to_path_buf())
-                .await
-                .unwrap(),
-        );
-
-        const TASK_ID: &str = "d3add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14a";
-        const CONTENT: &[u8] = b"piece content";
+    async fn wait_for_piece_finished_wakes_on_notification() {
+        let dir = tempdir().unwrap();
+        let storage = storage(dir.path()).await;
         storage
             .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
             .await
@@ -2097,7 +2140,7 @@ mod tests {
 
         let piece_id = storage.piece_id(TASK_ID, 0);
         let piece = storage
-            .download_piece_started(piece_id.as_str(), 0)
+            .download_piece_started(piece_id.as_str(), 0, 0, CONTENT.len() as u64)
             .await
             .unwrap();
         assert!(!piece.is_finished());
@@ -2117,7 +2160,7 @@ mod tests {
         });
 
         sleep(Duration::from_millis(100)).await;
-        let mut stream = content_stream(CONTENT);
+        let mut stream = futures::stream::iter([Ok(Bytes::from_static(CONTENT))]);
         storage
             .download_piece_from_source_finished(
                 piece_id.as_str(),
@@ -2131,27 +2174,16 @@ mod tests {
             .unwrap();
 
         let elapsed = waiter.await.unwrap();
-        assert!(
-            elapsed < Duration::from_millis(800),
-            "waiter took {elapsed:?}, expected a notification-driven wake"
-        );
-
+        assert!(elapsed < Duration::from_millis(800));
         assert!(storage
             .in_flight_piece_notifier(piece_id.as_str())
             .is_none());
     }
 
     #[tokio::test]
-    async fn test_download_piece_failed_wakes_waiters_with_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = Arc::new(Config::default());
-        let storage = Arc::new(
-            Storage::new(config, dir.path(), dir.path().to_path_buf())
-                .await
-                .unwrap(),
-        );
-
-        const TASK_ID: &str = "e4add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14b";
+    async fn download_piece_failed_wakes_waiters_with_error() {
+        let dir = tempdir().unwrap();
+        let storage = storage(dir.path()).await;
         storage
             .download_task_started(TASK_ID, 1024, 1024, None)
             .await
@@ -2159,7 +2191,7 @@ mod tests {
 
         let piece_id = storage.piece_id(TASK_ID, 0);
         storage
-            .download_piece_started(piece_id.as_str(), 0)
+            .download_piece_started(piece_id.as_str(), 0, 0, 1024)
             .await
             .unwrap();
 
@@ -2178,27 +2210,16 @@ mod tests {
 
         let (elapsed, result) = waiter.await.unwrap();
         assert!(result.is_err());
-        assert!(
-            elapsed < Duration::from_millis(800),
-            "waiter took {elapsed:?}, expected a notification-driven wake"
-        );
+        assert!(elapsed < Duration::from_millis(800));
         assert!(storage
             .in_flight_piece_notifier(piece_id.as_str())
             .is_none());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_download_piece_started_elects_single_downloader() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = Arc::new(Config::default());
-        let storage = Arc::new(
-            Storage::new(config, dir.path(), dir.path().to_path_buf())
-                .await
-                .unwrap(),
-        );
-
-        const TASK_ID: &str = "f5add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14c";
-        const CONTENT: &[u8] = b"piece content";
+    async fn download_piece_started_elects_a_single_downloader() {
+        let dir = tempdir().unwrap();
+        let storage = storage(dir.path()).await;
         storage
             .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
             .await
@@ -2211,14 +2232,14 @@ mod tests {
             let piece_id = piece_id.clone();
             claimers.spawn(async move {
                 let piece = storage
-                    .download_piece_started(piece_id.as_str(), 0)
+                    .download_piece_started(piece_id.as_str(), 0, 0, CONTENT.len() as u64)
                     .await
                     .unwrap();
                 if piece.is_finished() {
                     return false;
                 }
 
-                let mut stream = content_stream(CONTENT);
+                let mut stream = futures::stream::iter([Ok(Bytes::from_static(CONTENT))]);
                 storage
                     .download_piece_from_source_finished(
                         piece_id.as_str(),
@@ -2240,24 +2261,16 @@ mod tests {
             .into_iter()
             .filter(|downloader| *downloader)
             .count();
-        assert_eq!(downloaders, 1, "expected exactly one downloader");
+        assert_eq!(downloaders, 1);
         assert!(storage
             .in_flight_piece_notifier(piece_id.as_str())
             .is_none());
     }
 
     #[tokio::test]
-    async fn test_wait_for_persistent_piece_finished_wakes_on_notification() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = Arc::new(Config::default());
-        let storage = Arc::new(
-            Storage::new(config, dir.path(), dir.path().to_path_buf())
-                .await
-                .unwrap(),
-        );
-
-        const TASK_ID: &str = "f5add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14c";
-        const CONTENT: &[u8] = b"piece content";
+    async fn wait_for_persistent_piece_finished_wakes_on_notification() {
+        let dir = tempdir().unwrap();
+        let storage = storage(dir.path()).await;
         storage
             .create_persistent_task(TASK_ID, CONTENT.len() as u64)
             .await
@@ -2265,7 +2278,7 @@ mod tests {
 
         let piece_id = storage.persistent_piece_id(TASK_ID, 0);
         let piece = storage
-            .download_persistent_piece_started(piece_id.as_str(), 0)
+            .download_persistent_piece_started(piece_id.as_str(), 0, 0, CONTENT.len() as u64)
             .await
             .unwrap();
         assert!(!piece.is_finished());
@@ -2278,14 +2291,19 @@ mod tests {
         let waiter = tokio::spawn(async move {
             let started_at = std::time::Instant::now();
             let piece = storage_clone
-                .download_persistent_piece_started(piece_id_clone.as_str(), 0)
+                .download_persistent_piece_started(
+                    piece_id_clone.as_str(),
+                    0,
+                    0,
+                    CONTENT.len() as u64,
+                )
                 .await
                 .unwrap();
             (started_at.elapsed(), piece)
         });
 
         sleep(Duration::from_millis(100)).await;
-        let mut stream = content_stream(CONTENT);
+        let mut stream = futures::stream::iter([Ok(Bytes::from_static(CONTENT))]);
         storage
             .download_persistent_piece_from_source_finished(
                 piece_id.as_str(),
@@ -2300,27 +2318,16 @@ mod tests {
 
         let (elapsed, piece) = waiter.await.unwrap();
         assert!(piece.is_finished());
-        assert!(
-            elapsed < Duration::from_millis(800),
-            "waiter took {elapsed:?}, expected a notification-driven wake"
-        );
-
+        assert!(elapsed < Duration::from_millis(800));
         assert!(storage
             .in_flight_piece_notifier(piece_id.as_str())
             .is_none());
     }
 
     #[tokio::test]
-    async fn test_wait_for_piece_finished_fails_fast_on_stale_piece() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = Arc::new(Config::default());
-        let storage = Arc::new(
-            Storage::new(config, dir.path(), dir.path().to_path_buf())
-                .await
-                .unwrap(),
-        );
-
-        const TASK_ID: &str = "a6add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14d";
+    async fn wait_for_piece_finished_fails_fast_on_stale_piece() {
+        let dir = tempdir().unwrap();
+        let storage = storage(dir.path()).await;
         storage
             .download_task_started(TASK_ID, 1024, 1024, None)
             .await
@@ -2329,7 +2336,7 @@ mod tests {
         let piece_id = storage.piece_id(TASK_ID, 0);
         storage
             .metadata
-            .download_piece_started(piece_id.as_str(), 0)
+            .download_piece_started(piece_id.as_str(), 0, 0, 1024)
             .unwrap();
         assert!(storage
             .in_flight_piece_notifier(piece_id.as_str())
@@ -2338,38 +2345,25 @@ mod tests {
         let started_at = std::time::Instant::now();
         let result = storage.upload_piece(piece_id.as_str(), TASK_ID, None).await;
         assert!(matches!(result, Err(Error::PieceNotFound(_))));
-        assert!(
-            started_at.elapsed() < Duration::from_millis(100),
-            "waiter took {:?}, expected an immediate fail-fast",
-            started_at.elapsed()
-        );
+        assert!(started_at.elapsed() < Duration::from_millis(100));
         assert!(storage.get_piece(piece_id.as_str()).unwrap().is_none());
     }
 
     #[tokio::test]
-    async fn test_download_piece_failed_keeps_finished_piece_serving() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = Arc::new(Config::default());
-        let storage = Arc::new(
-            Storage::new(config, dir.path(), dir.path().to_path_buf())
-                .await
-                .unwrap(),
-        );
-
-        const TASK_ID: &str = "b7add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14e";
-        const CONTENT: &[u8] = b"piece content";
+    async fn download_piece_failed_keeps_finished_piece_serving() {
+        let dir = tempdir().unwrap();
+        let storage = storage(dir.path()).await;
         storage
             .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
             .await
             .unwrap();
 
-        // The winner downloads and finishes the piece.
         let piece_id = storage.piece_id(TASK_ID, 0);
         storage
-            .download_piece_started(piece_id.as_str(), 0)
+            .download_piece_started(piece_id.as_str(), 0, 0, CONTENT.len() as u64)
             .await
             .unwrap();
-        let mut stream = content_stream(CONTENT);
+        let mut stream = futures::stream::iter([Ok(Bytes::from_static(CONTENT))]);
         storage
             .download_piece_from_source_finished(
                 piece_id.as_str(),
@@ -2382,14 +2376,107 @@ mod tests {
             .await
             .unwrap();
 
-        // A duplicate downloader failing afterwards must not erase the finished
-        // piece, and serving keeps working.
         storage.download_piece_failed(piece_id.as_str()).unwrap();
         let piece = storage.get_piece(piece_id.as_str()).unwrap().unwrap();
         assert!(piece.is_finished());
+
         storage
             .upload_piece(piece_id.as_str(), TASK_ID, None)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn download_piece_from_parent_finished_checks_the_digest() {
+        let test_cases: Vec<(&str, fn(Result<metadata::Piece>, Option<metadata::Piece>))> = vec![
+            ("", |result, stored| {
+                let piece = result.unwrap();
+                assert!(piece.is_finished());
+                assert_eq!(piece.digest, CONTENT_DIGEST);
+                assert_eq!(piece.parent_id.as_deref(), Some("parent-1"));
+                assert_eq!(stored, Some(piece));
+            }),
+            (CONTENT_DIGEST, |result, stored| {
+                let piece = result.unwrap();
+                assert!(piece.is_finished());
+                assert_eq!(piece.digest, CONTENT_DIGEST);
+                assert_eq!(piece.parent_id.as_deref(), Some("parent-1"));
+                assert_eq!(stored, Some(piece));
+            }),
+            ("crc32:1", |result, stored| {
+                assert!(matches!(
+                    result,
+                    Err(Error::DigestMismatch(ref expected, ref actual))
+                        if expected == "crc32:1" && actual == CONTENT_DIGEST
+                ));
+                assert!(!stored.unwrap().is_finished());
+            }),
+        ];
+
+        for (expected_digest, expect) in test_cases {
+            let dir = tempdir().unwrap();
+            let storage = storage(dir.path()).await;
+            storage
+                .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
+                .await
+                .unwrap();
+
+            let piece_id = storage.piece_id(TASK_ID, 0);
+            storage
+                .download_piece_started(piece_id.as_str(), 0, 0, CONTENT.len() as u64)
+                .await
+                .unwrap();
+            let mut stream = futures::stream::iter([Ok(Bytes::from_static(CONTENT))]);
+            let result = storage
+                .download_piece_from_parent_finished(
+                    piece_id.as_str(),
+                    TASK_ID,
+                    0,
+                    CONTENT.len() as u64,
+                    expected_digest,
+                    "parent-1",
+                    &mut stream,
+                    Duration::from_secs(5),
+                )
+                .await;
+            let stored = storage.get_piece(piece_id.as_str()).unwrap();
+            expect(result, stored);
+        }
+    }
+
+    #[tokio::test]
+    async fn download_piece_from_source_finished_times_out() {
+        let dir = tempdir().unwrap();
+        let storage = storage(dir.path()).await;
+        storage
+            .download_task_started(TASK_ID, 1024, 1024, None)
+            .await
+            .unwrap();
+
+        let piece_id = storage.piece_id(TASK_ID, 0);
+        storage
+            .download_piece_started(piece_id.as_str(), 0, 0, 1024)
+            .await
+            .unwrap();
+
+        let mut stream = futures::stream::pending::<std::io::Result<Bytes>>();
+        let result = storage
+            .download_piece_from_source_finished(
+                piece_id.as_str(),
+                TASK_ID,
+                0,
+                1024,
+                &mut stream,
+                Duration::from_millis(50),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(Error::DownloadPieceFinishedTimeout(ref id)) if id == &piece_id)
+        );
+        assert!(!storage
+            .get_piece(piece_id.as_str())
+            .unwrap()
+            .unwrap()
+            .is_finished());
     }
 }

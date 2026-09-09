@@ -14,23 +14,29 @@
  * limitations under the License.
  */
 
+use bytes::Bytes;
 use dragonfly_api::common::v2::{Range, TrafficType};
 use dragonfly_client_config::{
     dfdaemon::Config, BUILD_PLATFORM, CARGO_PKG_VERSION, GIT_COMMIT_DATE, GIT_COMMIT_SHORT_HASH,
 };
 use dragonfly_client_util::shutdown;
-use lazy_static::lazy_static;
+use http_body_util::Full;
+use hyper::server::conn::http1::Builder as ServerBuilder;
+use hyper::service::service_fn;
+use hyper::{Method, Request, Response, StatusCode};
+use hyper_util::rt::TokioIo;
 use prometheus::{
     exponential_buckets, gather, Encoder, HistogramOpts, HistogramVec, IntCounterVec, IntGaugeVec,
     Opts, Registry, TextEncoder,
 };
+use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
+use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tracing::{error, info, instrument, warn};
-use warp::{Filter, Rejection, Reply};
 
 /// The threshold of small (Level0–Level2, under 4MiB) download task
 /// duration for recording slow download task.
@@ -40,291 +46,577 @@ const DOWNLOAD_SMALL_TASK_DURATION_THRESHOLD: Duration = Duration::from_millis(5
 /// duration for recording slow upload task.
 const UPLOAD_SMALL_TASK_DURATION_THRESHOLD: Duration = Duration::from_millis(500);
 
-lazy_static! {
-    /// Used to register all metrics.
-    pub static ref REGISTRY: Registry = Registry::new();
+/// Used to register all metrics.
+pub static REGISTRY: LazyLock<Registry> = LazyLock::new(Registry::new);
 
-    /// Used to record the version info of the service.
-    pub static ref VERSION_GAUGE: IntGaugeVec =
-        IntGaugeVec::new(
-            Opts::new("version", "Version info of the service.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["git_version", "git_commit", "platform", "build_time"]
-        ).expect("metric can be created");
+/// Used to record the version info of the service.
+pub static VERSION_GAUGE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
+    IntGaugeVec::new(
+        Opts::new("version", "Version info of the service.")
+            .namespace(dragonfly_client_config::SERVICE_NAME)
+            .subsystem(dragonfly_client_config::NAME),
+        &["git_version", "git_commit", "platform", "build_time"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of upload tasks.
-    pub static ref UPLOAD_TASK_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("upload_task_total", "Counter of the number of the upload task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type", "tag", "app"]
-        ).expect("metric can be created");
+/// Used to count the number of upload tasks.
+pub static UPLOAD_TASK_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "upload_task_total",
+            "Counter of the number of the upload task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type", "tag", "app"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of upload tasks.
-    pub static ref UPLOAD_TASK_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("upload_task_failure_total", "Counter of the number of failed of the upload task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type", "tag", "app"]
-        ).expect("metric can be created");
+/// Used to count the failed number of upload tasks.
+pub static UPLOAD_TASK_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "upload_task_failure_total",
+            "Counter of the number of failed of the upload task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type", "tag", "app"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to gauge the number of concurrent upload tasks.
-    pub static ref CONCURRENT_UPLOAD_TASK_GAUGE: IntGaugeVec =
-        IntGaugeVec::new(
-            Opts::new("concurrent_upload_task_total", "Gauge of the number of concurrent of the upload task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type", "tag", "app"]
-        ).expect("metric can be created");
+/// Used to gauge the number of concurrent upload tasks.
+pub static CONCURRENT_UPLOAD_TASK_GAUGE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
+    IntGaugeVec::new(
+        Opts::new(
+            "concurrent_upload_task_total",
+            "Gauge of the number of concurrent of the upload task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type", "tag", "app"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to record the upload task duration.
-    pub static ref UPLOAD_TASK_DURATION: HistogramVec =
-        HistogramVec::new(
-            HistogramOpts::new("upload_task_duration_milliseconds", "Histogram of the upload task duration.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME).buckets(exponential_buckets(1.0, 2.0, 24).unwrap()),
-            &["task_type", "task_size_level"]
-        ).expect("metric can be created");
+/// Used to record the upload task duration.
+pub static UPLOAD_TASK_DURATION: LazyLock<HistogramVec> = LazyLock::new(|| {
+    HistogramVec::new(
+        HistogramOpts::new(
+            "upload_task_duration_milliseconds",
+            "Histogram of the upload task duration.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME)
+        .buckets(exponential_buckets(1.0, 2.0, 24).unwrap()),
+        &["task_type", "task_size_level"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of download tasks.
-    pub static ref DOWNLOAD_TASK_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("download_task_total", "Counter of the number of the download task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type", "tag", "app", "priority"]
-        ).expect("metric can be created");
+/// Used to count the number of download tasks.
+pub static DOWNLOAD_TASK_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "download_task_total",
+            "Counter of the number of the download task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type", "tag", "app", "priority"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of download tasks.
-    pub static ref DOWNLOAD_TASK_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("download_task_failure_total", "Counter of the number of failed of the download task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type", "tag", "app", "priority"]
-        ).expect("metric can be created");
+/// Used to count the failed number of download tasks.
+pub static DOWNLOAD_TASK_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "download_task_failure_total",
+            "Counter of the number of failed of the download task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type", "tag", "app", "priority"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of prefetch tasks.
-    pub static ref PREFETCH_TASK_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("prefetch_task_total", "Counter of the number of the prefetch task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type", "tag", "app", "priority"]
-        ).expect("metric can be created");
+/// Used to count the number of prefetch tasks.
+pub static PREFETCH_TASK_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "prefetch_task_total",
+            "Counter of the number of the prefetch task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type", "tag", "app", "priority"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of prefetch tasks.
-    pub static ref PREFETCH_TASK_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("prefetch_task_failure_total", "Counter of the number of failed of the prefetch task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type", "tag", "app", "priority"]
-        ).expect("metric can be created");
+/// Used to count the failed number of prefetch tasks.
+pub static PREFETCH_TASK_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "prefetch_task_failure_total",
+            "Counter of the number of failed of the prefetch task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type", "tag", "app", "priority"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to gauge the number of concurrent download tasks.
-    pub static ref CONCURRENT_DOWNLOAD_TASK_GAUGE: IntGaugeVec =
-        IntGaugeVec::new(
-            Opts::new("concurrent_download_task_total", "Gauge of the number of concurrent of the download task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type", "tag", "app", "priority"]
-        ).expect("metric can be created");
+/// Used to gauge the number of concurrent download tasks.
+pub static CONCURRENT_DOWNLOAD_TASK_GAUGE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
+    IntGaugeVec::new(
+        Opts::new(
+            "concurrent_download_task_total",
+            "Gauge of the number of concurrent of the download task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type", "tag", "app", "priority"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to gauge the number of concurrent upload pieces.
-    pub static ref CONCURRENT_UPLOAD_PIECE_GAUGE: IntGaugeVec =
-        IntGaugeVec::new(
-            Opts::new("concurrent_upload_piece_total", "Gauge of the number of concurrent of the upload piece.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &[]
-        ).expect("metric can be created");
+/// Used to gauge the number of concurrent upload pieces.
+pub static CONCURRENT_UPLOAD_PIECE_GAUGE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
+    IntGaugeVec::new(
+        Opts::new(
+            "concurrent_upload_piece_total",
+            "Gauge of the number of concurrent of the upload piece.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &[],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the download traffic.
-    pub static ref DOWNLOAD_TRAFFIC: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("download_traffic", "Counter of the number of the download traffic.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the download traffic.
+pub static DOWNLOAD_TRAFFIC: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "download_traffic",
+            "Counter of the number of the download traffic.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the upload traffic.
-    pub static ref UPLOAD_TRAFFIC: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("upload_traffic", "Counter of the number of the upload traffic.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &[]
-        ).expect("metric can be created");
+/// Used to record the download piece duration.
+pub static DOWNLOAD_PIECE_DURATION: LazyLock<HistogramVec> = LazyLock::new(|| {
+    HistogramVec::new(
+        HistogramOpts::new(
+            "download_piece_duration_milliseconds",
+            "Histogram of the download piece duration.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME)
+        .buckets(exponential_buckets(1.0, 2.0, 24).unwrap()),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to record the download task duration.
-    pub static ref DOWNLOAD_TASK_DURATION: HistogramVec =
-        HistogramVec::new(
-            HistogramOpts::new("download_task_duration_milliseconds", "Histogram of the download task duration.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME).buckets(exponential_buckets(1.0, 2.0, 24).unwrap()),
-            &["task_type", "task_size_level"]
-        ).expect("metric can be created");
+/// Used to count the upload traffic.
+pub static UPLOAD_TRAFFIC: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "upload_traffic",
+            "Counter of the number of the upload traffic.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &[],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of backend requset.
-    pub static ref BACKEND_REQUEST_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("backend_request_total", "Counter of the number of the backend request.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["scheme", "method"]
-        ).expect("metric can be created");
+/// Used to record the download task duration.
+pub static DOWNLOAD_TASK_DURATION: LazyLock<HistogramVec> = LazyLock::new(|| {
+    HistogramVec::new(
+        HistogramOpts::new(
+            "download_task_duration_milliseconds",
+            "Histogram of the download task duration.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME)
+        .buckets(exponential_buckets(1.0, 2.0, 24).unwrap()),
+        &["task_type", "task_size_level"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of backend request.
-    pub static ref BACKEND_REQUEST_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("backend_request_failure_total", "Counter of the number of failed of the backend request.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["scheme", "method"]
-        ).expect("metric can be created");
+/// Used to count the number of backend requset.
+pub static BACKEND_REQUEST_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "backend_request_total",
+            "Counter of the number of the backend request.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["scheme", "method"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to record the backend request duration.
-    pub static ref BACKEND_REQUEST_DURATION: HistogramVec =
-        HistogramVec::new(
-            HistogramOpts::new("backend_request_duration_milliseconds", "Histogram of the backend request duration.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME).buckets(exponential_buckets(1.0, 2.0, 24).unwrap()),
-            &["scheme", "method"]
-        ).expect("metric can be created");
+/// Used to count the failed number of backend request.
+pub static BACKEND_REQUEST_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "backend_request_failure_total",
+            "Counter of the number of failed of the backend request.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["scheme", "method"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of proxy requset.
-    pub static ref PROXY_REQUEST_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("proxy_request_total", "Counter of the number of the proxy request.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &[]
-        ).expect("metric can be created");
+/// Used to record the backend request duration.
+pub static BACKEND_REQUEST_DURATION: LazyLock<HistogramVec> = LazyLock::new(|| {
+    HistogramVec::new(
+        HistogramOpts::new(
+            "backend_request_duration_milliseconds",
+            "Histogram of the backend request duration.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME)
+        .buckets(exponential_buckets(1.0, 2.0, 24).unwrap()),
+        &["scheme", "method"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of proxy request.
-    pub static ref PROXY_REQUEST_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("proxy_request_failure_total", "Counter of the number of failed of the proxy request.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &[]
-        ).expect("metric can be created");
+/// Used to count the number of proxy requset.
+pub static PROXY_REQUEST_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "proxy_request_total",
+            "Counter of the number of the proxy request.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &[],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of proxy requset via dfdaemon.
-    pub static ref PROXY_REQUEST_VIA_DFDAEMON_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("proxy_request_via_dfdaemon_total", "Counter of the number of the proxy request via dfdaemon.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &[]
-        ).expect("metric can be created");
+/// Used to count the failed number of proxy request.
+pub static PROXY_REQUEST_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "proxy_request_failure_total",
+            "Counter of the number of failed of the proxy request.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &[],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of update tasks.
-    pub static ref UPDATE_TASK_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("update_task_total", "Counter of the number of the update task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the number of proxy requset via dfdaemon.
+pub static PROXY_REQUEST_VIA_DFDAEMON_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "proxy_request_via_dfdaemon_total",
+            "Counter of the number of the proxy request via dfdaemon.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &[],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of update tasks.
-    pub static ref UPDATE_TASK_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("update_task_failure_total", "Counter of the number of failed of the update task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the number of update tasks.
+pub static UPDATE_TASK_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "update_task_total",
+            "Counter of the number of the update task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of stat tasks.
-    pub static ref STAT_TASK_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("stat_task_total", "Counter of the number of the stat task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the failed number of update tasks.
+pub static UPDATE_TASK_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "update_task_failure_total",
+            "Counter of the number of failed of the update task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of stat tasks.
-    pub static ref STAT_TASK_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("stat_task_failure_total", "Counter of the number of failed of the stat task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the number of stat tasks.
+pub static STAT_TASK_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new("stat_task_total", "Counter of the number of the stat task.")
+            .namespace(dragonfly_client_config::SERVICE_NAME)
+            .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of stat tasks.
-    pub static ref STAT_LOCAL_TASK_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("stat_local_task_total", "Counter of the number of the stat local task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the failed number of stat tasks.
+pub static STAT_TASK_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "stat_task_failure_total",
+            "Counter of the number of failed of the stat task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of stat tasks.
-    pub static ref STAT_LOCAL_TASK_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("stat_local_task_failure_total", "Counter of the number of failed of the stat local task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the number of stat tasks.
+pub static STAT_LOCAL_TASK_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "stat_local_task_total",
+            "Counter of the number of the stat local task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of list tasks.
-    pub static ref LIST_LOCAL_TASKS_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("list_local_tasks_total", "Counter of the number of the list tasks.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the failed number of stat tasks.
+pub static STAT_LOCAL_TASK_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "stat_local_task_failure_total",
+            "Counter of the number of failed of the stat local task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of list tasks.
-    pub static ref LIST_LOCAL_TASKS_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("list_tasks_failure_total", "Counter of the number of failed of the list tasks.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the number of list tasks.
+pub static LIST_LOCAL_TASKS_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "list_local_tasks_total",
+            "Counter of the number of the list tasks.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of list task entries.
-    pub static ref LIST_TASK_ENTRIES_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("list_task_entries_total", "Counter of the number of the list task entries.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the failed number of list tasks.
+pub static LIST_LOCAL_TASKS_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "list_tasks_failure_total",
+            "Counter of the number of failed of the list tasks.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of list task entries.
-    pub static ref LIST_TASK_ENTRIES_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("list_task_entries_failure_total", "Counter of the number of failed of the list task entries.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the number of list task entries.
+pub static LIST_TASK_ENTRIES_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "list_task_entries_total",
+            "Counter of the number of the list task entries.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-        /// Used to count the number of delete tasks.
-    pub static ref DELETE_TASK_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("delete_task_total", "Counter of the number of the delete task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the failed number of list task entries.
+pub static LIST_TASK_ENTRIES_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "list_task_entries_failure_total",
+            "Counter of the number of failed of the list task entries.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of delete tasks.
-    pub static ref DELETE_TASK_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("delete_task_failure_total", "Counter of the number of failed of the delete task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the number of delete tasks.
+pub static DELETE_TASK_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "delete_task_total",
+            "Counter of the number of the delete task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-        /// Used to count the number of delete local tasks.
-    pub static ref DELETE_LOCAL_TASK_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("delete_local_task_total", "Counter of the number of the delete local task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the failed number of delete tasks.
+pub static DELETE_TASK_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "delete_task_failure_total",
+            "Counter of the number of failed of the delete task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of delete local tasks.
-    pub static ref DELETE_LOCAL_TASK_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("delete_local_task_failure_total", "Counter of the number of failed of the delete local task.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count the number of delete local tasks.
+pub static DELETE_LOCAL_TASK_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "delete_local_task_total",
+            "Counter of the number of the delete local task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the number of delete host.
-    pub static ref DELETE_HOST_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("delete_host_total", "Counter of the number of the delete host.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &[]
-        ).expect("metric can be created");
+/// Used to count the failed number of delete local tasks.
+pub static DELETE_LOCAL_TASK_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "delete_local_task_failure_total",
+            "Counter of the number of failed of the delete local task.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count the failed number of delete host.
-    pub static ref DELETE_HOST_FAILURE_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("delete_host_failure_total", "Counter of the number of failed of the delete host.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &[]
-        ).expect("metric can be created");
+/// Used to count the number of delete host.
+pub static DELETE_HOST_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "delete_host_total",
+            "Counter of the number of the delete host.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &[],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count of the disk space.
-    pub static ref DISK_SPACE: IntGaugeVec =
-        IntGaugeVec::new(
-            Opts::new("disk_space_total", "Gauge of the disk space in bytes").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &[]
-        ).expect("metric can be created");
+/// Used to count the failed number of delete host.
+pub static DELETE_HOST_FAILURE_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "delete_host_failure_total",
+            "Counter of the number of failed of the delete host.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &[],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count of the disk usage space.
-    pub static ref DISK_USAGE_SPACE: IntGaugeVec =
-        IntGaugeVec::new(
-            Opts::new("disk_usage_space_total", "Gauge of the disk usage space in bytes").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &[]
-        ).expect("metric can be created");
+/// Used to count of the disk space.
+pub static DISK_SPACE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
+    IntGaugeVec::new(
+        Opts::new("disk_space_total", "Gauge of the disk space in bytes")
+            .namespace(dragonfly_client_config::SERVICE_NAME)
+            .subsystem(dragonfly_client_config::NAME),
+        &[],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count of the download task blocked.
-    pub static ref DOWNLOAD_TASK_BLOCKED_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("download_task_blocked_total", "Counter of the number of download task blocked.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
+/// Used to count of the disk usage space.
+pub static DISK_USAGE_SPACE: LazyLock<IntGaugeVec> = LazyLock::new(|| {
+    IntGaugeVec::new(
+        Opts::new(
+            "disk_usage_space_total",
+            "Gauge of the disk usage space in bytes",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &[],
+    )
+    .expect("metric can be created")
+});
 
+/// Used to count of the download task blocked.
+pub static DOWNLOAD_TASK_BLOCKED_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "download_task_blocked_total",
+            "Counter of the number of download task blocked.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
-    /// Used to count of the upload task blocked.
-    pub static ref UPLOAD_TASK_BLOCKED_COUNT: IntCounterVec =
-        IntCounterVec::new(
-            Opts::new("upload_task_blocked_total", "Counter of the number of upload task blocked.").namespace(dragonfly_client_config::SERVICE_NAME).subsystem(dragonfly_client_config::NAME),
-            &["type"]
-        ).expect("metric can be created");
-}
+/// Used to count of the upload task blocked.
+pub static UPLOAD_TASK_BLOCKED_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "upload_task_blocked_total",
+            "Counter of the number of upload task blocked.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &["type"],
+    )
+    .expect("metric can be created")
+});
 
 /// Registers all custom metrics.
 fn register_custom_metrics() {
@@ -358,6 +650,10 @@ fn register_custom_metrics() {
 
     REGISTRY
         .register(Box::new(DOWNLOAD_TRAFFIC.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(DOWNLOAD_PIECE_DURATION.clone()))
         .expect("metric can be registered");
 
     REGISTRY
@@ -475,6 +771,7 @@ fn reset_custom_metrics() {
     CONCURRENT_DOWNLOAD_TASK_GAUGE.reset();
     CONCURRENT_UPLOAD_PIECE_GAUGE.reset();
     DOWNLOAD_TRAFFIC.reset();
+    DOWNLOAD_PIECE_DURATION.reset();
     UPLOAD_TRAFFIC.reset();
     DOWNLOAD_TASK_DURATION.reset();
     BACKEND_REQUEST_COUNT.reset();
@@ -774,6 +1071,13 @@ pub fn collect_download_piece_traffic_metrics(typ: &TrafficType, length: u64) {
         .inc_by(length);
 }
 
+/// Collects the download piece duration metrics.
+pub fn collect_download_piece_duration_metrics(typ: &TrafficType, cost: Duration) {
+    DOWNLOAD_PIECE_DURATION
+        .with_label_values(&[typ.as_str_name()])
+        .observe(cost.as_millis() as f64);
+}
+
 /// Collects the upload piece started metrics.
 pub fn collect_upload_piece_started_metrics() {
     CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).inc();
@@ -1030,36 +1334,70 @@ impl Metrics {
             self.config.metrics.server.port,
         );
 
-        // Get the metrics route.
-        let get_metrics_route = warp::path!("metrics")
-            .and(warp::get())
-            .and(warp::path::end())
-            .and_then(move || Self::get_metrics_handler(config.clone()));
-
-        // Delete the metrics route.
-        let delete_metrics_route = warp::path!("metrics")
-            .and(warp::delete())
-            .and(warp::path::end())
-            .and_then(Self::delete_metrics_handler);
-        let metrics_routes = get_metrics_route.or(delete_metrics_route);
-
         // Start the metrics server and wait for it to finish.
         info!("metrics server listening on {}", addr);
-        tokio::select! {
-            _ = warp::serve(metrics_routes).run(addr) => {
-                // Metrics server ended.
-                info!("metrics server ended");
+        let listener = TcpListener::bind(addr).await.unwrap();
+        loop {
+            tokio::select! {
+                tcp_accepted = listener.accept() => {
+                    let (tcp, remote_address) = match tcp_accepted {
+                        Ok(tcp_accepted) => tcp_accepted,
+                        Err(err) => {
+                            error!("failed to accept connection: {}", err);
+                            continue;
+                        }
+                    };
+
+                    let io = TokioIo::new(tcp);
+                    let config = config.clone();
+                    tokio::spawn(async move {
+                        if let Err(err) = ServerBuilder::new()
+                            .serve_connection(
+                                io,
+                                service_fn(move |request| Self::handler(config.clone(), request)),
+                            )
+                            .await
+                        {
+                            error!("failed to serve connection from {}: {}", remote_address, err);
+                        }
+                    });
+                }
+                _ = shutdown.recv() => {
+                    // Metrics server shutting down with signals.
+                    info!("metrics server shutting down");
+                    return;
+                }
             }
-            _ = shutdown.recv() => {
-                // Metrics server shutting down with signals.
-                info!("metrics server shutting down");
+        }
+    }
+
+    /// Handles the metrics request.
+    #[instrument(skip_all)]
+    async fn handler<T>(
+        config: Arc<Config>,
+        request: Request<T>,
+    ) -> Result<Response<Full<Bytes>>, Infallible> {
+        match (request.method(), request.uri().path()) {
+            (&Method::GET, "/metrics") => Ok(Response::builder()
+                .header(hyper::header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .body(Full::new(Bytes::from(
+                    Self::get_metrics_handler(config).await,
+                )))
+                .unwrap()),
+            (&Method::DELETE, "/metrics") => {
+                Self::delete_metrics_handler().await;
+                Ok(Response::new(Full::default()))
             }
+            _ => Ok(Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Full::default())
+                .unwrap()),
         }
     }
 
     /// Handles the metrics request of getting.
     #[instrument(skip_all)]
-    async fn get_metrics_handler(config: Arc<Config>) -> Result<impl Reply, Rejection> {
+    async fn get_metrics_handler(config: Arc<Config>) -> String {
         // Collect the disk space metrics.
         collect_disk_metrics(config.storage.dir.as_path());
 
@@ -1095,487 +1433,525 @@ impl Metrics {
         buf.clear();
 
         res.push_str(&res_custom);
-        Ok(res)
+        res
     }
 
     /// Handles the metrics request of deleting.
     #[instrument(skip_all)]
-    async fn delete_metrics_handler() -> Result<impl Reply, Rejection> {
+    async fn delete_metrics_handler() {
         reset_custom_metrics();
-        Ok(Vec::new())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
+    use dragonfly_client_config::dfdaemon::Storage;
 
     #[test]
-    fn test_task_size_calculate_size_level() {
-        assert_eq!(TaskSize::calculate_size_level(0), TaskSize::Level0);
-        assert_eq!(TaskSize::calculate_size_level(1), TaskSize::Level1);
-        assert_eq!(TaskSize::calculate_size_level(512 * 1024), TaskSize::Level1);
-        assert_eq!(
-            TaskSize::calculate_size_level(1024 * 1024 - 1),
-            TaskSize::Level1
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(1024 * 1024),
-            TaskSize::Level2
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(2 * 1024 * 1024),
-            TaskSize::Level2
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(4 * 1024 * 1024 - 1),
-            TaskSize::Level2
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(4 * 1024 * 1024),
-            TaskSize::Level3
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(6 * 1024 * 1024),
-            TaskSize::Level3
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(8 * 1024 * 1024),
-            TaskSize::Level4
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(16 * 1024 * 1024),
-            TaskSize::Level5
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(32 * 1024 * 1024),
-            TaskSize::Level6
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(64 * 1024 * 1024),
-            TaskSize::Level7
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(128 * 1024 * 1024),
-            TaskSize::Level8
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(256 * 1024 * 1024),
-            TaskSize::Level9
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(512 * 1024 * 1024),
-            TaskSize::Level10
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(1024 * 1024 * 1024),
-            TaskSize::Level11
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(2 * 1024 * 1024 * 1024),
-            TaskSize::Level11
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(4 * 1024 * 1024 * 1024),
-            TaskSize::Level12
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(8 * 1024 * 1024 * 1024),
-            TaskSize::Level13
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(16 * 1024 * 1024 * 1024),
-            TaskSize::Level14
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(32 * 1024 * 1024 * 1024),
-            TaskSize::Level15
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(64 * 1024 * 1024 * 1024),
-            TaskSize::Level16
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(128 * 1024 * 1024 * 1024),
-            TaskSize::Level17
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(256 * 1024 * 1024 * 1024),
-            TaskSize::Level18
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(512 * 1024 * 1024 * 1024),
-            TaskSize::Level19
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(1024 * 1024 * 1024 * 1024),
-            TaskSize::Level20
-        );
-        assert_eq!(
-            TaskSize::calculate_size_level(2 * 1024 * 1024 * 1024 * 1024),
-            TaskSize::Level20
-        );
+    fn calculate_size_level_maps_bytes_to_levels() {
+        let test_cases = vec![
+            (0, TaskSize::Level0),
+            (1, TaskSize::Level1),
+            (512 * 1024, TaskSize::Level1),
+            (1024 * 1024 - 1, TaskSize::Level1),
+            (1024 * 1024, TaskSize::Level2),
+            (2 * 1024 * 1024, TaskSize::Level2),
+            (4 * 1024 * 1024 - 1, TaskSize::Level2),
+            (4 * 1024 * 1024, TaskSize::Level3),
+            (6 * 1024 * 1024, TaskSize::Level3),
+            (8 * 1024 * 1024, TaskSize::Level4),
+            (16 * 1024 * 1024, TaskSize::Level5),
+            (32 * 1024 * 1024, TaskSize::Level6),
+            (64 * 1024 * 1024, TaskSize::Level7),
+            (128 * 1024 * 1024, TaskSize::Level8),
+            (256 * 1024 * 1024, TaskSize::Level9),
+            (512 * 1024 * 1024, TaskSize::Level10),
+            (1024 * 1024 * 1024, TaskSize::Level11),
+            (2 * 1024 * 1024 * 1024, TaskSize::Level11),
+            (4 * 1024 * 1024 * 1024, TaskSize::Level12),
+            (8 * 1024 * 1024 * 1024, TaskSize::Level13),
+            (16 * 1024 * 1024 * 1024, TaskSize::Level14),
+            (32 * 1024 * 1024 * 1024, TaskSize::Level15),
+            (64 * 1024 * 1024 * 1024, TaskSize::Level16),
+            (128 * 1024 * 1024 * 1024, TaskSize::Level17),
+            (256 * 1024 * 1024 * 1024, TaskSize::Level18),
+            (512 * 1024 * 1024 * 1024, TaskSize::Level19),
+            (1024 * 1024 * 1024 * 1024, TaskSize::Level20),
+            (2 * 1024 * 1024 * 1024 * 1024, TaskSize::Level20),
+        ];
+
+        for (size, expected) in test_cases {
+            assert_eq!(TaskSize::calculate_size_level(size), expected);
+        }
     }
 
     #[test]
-    fn test_task_size_display() {
-        assert_eq!(format!("{}", TaskSize::Level0), "0");
-        assert_eq!(format!("{}", TaskSize::Level1), "1");
-        assert_eq!(format!("{}", TaskSize::Level2), "2");
-        assert_eq!(format!("{}", TaskSize::Level3), "3");
-        assert_eq!(format!("{}", TaskSize::Level4), "4");
-        assert_eq!(format!("{}", TaskSize::Level5), "5");
-        assert_eq!(format!("{}", TaskSize::Level6), "6");
-        assert_eq!(format!("{}", TaskSize::Level7), "7");
-        assert_eq!(format!("{}", TaskSize::Level8), "8");
-        assert_eq!(format!("{}", TaskSize::Level9), "9");
-        assert_eq!(format!("{}", TaskSize::Level10), "10");
-        assert_eq!(format!("{}", TaskSize::Level11), "11");
-        assert_eq!(format!("{}", TaskSize::Level12), "12");
-        assert_eq!(format!("{}", TaskSize::Level13), "13");
-        assert_eq!(format!("{}", TaskSize::Level14), "14");
-        assert_eq!(format!("{}", TaskSize::Level15), "15");
-        assert_eq!(format!("{}", TaskSize::Level16), "16");
-        assert_eq!(format!("{}", TaskSize::Level17), "17");
-        assert_eq!(format!("{}", TaskSize::Level18), "18");
-        assert_eq!(format!("{}", TaskSize::Level19), "19");
-        assert_eq!(format!("{}", TaskSize::Level20), "20");
+    fn display_formats_level_as_its_number() {
+        let test_cases = vec![
+            (TaskSize::Level0, "0"),
+            (TaskSize::Level1, "1"),
+            (TaskSize::Level2, "2"),
+            (TaskSize::Level3, "3"),
+            (TaskSize::Level4, "4"),
+            (TaskSize::Level5, "5"),
+            (TaskSize::Level6, "6"),
+            (TaskSize::Level7, "7"),
+            (TaskSize::Level8, "8"),
+            (TaskSize::Level9, "9"),
+            (TaskSize::Level10, "10"),
+            (TaskSize::Level11, "11"),
+            (TaskSize::Level12, "12"),
+            (TaskSize::Level13, "13"),
+            (TaskSize::Level14, "14"),
+            (TaskSize::Level15, "15"),
+            (TaskSize::Level16, "16"),
+            (TaskSize::Level17, "17"),
+            (TaskSize::Level18, "18"),
+            (TaskSize::Level19, "19"),
+            (TaskSize::Level20, "20"),
+        ];
+
+        for (level, expected) in test_cases {
+            assert_eq!(level.to_string(), expected);
+        }
     }
 
     #[test]
-    fn test_collect_upload_task_metrics() {
-        let tag = "test-upload-tag";
-        let app = "test-upload-app";
+    fn upload_task_metrics_follow_started_finished_and_failure() {
+        let (tag, app) = ("upload-task-tag", "upload-task-app");
+        let labels = ["1", tag, app];
+        let samples_before = UPLOAD_TASK_DURATION
+            .with_label_values(&["1", "1"])
+            .get_sample_count();
+        let count_before = UPLOAD_TASK_COUNT.with_label_values(&labels).get();
+        let concurrent_before = CONCURRENT_UPLOAD_TASK_GAUGE
+            .with_label_values(&labels)
+            .get();
         collect_upload_task_started_metrics(1, tag, app);
+        assert_eq!(
+            UPLOAD_TASK_COUNT.with_label_values(&labels).get(),
+            count_before + 1
+        );
+        assert_eq!(
+            CONCURRENT_UPLOAD_TASK_GAUGE
+                .with_label_values(&labels)
+                .get(),
+            concurrent_before + 1
+        );
 
-        let counter = UPLOAD_TASK_COUNT.with_label_values(&["1", tag, app]).get();
-        assert!(counter >= 1);
+        collect_upload_task_finished_metrics(1, tag, app, 1024, Duration::from_millis(100));
+        assert_eq!(
+            CONCURRENT_UPLOAD_TASK_GAUGE
+                .with_label_values(&labels)
+                .get(),
+            concurrent_before
+        );
 
-        let gauge_before = CONCURRENT_UPLOAD_TASK_GAUGE
-            .with_label_values(&["1", tag, app])
-            .get();
-        let duration = Duration::from_millis(100);
-        collect_upload_task_finished_metrics(1, tag, app, 1024, duration);
-
-        let gauge_after = CONCURRENT_UPLOAD_TASK_GAUGE
-            .with_label_values(&["1", tag, app])
-            .get();
-        assert_eq!(gauge_after, gauge_before - 1);
-
+        let failure_before = UPLOAD_TASK_FAILURE_COUNT.with_label_values(&labels).get();
         collect_upload_task_started_metrics(1, tag, app);
-        let gauge_before_failure = CONCURRENT_UPLOAD_TASK_GAUGE
-            .with_label_values(&["1", tag, app])
-            .get();
         collect_upload_task_failure_metrics(1, tag, app);
-
-        let failure_counter = UPLOAD_TASK_FAILURE_COUNT
-            .with_label_values(&["1", tag, app])
-            .get();
-        assert!(failure_counter >= 1);
-
-        let gauge_after_failure = CONCURRENT_UPLOAD_TASK_GAUGE
-            .with_label_values(&["1", tag, app])
-            .get();
-        assert_eq!(gauge_after_failure, gauge_before_failure - 1);
+        assert_eq!(
+            UPLOAD_TASK_FAILURE_COUNT.with_label_values(&labels).get(),
+            failure_before + 1
+        );
+        assert_eq!(
+            CONCURRENT_UPLOAD_TASK_GAUGE
+                .with_label_values(&labels)
+                .get(),
+            concurrent_before
+        );
+        assert_eq!(
+            UPLOAD_TASK_DURATION
+                .with_label_values(&["1", "1"])
+                .get_sample_count(),
+            samples_before + 1
+        );
     }
 
     #[test]
-    fn test_collect_download_task_metrics() {
-        let tag = "test-download-tag";
-        let app = "test-download-app";
-        let priority = "5";
-        collect_download_task_started_metrics(2, tag, app, priority);
-        let counter = DOWNLOAD_TASK_COUNT
-            .with_label_values(&["2", tag, app, priority])
-            .get();
-        assert!(counter >= 1);
+    fn upload_task_finished_observes_duration_by_size_level() {
+        let (tag, app) = ("upload-duration-tag", "upload-duration-app");
 
-        let gauge_before = CONCURRENT_DOWNLOAD_TASK_GAUGE
-            .with_label_values(&["2", tag, app, priority])
-            .get();
+        let test_cases = vec![
+            (2, 512 * 1024, Duration::from_millis(1000), "1"),
+            (3, 8 * 1024 * 1024, Duration::from_millis(100), "4"),
+        ];
 
-        let duration = Duration::from_millis(200);
-        collect_download_task_finished_metrics(2, tag, app, priority, 1024 * 1024, None, duration);
-
-        let gauge_after = CONCURRENT_DOWNLOAD_TASK_GAUGE
-            .with_label_values(&["2", tag, app, priority])
-            .get();
-        assert_eq!(gauge_after, gauge_before - 1);
-
-        collect_download_task_started_metrics(2, tag, app, priority);
-        let gauge_before_failure = CONCURRENT_DOWNLOAD_TASK_GAUGE
-            .with_label_values(&["2", tag, app, priority])
-            .get();
-        collect_download_task_failure_metrics(2, tag, app, priority);
-        let failure_counter = DOWNLOAD_TASK_FAILURE_COUNT
-            .with_label_values(&["2", tag, app, priority])
-            .get();
-        assert!(failure_counter >= 1);
-
-        let gauge_after_failure = CONCURRENT_DOWNLOAD_TASK_GAUGE
-            .with_label_values(&["2", tag, app, priority])
-            .get();
-        assert_eq!(gauge_after_failure, gauge_before_failure - 1);
+        for (typ, content_length, cost, expected_level) in test_cases {
+            let typ_label = typ.to_string();
+            let labels = [typ_label.as_str(), expected_level];
+            let samples_before = UPLOAD_TASK_DURATION
+                .with_label_values(&labels)
+                .get_sample_count();
+            collect_upload_task_started_metrics(typ, tag, app);
+            collect_upload_task_finished_metrics(typ, tag, app, content_length, cost);
+            assert_eq!(
+                UPLOAD_TASK_DURATION
+                    .with_label_values(&labels)
+                    .get_sample_count(),
+                samples_before + 1
+            );
+        }
     }
 
     #[test]
-    fn test_collect_prefetch_task_metrics() {
-        let tag = "test-prefetch-tag";
-        let app = "test-prefetch-app";
-        let priority = "5";
-        let counter_before = PREFETCH_TASK_COUNT
-            .with_label_values(&["3", tag, app, priority])
+    fn download_task_metrics_follow_started_finished_and_failure() {
+        let (tag, app, priority) = ("download-task-tag", "download-task-app", "5");
+        let labels = ["1", tag, app, priority];
+        let samples_before = DOWNLOAD_TASK_DURATION
+            .with_label_values(&["1", "2"])
+            .get_sample_count();
+        let count_before = DOWNLOAD_TASK_COUNT.with_label_values(&labels).get();
+        let concurrent_before = CONCURRENT_DOWNLOAD_TASK_GAUGE
+            .with_label_values(&labels)
             .get();
+        collect_download_task_started_metrics(1, tag, app, priority);
+        assert_eq!(
+            DOWNLOAD_TASK_COUNT.with_label_values(&labels).get(),
+            count_before + 1
+        );
+        assert_eq!(
+            CONCURRENT_DOWNLOAD_TASK_GAUGE
+                .with_label_values(&labels)
+                .get(),
+            concurrent_before + 1
+        );
 
+        collect_download_task_finished_metrics(
+            1,
+            tag,
+            app,
+            priority,
+            1024 * 1024,
+            None,
+            Duration::from_millis(200),
+        );
+        assert_eq!(
+            CONCURRENT_DOWNLOAD_TASK_GAUGE
+                .with_label_values(&labels)
+                .get(),
+            concurrent_before
+        );
+
+        let failure_before = DOWNLOAD_TASK_FAILURE_COUNT.with_label_values(&labels).get();
+        collect_download_task_started_metrics(1, tag, app, priority);
+        collect_download_task_failure_metrics(1, tag, app, priority);
+        assert_eq!(
+            DOWNLOAD_TASK_FAILURE_COUNT.with_label_values(&labels).get(),
+            failure_before + 1
+        );
+        assert_eq!(
+            CONCURRENT_DOWNLOAD_TASK_GAUGE
+                .with_label_values(&labels)
+                .get(),
+            concurrent_before
+        );
+        assert_eq!(
+            DOWNLOAD_TASK_DURATION
+                .with_label_values(&["1", "2"])
+                .get_sample_count(),
+            samples_before + 1
+        );
+    }
+
+    #[test]
+    fn download_task_finished_observes_duration_by_range_or_content_length() {
+        let (tag, app, priority) = ("download-duration-tag", "download-duration-app", "5");
+
+        let test_cases = vec![
+            (2, 512 * 1024, None, Duration::from_millis(600), "1"),
+            (
+                3,
+                5 * 1024 * 1024,
+                Some(Range {
+                    start: 0,
+                    length: 1024,
+                }),
+                Duration::from_millis(50),
+                "1",
+            ),
+            (4, 5 * 1024 * 1024, None, Duration::from_millis(50), "3"),
+        ];
+
+        for (typ, content_length, range, cost, expected_level) in test_cases {
+            let typ_label = typ.to_string();
+            let labels = [typ_label.as_str(), expected_level];
+            let samples_before = DOWNLOAD_TASK_DURATION
+                .with_label_values(&labels)
+                .get_sample_count();
+            collect_download_task_started_metrics(typ, tag, app, priority);
+            collect_download_task_finished_metrics(
+                typ,
+                tag,
+                app,
+                priority,
+                content_length,
+                range,
+                cost,
+            );
+            assert_eq!(
+                DOWNLOAD_TASK_DURATION
+                    .with_label_values(&labels)
+                    .get_sample_count(),
+                samples_before + 1
+            );
+        }
+    }
+
+    #[test]
+    fn prefetch_task_metrics_count_started_and_failure() {
+        let (tag, app, priority) = ("prefetch-tag", "prefetch-app", "5");
+        let labels = ["3", tag, app, priority];
+        let count_before = PREFETCH_TASK_COUNT.with_label_values(&labels).get();
         collect_prefetch_task_started_metrics(3, tag, app, priority);
-        let counter_after = PREFETCH_TASK_COUNT
-            .with_label_values(&["3", tag, app, priority])
-            .get();
-        assert_eq!(counter_after, counter_before + 1);
+        assert_eq!(
+            PREFETCH_TASK_COUNT.with_label_values(&labels).get(),
+            count_before + 1
+        );
 
-        let failure_before = PREFETCH_TASK_FAILURE_COUNT
-            .with_label_values(&["3", tag, app, priority])
-            .get();
+        let failure_before = PREFETCH_TASK_FAILURE_COUNT.with_label_values(&labels).get();
         collect_prefetch_task_failure_metrics(3, tag, app, priority);
-
-        let failure_after = PREFETCH_TASK_FAILURE_COUNT
-            .with_label_values(&["3", tag, app, priority])
-            .get();
-        assert_eq!(failure_after, failure_before + 1);
+        assert_eq!(
+            PREFETCH_TASK_FAILURE_COUNT.with_label_values(&labels).get(),
+            failure_before + 1
+        );
     }
 
     #[test]
-    fn test_collect_upload_piece_metrics() {
+    fn upload_piece_metrics_move_gauge_and_traffic() {
         let gauge_before = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
         collect_upload_piece_started_metrics();
+        assert_eq!(
+            CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get(),
+            gauge_before + 1
+        );
 
-        let gauge_after_start = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
-        assert_eq!(gauge_after_start, gauge_before + 1);
         collect_upload_piece_finished_metrics();
-
-        let gauge_after_finish = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
-        assert_eq!(gauge_after_finish, gauge_after_start - 1);
+        assert_eq!(
+            CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get(),
+            gauge_before
+        );
 
         let traffic_before = UPLOAD_TRAFFIC.with_label_values(&[]).get();
         collect_upload_piece_traffic_metrics(1024);
-
-        let traffic_after = UPLOAD_TRAFFIC.with_label_values(&[]).get();
-        assert_eq!(traffic_after, traffic_before + 1024);
-
-        collect_upload_piece_started_metrics();
-        let gauge_before_failure = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
-        collect_upload_piece_failure_metrics();
-        let gauge_after_failure = CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get();
-        assert_eq!(gauge_after_failure, gauge_before_failure - 1);
-    }
-
-    #[test]
-    fn test_collect_download_piece_traffic_metrics() {
-        let traffic_type = TrafficType::RemotePeer;
-        collect_download_piece_traffic_metrics(&traffic_type, 2048);
-
-        let traffic = DOWNLOAD_TRAFFIC
-            .with_label_values(&[traffic_type.as_str_name()])
-            .get();
-        assert!(traffic >= 2048);
-    }
-
-    #[test]
-    fn test_collect_backend_request_metrics() {
-        collect_backend_request_started_metrics("http", "GET");
-        let counter = BACKEND_REQUEST_COUNT
-            .with_label_values(&["http", "GET"])
-            .get();
-        assert!(counter > 0);
-
-        collect_backend_request_failure_metrics("http", "GET");
-        let failure_counter = BACKEND_REQUEST_FAILURE_COUNT
-            .with_label_values(&["http", "GET"])
-            .get();
-        assert!(failure_counter > 0);
-
-        let duration = Duration::from_millis(150);
-        collect_backend_request_finished_metrics("http", "POST", duration);
-
-        let histogram = BACKEND_REQUEST_DURATION
-            .with_label_values(&["http", "POST"])
-            .get_sample_count();
-        assert!(histogram > 0);
-    }
-
-    #[test]
-    fn test_collect_proxy_request_metrics() {
-        collect_proxy_request_started_metrics();
-        let counter = PROXY_REQUEST_COUNT.with_label_values(&[]).get();
-        assert!(counter > 0);
-
-        collect_proxy_request_failure_metrics();
-        let failure_counter = PROXY_REQUEST_FAILURE_COUNT.with_label_values(&[]).get();
-        assert!(failure_counter > 0);
-
-        collect_proxy_request_via_dfdaemon_metrics();
-        let via_dfdaemon_counter = PROXY_REQUEST_VIA_DFDAEMON_COUNT
-            .with_label_values(&[])
-            .get();
-        assert!(via_dfdaemon_counter > 0);
-    }
-
-    #[test]
-    fn test_collect_update_task_metrics() {
-        collect_update_task_started_metrics(1);
-
-        let counter = UPDATE_TASK_COUNT.with_label_values(&["1"]).get();
-        assert!(counter > 0);
-
-        collect_update_task_failure_metrics(1);
-
-        let failure_counter = UPDATE_TASK_FAILURE_COUNT.with_label_values(&["1"]).get();
-        assert!(failure_counter > 0);
-    }
-
-    #[test]
-    fn test_collect_stat_task_metrics() {
-        collect_stat_task_started_metrics(2);
-        let counter = STAT_TASK_COUNT.with_label_values(&["2"]).get();
-        assert!(counter > 0);
-
-        collect_stat_task_failure_metrics(2);
-        let failure_counter = STAT_TASK_FAILURE_COUNT.with_label_values(&["2"]).get();
-        assert!(failure_counter > 0);
-    }
-
-    #[test]
-    fn test_collect_stat_local_task_metrics() {
-        collect_stat_local_task_started_metrics(3);
-        let counter = STAT_LOCAL_TASK_COUNT.with_label_values(&["3"]).get();
-        assert!(counter > 0);
-
-        collect_stat_local_task_failure_metrics(3);
-        let failure_counter = STAT_LOCAL_TASK_FAILURE_COUNT
-            .with_label_values(&["3"])
-            .get();
-        assert!(failure_counter > 0);
-    }
-
-    #[test]
-    fn test_collect_list_local_tasks_metrics() {
-        collect_list_local_tasks_started_metrics(4);
-        let counter = LIST_LOCAL_TASKS_COUNT.with_label_values(&["4"]).get();
-        assert!(counter > 0);
-
-        collect_list_local_tasks_failure_metrics(4);
-        let failure_counter = LIST_LOCAL_TASKS_FAILURE_COUNT
-            .with_label_values(&["4"])
-            .get();
-        assert!(failure_counter > 0);
-    }
-
-    #[test]
-    fn test_collect_list_task_entries_metrics() {
-        collect_list_task_entries_started_metrics(4);
-        let counter = LIST_TASK_ENTRIES_COUNT.with_label_values(&["4"]).get();
-        assert!(counter > 0);
-
-        collect_list_task_entries_failure_metrics(4);
-        let failure_counter = LIST_TASK_ENTRIES_FAILURE_COUNT
-            .with_label_values(&["4"])
-            .get();
-        assert!(failure_counter > 0);
-    }
-
-    #[test]
-    fn test_collect_delete_task_metrics() {
-        collect_delete_task_started_metrics(5);
-        let counter = DELETE_TASK_COUNT.with_label_values(&["5"]).get();
-        assert!(counter > 0);
-
-        collect_delete_task_failure_metrics(5);
-        let failure_counter = DELETE_TASK_FAILURE_COUNT.with_label_values(&["5"]).get();
-        assert!(failure_counter > 0);
-    }
-
-    #[test]
-    fn test_collect_delete_local_task_metrics() {
-        collect_delete_local_task_started_metrics(5);
-        let counter = DELETE_LOCAL_TASK_COUNT.with_label_values(&["5"]).get();
-        assert!(counter > 0);
-
-        collect_delete_local_task_failure_metrics(5);
-        let failure_counter = DELETE_LOCAL_TASK_FAILURE_COUNT
-            .with_label_values(&["5"])
-            .get();
-        assert!(failure_counter > 0);
-    }
-
-    #[test]
-    fn test_collect_delete_host_metrics() {
-        collect_delete_host_started_metrics();
-        let counter = DELETE_HOST_COUNT.with_label_values(&[]).get();
-        assert!(counter > 0);
-
-        collect_delete_host_failure_metrics();
-        let failure_counter = DELETE_HOST_FAILURE_COUNT.with_label_values(&[]).get();
-        assert!(failure_counter > 0);
-    }
-
-    #[test]
-    fn test_task_size_level1_slow_download() {
-        let tag = "slow-download-tag";
-        let app = "slow-download-app";
-        let small_size = 512 * 1024;
-        let slow_duration = Duration::from_millis(600);
-
-        collect_download_task_started_metrics(1, tag, app, "5");
-        let histogram_before = DOWNLOAD_TASK_DURATION
-            .with_label_values(&["1", "1"])
-            .get_sample_count();
-        collect_download_task_finished_metrics(1, tag, app, "5", small_size, None, slow_duration);
-        let histogram_after = DOWNLOAD_TASK_DURATION
-            .with_label_values(&["1", "1"])
-            .get_sample_count();
-        assert_eq!(histogram_after, histogram_before + 1);
-    }
-
-    #[test]
-    fn test_task_size_level1_slow_upload() {
-        let tag = "slow-upload-tag";
-        let app = "slow-upload-app";
-        let small_size = 512 * 1024;
-        let slow_duration = Duration::from_millis(1000);
-        collect_upload_task_started_metrics(1, tag, app);
-
-        let histogram_before = UPLOAD_TASK_DURATION
-            .with_label_values(&["1", "1"])
-            .get_sample_count();
-        collect_upload_task_finished_metrics(1, tag, app, small_size, slow_duration);
-
-        let histogram_after = UPLOAD_TASK_DURATION
-            .with_label_values(&["1", "1"])
-            .get_sample_count();
-        assert_eq!(histogram_after, histogram_before + 1);
-    }
-
-    #[test]
-    fn test_download_task_with_range() {
-        let range = Range {
-            start: 0,
-            length: 1024,
-        };
-        let duration = Duration::from_millis(50);
-        collect_download_task_started_metrics(1, "range-tag", "range-app", "5");
-        collect_download_task_finished_metrics(
-            1,
-            "range-tag",
-            "range-app",
-            "5",
-            10240,
-            Some(range),
-            duration,
+        assert_eq!(
+            UPLOAD_TRAFFIC.with_label_values(&[]).get(),
+            traffic_before + 1024
         );
 
-        let histogram = DOWNLOAD_TASK_DURATION
-            .with_label_values(&["1", "1"])
+        collect_upload_piece_started_metrics();
+        collect_upload_piece_failure_metrics();
+        assert_eq!(
+            CONCURRENT_UPLOAD_PIECE_GAUGE.with_label_values(&[]).get(),
+            gauge_before
+        );
+    }
+
+    #[test]
+    fn download_piece_traffic_adds_length_for_the_traffic_type() {
+        let labels = [TrafficType::RemotePeer.as_str_name()];
+        let traffic_before = DOWNLOAD_TRAFFIC.with_label_values(&labels).get();
+        collect_download_piece_traffic_metrics(&TrafficType::RemotePeer, 2048);
+        assert_eq!(
+            DOWNLOAD_TRAFFIC.with_label_values(&labels).get(),
+            traffic_before + 2048
+        );
+    }
+
+    #[test]
+    fn download_piece_duration_observes_a_sample_for_the_traffic_type() {
+        let labels = [TrafficType::RemotePeer.as_str_name()];
+        let samples_before = DOWNLOAD_PIECE_DURATION
+            .with_label_values(&labels)
             .get_sample_count();
-        assert!(histogram > 0);
+        collect_download_piece_duration_metrics(
+            &TrafficType::RemotePeer,
+            Duration::from_millis(42),
+        );
+        assert_eq!(
+            DOWNLOAD_PIECE_DURATION
+                .with_label_values(&labels)
+                .get_sample_count(),
+            samples_before + 1
+        );
+    }
+
+    #[test]
+    fn backend_request_metrics_count_and_time_by_scheme_and_method() {
+        let count_before = BACKEND_REQUEST_COUNT
+            .with_label_values(&["http", "GET"])
+            .get();
+        collect_backend_request_started_metrics("http", "GET");
+        assert_eq!(
+            BACKEND_REQUEST_COUNT
+                .with_label_values(&["http", "GET"])
+                .get(),
+            count_before + 1
+        );
+
+        let failure_before = BACKEND_REQUEST_FAILURE_COUNT
+            .with_label_values(&["http", "GET"])
+            .get();
+        collect_backend_request_failure_metrics("http", "GET");
+        assert_eq!(
+            BACKEND_REQUEST_FAILURE_COUNT
+                .with_label_values(&["http", "GET"])
+                .get(),
+            failure_before + 1
+        );
+
+        let samples_before = BACKEND_REQUEST_DURATION
+            .with_label_values(&["http", "POST"])
+            .get_sample_count();
+        collect_backend_request_finished_metrics("http", "POST", Duration::from_millis(150));
+        assert_eq!(
+            BACKEND_REQUEST_DURATION
+                .with_label_values(&["http", "POST"])
+                .get_sample_count(),
+            samples_before + 1
+        );
+    }
+
+    #[test]
+    fn typed_counters_increment_under_the_type_label() {
+        let test_cases: Vec<(fn(i32), &IntCounterVec)> = vec![
+            (collect_update_task_started_metrics, &UPDATE_TASK_COUNT),
+            (
+                collect_update_task_failure_metrics,
+                &UPDATE_TASK_FAILURE_COUNT,
+            ),
+            (collect_stat_task_started_metrics, &STAT_TASK_COUNT),
+            (collect_stat_task_failure_metrics, &STAT_TASK_FAILURE_COUNT),
+            (
+                collect_stat_local_task_started_metrics,
+                &STAT_LOCAL_TASK_COUNT,
+            ),
+            (
+                collect_stat_local_task_failure_metrics,
+                &STAT_LOCAL_TASK_FAILURE_COUNT,
+            ),
+            (
+                collect_list_local_tasks_started_metrics,
+                &LIST_LOCAL_TASKS_COUNT,
+            ),
+            (
+                collect_list_local_tasks_failure_metrics,
+                &LIST_LOCAL_TASKS_FAILURE_COUNT,
+            ),
+            (
+                collect_list_task_entries_started_metrics,
+                &LIST_TASK_ENTRIES_COUNT,
+            ),
+            (
+                collect_list_task_entries_failure_metrics,
+                &LIST_TASK_ENTRIES_FAILURE_COUNT,
+            ),
+            (collect_delete_task_started_metrics, &DELETE_TASK_COUNT),
+            (
+                collect_delete_task_failure_metrics,
+                &DELETE_TASK_FAILURE_COUNT,
+            ),
+            (
+                collect_delete_local_task_started_metrics,
+                &DELETE_LOCAL_TASK_COUNT,
+            ),
+            (
+                collect_delete_local_task_failure_metrics,
+                &DELETE_LOCAL_TASK_FAILURE_COUNT,
+            ),
+            (
+                collect_download_task_blocked_metrics,
+                &DOWNLOAD_TASK_BLOCKED_COUNT,
+            ),
+            (
+                collect_upload_task_blocked_metrics,
+                &UPLOAD_TASK_BLOCKED_COUNT,
+            ),
+        ];
+
+        for (collect, metric) in test_cases {
+            let count_before = metric.with_label_values(&["1"]).get();
+            collect(1);
+            assert_eq!(metric.with_label_values(&["1"]).get(), count_before + 1);
+        }
+    }
+
+    #[test]
+    fn unlabeled_counters_increment_on_each_call() {
+        let test_cases: Vec<(fn(), &IntCounterVec)> = vec![
+            (collect_proxy_request_started_metrics, &PROXY_REQUEST_COUNT),
+            (
+                collect_proxy_request_failure_metrics,
+                &PROXY_REQUEST_FAILURE_COUNT,
+            ),
+            (
+                collect_proxy_request_via_dfdaemon_metrics,
+                &PROXY_REQUEST_VIA_DFDAEMON_COUNT,
+            ),
+            (collect_delete_host_started_metrics, &DELETE_HOST_COUNT),
+            (
+                collect_delete_host_failure_metrics,
+                &DELETE_HOST_FAILURE_COUNT,
+            ),
+        ];
+
+        for (collect, metric) in test_cases {
+            let count_before = metric.with_label_values(&[]).get();
+            collect();
+            assert_eq!(metric.with_label_values(&[]).get(), count_before + 1);
+        }
+    }
+
+    #[test]
+    fn collect_disk_metrics_sets_space_gauges_only_for_an_existing_path() {
+        collect_disk_metrics(&std::env::temp_dir());
+        let total_space = DISK_SPACE.with_label_values(&[]).get();
+        let usage_space = DISK_USAGE_SPACE.with_label_values(&[]).get();
+        assert!(total_space > 0);
+        assert!((0..=total_space).contains(&usage_space));
+
+        collect_disk_metrics(Path::new("/nonexistent/dragonfly-client-metric"));
+        assert_eq!(DISK_SPACE.with_label_values(&[]).get(), total_space);
+        assert_eq!(DISK_USAGE_SPACE.with_label_values(&[]).get(), usage_space);
+    }
+
+    #[tokio::test]
+    async fn handler_serves_get_metrics_and_rejects_other_routes() {
+        let config = Arc::new(Config {
+            storage: Storage {
+                dir: "/nonexistent/dragonfly-client-metric".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+
+        let test_cases = vec![
+            (
+                Method::GET,
+                "/metrics",
+                StatusCode::OK,
+                Some("text/plain; charset=utf-8"),
+            ),
+            (Method::POST, "/metrics", StatusCode::NOT_FOUND, None),
+            (Method::GET, "/healthz", StatusCode::NOT_FOUND, None),
+        ];
+
+        for (method, path, expected_status, expected_content_type) in test_cases {
+            let request = Request::builder()
+                .method(&method)
+                .uri(path)
+                .body(())
+                .unwrap();
+            let response = Metrics::handler(config.clone(), request).await.unwrap();
+            let content_type = response
+                .headers()
+                .get(hyper::header::CONTENT_TYPE)
+                .map(|value| value.to_str().unwrap());
+            assert_eq!(response.status(), expected_status);
+            assert_eq!(content_type, expected_content_type);
+        }
     }
 }

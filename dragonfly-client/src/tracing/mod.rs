@@ -261,42 +261,33 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn zero_max_file_size_disables_size_based_rotation() {
-        let temp_dir = TempDir::new().expect("failed to create temp dir");
-        let log_path = temp_dir.path().join("dfdaemon.log");
-        let mut appender = BasicRollingFileAppender::new(
-            &log_path,
-            RollingConditionBasic::new().max_size(ByteSize::gib(1).as_u64()),
-            6,
-        )
-        .expect("failed to create rolling file appender");
+    fn rolling_appender_rotates_when_max_size_is_reached() {
+        let test_cases = vec![
+            (ByteSize::gib(1).as_u64(), vec!["first", "second"], false),
+            (ByteSize::b(4).as_u64(), vec!["1234", "5"], true),
+        ];
 
-        appender.write_all(b"first").unwrap();
-        appender.write_all(b"second").unwrap();
-        appender.flush().unwrap();
-        assert!(!log_path.with_extension("log.1").exists());
+        for (max_size, writes, expected_rotated) in test_cases {
+            let temp_dir = TempDir::new().unwrap();
+            let log_path = temp_dir.path().join("dfdaemon.log");
+            let mut appender = BasicRollingFileAppender::new(
+                &log_path,
+                RollingConditionBasic::new().max_size(max_size),
+                6,
+            )
+            .unwrap();
+
+            for write in &writes {
+                appender.write_all(write.as_bytes()).unwrap();
+            }
+            appender.flush().unwrap();
+            assert_eq!(log_path.with_extension("log.1").exists(), expected_rotated);
+        }
     }
 
     #[test]
-    fn positive_max_file_size_enables_size_based_rotation() {
-        let temp_dir = TempDir::new().expect("failed to create temp dir");
-        let log_path = temp_dir.path().join("dfdaemon.log");
-        let mut appender = BasicRollingFileAppender::new(
-            &log_path,
-            RollingConditionBasic::new().max_size(ByteSize::b(4).as_u64()),
-            6,
-        )
-        .expect("failed to create rolling file appender");
-
-        appender.write_all(b"1234").unwrap();
-        appender.write_all(b"5").unwrap();
-        appender.flush().unwrap();
-        assert!(log_path.with_extension("log.1").exists());
-    }
-
-    #[test]
-    fn test_init_tracing_comprehensive() {
-        let temp_dir = TempDir::new().expect("failed to create temp dir");
+    fn init_tracing_creates_the_log_dir_and_returns_a_guard() {
+        let temp_dir = TempDir::new().unwrap();
         let log_dir = temp_dir.path().join("logs");
         assert!(!log_dir.exists());
 
@@ -314,9 +305,7 @@ mod tests {
             false,
             false,
         );
-        assert!(log_dir.exists());
         assert!(log_dir.is_dir());
-        assert!(!guards.is_empty());
         assert_eq!(guards.len(), 1);
     }
 }

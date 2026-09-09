@@ -38,9 +38,9 @@ use std::fmt;
 use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, ReadBuf};
 use tokio::sync::{oneshot, Notify, OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use tracing::{error, info, warn};
@@ -75,6 +75,9 @@ mod ffi {
         pub fn dfrdma_close_endpoint(f: *mut DfrdmaFabric) -> c_int;
         pub fn dfrdma_provider_name(f: *mut DfrdmaFabric) -> *const c_char;
         pub fn dfrdma_max_msg_size(f: *mut DfrdmaFabric) -> usize;
+        pub fn dfrdma_max_tag(f: *mut DfrdmaFabric) -> u64;
+        #[cfg(test)]
+        pub fn dfrdma_usable_tag_mask(format: u64) -> u64;
         pub fn dfrdma_mr_required(f: *mut DfrdmaFabric) -> c_int;
         pub fn dfrdma_strerror(err: i64) -> *const c_char;
         pub fn dfrdma_getname(f: *mut DfrdmaFabric, buf: *mut u8, len: *mut usize) -> c_int;
@@ -123,7 +126,7 @@ const BUDGET_UNIT: u64 = 64 * 1024;
 
 /// TAG_RANGE_SIZE reserves one disjoint tag block per transfer. A transfer uses its base
 /// tag plus at most TAG_RANGE_SIZE - 1 chunk indices.
-pub(crate) const TAG_RANGE_SIZE: u64 = 4096;
+pub(crate) const TAG_RANGE_SIZE: u64 = 16_384;
 
 /// MAX_RESOLVED_PEERS bounds provider address-vector and process memory growth caused by
 /// resolving a stream of unique endpoint addresses.
@@ -202,6 +205,32 @@ struct PendingOp {
     /// _buf keeps the posted buffer (and its memory registration) alive until the hardware
     /// is done with it.
     _buf: Arc<PinnedBuf>,
+
+    /// cancel_deadline also covers abandoned wait futures: progress owns cancellation cleanup.
+    cancel_deadline: Option<Instant>,
+}
+
+/// PendingSubmission removes an operation that never reached the provider, including when
+/// an outer deadline drops the posting future during an FI_EAGAIN retry.
+struct PendingSubmission<'a> {
+    inner: &'a FabricInner,
+    ctx_addr: usize,
+    id: u64,
+    submitted: bool,
+}
+
+impl Drop for PendingSubmission<'_> {
+    fn drop(&mut self) {
+        if !self.submitted {
+            let mut pending = self.inner.pending.lock().unwrap();
+            if pending
+                .get(&self.ctx_addr)
+                .is_some_and(|op| op.id == self.id)
+            {
+                pending.remove(&self.ctx_addr);
+            }
+        }
+    }
 }
 
 /// Handle owns the raw fabric pointer. Endpoint calls take a shared lifecycle lock, while
@@ -211,34 +240,6 @@ struct Handle {
     raw: *mut ffi::DfrdmaFabric,
     endpoint_lifecycle: RwLock<()>,
     endpoint_open: AtomicBool,
-
-    /// endpoint_close_drains records whether closing the endpoint is known to stop the device
-    /// from writing into buffers that were posted to it. See [`endpoint_close_drains`].
-    endpoint_close_drains: bool,
-}
-
-/// endpoint_close_drains reports whether `fi_close` on an endpoint of this provider is a hardware
-/// barrier: after it returns, nothing can still land in a buffer that was posted to that endpoint.
-///
-/// libfabric does not promise this in general. It asks the application to complete or cancel every
-/// operation before closing, and leaves the behaviour of closing with work outstanding to the
-/// provider. The abort path needs the opposite guarantee, because it runs precisely when an
-/// operation could not be cancelled, so it has to know the answer per provider rather than assume
-/// one:
-///
-///   - `efa` and `verbs` close the endpoint by destroying the underlying queue pair. The kernel
-///     driver takes the queue pair out of service before `ibv_destroy_qp` returns, so the NIC can
-///     no longer reach the posted buffers.
-///   - `tcp`, `udp`, `sockets` and `shm` are software providers. No device DMA is involved, and
-///     closing the endpoint tears down the socket the progress thread was using.
-///
-/// Anything else is treated as unknown, and the abort path quarantines the buffers instead of
-/// freeing them. That leaks the in-flight registrations for the life of the process, which is the
-/// correct trade against handing memory back to the allocator while a device may still write it.
-fn endpoint_close_drains(provider: &str) -> bool {
-    // Providers are reported as either a bare name or "base;layered", e.g. "verbs;ofi_rxm".
-    let base = provider.split(';').next().unwrap_or(provider);
-    matches!(base, "efa" | "verbs" | "tcp" | "udp" | "sockets" | "shm")
 }
 
 /// Safety: the shim rejects providers that do not grant FI_THREAD_SAFE, and the handle is
@@ -343,15 +344,11 @@ impl FabricInner {
 
         let _progress_guard = self.cancel_progress_lock.lock().unwrap();
         let closed = self.handle.close_endpoint();
-        if closed && self.handle.endpoint_close_drains {
-            // Closing the endpoint is the supported way to abort posted receives on this
-            // provider, and it has returned, so nothing can reach these buffers any more.
+        if closed {
+            // fi_endpoint(3), fi_close: posted buffers may be released after endpoint close
+            // returns successfully. Do not infer this guarantee from a provider's name or
+            // queue-pair implementation. A failed close still quarantines every operation.
             self.pending.lock().unwrap().clear();
-        } else if closed {
-            error!(
-                "rdma endpoint closed but this provider does not guarantee the device has stopped; \
-                 pending buffers remain quarantined for process lifetime"
-            );
         } else {
             error!(
                 "rdma endpoint close failed; pending buffers remain quarantined for process lifetime"
@@ -374,6 +371,10 @@ impl FabricInner {
                 if !self.handle.endpoint_open.load(Ordering::Acquire) {
                     None
                 } else {
+                    if let Some(op) = self.pending.lock().unwrap().get_mut(&ctx_addr) {
+                        op.cancel_deadline
+                            .get_or_insert_with(|| Instant::now() + CANCEL_GRACE_TIMEOUT);
+                    }
                     // Safety: the pending entry owns the context block. The shim normalizes
                     // an already-completed operation to success; other failures are fatal
                     // because the provider may continue to access the buffer.
@@ -405,8 +406,7 @@ impl Drop for FabricInner {
         let pending = std::mem::take(self.pending.get_mut().unwrap());
         if !pending.is_empty() {
             // A shutdown that reached the provider empties this map, so anything left here is an
-            // operation the provider never gave back: either the endpoint would not close or the
-            // provider does not promise the device stops when it does. Leaking the map also
+            // operation the provider never gave back because endpoint close failed. Leaking the map also
             // retains Handle, and is safer than returning memory a device may still write.
             error!(
                 "leaking {} in-flight rdma registrations that the provider never released",
@@ -522,9 +522,9 @@ impl PinnedBuf {
         unsafe { (*self.data.get()).as_mut_ptr().add(offset) }
     }
 
-    /// into_vec extracts the buffer contents. When this Arc is the last reference (no
-    /// operations in flight) the data is moved out without copying.
-    pub fn into_vec(self: Arc<Self>) -> Vec<u8> {
+    /// into_vec extracts the contents only when no operation or other owner retains them.
+    /// An in-flight receive must never be copied while the provider can still write to it.
+    pub fn into_vec(self: Arc<Self>) -> Result<Vec<u8>> {
         match Arc::try_unwrap(self) {
             Ok(buf) => {
                 let PinnedBuf {
@@ -535,13 +535,9 @@ impl PinnedBuf {
                 } = buf;
                 // Close the registration before handing out the memory.
                 drop(mr_guard);
-                data.into_inner()
+                Ok(data.into_inner())
             }
-            Err(buf) => {
-                warn!("rdma buffer still referenced, copying contents");
-                // Safety: callers only convert after all completions were reaped.
-                unsafe { (*buf.data.get()).clone() }
-            }
+            Err(_) => Err(Error::Unknown("rdma buffer is still in use".to_string())),
         }
     }
 }
@@ -562,14 +558,53 @@ pub struct BufferPoolStats {
     pub cached_bytes: usize,
 }
 
+/// RegisteredMemoryBudget accounts for every role and endpoint generation in one daemon.
+/// Pools keep their registrations separate, but can relinquish idle allocations under pressure.
+/// Operation-owned and quarantined allocations retain their semaphore permits until safely freed.
+pub struct RegisteredMemoryBudget {
+    semaphore: Arc<Semaphore>,
+    permits: u32,
+    pools: Mutex<Vec<Weak<BufferPool>>>,
+    changed: Notify,
+}
+
+impl RegisteredMemoryBudget {
+    /// new creates accounting in whole 64 KiB units. Configuration must allow at least one unit.
+    pub fn new(max_registered_bytes: u64) -> Self {
+        let permits = (max_registered_bytes / BUDGET_UNIT)
+            .min(Semaphore::MAX_PERMITS as u64)
+            .min(u32::MAX as u64) as u32;
+        Self {
+            semaphore: Arc::new(Semaphore::new(permits as usize)),
+            permits,
+            pools: Mutex::new(Vec::new()),
+            changed: Notify::new(),
+        }
+    }
+
+    /// reclaim_idle releases idle registrations, including those cached by another role.
+    /// Snapshot pools before dropping buffers: registration destructors never run under this lock.
+    fn reclaim_idle(&self) {
+        let pools: Vec<_> = {
+            let mut pools = self.pools.lock().unwrap();
+            pools.retain(|pool| pool.strong_count() != 0);
+            pools.iter().filter_map(Weak::upgrade).collect()
+        };
+        for pool in pools {
+            let idle = std::mem::take(&mut *pool.idle.lock().unwrap());
+            drop(idle);
+        }
+    }
+}
+
 /// BufferPool retains completed registered buffers for best-fit reuse. Cached buffers keep
 /// their semaphore permits, so active plus idle memory remains bounded by the fabric budget.
 struct BufferPool {
     /// idle contains buffers with no in-flight operation or reader.
     idle: Mutex<Vec<Arc<PinnedBuf>>>,
 
-    /// changed wakes checkouts when a buffer is returned to the idle set.
-    changed: Notify,
+    /// budget wakes checkouts in every role when a buffer is returned to the idle set.
+    budget: Arc<RegisteredMemoryBudget>,
 
     /// closed prevents buffers from being retained after Fabric shutdown.
     closed: AtomicBool,
@@ -583,10 +618,10 @@ struct BufferPool {
 
 impl BufferPool {
     /// new creates an empty registered-buffer pool.
-    fn new() -> Self {
+    fn new(budget: Arc<RegisteredMemoryBudget>) -> Self {
         Self {
             idle: Mutex::new(Vec::new()),
-            changed: Notify::new(),
+            budget,
             closed: AtomicBool::new(false),
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
@@ -625,13 +660,13 @@ impl BufferPool {
         }
         idle.push(buf);
         drop(idle);
-        self.changed.notify_one();
+        self.budget.changed.notify_waiters();
     }
 
     /// close stops future retention and releases every idle registration.
     fn close(&self) {
         self.closed.store(true, Ordering::Release);
-        self.changed.notify_waiters();
+        self.budget.changed.notify_waiters();
         self.idle.lock().unwrap().clear();
     }
 
@@ -708,11 +743,14 @@ impl PooledBuf {
 
     /// into_reader turns a completed receive lease into an async reader without moving or
     /// copying its registered allocation.
-    pub fn into_reader(self) -> PooledBufReader {
-        PooledBufReader {
+    pub fn into_reader(self) -> Result<PooledBufReader> {
+        if Arc::strong_count(self.buffer()) != 1 {
+            return Err(Error::Unknown("rdma buffer is still in use".to_string()));
+        }
+        Ok(PooledBufReader {
             buffer: self,
             position: 0,
-        }
+        })
     }
 }
 
@@ -824,17 +862,21 @@ pub struct Fabric {
     /// max_msg_size is the provider's maximum single-message size.
     max_msg_size: usize,
 
-    /// budget bounds registered/pinned memory, in BUDGET_UNIT permits.
-    budget: Arc<Semaphore>,
+    /// max_tag excludes the provider's reserved upper tag bits.
+    max_tag: u64,
 
-    /// budget_permits is the total number of permits in the budget.
-    budget_permits: u32,
+    /// budget bounds registered/pinned memory, in BUDGET_UNIT permits.
+    budget: Arc<RegisteredMemoryBudget>,
 
     /// pool retains idle registrations for best-fit reuse.
     pool: Arc<BufferPool>,
 
     /// tag_counter is the first unallocated transfer-tag block.
     tag_counter: AtomicU64,
+
+    /// test_queue_full deterministically injects the provider's FI_EAGAIN response.
+    #[cfg(test)]
+    test_queue_full: AtomicBool,
 }
 
 impl Fabric {
@@ -846,6 +888,21 @@ impl Fabric {
         provider: Option<&str>,
         device: Option<&str>,
         max_registered_bytes: u64,
+        allow_software_provider: bool,
+    ) -> Result<Self> {
+        Self::new_with_budget(
+            provider,
+            device,
+            Arc::new(RegisteredMemoryBudget::new(max_registered_bytes)),
+            allow_software_provider,
+        )
+    }
+
+    /// new_with_budget opens an endpoint sharing accounting with every daemon transport role.
+    pub fn new_with_budget(
+        provider: Option<&str>,
+        device: Option<&str>,
+        budget: Arc<RegisteredMemoryBudget>,
         allow_software_provider: bool,
     ) -> Result<Self> {
         let device_cstr = device
@@ -889,15 +946,23 @@ impl Fabric {
         }
 
         // Safety: handle is valid; provider name points into fi_info owned by the handle.
-        let (provider_name, max_msg_size, mr_required) = unsafe {
+        let (provider_name, max_msg_size, max_tag, mr_required) = unsafe {
             (
                 CStr::from_ptr(ffi::dfrdma_provider_name(handle))
                     .to_string_lossy()
                     .into_owned(),
                 ffi::dfrdma_max_msg_size(handle),
+                ffi::dfrdma_max_tag(handle),
                 ffi::dfrdma_mr_required(handle) != 0,
             )
         };
+        if max_tag < TAG_RANGE_SIZE - 1 || max_msg_size == 0 {
+            // Safety: the endpoint has not escaped construction and owns no posted buffers.
+            unsafe { ffi::dfrdma_close(handle) };
+            return Err(Error::Unknown(
+                "rdma provider has insufficient message or tag capacity".to_string(),
+            ));
+        }
 
         let mut endpoint = vec![0u8; GETNAME_INITIAL_CAPACITY];
         let mut endpoint_len = endpoint.len();
@@ -916,16 +981,10 @@ impl Fabric {
         }
         endpoint.truncate(endpoint_len);
 
-        let budget_permits = (max_registered_bytes / BUDGET_UNIT)
-            .max(1)
-            .min(Semaphore::MAX_PERMITS as u64)
-            .min(u32::MAX as u64) as u32;
-
         let handle = Arc::new(Handle {
             raw: handle,
             endpoint_lifecycle: RwLock::new(()),
             endpoint_open: AtomicBool::new(true),
-            endpoint_close_drains: endpoint_close_drains(&provider_name),
         });
         let inner = Arc::new(FabricInner {
             cancel_progress_lock: Mutex::new(()),
@@ -954,16 +1013,24 @@ impl Fabric {
             endpoint.len()
         );
 
+        let pool = Arc::new(BufferPool::new(budget.clone()));
+        {
+            let mut pools = budget.pools.lock().unwrap();
+            pools.retain(|pool| pool.strong_count() != 0);
+            pools.push(Arc::downgrade(&pool));
+        }
         Ok(Self {
             inner,
             progress: Some(progress),
             provider: provider_name,
             local_endpoint: endpoint,
             max_msg_size,
-            budget: Arc::new(Semaphore::new(budget_permits as usize)),
-            budget_permits,
-            pool: Arc::new(BufferPool::new()),
+            max_tag,
+            budget,
+            pool,
             tag_counter: AtomicU64::new(0),
+            #[cfg(test)]
+            test_queue_full: AtomicBool::new(false),
         })
     }
 
@@ -976,6 +1043,16 @@ impl Fabric {
     /// operation or completion-queue failure.
     pub fn is_failed(&self) -> bool {
         self.inner.failed.load(Ordering::Acquire)
+    }
+
+    /// wait_failed wakes lifecycle owners when this endpoint is retired.
+    pub async fn wait_failed(&self) {
+        let failed = self.inner.failure_notify.notified();
+        tokio::pin!(failed);
+        failed.as_mut().enable();
+        if !self.is_failed() {
+            failed.await;
+        }
     }
 
     /// local_endpoint returns the provider-opaque endpoint address to advertise to peers.
@@ -997,7 +1074,7 @@ impl Fabric {
     /// together. Callers use it to decide how many buffers to hold at once, since
     /// [`Fabric::acquire_buffer`] blocks rather than reporting that the budget is spent.
     pub fn registered_budget_bytes(&self) -> u64 {
-        u64::from(self.budget_permits) * BUDGET_UNIT
+        u64::from(self.budget.permits) * BUDGET_UNIT
     }
 
     /// next_tag reserves a disjoint block of tags for one transfer. Exhaustion fails closed
@@ -1005,9 +1082,28 @@ impl Fabric {
     pub fn next_tag(&self) -> Result<u64> {
         self.tag_counter
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                let last = next.checked_add(TAG_RANGE_SIZE - 1)?;
+                if last > self.max_tag {
+                    return None;
+                }
                 next.checked_add(TAG_RANGE_SIZE)
             })
             .map_err(|_| Error::Unknown("rdma transfer tag space exhausted".to_string()))
+    }
+
+    /// validate_tag_range rejects remote ranges using reserved bits before any operation posts.
+    pub fn validate_tag_range(&self, base: u64, count: u64) -> Result<()> {
+        if count == 0
+            || count > TAG_RANGE_SIZE
+            || base
+                .checked_add(count - 1)
+                .is_none_or(|last| last > self.max_tag)
+        {
+            return Err(Error::Unknown(
+                "rdma transfer uses unsupported fabric tags".to_string(),
+            ));
+        }
+        Ok(())
     }
 
     /// alloc_buffer allocates a transfer buffer of `len` bytes, waits for registered-memory
@@ -1043,7 +1139,7 @@ impl Fabric {
             }));
         }
 
-        match self.budget.clone().try_acquire_many_owned(permits) {
+        match self.try_buffer_permit(permits) {
             Ok(permit) => {
                 let buf = self.register_buffer(len, permit)?;
                 self.pool.misses.fetch_add(1, Ordering::Relaxed);
@@ -1074,8 +1170,11 @@ impl Fabric {
                 return Err(Error::Unknown("rdma fabric is shut down".to_string()));
             }
 
-            let changed = self.pool.changed.notified();
+            let changed = self.budget.changed.notified();
             let failed = self.inner.failure_notify.notified();
+            tokio::pin!(changed, failed);
+            changed.as_mut().enable();
+            failed.as_mut().enable();
             if let Some(buf) = self.pool.take_best_fit(len) {
                 return Ok(PooledBuf {
                     buf: Some(buf),
@@ -1084,7 +1183,7 @@ impl Fabric {
                 });
             }
 
-            match self.budget.clone().try_acquire_many_owned(permits) {
+            match self.try_buffer_permit(permits) {
                 Ok(permit) => {
                     let buf = self.register_buffer(len, permit)?;
                     self.pool.misses.fetch_add(1, Ordering::Relaxed);
@@ -1100,7 +1199,7 @@ impl Fabric {
                 Err(TryAcquireError::NoPermits) => {}
             }
 
-            let budget = self.budget.clone();
+            let budget = self.budget.semaphore.clone();
             tokio::select! {
                 _ = changed => continue,
                 _ = failed => {
@@ -1139,12 +1238,34 @@ impl Fabric {
     /// buffer_permits validates a requested buffer and returns its budget units.
     fn buffer_permits(&self, len: usize) -> Result<u32> {
         let permits = len.div_ceil(BUDGET_UNIT as usize).max(1);
-        if permits > self.budget_permits as usize {
+        if permits > self.budget.permits as usize {
             return Err(Error::Unknown(format!(
                 "buffer of {len} bytes exceeds the rdma registered-memory budget"
             )));
         }
         Ok(permits as u32)
+    }
+
+    /// try_buffer_permit reclaims idle registrations before waiting behind active buffers.
+    fn try_buffer_permit(
+        &self,
+        permits: u32,
+    ) -> std::result::Result<OwnedSemaphorePermit, TryAcquireError> {
+        match self
+            .budget
+            .semaphore
+            .clone()
+            .try_acquire_many_owned(permits)
+        {
+            Err(TryAcquireError::NoPermits) => {
+                self.budget.reclaim_idle();
+                self.budget
+                    .semaphore
+                    .clone()
+                    .try_acquire_many_owned(permits)
+            }
+            result => result,
+        }
     }
 
     /// register_buffer allocates stable storage and registers it using an already-owned budget.
@@ -1263,6 +1384,12 @@ impl Fabric {
         dest: Option<u64>,
     ) -> Result<OpHandle> {
         self.inner.ensure_healthy()?;
+        self.validate_tag_range(tag, 1)?;
+        if !Arc::ptr_eq(&buf.mr_guard._handle, &self.inner.handle) {
+            return Err(Error::Unknown(
+                "rdma buffer belongs to a different fabric domain".to_string(),
+            ));
+        }
         if offset.checked_add(len).is_none_or(|end| end > buf.len()) {
             return Err(Error::InvalidParameter);
         }
@@ -1281,60 +1408,71 @@ impl Fabric {
                 tx,
                 _ctx: ctx,
                 _buf: buf.clone(),
+                cancel_deadline: None,
             },
         );
+        let mut submission = PendingSubmission {
+            inner: &self.inner,
+            ctx_addr,
+            id,
+            submitted: false,
+        };
 
         let deadline = tokio::time::Instant::now() + POST_RETRY_TIMEOUT;
         loop {
-            if let Err(err) = self.inner.ensure_healthy() {
-                self.inner.pending.lock().unwrap().remove(&ctx_addr);
-                return Err(err);
-            }
+            self.inner.ensure_healthy()?;
             let rc = {
                 let _lifecycle = self.inner.handle.endpoint_lifecycle.read().unwrap();
                 if !self.inner.handle.endpoint_open.load(Ordering::Acquire) {
-                    self.inner.pending.lock().unwrap().remove(&ctx_addr);
                     return Err(Error::Unknown("rdma endpoint is closed".to_string()));
                 }
                 // Safety: buf outlives the operation via the pending map; the range was
                 // validated above; ctx_addr points at the boxed context block owned by the
                 // pending map. The shim requires FI_THREAD_SAFE, so posts may run concurrently.
-                unsafe {
-                    match dest {
-                        Some(dest) => ffi::dfrdma_tsend(
-                            self.inner.handle.raw,
-                            buf.ptr(offset) as *const c_void,
-                            len,
-                            buf.desc,
-                            dest,
-                            tag,
-                            ctx_addr as *mut c_void,
-                        ),
-                        None => ffi::dfrdma_trecv(
-                            self.inner.handle.raw,
-                            buf.ptr(offset) as *mut c_void,
-                            len,
-                            buf.desc,
-                            tag,
-                            ctx_addr as *mut c_void,
-                        ),
+                #[cfg(test)]
+                let queue_full = self.test_queue_full.load(Ordering::Relaxed);
+                #[cfg(not(test))]
+                let queue_full = false;
+                if queue_full {
+                    1
+                } else {
+                    unsafe {
+                        match dest {
+                            Some(dest) => ffi::dfrdma_tsend(
+                                self.inner.handle.raw,
+                                buf.ptr(offset) as *const c_void,
+                                len,
+                                buf.desc,
+                                dest,
+                                tag,
+                                ctx_addr as *mut c_void,
+                            ),
+                            None => ffi::dfrdma_trecv(
+                                self.inner.handle.raw,
+                                buf.ptr(offset) as *mut c_void,
+                                len,
+                                buf.desc,
+                                tag,
+                                ctx_addr as *mut c_void,
+                            ),
+                        }
                     }
                 }
             };
 
             match rc {
                 0 => {
+                    submission.submitted = true;
                     return Ok(OpHandle {
                         ctx_addr,
                         id,
                         rx: Some(rx),
                         inner: self.inner.clone(),
                         armed: true,
-                    })
+                    });
                 }
                 1 => {
                     if tokio::time::Instant::now() >= deadline {
-                        self.inner.pending.lock().unwrap().remove(&ctx_addr);
                         return Err(Error::Unknown(
                             "rdma post retries exhausted, queue stayed full".to_string(),
                         ));
@@ -1342,7 +1480,6 @@ impl Fabric {
                     tokio::time::sleep(POST_RETRY_INTERVAL).await;
                 }
                 rc => {
-                    self.inner.pending.lock().unwrap().remove(&ctx_addr);
                     let op = if dest.is_some() {
                         "fi_tsend"
                     } else {
@@ -1356,7 +1493,7 @@ impl Fabric {
 
     /// wait awaits an operation's completion, returning the transferred length. On timeout
     /// the operation is cancelled; if the cancellation completion does not arrive within a
-    /// grace period, the buffer is left pinned (leaked) rather than freed under the NIC.
+    /// grace period, the endpoint is retired. A failed close keeps the buffer quarantined.
     pub async fn wait(&self, mut op: OpHandle, timeout: Duration) -> Result<usize> {
         let ctx_addr = op.ctx_addr;
         let op_id = op.id;
@@ -1422,9 +1559,21 @@ impl Drop for Fabric {
 /// success path.
 fn progress_loop(inner: Arc<FabricInner>) {
     let mut active_yields = 0u32;
+    let mut cancellation_check = Instant::now();
     while !inner.shutdown.load(Ordering::Relaxed) && !inner.failed.load(Ordering::Acquire) {
         let mut progressed = false;
         loop {
+            if cancellation_check.elapsed() >= Duration::from_millis(100) {
+                cancellation_check = Instant::now();
+                let expired = inner.pending.lock().unwrap().values().any(|op| {
+                    op.cancel_deadline
+                        .is_some_and(|deadline| deadline <= cancellation_check)
+                });
+                if expired {
+                    inner.fail_and_abort("rdma cancellation grace period expired".to_string());
+                    return;
+                }
+            }
             let mut entries = [ffi::DfrdmaCompletion {
                 context: std::ptr::null_mut(),
                 flags: 0,
@@ -1477,7 +1626,10 @@ fn progress_loop(inner: Arc<FabricInner>) {
                         if let Some((completion, op)) = completion {
                             // The receiver may have timed out and gone; that is fine, the
                             // buffer reference is released either way.
-                            let _ = op.tx.send(completion);
+                            let PendingOp { tx, _ctx, _buf, .. } = op;
+                            drop(_ctx);
+                            drop(_buf);
+                            let _ = tx.send(completion);
                         } else {
                             let _ = entries[index].flags;
                             warn!("rdma completion for unknown context, dropping");
@@ -1604,7 +1756,7 @@ mod tests {
             assert_eq!(len, expected_len);
         }
 
-        assert_eq!(recv_buf.into_vec(), payload);
+        assert_eq!(recv_buf.into_vec().unwrap(), payload);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1661,7 +1813,7 @@ mod tests {
         drop(buffer);
 
         let smaller = fabric.acquire_buffer(17).await.unwrap();
-        let mut reader = smaller.into_reader();
+        let mut reader = smaller.into_reader().unwrap();
         let mut content = Vec::new();
         tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut content)
             .await
@@ -1675,13 +1827,160 @@ mod tests {
     }
 
     #[test]
-    fn only_known_providers_treat_endpoint_close_as_a_dma_barrier() {
-        for provider in ["efa", "verbs", "verbs;ofi_rxm", "tcp", "shm"] {
-            assert!(endpoint_close_drains(provider), "{provider}");
+    fn transfer_tags_cover_the_largest_piece_without_using_provider_reserved_bits() {
+        let mut fabric = open_fabric();
+        fabric.max_tag = TAG_RANGE_SIZE * 2 - 1;
+        let chunk_count = (1024 * 1024 * 1024u64).div_ceil(64 * 1024);
+        let first = fabric.next_tag().unwrap();
+        let second = fabric.next_tag().unwrap();
+        fabric.validate_tag_range(first, chunk_count).unwrap();
+        fabric.validate_tag_range(second, chunk_count).unwrap();
+        assert_eq!(first + chunk_count, second);
+        assert!(fabric.next_tag().is_err());
+        assert!(fabric.validate_tag_range(second + 1, chunk_count).is_err());
+        assert!(fabric.validate_tag_range(0, chunk_count + 1).is_err());
+        assert!(fabric.validate_tag_range(u64::MAX, 2).is_err());
+    }
+
+    #[test]
+    fn provider_tag_fields_keep_internal_zero_bits_usable() {
+        // fi_endpoint(3) specifies 0x30FF as three fields spanning 14 usable tag bits.
+        for (format, mask) in [
+            (0, 0),
+            (0x30ff, 0x3fff),
+            (0xaaaa_aaaa_aaaa_aaaa, u64::MAX),
+            (u64::MAX, u64::MAX),
+        ] {
+            // Safety: this pure shim helper accepts and returns integer values only.
+            assert_eq!(unsafe { ffi::dfrdma_usable_tag_mask(format) }, mask);
         }
-        for provider in ["cxi", "opx", "psm3", ""] {
-            assert!(!endpoint_close_drains(provider), "{provider}");
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_queue_full_post_returns_unsubmitted_memory() {
+        let fabric = Fabric::new(None, None, BUDGET_UNIT, true).expect("libfabric endpoint");
+        fabric.test_queue_full.store(true, Ordering::Relaxed);
+        for dest in [None, Some(0)] {
+            let buf = fabric.alloc_buffer(BUDGET_UNIT as usize).await.unwrap();
+            let result = tokio::time::timeout(
+                Duration::from_millis(5),
+                fabric.post(&buf, 0, buf.len(), 0, dest),
+            )
+            .await;
+            assert!(
+                result.is_err(),
+                "queue-full post must be cancelled by the outer deadline"
+            );
+            assert!(fabric.inner.pending.lock().unwrap().is_empty());
+            assert_eq!(Arc::strong_count(&buf), 1);
+            drop(buf);
+            let replacement = tokio::time::timeout(
+                Duration::from_secs(1),
+                fabric.acquire_buffer(BUDGET_UNIT as usize),
+            )
+            .await
+            .expect("cancelled post retained registration budget")
+            .unwrap();
+            drop(replacement);
         }
+    }
+
+    #[tokio::test]
+    async fn buffer_conversion_rejects_an_outstanding_receive() {
+        let fabric = open_fabric();
+        let buf = fabric.alloc_buffer(4096).await.unwrap();
+        let op = fabric.post_recv(&buf, 0, 4096, 0).await.unwrap();
+        assert!(buf.into_vec().is_err());
+        drop(op);
+
+        let lease = fabric.acquire_buffer(4096).await.unwrap();
+        let op = fabric.post_recv(lease.buffer(), 0, 4096, 1).await.unwrap();
+        assert!(lease.into_reader().is_err());
+        drop(op);
+    }
+
+    #[tokio::test]
+    async fn posts_reject_another_fabrics_registration() {
+        let owner = open_fabric();
+        let other = open_fabric();
+        let buf = owner.alloc_buffer(4096).await.unwrap();
+        assert!(other.post_recv(&buf, 0, 4096, 0).await.is_err());
+        assert!(other.post_send(&buf, 0, 4096, 0, 0).await.is_err());
+        assert!(other.inner.pending.lock().unwrap().is_empty());
+        assert_eq!(Arc::strong_count(&buf), 1);
+    }
+
+    #[tokio::test]
+    async fn expired_cancellation_retires_endpoint_without_a_waiter() {
+        let fabric = open_fabric();
+        let buf = fabric.alloc_buffer(4096).await.unwrap();
+        let mut op = fabric.post_recv(&buf, 0, 4096, 0).await.unwrap();
+        // Model a provider accepting cancellation but never publishing its completion.
+        // The receive remains posted until the progress watchdog closes the endpoint.
+        fabric
+            .inner
+            .pending
+            .lock()
+            .unwrap()
+            .get_mut(&op.ctx_addr)
+            .unwrap()
+            .cancel_deadline = Some(Instant::now());
+        op.armed = false;
+        drop(op);
+        tokio::time::timeout(Duration::from_secs(2), fabric.wait_failed())
+            .await
+            .expect("abandoned cancellation had no cleanup owner");
+        assert!(fabric.inner.pending.lock().unwrap().is_empty());
+        assert_eq!(Arc::strong_count(&buf), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn shared_budget_reclaims_idle_buffers_from_other_roles() {
+        let budget = Arc::new(RegisteredMemoryBudget::new(BUDGET_UNIT));
+        let sender = Fabric::new_with_budget(None, None, budget.clone(), true).unwrap();
+        let receiver = Arc::new(Fabric::new_with_budget(None, None, budget.clone(), true).unwrap());
+        let held = sender.acquire_buffer(BUDGET_UNIT as usize).await.unwrap();
+        assert!(receiver
+            .try_acquire_buffer(BUDGET_UNIT as usize)
+            .unwrap()
+            .is_none());
+        let waiting_receiver = receiver.clone();
+        let waiter =
+            tokio::spawn(
+                async move { waiting_receiver.acquire_buffer(BUDGET_UNIT as usize).await },
+            );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(!waiter.is_finished());
+        drop(held);
+        let received = tokio::time::timeout(Duration::from_secs(2), waiter)
+            .await
+            .expect("another role's idle pool starved the waiter")
+            .unwrap()
+            .unwrap();
+        assert_eq!(sender.buffer_pool_stats().cached_bytes, 0);
+        assert_eq!(budget.semaphore.available_permits(), 0);
+        drop(received);
+        let sent = sender.acquire_buffer(BUDGET_UNIT as usize).await.unwrap();
+        assert_eq!(receiver.buffer_pool_stats().cached_bytes, 0);
+        drop(sent);
+    }
+
+    #[tokio::test]
+    async fn retired_generation_keeps_live_buffers_charged_to_shared_budget() {
+        let budget = Arc::new(RegisteredMemoryBudget::new(BUDGET_UNIT));
+        let original = Fabric::new_with_budget(None, None, budget.clone(), true).unwrap();
+        let held = original.acquire_buffer(BUDGET_UNIT as usize).await.unwrap();
+        drop(original);
+        let replacement = Fabric::new_with_budget(None, None, budget.clone(), true).unwrap();
+        assert!(replacement
+            .try_acquire_buffer(BUDGET_UNIT as usize)
+            .unwrap()
+            .is_none());
+        drop(held);
+        assert!(replacement
+            .try_acquire_buffer(BUDGET_UNIT as usize)
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1772,13 +2071,13 @@ mod tests {
         let fabric = Fabric::new(None, None, 1024 * 1024, true).expect("libfabric endpoint");
         let buffer = fabric.acquire_buffer(1024 * 1024).await.unwrap();
         drop(buffer);
-        assert_eq!(fabric.budget.available_permits(), 0);
+        assert_eq!(fabric.budget.semaphore.available_permits(), 0);
         assert_eq!(fabric.buffer_pool_stats().cached_bytes, 1024 * 1024);
 
         fabric.pool.close();
         assert_eq!(
-            fabric.budget.available_permits(),
-            fabric.budget_permits as usize
+            fabric.budget.semaphore.available_permits(),
+            fabric.budget.permits as usize
         );
         assert_eq!(fabric.buffer_pool_stats().cached_buffers, 0);
     }
