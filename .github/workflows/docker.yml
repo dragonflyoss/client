@@ -12,7 +12,7 @@ jobs:
     name: Push Client Image
     runs-on:
       group: Default
-      labels: [oracle-vm-24cpu-96gb-x86-64]
+      labels: [cncf-ubuntu-24-96-x86]
     timeout-minutes: 600
     steps:
       - name: Check out code
@@ -96,7 +96,7 @@ jobs:
     name: Push Client Debug Image
     runs-on:
       group: Default
-      labels: [oracle-vm-24cpu-96gb-x86-64]
+      labels: [cncf-ubuntu-24-96-x86]
     timeout-minutes: 600
     steps:
       - name: Check out code
@@ -180,7 +180,7 @@ jobs:
     name: Push Dfinit Image
     runs-on:
       group: Default
-      labels: [oracle-vm-24cpu-96gb-x86-64]
+      labels: [cncf-ubuntu-24-96-x86]
     timeout-minutes: 600
     steps:
       - name: Check out code

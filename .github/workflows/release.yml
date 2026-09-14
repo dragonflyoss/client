@@ -14,13 +14,13 @@ jobs:
     strategy:
       matrix:
         include:
-          - runner: [oracle-vm-24cpu-96gb-x86-64]
+          - runner: [cncf-ubuntu-24-96-x86]
             target: x86_64-unknown-linux-gnu
-          - runner: [oracle-vm-24cpu-96gb-x86-64]
+          - runner: [cncf-ubuntu-24-96-x86]
             target: x86_64-unknown-linux-musl
-          - runner: [oracle-vm-32cpu-128gb-arm64]
+          - runner: [cncf-ubuntu-32-128-arm]
             target: aarch64-unknown-linux-gnu
-          - runner: [oracle-vm-32cpu-128gb-arm64]
+          - runner: [cncf-ubuntu-32-128-arm]
             target: aarch64-unknown-linux-musl
 
     steps:
@@ -149,7 +149,7 @@ jobs:
   publish-crates:
     runs-on:
       group: Default
-      labels: [oracle-vm-24cpu-96gb-x86-64]
+      labels: [cncf-ubuntu-24-96-x86]
     timeout-minutes: 360
     steps:
       - name: Free Disk Space (Ubuntu)
