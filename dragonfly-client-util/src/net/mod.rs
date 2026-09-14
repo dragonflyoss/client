@@ -16,6 +16,7 @@
 
 use local_ip_address::{local_ip, local_ipv6};
 use std::net::IpAddr;
+use std::path::Path;
 
 #[cfg(target_os = "linux")]
 use std::{io, mem, os::unix::io::RawFd};
@@ -34,6 +35,26 @@ pub fn format_socket_addr(ip: IpAddr, port: u16) -> String {
 /// Formats a complete URL with scheme, IP address, and port.
 pub fn format_url(scheme: &str, ip: IpAddr, port: u16) -> String {
     format!("{}://{}", scheme, format_socket_addr(ip, port))
+}
+
+/// The HTTP scheme.
+pub const HTTP_SCHEME: &str = "http";
+
+/// The HTTPS scheme.
+pub const HTTPS_SCHEME: &str = "https";
+
+/// Returns the scheme to dial a gRPC endpoint with: `https` when ca_cert, cert,
+/// and key are all set, otherwise `http`.
+pub fn scheme_for_tls(
+    ca_cert: Option<&Path>,
+    cert: Option<&Path>,
+    key: Option<&Path>,
+) -> &'static str {
+    if ca_cert.is_some() && cert.is_some() && key.is_some() {
+        HTTPS_SCHEME
+    } else {
+        HTTP_SCHEME
+    }
 }
 
 /// Get the local IP address of the machine.
@@ -128,6 +149,25 @@ mod tests {
                 format_url(scheme, IpAddr::from_str(ip).unwrap(), port),
                 expected
             );
+        }
+    }
+
+    #[test]
+    fn scheme_for_tls_requires_full_client_identity() {
+        let ca_cert = Path::new("/etc/tls/ca.pem");
+        let cert = Path::new("/etc/tls/cert.pem");
+        let key = Path::new("/etc/tls/key.pem");
+
+        let test_cases = vec![
+            (Some(ca_cert), Some(cert), Some(key), HTTPS_SCHEME),
+            (None, Some(cert), Some(key), HTTP_SCHEME),
+            (Some(ca_cert), None, Some(key), HTTP_SCHEME),
+            (Some(ca_cert), Some(cert), None, HTTP_SCHEME),
+            (None, None, None, HTTP_SCHEME),
+        ];
+
+        for (ca_cert, cert, key, expected) in test_cases {
+            assert_eq!(scheme_for_tls(ca_cert, cert, key), expected);
         }
     }
 
