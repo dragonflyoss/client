@@ -48,6 +48,7 @@ pub mod client;
 pub mod content;
 pub mod io;
 pub mod metadata;
+pub mod rdma;
 pub mod server;
 pub mod storage_engine;
 
@@ -83,6 +84,10 @@ pub struct Storage {
     /// Notifies the waiters of the in-flight pieces when their downloads
     /// complete.
     piece_notifier: PieceNotifier,
+
+    /// Shares the registered-memory ceiling across uploads, downloads, and endpoint recovery.
+    #[cfg(feature = "rdma")]
+    rdma_memory_budget: Arc<rdma::fabric::RegisteredMemoryBudget>,
 }
 
 /// Implements the storage.
@@ -96,12 +101,22 @@ impl Storage {
         // Create temporary directory for output operations.
         fs::create_dir_all(&dir.join(DEFAULT_TMP_DIR)).await?;
         Ok(Storage {
+            #[cfg(feature = "rdma")]
+            rdma_memory_budget: Arc::new(rdma::fabric::RegisteredMemoryBudget::new(
+                config.storage.server.rdma.max_registered_bytes.as_u64(),
+            )),
             config,
             metadata,
             content,
             cache,
             piece_notifier: PieceNotifier::default(),
         })
+    }
+
+    /// Returns the daemon-wide RDMA application buffer budget.
+    #[cfg(feature = "rdma")]
+    pub fn rdma_memory_budget(&self) -> Arc<rdma::fabric::RegisteredMemoryBudget> {
+        self.rdma_memory_budget.clone()
     }
 
     /// Returns the total space of the disk.
@@ -901,7 +916,50 @@ impl Storage {
             .content
             .write_piece_from_stream(task_id, offset, length, stream)
             .await?;
+        self.finish_parent_piece(piece_id, offset, expected_digest, parent_id, response)
+    }
 
+    /// Completes a parent piece without cancelling an in-flight disk write.
+    /// The caller must bound stream reads and retain piece ownership until this
+    /// future completes, including when its own requester is cancelled.
+    #[cfg(feature = "rdma")]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn download_piece_from_parent_finished_without_timeout<S>(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+        expected_digest: &str,
+        parent_id: &str,
+        stream: &mut S,
+    ) -> Result<metadata::Piece>
+    where
+        S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
+    {
+        let piece = self
+            .handle_downloaded_piece_from_parent_finished(
+                piece_id,
+                task_id,
+                offset,
+                length,
+                expected_digest,
+                parent_id,
+                stream,
+            )
+            .await?;
+        self.piece_notifier.remove_and_notify(piece_id);
+        Ok(piece)
+    }
+
+    fn finish_parent_piece(
+        &self,
+        piece_id: &str,
+        offset: u64,
+        expected_digest: &str,
+        parent_id: &str,
+        response: io::WriteRangeResponse,
+    ) -> Result<metadata::Piece> {
         let length = response.length;
         let digest = Digest::new(Algorithm::Crc32, response.hash);
 
@@ -972,6 +1030,114 @@ impl Storage {
                 // Failed uploading the task.
                 self.metadata.upload_task_failed(task_id);
                 Err(err)
+            }
+        }
+    }
+
+    /// wait_for_rdma_piece_finished returns the committed metadata for a piece of any RDMA-servable
+    /// kind, waiting for a piece this node is still downloading exactly as the TCP piece server
+    /// does. Serving RDMA requires the stored digest, which only exists once the piece is
+    /// finished, so reading metadata without this wait would refuse every child of a parent that
+    /// is mid-download.
+    #[instrument(skip_all)]
+    pub async fn wait_for_rdma_piece_finished(
+        &self,
+        piece_id: &str,
+        kind: crate::rdma::rendezvous::PieceKind,
+    ) -> Result<metadata::Piece> {
+        match kind {
+            crate::rdma::rendezvous::PieceKind::Piece => {
+                self.wait_for_piece_finished(piece_id).await
+            }
+            crate::rdma::rendezvous::PieceKind::PersistentPiece => {
+                self.wait_for_persistent_piece_finished(piece_id).await
+            }
+            crate::rdma::rendezvous::PieceKind::PersistentCachePiece => {
+                self.wait_for_persistent_cache_piece_finished(piece_id)
+                    .await
+            }
+        }
+    }
+
+    /// map_upload_piece memory-maps finished on-disk piece bytes for RDMA upload. Cache-resident
+    /// pieces and missing content return an error so callers can fall back to `upload_piece`.
+    #[instrument(skip_all)]
+    pub async fn map_upload_piece(
+        &self,
+        piece_id: &str,
+        task_id: &str,
+        kind: crate::rdma::rendezvous::PieceKind,
+    ) -> Result<content::MappedPiece> {
+        let piece = match kind {
+            crate::rdma::rendezvous::PieceKind::Piece => {
+                self.wait_for_piece_finished(piece_id).await?
+            }
+            crate::rdma::rendezvous::PieceKind::PersistentPiece => {
+                self.wait_for_persistent_piece_finished(piece_id).await?
+            }
+            crate::rdma::rendezvous::PieceKind::PersistentCachePiece => {
+                self.wait_for_persistent_cache_piece_finished(piece_id)
+                    .await?
+            }
+        };
+
+        if self.cache.contains_piece(task_id, piece_id).await {
+            return Err(Error::Unsupported(
+                "rdma mmap upload is unavailable for cache-resident pieces".to_string(),
+            ));
+        }
+
+        match kind {
+            crate::rdma::rendezvous::PieceKind::Piece => {
+                self.metadata.upload_task_started(task_id);
+                match self
+                    .content
+                    .map_piece(task_id, piece.offset, piece.length)
+                    .await
+                {
+                    Ok(mapped) => {
+                        self.metadata.upload_task_finished(task_id);
+                        Ok(mapped)
+                    }
+                    Err(err) => {
+                        self.metadata.upload_task_failed(task_id);
+                        Err(err)
+                    }
+                }
+            }
+            crate::rdma::rendezvous::PieceKind::PersistentPiece => {
+                self.metadata.upload_persistent_task_started(task_id);
+                match self
+                    .content
+                    .map_persistent_piece(task_id, piece.offset, piece.length)
+                    .await
+                {
+                    Ok(mapped) => {
+                        self.metadata.upload_persistent_task_finished(task_id);
+                        Ok(mapped)
+                    }
+                    Err(err) => {
+                        self.metadata.upload_persistent_task_failed(task_id);
+                        Err(err)
+                    }
+                }
+            }
+            crate::rdma::rendezvous::PieceKind::PersistentCachePiece => {
+                self.metadata.upload_persistent_cache_task_started(task_id);
+                match self
+                    .content
+                    .map_persistent_cache_piece(task_id, piece.offset, piece.length)
+                    .await
+                {
+                    Ok(mapped) => {
+                        self.metadata.upload_persistent_cache_task_finished(task_id);
+                        Ok(mapped)
+                    }
+                    Err(err) => {
+                        self.metadata.upload_persistent_cache_task_failed(task_id);
+                        Err(err)
+                    }
+                }
             }
         }
     }
