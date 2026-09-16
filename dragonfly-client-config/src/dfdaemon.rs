@@ -284,16 +284,16 @@ fn default_storage_write_piece_timeout() -> Duration {
     Duration::from_secs(360)
 }
 
-/// Returns the default buffer size for writing piece to disk, default is 512KiB.
+/// Returns the default buffer size for writing piece to disk, default is 2MiB.
 #[inline]
 fn default_storage_write_buffer_size() -> usize {
-    512 * 1024
+    2 * 1024 * 1024
 }
 
-/// Returns the default buffer size for reading piece from disk, default is 512KiB.
+/// Returns the default buffer size for reading piece from disk, default is 2MiB.
 #[inline]
 fn default_storage_read_buffer_size() -> usize {
-    512 * 1024
+    2 * 1024 * 1024
 }
 
 /// Returns the default cache capacity for the storage server, default is
@@ -364,10 +364,10 @@ pub fn default_proxy_request_rate_limit() -> u64 {
     4000
 }
 
-/// Returns the default buffer size for reading piece, default is 512KiB.
+/// Returns the default buffer size for reading piece, default is 2MiB.
 #[inline]
 pub fn default_proxy_read_buffer_size() -> usize {
-    512 * 1024
+    2 * 1024 * 1024
 }
 
 /// Returns the default rate limit of the prefetch speed in GB/MB/KB per second, default is 10GB/s. The prefetch request
