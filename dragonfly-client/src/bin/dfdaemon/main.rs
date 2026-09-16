@@ -37,14 +37,15 @@ use dragonfly_client_config::{dfdaemon, VersionValueParser};
 use dragonfly_client_metric::Metrics;
 use dragonfly_client_storage::{server::quic::QUICServer, server::tcp::TCPServer, Storage};
 use dragonfly_client_util::{
-    container::is_running_in_container, id_generator::IDGenerator, ratelimiter::bbr::BBR, shutdown,
+    container::is_running_in_container,
+    id_generator::IDGenerator,
+    ratelimiter::{bbr::BBR, new_bandwidth_limiter},
+    shutdown,
     sysinfo::SystemMonitor,
 };
-use leaky_bucket::RateLimiter;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::sync::Barrier;
 use tracing::{error, info, Level};
@@ -236,48 +237,20 @@ async fn main() -> Result<(), anyhow::Error> {
     let backend_factory = Arc::new(backend_factory);
 
     // Initialize download rate limiter.
-    let download_bandwidth_limiter = Arc::new(
-        RateLimiter::builder()
-            .initial(config.download.bandwidth_limit.as_u64() as usize)
-            .refill(config.download.bandwidth_limit.as_u64() as usize)
-            .max(config.download.bandwidth_limit.as_u64() as usize)
-            .interval(Duration::from_secs(1))
-            .fair(false)
-            .build(),
-    );
+    let download_bandwidth_limiter =
+        Arc::new(new_bandwidth_limiter(config.download.bandwidth_limit));
 
     // Initialize upload rate limiter.
-    let upload_bandwidth_limiter = Arc::new(
-        RateLimiter::builder()
-            .initial(config.upload.bandwidth_limit.as_u64() as usize)
-            .refill(config.upload.bandwidth_limit.as_u64() as usize)
-            .max(config.upload.bandwidth_limit.as_u64() as usize)
-            .interval(Duration::from_secs(1))
-            .fair(false)
-            .build(),
-    );
+    let upload_bandwidth_limiter = Arc::new(new_bandwidth_limiter(config.upload.bandwidth_limit));
 
     // Initialize prefetch rate limiter.
-    let prefetch_bandwidth_limiter = Arc::new(
-        RateLimiter::builder()
-            .initial(config.proxy.prefetch_bandwidth_limit.as_u64() as usize)
-            .refill(config.proxy.prefetch_bandwidth_limit.as_u64() as usize)
-            .max(config.proxy.prefetch_bandwidth_limit.as_u64() as usize)
-            .interval(Duration::from_secs(1))
-            .fair(false)
-            .build(),
-    );
+    let prefetch_bandwidth_limiter =
+        Arc::new(new_bandwidth_limiter(config.proxy.prefetch_bandwidth_limit));
 
     // Initialize back to source rate limiter.
-    let back_to_source_bandwidth_limiter = Arc::new(
-        RateLimiter::builder()
-            .initial(config.download.back_to_source_bandwidth_limit.as_u64() as usize)
-            .refill(config.download.back_to_source_bandwidth_limit.as_u64() as usize)
-            .max(config.download.back_to_source_bandwidth_limit.as_u64() as usize)
-            .interval(Duration::from_secs(1))
-            .fair(false)
-            .build(),
-    );
+    let back_to_source_bandwidth_limiter = Arc::new(new_bandwidth_limiter(
+        config.download.back_to_source_bandwidth_limit,
+    ));
 
     // Initialize task manager.
     let task = Task::new(
