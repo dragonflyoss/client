@@ -57,7 +57,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Barrier};
 use tokio_rustls::TlsAcceptor;
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{debug, error, info, instrument, Instrument, Span};
+use tracing::{debug, error, info, instrument, warn, Instrument, Span};
 
 pub mod header;
 pub mod query;
@@ -237,6 +237,12 @@ impl Proxy {
                 tcp_accepted = listener.accept() => {
                     // A new client connection has been established.
                     let (tcp, remote_address) = tcp_accepted?;
+
+                    // Disable Nagle so the short tail segment of each response is sent
+                    // immediately instead of waiting for the in-flight data to be acked.
+                    tcp.set_nodelay(true).unwrap_or_else(|err| {
+                        warn!("set nodelay for {} failed: {}", remote_address, err);
+                    });
 
                     // Spawn a task to handle the connection.
                     let io = TokioIo::new(tcp);
