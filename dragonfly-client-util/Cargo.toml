@@ -32,6 +32,7 @@ sysinfo.workspace = true
 hex.workspace = true
 crc32fast.workspace = true
 bytesize.workspace = true
+leaky-bucket.workspace = true
 lru.workspace = true
 tokio.workspace = true
 bytes.workspace = true

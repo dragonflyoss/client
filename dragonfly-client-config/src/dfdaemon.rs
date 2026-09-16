@@ -373,7 +373,7 @@ pub fn default_proxy_read_buffer_size() -> usize {
 /// Returns the default rate limit of the prefetch speed in GB/MB/KB per second, default is 10GB/s. The prefetch request
 /// has lower priority so limit the rate to avoid occupying the bandwidth impact other download tasks.
 #[inline]
-fn default_prefetch_bandwidth_limit() -> ByteSize {
+fn default_proxy_prefetch_bandwidth_limit() -> ByteSize {
     ByteSize::gb(10)
 }
 
@@ -1460,7 +1460,10 @@ pub struct Proxy {
 
     /// The rate limit of the prefetch speed in GB/MB/KB per second. The prefetch request
     /// has lower priority so limit the rate to avoid occupying the bandwidth impact other download tasks.
-    #[serde(with = "bytesize_serde", default = "default_prefetch_bandwidth_limit")]
+    #[serde(
+        with = "bytesize_serde",
+        default = "default_proxy_prefetch_bandwidth_limit"
+    )]
     pub prefetch_bandwidth_limit: ByteSize,
 
     /// Specifies the buffer size for reading piece data from disk.
@@ -1480,7 +1483,7 @@ impl Default for Proxy {
             registry_mirror: RegistryMirror::default(),
             disable_back_to_source: false,
             prefetch: false,
-            prefetch_bandwidth_limit: default_prefetch_bandwidth_limit(),
+            prefetch_bandwidth_limit: default_proxy_prefetch_bandwidth_limit(),
             read_buffer_size: default_proxy_read_buffer_size(),
         }
     }
@@ -2387,8 +2390,8 @@ mod tests {
                 assert_eq!(storage.dir, crate::default_storage_dir());
                 assert!(!storage.keep);
                 assert_eq!(storage.write_piece_timeout, Duration::from_secs(360));
-                assert_eq!(storage.write_buffer_size, 512 * 1024);
-                assert_eq!(storage.read_buffer_size, 512 * 1024);
+                assert_eq!(storage.write_buffer_size, 2 * 1024 * 1024);
+                assert_eq!(storage.read_buffer_size, 2 * 1024 * 1024);
                 assert_eq!(storage.cache_capacity, ByteSize::mib(64));
             }),
         ];
@@ -2709,7 +2712,7 @@ mod tests {
                 assert!(!proxy.disable_back_to_source);
                 assert!(!proxy.prefetch);
                 assert_eq!(proxy.prefetch_bandwidth_limit, ByteSize::gb(10));
-                assert_eq!(proxy.read_buffer_size, 512 * 1024);
+                assert_eq!(proxy.read_buffer_size, 2 * 1024 * 1024);
             }),
         ];
 

@@ -1582,6 +1582,7 @@ dependencies = [
  "http",
  "http-range-header",
  "humantime-serde",
+ "leaky-bucket",
  "libc",
  "local-ip-address",
  "lru",
