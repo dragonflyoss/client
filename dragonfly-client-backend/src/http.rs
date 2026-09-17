@@ -59,8 +59,7 @@ use dragonfly_client_core::{
 use dragonfly_client_util::{http::validate_ranged_response, tls::NoVerifier};
 use futures::{StreamExt, TryStreamExt};
 use http::header::{
-    HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_RANGE, LOCATION, RANGE, TRANSFER_ENCODING,
-    USER_AGENT,
+    HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_RANGE, LOCATION, RANGE, USER_AGENT,
 };
 use lru::LruCache;
 use reqwest::header::HeaderMap;
@@ -97,6 +96,29 @@ struct TemporaryRedirectEntry {
     created_at: Instant,
 }
 
+/// The HTTP method used to retrieve object metadata.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MetadataMethod {
+    Head,
+    Get,
+}
+
+impl MetadataMethod {
+    fn as_reqwest_method(self) -> reqwest::Method {
+        match self {
+            Self::Head => reqwest::Method::HEAD,
+            Self::Get => reqwest::Method::GET,
+        }
+    }
+}
+
+/// The result of sending a stat request, keeping transport failures separate from HTTP responses.
+enum StatRequestOutcome {
+    Response(reqwest::Response),
+    RequestFailed(reqwest_middleware::Error),
+    MissingRedirectLocation,
+}
+
 /// The HTTP backend.
 pub struct HTTP {
     /// The scheme of the HTTP backend.
@@ -124,6 +146,11 @@ pub struct HTTP {
     /// Cache TTL for temporary redirects. If a cached redirect is older than this duration, it
     /// will be considered expired and removed from the cache.
     cache_temporary_redirect_ttl: Duration,
+
+    /// The metadata request method selected for each origin. HEAD is preferred because it has no
+    /// response body; GET is retained as a compatibility fallback for origins and signed URLs
+    /// that do not support HEAD.
+    metadata_methods: Arc<DashMap<String, MetadataMethod>>,
 
     /// Enable hickory DNS resolver for reqwest client. It can be enabled to improve DNS resolution
     /// performance
@@ -212,6 +239,7 @@ impl HTTP {
             ))),
             enable_cache_temporary_redirect,
             cache_temporary_redirect_ttl,
+            metadata_methods: Arc::new(DashMap::new()),
             enable_hickory_dns,
         })
     }
@@ -317,6 +345,112 @@ impl HTTP {
         Ok(())
     }
 
+    /// Returns the cache key used to select a metadata request method for an origin.
+    fn metadata_method_cache_key(url: &str) -> Result<String> {
+        Ok(Url::parse(url)
+            .or_err(ErrorType::ParseError)?
+            .origin()
+            .ascii_serialization())
+    }
+
+    /// Returns headers for a stat request using the selected metadata method.
+    fn make_stat_request_headers(request_header: &HeaderMap, method: MetadataMethod) -> HeaderMap {
+        let mut request_header = request_header.clone();
+        match method {
+            MetadataMethod::Head => {
+                request_header.remove(RANGE);
+            }
+            MetadataMethod::Get => {
+                request_header.insert(RANGE, HeaderValue::from_static("bytes=0-0"));
+            }
+        }
+
+        request_header
+    }
+
+    /// Returns whether a response contains enough metadata for a stat operation.
+    fn is_usable_stat_response(response: &reqwest::Response) -> bool {
+        if !response.status().is_success() {
+            return false;
+        }
+
+        if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+            return response
+                .headers()
+                .get(CONTENT_RANGE)
+                .and_then(|content_range| content_range.to_str().ok())
+                .and_then(|content_range| content_range.rsplit_once('/'))
+                .and_then(|(_, total)| total.parse::<u64>().ok())
+                .is_some();
+        }
+
+        response
+            .headers()
+            .get(CONTENT_LENGTH)
+            .and_then(|content_length| content_length.to_str().ok())
+            .and_then(|content_length| content_length.parse::<u64>().ok())
+            .is_some()
+    }
+
+    /// Sends a stat request and follows a 307 redirect with the same HTTP method.
+    async fn send_stat_request(
+        &self,
+        request: &StatRequest,
+        request_url: &str,
+        request_header: &HeaderMap,
+        method: MetadataMethod,
+    ) -> Result<StatRequestOutcome> {
+        let request_header = Self::make_stat_request_headers(request_header, method);
+        let response = self
+            .client(request.client_cert.clone(), self.enable_hickory_dns)?
+            .request(method.as_reqwest_method(), request_url)
+            .headers(request_header.clone())
+            .timeout(request.timeout)
+            .send()
+            .await;
+
+        match response {
+            Ok(response) if response.status() == reqwest::StatusCode::TEMPORARY_REDIRECT => {
+                let Some(location) = response.headers().get(LOCATION) else {
+                    return Ok(StatRequestOutcome::MissingRedirectLocation);
+                };
+
+                let location = location.to_str().or_err(ErrorType::ParseError)?;
+                let base_url = Url::parse(&request.url).or_err(ErrorType::ParseError)?;
+                let redirect_url = base_url.join(location).or_err(ErrorType::ParseError)?;
+                debug!(
+                    "stat request got 307 Temporary Redirect, following redirect {} -> {}",
+                    request.url, redirect_url
+                );
+
+                self.store_temporary_redirect_url(&request.url, location.as_ref())
+                    .await;
+
+                // Strips sensitive headers when following a cross-origin redirect.
+                let mut redirect_headers = request_header;
+                remove_sensitive_headers(
+                    &mut redirect_headers,
+                    &redirect_url,
+                    &request.url.parse()?,
+                );
+
+                match self
+                    .client(request.client_cert.clone(), self.enable_hickory_dns)?
+                    .request(method.as_reqwest_method(), redirect_url)
+                    .headers(redirect_headers)
+                    .timeout(request.timeout)
+                    .send()
+                    .await
+                {
+                    Ok(response) => Ok(StatRequestOutcome::Response(response)),
+                    Err(err) => Ok(StatRequestOutcome::RequestFailed(err)),
+                }
+            }
+            Ok(response) => Ok(StatRequestOutcome::Response(response)),
+            Err(err) => Ok(StatRequestOutcome::RequestFailed(err)),
+        }
+    }
+
     /// Get the cached temporary redirect URL if exists and not expired.
     async fn get_temporary_redirect_url(&self, url: &str) -> Option<String> {
         let mut temporary_redirects = self.temporary_redirects.lock().await;
@@ -392,21 +526,16 @@ impl Backend for HTTP {
         // The header of the request is required.
         let mut request_header = request
             .http_header
+            .clone()
             .ok_or(Error::InvalidParameter)
             .inspect_err(|_err| {
                 error!("request header is missing");
             })?;
 
-        // Make the custom request headers with "Range: bytes=0-0", so the origin returns
-        // 206 Partial Content with the total length in the Content-Range header and a
-        // one-byte body, instead of streaming the whole object body for the stat request.
-        self.make_request_headers(
-            &mut request_header,
-            Some(Range {
-                start: 0,
-                length: 1,
-            }),
-        )?;
+        // Range is applied only when GET is selected. HEAD must be sent without Range so origins
+        // return metadata for the complete object.
+        self.make_request_headers(&mut request_header, None)?;
+        request_header.remove(RANGE);
 
         // Check if we have a cached temporary redirect for this URL.
         let (request_url, request_header) =
@@ -424,120 +553,68 @@ impl Backend for HTTP {
                 None => (request.url.clone(), request_header),
             };
 
-        // The signature in the signed URL generated by the object storage client will include
-        // the request method. Therefore, the signed URL of the GET method cannot be requested
-        // through the HEAD method. Use GET request to replace of HEAD request
-        // to get header and status code.
-        let response = match self
-            .client(request.client_cert.clone(), self.enable_hickory_dns)?
-            .get(&request_url)
-            .headers(request_header.clone())
-            .timeout(request.timeout)
-            .send()
-            .await
-        {
-            Ok(response) if response.status() == reqwest::StatusCode::TEMPORARY_REDIRECT => {
-                if let Some(location) = response.headers().get(LOCATION) {
-                    let location = location.to_str().or_err(ErrorType::ParseError)?;
-                    let base_url = Url::parse(&request.url).or_err(ErrorType::ParseError)?;
-                    let redirect_url = base_url.join(location).or_err(ErrorType::ParseError)?;
-                    debug!(
-                        "stat request got 307 Temporary Redirect, following redirect {} -> {}",
-                        request.url, redirect_url
-                    );
+        let method_cache_key = Self::metadata_method_cache_key(&request.url)?;
+        let selected_method = self
+            .metadata_methods
+            .get(&method_cache_key)
+            .map(|method| *method)
+            .unwrap_or(MetadataMethod::Head);
+        let mut used_method = selected_method;
+        let mut outcome = self
+            .send_stat_request(&request, &request_url, &request_header, selected_method)
+            .await?;
 
-                    self.store_temporary_redirect_url(&request.url, location.as_ref())
-                        .await;
+        // Prefer HEAD because it cannot leave an unread response body. If the first HEAD request
+        // is not successful or does not provide a usable object length, retain GET as the
+        // compatibility fallback for this origin. A cached HEAD selection is re-evaluated on
+        // failure so GET-signed URLs continue to work.
+        if selected_method == MetadataMethod::Head {
+            let head_explicitly_unsupported = matches!(
+                &outcome,
+                StatRequestOutcome::Response(response)
+                    if matches!(
+                        response.status(),
+                        reqwest::StatusCode::METHOD_NOT_ALLOWED
+                            | reqwest::StatusCode::NOT_IMPLEMENTED
+                    )
+            );
+            let head_is_usable = match &outcome {
+                StatRequestOutcome::Response(response) => Self::is_usable_stat_response(response),
+                StatRequestOutcome::RequestFailed(_)
+                | StatRequestOutcome::MissingRedirectLocation => false,
+            };
 
-                    // Strips sensitive headers when following a cross-origin redirect.
-                    let mut redirect_headers = request_header.clone();
-                    remove_sensitive_headers(
-                        &mut redirect_headers,
-                        &redirect_url,
-                        &request.url.parse()?,
-                    );
-
-                    match self
-                        .client(request.client_cert.clone(), self.enable_hickory_dns)?
-                        .get(redirect_url.clone())
-                        .headers(redirect_headers)
-                        .timeout(request.timeout)
-                        .send()
-                        .await
-                    {
-                        Ok(response) => response,
-                        Err(err) => {
-                            error!(
-                                "stat request failed {} {}: {}",
-                                request.task_id, redirect_url, err
-                            );
-
-                            return Ok(StatResponse {
-                                success: false,
-                                content_length: None,
-                                http_header: None,
-                                http_status_code: None,
-                                entries: Vec::new(),
-                                error_message: Some(err.to_string()),
-                            });
-                        }
-                    }
-                } else {
-                    error!(
-                        "stat request got 307 Temporary Redirect without Location header {} {}",
-                        request.task_id, request_url
-                    );
-
-                    return Ok(StatResponse {
-                        success: false,
-                        content_length: None,
-                        http_header: None,
-                        http_status_code: None,
-                        entries: Vec::new(),
-                        error_message: Some(
-                            "got 307 Temporary Redirect without Location header".to_string(),
-                        ),
-                    });
-                }
-            }
-            Ok(response)
-                if response.headers().get(TRANSFER_ENCODING).is_some()
-                    && response.headers().get(CONTENT_LENGTH).is_none() =>
-            {
-                // If the response has Transfer-Encoding header but no Content-Length header,
-                // retry with HEAD request to get the correct Content-Length.
+            if head_is_usable {
+                self.metadata_methods
+                    .insert(method_cache_key, MetadataMethod::Head);
+            } else {
                 debug!(
-                    "stat request got Transfer-Encoding header, retrying with HEAD {} {}",
-                    request.task_id, request.url,
+                    "stat HEAD response is not usable, falling back to GET {} {}",
+                    request.task_id, request_url
                 );
+                used_method = MetadataMethod::Get;
+                outcome = self
+                    .send_stat_request(&request, &request_url, &request_header, MetadataMethod::Get)
+                    .await?;
 
-                match self
-                    .client(request.client_cert.clone(), self.enable_hickory_dns)?
-                    .head(&request_url)
-                    .headers(request_header.clone())
-                    .timeout(request.timeout)
-                    .send()
-                    .await
-                {
-                    Ok(response) => response,
-                    Err(err) => {
-                        error!(
-                            "stat request failed with HEAD {} {}: {}",
-                            request.task_id, request_url, err
-                        );
-
-                        return Ok(StatResponse {
-                            success: false,
-                            content_length: None,
-                            http_header: None,
-                            http_status_code: None,
-                            entries: Vec::new(),
-                            error_message: Some(err.to_string()),
-                        });
+                let get_is_usable = match &outcome {
+                    StatRequestOutcome::Response(response) => {
+                        Self::is_usable_stat_response(response)
                     }
+                    StatRequestOutcome::RequestFailed(_)
+                    | StatRequestOutcome::MissingRedirectLocation => false,
+                };
+                if head_explicitly_unsupported || get_is_usable {
+                    self.metadata_methods
+                        .insert(method_cache_key, MetadataMethod::Get);
                 }
             }
-            Ok(response) if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE => {
+        }
+
+        let response = match outcome {
+            StatRequestOutcome::Response(response)
+                if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE =>
+            {
                 // For zero-byte files, some servers return 416 Range Not Satisfiable for
                 // the "bytes=0-0" request. Retry with a GET request without the Range
                 // header to retrieve headers.
@@ -574,11 +651,11 @@ impl Backend for HTTP {
                     }
                 }
             }
-            Ok(response) => response,
-            Err(err) => {
+            StatRequestOutcome::Response(response) => response,
+            StatRequestOutcome::RequestFailed(err) => {
                 error!(
-                    "stat request failed with GET {} {}: {}",
-                    request.task_id, request_url, err
+                    "stat request failed with {:?} {} {}: {}",
+                    used_method, request.task_id, request_url, err
                 );
 
                 return Ok(StatResponse {
@@ -587,7 +664,24 @@ impl Backend for HTTP {
                     http_header: None,
                     http_status_code: None,
                     entries: Vec::new(),
-                    error_message: None,
+                    error_message: Some(err.to_string()),
+                });
+            }
+            StatRequestOutcome::MissingRedirectLocation => {
+                error!(
+                    "stat request got 307 Temporary Redirect without Location header {} {}",
+                    request.task_id, request_url
+                );
+
+                return Ok(StatResponse {
+                    success: false,
+                    content_length: None,
+                    http_header: None,
+                    http_status_code: None,
+                    entries: Vec::new(),
+                    error_message: Some(
+                        "got 307 Temporary Redirect without Location header".to_string(),
+                    ),
                 });
             }
         };
@@ -1235,6 +1329,184 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 .unwrap();
             expect(response);
         }
+    }
+
+    #[tokio::test]
+    async fn stat_prefers_head_and_reuses_it_for_the_origin() {
+        install_crypto_provider();
+
+        let server = MockServer::start().await;
+        Mock::given(method("HEAD"))
+            .and(path("/first"))
+            .respond_with(ResponseTemplate::new(200).insert_header("Content-Length", "42"))
+            .mount(&server)
+            .await;
+        Mock::given(method("HEAD"))
+            .and(path("/second"))
+            .respond_with(ResponseTemplate::new(200).insert_header("Content-Length", "84"))
+            .mount(&server)
+            .await;
+
+        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+        for (path, expected_content_length) in [("first", 42), ("second", 84)] {
+            let response = http
+                .stat(StatRequest {
+                    task_id: path.to_string(),
+                    url: format!("{}/{path}", server.uri()),
+                    http_header: Some(HeaderMap::new()),
+                    timeout: Duration::from_secs(5),
+                    client_cert: None,
+                    object_storage: None,
+                    hdfs: None,
+                    hugging_face: None,
+                    model_scope: None,
+                    open_csg: None,
+                })
+                .await
+                .unwrap();
+
+            assert!(response.success);
+            assert_eq!(response.content_length, Some(expected_content_length));
+        }
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests
+            .iter()
+            .all(|request| request.method.as_str() == "HEAD"));
+        assert!(requests
+            .iter()
+            .all(|request| request.headers.get("range").is_none()));
+    }
+
+    #[tokio::test]
+    async fn stat_falls_back_to_get_and_reuses_it_for_the_origin() {
+        install_crypto_provider();
+
+        let server = MockServer::start().await;
+        Mock::given(method("HEAD"))
+            .and(path("/first"))
+            .respond_with(ResponseTemplate::new(405))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/first"))
+            .and(header("range", "bytes=0-0"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header("Content-Range", "bytes 0-0/42")
+                    .set_body_bytes(vec![0u8]),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/second"))
+            .and(header("range", "bytes=0-0"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header("Content-Range", "bytes 0-0/84")
+                    .set_body_bytes(vec![0u8]),
+            )
+            .mount(&server)
+            .await;
+
+        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+        for (path, expected_content_length) in [("first", 42), ("second", 84)] {
+            let response = http
+                .stat(StatRequest {
+                    task_id: path.to_string(),
+                    url: format!("{}/{path}", server.uri()),
+                    http_header: Some(HeaderMap::new()),
+                    timeout: Duration::from_secs(5),
+                    client_cert: None,
+                    object_storage: None,
+                    hdfs: None,
+                    hugging_face: None,
+                    model_scope: None,
+                    open_csg: None,
+                })
+                .await
+                .unwrap();
+
+            assert!(response.success);
+            assert_eq!(response.content_length, Some(expected_content_length));
+        }
+
+        let requests = server.received_requests().await.unwrap();
+        let methods = requests
+            .iter()
+            .map(|request| request.method.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(methods, vec!["HEAD", "GET", "GET"]);
+        assert!(requests[0].headers.get("range").is_none());
+        assert_eq!(requests[1].headers.get("range").unwrap(), "bytes=0-0");
+        assert_eq!(requests[2].headers.get("range").unwrap(), "bytes=0-0");
+    }
+
+    #[tokio::test]
+    async fn stat_switches_cached_head_to_get_for_get_only_urls() {
+        install_crypto_provider();
+
+        let server = MockServer::start().await;
+        Mock::given(method("HEAD"))
+            .and(path("/regular"))
+            .respond_with(ResponseTemplate::new(200).insert_header("Content-Length", "42"))
+            .mount(&server)
+            .await;
+        Mock::given(method("HEAD"))
+            .and(path("/signed"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/signed"))
+            .and(header("range", "bytes=0-0"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header("Content-Range", "bytes 0-0/84")
+                    .set_body_bytes(vec![0u8]),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/next"))
+            .and(header("range", "bytes=0-0"))
+            .respond_with(
+                ResponseTemplate::new(206)
+                    .insert_header("Content-Range", "bytes 0-0/126")
+                    .set_body_bytes(vec![0u8]),
+            )
+            .mount(&server)
+            .await;
+
+        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+        for (path, expected_content_length) in [("regular", 42), ("signed", 84), ("next", 126)] {
+            let response = http
+                .stat(StatRequest {
+                    task_id: path.to_string(),
+                    url: format!("{}/{path}", server.uri()),
+                    http_header: Some(HeaderMap::new()),
+                    timeout: Duration::from_secs(5),
+                    client_cert: None,
+                    object_storage: None,
+                    hdfs: None,
+                    hugging_face: None,
+                    model_scope: None,
+                    open_csg: None,
+                })
+                .await
+                .unwrap();
+
+            assert!(response.success);
+            assert_eq!(response.content_length, Some(expected_content_length));
+        }
+
+        let requests = server.received_requests().await.unwrap();
+        let methods = requests
+            .iter()
+            .map(|request| request.method.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(methods, vec!["HEAD", "HEAD", "GET", "GET"]);
     }
 
     #[tokio::test]
