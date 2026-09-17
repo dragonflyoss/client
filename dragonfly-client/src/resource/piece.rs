@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+#[cfg(feature = "rdma")]
+mod rdma;
+
 use super::*;
 use chrono::Utc;
 use dragonfly_api::common::v2::{
@@ -56,6 +59,7 @@ pub enum PieceLengthStrategy {
 }
 
 /// Represents a piece manager.
+#[derive(Clone)]
 pub struct Piece {
     /// The configuration of the dfdaemon.
     config: Arc<Config>,
@@ -68,6 +72,12 @@ pub struct Piece {
 
     /// The QUIC piece downloader.
     quic_downloader: Arc<dyn piece_downloader::Downloader>,
+
+    /// rdma_downloader is the libfabric piece downloader (AWS EFA, RoCE/InfiniBand). It is
+    /// only Some when the client is built with the `rdma` feature and the download protocol
+    /// is "rdma"; every RDMA failure falls back to the TCP downloader for that piece.
+    #[cfg(feature = "rdma")]
+    rdma_downloader: Option<Arc<piece_downloader::rdma::RDMADownloader>>,
 
     /// The backend factory.
     backend_factory: Arc<BackendFactory>,
@@ -93,12 +103,30 @@ impl Piece {
         prefetch_bandwidth_limiter: Arc<RateLimiter>,
         back_to_source_bandwidth_limiter: Arc<RateLimiter>,
     ) -> Result<Self> {
+        #[cfg(feature = "rdma")]
+        let rdma_downloader = if config.download.protocol == "rdma" {
+            Some(Arc::new(
+                piece_downloader::rdma::RDMADownloader::new_with_budget(
+                    config.clone(),
+                    storage.rdma_memory_budget(),
+                ),
+            ))
+        } else {
+            None
+        };
+        #[cfg(not(feature = "rdma"))]
+        if config.download.protocol == "rdma" {
+            warn!("download protocol is rdma but this build lacks the rdma feature, using tcp");
+        }
+
         Ok(Self {
             config: config.clone(),
             storage,
             tcp_downloader: piece_downloader::DownloaderFactory::new("tcp", config.clone())?
                 .build(),
             quic_downloader: piece_downloader::DownloaderFactory::new("quic", config)?.build(),
+            #[cfg(feature = "rdma")]
+            rdma_downloader,
             backend_factory,
             download_bandwidth_limiter,
             prefetch_bandwidth_limiter,
@@ -367,6 +395,29 @@ impl Piece {
         parent: piece_collector::CollectedParent,
         is_prefetch: bool,
     ) -> Result<metadata::Piece> {
+        #[cfg(feature = "rdma")]
+        if self.rdma_downloader.is_some() {
+            if let (Some(ip), Some(port)) =
+                (parent.download_ip.as_deref(), parent.download_tcp_port)
+            {
+                let addr = format_socket_addr(IpAddr::from_str(ip)?, port as u16);
+                return self
+                    .download_from_parent_with_rdma(
+                        dragonfly_client_storage::rdma::rendezvous::PieceKind::Piece,
+                        piece_id,
+                        host_id,
+                        task_id,
+                        number,
+                        offset,
+                        length,
+                        parent.id.as_str(),
+                        &addr,
+                        is_prefetch,
+                    )
+                    .await;
+            }
+        }
+
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
@@ -411,7 +462,7 @@ impl Piece {
             parent.download_tcp_port,
             parent.download_quic_port,
         ) {
-            ("tcp", Some(ip), Some(port), _) => {
+            ("tcp" | "rdma", Some(ip), Some(port), _) => {
                 self.tcp_downloader
                     .download_piece(
                         &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
@@ -737,6 +788,29 @@ impl Piece {
         length: u64,
         parent: piece_collector::CollectedParent,
     ) -> Result<metadata::Piece> {
+        #[cfg(feature = "rdma")]
+        if self.rdma_downloader.is_some() {
+            if let (Some(ip), Some(port)) =
+                (parent.download_ip.as_deref(), parent.download_tcp_port)
+            {
+                let addr = format_socket_addr(IpAddr::from_str(ip)?, port as u16);
+                return self
+                    .download_from_parent_with_rdma(
+                        dragonfly_client_storage::rdma::rendezvous::PieceKind::PersistentPiece,
+                        piece_id,
+                        host_id,
+                        task_id,
+                        number,
+                        offset,
+                        length,
+                        parent.id.as_str(),
+                        &addr,
+                        false,
+                    )
+                    .await;
+            }
+        }
+
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
@@ -778,7 +852,7 @@ impl Piece {
             parent.download_tcp_port,
             parent.download_quic_port,
         ) {
-            ("tcp", Some(ip), Some(port), _) => {
+            ("tcp" | "rdma", Some(ip), Some(port), _) => {
                 self.tcp_downloader
                     .download_persistent_piece(
                         &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
@@ -1101,6 +1175,29 @@ impl Piece {
         length: u64,
         parent: piece_collector::CollectedParent,
     ) -> Result<metadata::Piece> {
+        #[cfg(feature = "rdma")]
+        if self.rdma_downloader.is_some() {
+            if let (Some(ip), Some(port)) =
+                (parent.download_ip.as_deref(), parent.download_tcp_port)
+            {
+                let addr = format_socket_addr(IpAddr::from_str(ip)?, port as u16);
+                return self
+                    .download_from_parent_with_rdma(
+                        dragonfly_client_storage::rdma::rendezvous::PieceKind::PersistentCachePiece,
+                        piece_id,
+                        host_id,
+                        task_id,
+                        number,
+                        offset,
+                        length,
+                        parent.id.as_str(),
+                        &addr,
+                        false,
+                    )
+                    .await;
+            }
+        }
+
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
@@ -1142,7 +1239,7 @@ impl Piece {
             parent.download_tcp_port,
             parent.download_quic_port,
         ) {
-            ("tcp", Some(ip), Some(port), _) => {
+            ("tcp" | "rdma", Some(ip), Some(port), _) => {
                 self.tcp_downloader
                     .download_persistent_cache_piece(
                         &format_socket_addr(IpAddr::from_str(&ip)?, port as u16),
