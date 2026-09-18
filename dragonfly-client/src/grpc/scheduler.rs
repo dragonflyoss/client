@@ -35,6 +35,7 @@ use dragonfly_api::scheduler::v2::{
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
+use dragonfly_client_util::net::scheme_for_tls;
 use hashring::HashRing;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -601,7 +602,12 @@ impl SchedulerClient {
             return Ok(channel.clone());
         }
 
-        let addr = format!("http://{socket_addr}");
+        let scheme = scheme_for_tls(
+            self.config.scheduler.ca_cert.as_deref(),
+            self.config.scheduler.cert.as_deref(),
+            self.config.scheduler.key.as_deref(),
+        );
+        let addr = format!("{scheme}://{socket_addr}");
         let domain_name = Url::parse(addr.as_str())?
             .host_str()
             .ok_or(Error::InvalidParameter)

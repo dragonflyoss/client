@@ -22,7 +22,7 @@ use dragonfly_api::manager::v2::{
 };
 use dragonfly_client_config::{dfdaemon::Config, CARGO_PKG_VERSION, GIT_COMMIT_SHORT_HASH};
 use dragonfly_client_core::{Error, Result};
-use dragonfly_client_util::net::format_url;
+use dragonfly_client_util::net::{format_url, scheme_for_tls};
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -129,6 +129,11 @@ impl Remote {
     async fn get_available_schedulers(&self, schedulers: &[Scheduler]) -> Result<Vec<Scheduler>> {
         let mut available_schedulers: Vec<Scheduler> = Vec::new();
         let mut available_scheduler_cluster_id: Option<u64> = None;
+        let scheme = scheme_for_tls(
+            self.config.scheduler.ca_cert.as_deref(),
+            self.config.scheduler.cert.as_deref(),
+            self.config.scheduler.key.as_deref(),
+        );
         for scheduler in schedulers {
             // If scheduler_cluster_id is specified, only return the schedulers
             // of the specified scheduler cluster.
@@ -139,7 +144,7 @@ impl Remote {
             }
 
             let addr = format_url(
-                "http",
+                scheme,
                 IpAddr::from_str(&scheduler.ip)?,
                 scheduler.port as u16,
             );

@@ -21,7 +21,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
-use dragonfly_client_util::net::format_url;
+use dragonfly_client_util::net::{format_url, scheme_for_tls};
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
@@ -175,9 +175,14 @@ impl Local {
         schedulers: &[ManagerScheduler],
     ) -> Result<Vec<ManagerScheduler>> {
         let mut available_schedulers: Vec<ManagerScheduler> = Vec::new();
+        let scheme = scheme_for_tls(
+            self.config.scheduler.ca_cert.as_deref(),
+            self.config.scheduler.cert.as_deref(),
+            self.config.scheduler.key.as_deref(),
+        );
         for scheduler in schedulers {
             let addr = format_url(
-                "http",
+                scheme,
                 IpAddr::from_str(&scheduler.ip)?,
                 scheduler.port as u16,
             );
