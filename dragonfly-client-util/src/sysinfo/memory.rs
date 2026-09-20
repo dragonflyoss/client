@@ -52,6 +52,9 @@ pub struct CgroupMemoryStats {
     /// Current memory usage in bytes.
     pub usage: u64,
 
+    /// Memory charged to the cgroup in bytes, page cache included.
+    pub current: u64,
+
     /// Memory usage percentage relative to the cgroup limit (0.0 - 100.0).
     pub used_percent: f64,
 }
@@ -171,6 +174,7 @@ impl Memory {
                         return Some(CgroupMemoryStats {
                             limit: memory_stats.limit_in_bytes,
                             usage: memory_usage,
+                            current: memory_stats.usage_in_bytes,
                             used_percent: used_percent.clamp(0.0, 100.0),
                         });
                     }

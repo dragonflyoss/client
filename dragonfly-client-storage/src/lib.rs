@@ -21,6 +21,7 @@ use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::digest::{Algorithm, Digest};
 use futures::Stream;
+use page_cache::PageCache;
 use piece_notifier::{Claim, PieceNotifier};
 use reqwest::header::HeaderMap;
 use std::path::{Path, PathBuf};
@@ -35,6 +36,7 @@ use tokio::{
 use tokio_util::io::InspectReader;
 use tracing::{debug, error, info, instrument, warn};
 
+mod page_cache;
 mod piece_notifier;
 
 #[cfg(target_os = "linux")]
@@ -83,6 +85,9 @@ pub struct Storage {
     /// Notifies the waiters of the in-flight pieces when their downloads
     /// complete.
     piece_notifier: PieceNotifier,
+
+    /// Drops the written pieces from the page cache under memory pressure.
+    page_cache: Arc<PageCache>,
 }
 
 /// Implements the storage.
@@ -101,6 +106,7 @@ impl Storage {
             content,
             cache,
             piece_notifier: PieceNotifier::default(),
+            page_cache: PageCache::new(),
         })
     }
 
@@ -820,6 +826,12 @@ impl Storage {
         }?;
 
         self.piece_notifier.remove_and_notify(piece_id);
+        self.page_cache.download_piece_finished(
+            piece_id,
+            self.content.get_task_path(task_id),
+            piece.offset,
+            piece.length,
+        );
         Ok(piece)
     }
 
@@ -878,6 +890,12 @@ impl Storage {
         }?;
 
         self.piece_notifier.remove_and_notify(piece_id);
+        self.page_cache.download_piece_finished(
+            piece_id,
+            self.content.get_task_path(task_id),
+            piece.offset,
+            piece.length,
+        );
         Ok(piece)
     }
 
@@ -953,6 +971,9 @@ impl Storage {
     ) -> Result<(metadata::Piece, io::RangeReader)> {
         // Wait for the piece to be finished and get the piece metadata.
         let piece = self.wait_for_piece_finished(piece_id).await?;
+
+        // Start recording the upload of the piece in the page cache.
+        self.page_cache.upload_piece_started(piece_id);
 
         // Start uploading the task.
         self.metadata.upload_task_started(task_id);
@@ -1102,6 +1123,12 @@ impl Storage {
         )?;
 
         self.piece_notifier.remove_and_notify(piece_id);
+        self.page_cache.download_piece_finished(
+            piece_id,
+            self.content.get_persistent_task_path(task_id),
+            piece.offset,
+            piece.length,
+        );
         Ok(piece)
     }
 
@@ -1130,6 +1157,12 @@ impl Storage {
         }?;
 
         self.piece_notifier.remove_and_notify(piece_id);
+        self.page_cache.download_piece_finished(
+            piece_id,
+            self.content.get_persistent_task_path(task_id),
+            piece.offset,
+            piece.length,
+        );
         Ok(piece)
     }
 
@@ -1180,6 +1213,9 @@ impl Storage {
     ) -> Result<(metadata::Piece, io::RangeReader)> {
         // Wait for the persistent piece to be finished and get the piece metadata.
         let piece = self.wait_for_persistent_piece_finished(piece_id).await?;
+
+        // Start recording the upload of the persistent piece in the page cache.
+        self.page_cache.upload_piece_started(piece_id);
 
         // Start uploading the persistent task.
         self.metadata.upload_persistent_task_started(task_id);
@@ -1327,6 +1363,12 @@ impl Storage {
         )?;
 
         self.piece_notifier.remove_and_notify(piece_id);
+        self.page_cache.download_piece_finished(
+            piece_id,
+            self.content.get_persistent_cache_task_path(task_id),
+            piece.offset,
+            piece.length,
+        );
         Ok(piece)
     }
 
@@ -1351,6 +1393,9 @@ impl Storage {
         let piece = self
             .wait_for_persistent_cache_piece_finished(piece_id)
             .await?;
+
+        // Start recording the upload of the persistent cache piece in the page cache.
+        self.page_cache.upload_piece_started(piece_id);
 
         // Start uploading the persistent cache task.
         self.metadata.upload_persistent_cache_task_started(task_id);

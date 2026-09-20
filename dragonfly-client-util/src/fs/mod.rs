@@ -139,6 +139,33 @@ pub async fn fadvise_willneed(f: &std::fs::File, offset: u64, length: u64) -> Re
     Ok(())
 }
 
+/// Drops the cached pages of the range, only on Linux.
+#[allow(unused_variables)]
+pub async fn fadvise_dontneed_range(f: &std::fs::File, offset: u64, length: u64) -> Result<()> {
+    if length == 0 {
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use dragonfly_client_core::Error;
+        use rustix::fs::{fadvise, Advice};
+        use std::num::NonZeroU64;
+        use std::os::unix::io::AsFd;
+        use tokio::io;
+
+        let f = f.try_clone()?;
+        tokio::task::spawn_blocking(move || {
+            fadvise(f.as_fd(), offset, NonZeroU64::new(length), Advice::DontNeed)
+                .map_err(|err| Error::IO(io::Error::from_raw_os_error(err.raw_os_error())))
+        })
+        .await
+        .map_err(io::Error::other)??;
+    }
+
+    Ok(())
+}
+
 /// Sync file range initiates asynchronous writeback of the file range without
 /// waiting for it to complete, only on Linux.
 #[allow(unused_variables)]
@@ -255,6 +282,20 @@ mod tests {
 
         for (offset, length) in test_cases {
             sync_file_range(&f, offset, length).await.unwrap();
+            assert_eq!(std::fs::read(&path).unwrap(), CONTENT);
+        }
+    }
+
+    #[tokio::test]
+    async fn fadvise_dontneed_range_keeps_the_content_readable() {
+        let temp_dir = tempdir().unwrap();
+        let path = file(temp_dir.path());
+        let f = std::fs::File::open(&path).unwrap();
+
+        let test_cases = vec![(0, 13), (7, 5), (0, 0), (13, 100)];
+
+        for (offset, length) in test_cases {
+            fadvise_dontneed_range(&f, offset, length).await.unwrap();
             assert_eq!(std::fs::read(&path).unwrap(), CONTENT);
         }
     }

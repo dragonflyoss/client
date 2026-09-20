@@ -362,7 +362,7 @@ impl Content {
     }
 
     /// Returns the task path by task id.
-    fn get_task_path(&self, task_id: &str) -> PathBuf {
+    pub(crate) fn get_task_path(&self, task_id: &str) -> PathBuf {
         // The task needs split by the first 3 characters of task id(sha256) to
         // avoid too many files in one directory.
         let sub_dir = &task_id[..3];
@@ -648,7 +648,7 @@ impl Content {
     }
 
     /// Returns the persistent task path by task id.
-    fn get_persistent_task_path(&self, task_id: &str) -> PathBuf {
+    pub(crate) fn get_persistent_task_path(&self, task_id: &str) -> PathBuf {
         // The persistent task needs split by the first 3 characters of task id(sha256) to
         // avoid too many files in one directory.
         self.dir
@@ -942,7 +942,7 @@ impl Content {
     }
 
     /// Returns the persistent cache task path by task id.
-    fn get_persistent_cache_task_path(&self, task_id: &str) -> PathBuf {
+    pub(crate) fn get_persistent_cache_task_path(&self, task_id: &str) -> PathBuf {
         // The persistent cache task needs split by the first 3 characters of task id(sha256) to
         // avoid too many files in one directory.
         self.dir
