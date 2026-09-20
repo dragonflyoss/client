@@ -37,8 +37,9 @@ const MAX_CONCURRENT_DROP_COUNT: usize = 16;
 /// The capacity of the queue of the downloaded pieces waiting for the background task.
 const DEFAULT_QUEUE_CAPACITY: usize = 1024;
 
-/// The capacity of the cache of the recently read pieces, granted a second chance.
-const DEFAULT_REFERENCED_CACHE_CAPACITY: usize = 65536;
+/// The capacity of the cache of the recently read pieces, covering the pieces
+/// of a 64 GiB cgroup, so the reads of the dropped pieces evict none of them.
+const DEFAULT_REFERENCED_CACHE_CAPACITY: usize = 16384;
 
 /// Piece is a downloaded piece awaiting its drop from the page cache.
 struct Piece {
@@ -134,8 +135,10 @@ impl PageCache {
             return;
         }
 
+        // The cgroup v1 reports an unlimited memory as a huge limit.
+        let total = self.memory.get_stats().total;
         let mut limit = match self.memory.get_cgroup_stats(self.pid) {
-            Some(stats) if stats.limit > 0 => stats.limit as u64,
+            Some(stats) if stats.limit > 0 && (stats.limit as u64) < total => stats.limit as u64,
             _ => {
                 info!("page cache drop disabled without cgroup memory limit");
                 return;
@@ -162,7 +165,7 @@ impl PageCache {
             downloaded_length = 0;
             loop {
                 let current = match self.memory.get_cgroup_stats(self.pid) {
-                    Some(stats) if stats.limit > 0 => {
+                    Some(stats) if stats.limit > 0 && (stats.limit as u64) < total => {
                         limit = stats.limit as u64;
                         stats.current
                     }
