@@ -31,6 +31,7 @@ fs2.workspace = true
 bytes.workspace = true
 bytesize.workspace = true
 leaky-bucket.workspace = true
+lru.workspace = true
 vortex-protocol.workspace = true
 bincode = "1.3.3"
 walkdir = "2.5.0"
