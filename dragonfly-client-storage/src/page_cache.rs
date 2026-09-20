@@ -17,9 +17,7 @@
 use dragonfly_client_util::container::is_running_in_container;
 use dragonfly_client_util::fs::fadvise_dontneed_range;
 use dragonfly_client_util::sysinfo::memory::Memory;
-use lru::LruCache;
-use std::collections::VecDeque;
-use std::num::NonZeroUsize;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, Semaphore};
@@ -36,10 +34,6 @@ const MAX_CONCURRENT_DROP_COUNT: usize = 16;
 
 /// The capacity of the queue of the downloaded pieces waiting for the background task.
 const DEFAULT_QUEUE_CAPACITY: usize = 1024;
-
-/// The capacity of the cache of the recently read pieces, covering the pieces
-/// of a 64 GiB cgroup, so the reads of the dropped pieces evict none of them.
-const DEFAULT_REFERENCED_CACHE_CAPACITY: usize = 16384;
 
 /// Piece is a downloaded piece awaiting its drop from the page cache.
 struct Piece {
@@ -62,8 +56,9 @@ pub struct PageCache {
     /// Hands the downloaded pieces to the background task.
     tx: mpsc::Sender<Piece>,
 
-    /// The pieces read since their download, granted a second chance.
-    referenced: Mutex<LruCache<String, ()>>,
+    /// Whether each queued piece was read since its download, granting it a
+    /// second chance. Mirrors the queue, so it holds nothing else.
+    referenced: Mutex<HashMap<String, bool>>,
 
     /// Memory sampler used to read the cgroup memory usage and limit.
     memory: Memory,
@@ -82,9 +77,7 @@ impl PageCache {
         let (tx, rx) = mpsc::channel(DEFAULT_QUEUE_CAPACITY);
         let page_cache = Arc::new(Self {
             tx,
-            referenced: Mutex::new(LruCache::new(
-                NonZeroUsize::new(DEFAULT_REFERENCED_CACHE_CAPACITY).unwrap(),
-            )),
+            referenced: Mutex::new(HashMap::new()),
             memory: Memory::default(),
             pid: std::process::id(),
             is_running_in_container: is_running_in_container(),
@@ -104,6 +97,11 @@ impl PageCache {
             return;
         }
 
+        // Track the piece before it is readable, so no read of it is missed.
+        if let Ok(mut referenced) = self.referenced.lock() {
+            referenced.insert(id.to_string(), false);
+        }
+
         let piece = Piece {
             id: id.to_string(),
             path,
@@ -113,18 +111,22 @@ impl PageCache {
 
         if let Err(err) = self.tx.try_send(piece) {
             trace!("dropped downloaded piece: {}", err);
+            if let Ok(mut referenced) = self.referenced.lock() {
+                referenced.remove(id);
+            }
         }
     }
 
-    /// Marks the piece read, granting it a second chance.
+    /// Marks the queued piece read, granting it a second chance.
     pub fn upload_piece_started(&self, id: &str) {
         if self.tx.is_closed() {
             return;
         }
 
-        let id = id.to_string();
         if let Ok(mut referenced) = self.referenced.lock() {
-            referenced.put(id, ());
+            if let Some(referenced) = referenced.get_mut(id) {
+                *referenced = true;
+            }
         }
     }
 
@@ -182,6 +184,9 @@ impl PageCache {
                     };
 
                     pieces_length -= piece.length;
+                    if let Ok(mut referenced) = self.referenced.lock() {
+                        referenced.remove(&piece.id);
+                    }
                 }
 
                 // Drop what exceeds the threshold, but keep the room above it in
@@ -222,7 +227,7 @@ impl PageCache {
     /// per piece, so the readers never wait for a whole scan.
     fn select_drop_pieces(
         pieces: &mut VecDeque<Piece>,
-        referenced: &Mutex<LruCache<String, ()>>,
+        referenced: &Mutex<HashMap<String, bool>>,
         need_drop_length: u64,
     ) -> Vec<Piece> {
         let mut drop_pieces = Vec::new();
@@ -235,16 +240,24 @@ impl PageCache {
             let Some(piece) = pieces.pop_front() else {
                 break;
             };
-            let is_referenced = referenced
-                .lock()
-                .is_ok_and(|mut referenced| referenced.pop(&piece.id).is_some());
-            if is_referenced {
-                pieces.push_back(piece);
-                continue;
-            }
 
-            drop_length += piece.length;
-            drop_pieces.push(piece);
+            let Ok(mut referenced) = referenced.lock() else {
+                break;
+            };
+
+            match referenced.get_mut(&piece.id) {
+                Some(is_referenced) if *is_referenced => {
+                    *is_referenced = false;
+                    drop(referenced);
+                    pieces.push_back(piece);
+                }
+                _ => {
+                    referenced.remove(&piece.id);
+                    drop(referenced);
+                    drop_length += piece.length;
+                    drop_pieces.push(piece);
+                }
+            }
         }
 
         drop_pieces
@@ -279,12 +292,12 @@ mod tests {
             .collect()
     }
 
-    fn referenced_of(ids: &[&str]) -> Mutex<LruCache<String, ()>> {
-        let mut referenced = LruCache::new(NonZeroUsize::new(16).unwrap());
-        for id in ids {
-            referenced.put(id.to_string(), ());
-        }
-        Mutex::new(referenced)
+    fn referenced_of(ids: &[&str], read: &[&str]) -> Mutex<HashMap<String, bool>> {
+        Mutex::new(
+            ids.iter()
+                .map(|id| (id.to_string(), read.contains(id)))
+                .collect(),
+        )
     }
 
     fn ids_of(pieces: &[Piece]) -> Vec<&str> {
@@ -317,12 +330,19 @@ mod tests {
 
         for (ids, read, need_drop_length, expected_drops, expected_pieces) in test_cases {
             let mut pieces = pieces_of(ids);
-            let referenced = referenced_of(read);
+            let referenced = referenced_of(ids, read);
             let drop_pieces =
                 PageCache::select_drop_pieces(&mut pieces, &referenced, need_drop_length);
             assert_eq!(ids_of(&drop_pieces), expected_drops);
             assert_eq!(ids_of(pieces.make_contiguous()), expected_pieces);
-            assert_eq!(referenced.lock().unwrap().len(), 0);
+
+            let referenced = referenced.lock().unwrap();
+            let mut tracked: Vec<&str> = referenced.keys().map(String::as_str).collect();
+            tracked.sort_unstable();
+            let mut remaining = ids_of(pieces.make_contiguous());
+            remaining.sort_unstable();
+            assert_eq!(tracked, remaining);
+            assert!(referenced.values().all(|is_referenced| !is_referenced));
         }
     }
 }

@@ -1547,7 +1547,6 @@ dependencies = [
  "fs2",
  "futures",
  "leaky-bucket",
- "lru",
  "prost-wkt-types",
  "quinn",
  "reqwest 0.12.28",
