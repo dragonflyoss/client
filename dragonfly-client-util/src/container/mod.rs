@@ -72,7 +72,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_is_running_in_container() {
-        let _ = is_running_in_container();
+    fn is_running_in_container_detects_the_container_env_vars() {
+        let test_cases = vec![
+            "KUBERNETES_SERVICE_HOST",
+            "DOCKER_CONTAINER",
+            "container",
+            "PODMAN_CONTAINER",
+        ];
+
+        for var in test_cases {
+            std::env::set_var(var, "1");
+            let detected = is_running_in_container();
+            std::env::remove_var(var);
+            assert!(detected);
+        }
     }
 }

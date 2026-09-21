@@ -1052,3 +1052,236 @@ impl PersistentCacheParentSelector {
         max_bw.saturating_sub(tx_bw).max(max_bw / 10)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::type_complexity)]
+
+    use super::*;
+    use dragonfly_api::common::v2::Host;
+
+    #[test]
+    fn connection_active_requests_tracks_increments_and_decrements() {
+        let test_cases = vec![(0, 0, 0), (3, 0, 3), (3, 2, 1), (2, 2, 0)];
+
+        for (increments, decrements, expected) in test_cases {
+            let connection = Connection::new();
+            for _ in 0..increments {
+                connection.increment_request();
+            }
+
+            for _ in 0..decrements {
+                connection.decrement_request();
+            }
+
+            assert_eq!(connection.active_requests(), expected);
+        }
+    }
+
+    #[test]
+    fn calculate_weight_by_network_floors_idle_bandwidth_at_ten_percent() {
+        let test_cases = vec![
+            (0, None, DEFAULT_NETWORK_WEIGHT),
+            (1000, None, 1000),
+            (1000, Some(300), 700),
+            (1000, Some(950), 100),
+            (1000, Some(2000), 100),
+        ];
+
+        for (max_tx_bandwidth, tx_bandwidth, expected) in test_cases {
+            let network = Network {
+                max_tx_bandwidth,
+                tx_bandwidth,
+                ..Default::default()
+            };
+            assert_eq!(
+                ParentSelector::calculate_weight_by_network(&network),
+                expected
+            );
+            assert_eq!(
+                PersistentParentSelector::calculate_weight_by_network(&network),
+                expected
+            );
+            assert_eq!(
+                PersistentCacheParentSelector::calculate_weight_by_network(&network),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn select_prefers_weighted_parents_and_falls_back_to_uniform() {
+        let config = Arc::new(Config::default());
+        let id_generator = Arc::new(IDGenerator::new(
+            "127.0.0.1".to_string(),
+            "localhost".to_string(),
+            false,
+        ));
+        let (shutdown_complete_tx, _) = mpsc::unbounded_channel();
+
+        let test_cases: Vec<(Vec<(&str, Option<&str>)>, Vec<(&str, u64)>, fn(&[String]))> = vec![
+            (
+                vec![("a", Some("host-a")), ("b", Some("host-b"))],
+                vec![("host-a", 0)],
+                |selected| assert!(selected.iter().all(|id| id == "a" || id == "b")),
+            ),
+            (
+                vec![("a", Some("host-a")), ("b", Some("host-b"))],
+                vec![("host-b", 500)],
+                |selected| assert!(selected.iter().all(|id| id == "b")),
+            ),
+            (
+                vec![("a", None), ("b", Some("host-b"))],
+                vec![("host-b", 500)],
+                |selected| assert!(selected.iter().all(|id| id == "b")),
+            ),
+        ];
+
+        for (parents, weights, expect) in test_cases {
+            let selector = ParentSelector::new(
+                config.clone(),
+                id_generator.clone(),
+                Shutdown::new(),
+                shutdown_complete_tx.clone(),
+            );
+            for (host_id, weight) in weights {
+                selector.weights.insert(host_id.to_string(), weight);
+            }
+
+            let parents: Vec<CollectedParent> = parents
+                .into_iter()
+                .map(|(id, host_id)| CollectedParent {
+                    id: id.to_string(),
+                    host: host_id.map(|host_id| Host {
+                        id: host_id.to_string(),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+                .collect();
+            let selected: Vec<String> = (0..20).map(|_| selector.select(&parents).id).collect();
+            expect(&selected);
+        }
+    }
+
+    #[test]
+    fn unregister_releases_connection_and_weight_at_zero_requests() {
+        let config = Arc::new(Config::default());
+        let id_generator = Arc::new(IDGenerator::new(
+            "127.0.0.1".to_string(),
+            "localhost".to_string(),
+            false,
+        ));
+        let (shutdown_complete_tx, _) = mpsc::unbounded_channel();
+
+        let test_cases: Vec<(
+            usize,
+            Vec<Option<&str>>,
+            fn(&DashMap<String, Connection>, &DashMap<String, u64>),
+        )> = vec![
+            (2, vec![Some("host-a")], |connections, weights| {
+                assert_eq!(connections.get("host-a").unwrap().active_requests(), 1);
+                assert!(weights.contains_key("host-a"));
+            }),
+            (1, vec![Some("host-a")], |connections, weights| {
+                assert!(connections.is_empty());
+                assert!(weights.is_empty());
+            }),
+            (1, vec![None], |connections, weights| {
+                assert_eq!(connections.get("host-a").unwrap().active_requests(), 1);
+                assert!(weights.contains_key("host-a"));
+            }),
+            (1, vec![Some("host-b")], |connections, weights| {
+                assert_eq!(connections.get("host-a").unwrap().active_requests(), 1);
+                assert!(weights.contains_key("host-a"));
+            }),
+        ];
+
+        for (active_requests, unregistered, expect) in test_cases {
+            let hosts: Vec<Option<Host>> = unregistered
+                .iter()
+                .map(|host_id| {
+                    host_id.map(|host_id| Host {
+                        id: host_id.to_string(),
+                        ..Default::default()
+                    })
+                })
+                .collect();
+            let peers: Vec<Peer> = hosts
+                .iter()
+                .map(|host| Peer {
+                    host: host.clone(),
+                    ..Default::default()
+                })
+                .collect();
+            let persistent_peers: Vec<PersistentPeer> = hosts
+                .iter()
+                .map(|host| PersistentPeer {
+                    host: host.clone(),
+                    ..Default::default()
+                })
+                .collect();
+            let persistent_cache_peers: Vec<PersistentCachePeer> = hosts
+                .iter()
+                .map(|host| PersistentCachePeer {
+                    host: host.clone(),
+                    ..Default::default()
+                })
+                .collect();
+
+            let selector = ParentSelector::new(
+                config.clone(),
+                id_generator.clone(),
+                Shutdown::new(),
+                shutdown_complete_tx.clone(),
+            );
+            let connection = Connection::new();
+            for _ in 0..active_requests {
+                connection.increment_request();
+            }
+
+            selector
+                .connections
+                .insert("host-a".to_string(), connection);
+            selector.weights.insert("host-a".to_string(), 500);
+            selector.unregister(&peers);
+            expect(&selector.connections, &selector.weights);
+
+            let selector = PersistentParentSelector::new(
+                config.clone(),
+                id_generator.clone(),
+                Shutdown::new(),
+                shutdown_complete_tx.clone(),
+            );
+            let connection = Connection::new();
+            for _ in 0..active_requests {
+                connection.increment_request();
+            }
+
+            selector
+                .connections
+                .insert("host-a".to_string(), connection);
+            selector.weights.insert("host-a".to_string(), 500);
+            selector.unregister(&persistent_peers);
+            expect(&selector.connections, &selector.weights);
+
+            let selector = PersistentCacheParentSelector::new(
+                config.clone(),
+                id_generator.clone(),
+                Shutdown::new(),
+                shutdown_complete_tx.clone(),
+            );
+            let connection = Connection::new();
+            for _ in 0..active_requests {
+                connection.increment_request();
+            }
+
+            selector
+                .connections
+                .insert("host-a".to_string(), connection);
+            selector.weights.insert("host-a".to_string(), 500);
+            selector.unregister(&persistent_cache_peers);
+            expect(&selector.connections, &selector.weights);
+        }
+    }
+}

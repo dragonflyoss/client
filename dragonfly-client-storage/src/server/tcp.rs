@@ -118,12 +118,6 @@ impl TCPServer {
             use std::os::unix::io::AsRawFd;
             use tracing::{info, warn};
 
-            if let Err(err) = socket.set_tcp_congestion("cubic".as_bytes()) {
-                warn!("failed to set tcp congestion: {}", err);
-            } else {
-                info!("set tcp congestion to cubic");
-            }
-
             if self.config.storage.server.tcp_fastopen {
                 if let Err(err) = set_tcp_fastopen(socket.as_raw_fd()) {
                     warn!("failed to enable tcp fastopen: {}", err);
@@ -188,20 +182,50 @@ pub struct TCPServerHandler {
 
 /// Implements the request handler.
 impl TCPServerHandler {
-    /// Handles a single TCP connection for the Dragonfly P2P protocol.
-    ///
-    /// This is the main entry point for processing incoming TCP connections.
-    /// It reads the protocol header to determine the request type and dispatches
-    /// to the appropriate handler. Supports both regular piece downloads and
-    /// persistent cache piece downloads with proper request/response framing.
-    #[instrument(skip_all, fields(host_id, remote_address, task_id, piece_id))]
+    /// Handles a TCP connection for the Dragonfly P2P protocol, serving the
+    /// requests on it one after another until the client closes it or leaves
+    /// it idle for too long.
+    #[instrument(skip_all)]
     async fn handle(&self, stream: TcpStream, remote_address: String) -> ClientResult<()> {
         let (mut reader, mut writer) = stream.into_split();
-        let header = self.read_header(&mut reader).await?;
+        loop {
+            let header = match tokio::time::timeout(
+                super::DEFAULT_MAX_IDLE_TIMEOUT,
+                self.read_header(&mut reader),
+            )
+            .await
+            {
+                Ok(Ok(header)) => header,
+                Ok(Err(ClientError::IO(err)))
+                    if err.kind() == std::io::ErrorKind::UnexpectedEof =>
+                {
+                    return Ok(())
+                }
+                Ok(Err(err)) => return Err(err),
+                Err(_) => return Ok(()),
+            };
+
+            self.handle_request(header, &mut reader, &mut writer, &remote_address)
+                .await?;
+        }
+    }
+
+    /// Handles a request on the connection. It reads the request by the
+    /// header and dispatches to the appropriate handler. Supports both regular
+    /// piece downloads and persistent cache piece downloads with proper
+    /// request/response framing.
+    #[instrument(skip_all, fields(host_id, remote_address, task_id, piece_id))]
+    async fn handle_request(
+        &self,
+        header: Header,
+        reader: &mut OwnedReadHalf,
+        writer: &mut OwnedWriteHalf,
+        remote_address: &str,
+    ) -> ClientResult<()> {
         match header.tag() {
             Tag::DownloadPiece => {
                 let download_piece: DownloadPiece = self
-                    .read_download_piece(&mut reader, header.length() as usize)
+                    .read_download_piece(reader, header.length() as usize)
                     .await?;
 
                 // Generate the host id.
@@ -217,7 +241,7 @@ impl TCPServerHandler {
                 let piece_id = self.storage.piece_id(task_id, piece_number);
 
                 Span::current().record("host_id", host_id);
-                Span::current().record("remote_address", remote_address.as_str());
+                Span::current().record("remote_address", remote_address);
                 Span::current().record("task_id", task_id);
                 Span::current().record("piece_id", piece_id.as_str());
 
@@ -238,7 +262,7 @@ impl TCPServerHandler {
                         response.extend_from_slice(&header_bytes);
                         response.extend_from_slice(&piece_content_bytes);
 
-                        self.write_response(response.freeze(), &mut writer)
+                        self.write_response(response.freeze(), writer)
                             .await
                             .inspect_err(|err| {
                                 error!("failed to send piece content response: {}", err);
@@ -247,7 +271,7 @@ impl TCPServerHandler {
                                 collect_upload_piece_failure_metrics();
                             })?;
 
-                        self.write_stream(content_reader, &mut writer)
+                        self.write_stream(content_reader, writer)
                             .await
                             .inspect_err(|err| {
                                 error!("failed to send piece content stream: {}", err);
@@ -268,7 +292,7 @@ impl TCPServerHandler {
 
                         let error_response: Bytes =
                             Vortex::Error(Header::new_error(err.len() as u32), err).into();
-                        self.write_response(error_response, &mut writer).await?;
+                        self.write_response(error_response, writer).await?;
                     }
                 }
 
@@ -276,7 +300,7 @@ impl TCPServerHandler {
             }
             Tag::DownloadPersistentPiece => {
                 let download_persistent_piece: DownloadPersistentPiece = self
-                    .read_download_piece(&mut reader, header.length() as usize)
+                    .read_download_piece(reader, header.length() as usize)
                     .await?;
 
                 // Generate the host id.
@@ -292,7 +316,7 @@ impl TCPServerHandler {
                 let piece_id = self.storage.piece_id(task_id, piece_number);
 
                 Span::current().record("host_id", host_id);
-                Span::current().record("remote_address", remote_address.as_str());
+                Span::current().record("remote_address", remote_address);
                 Span::current().record("task_id", task_id);
                 Span::current().record("piece_id", piece_id.as_str());
 
@@ -319,7 +343,7 @@ impl TCPServerHandler {
                         response.extend_from_slice(&header_bytes);
                         response.extend_from_slice(&persistent_piece_content_bytes);
 
-                        self.write_response(response.freeze(), &mut writer)
+                        self.write_response(response.freeze(), writer)
                             .await
                             .inspect_err(|err| {
                                 error!("failed to send persistent piece content response: {}", err);
@@ -328,7 +352,7 @@ impl TCPServerHandler {
                                 collect_upload_piece_failure_metrics();
                             })?;
 
-                        self.write_stream(content_reader, &mut writer)
+                        self.write_stream(content_reader, writer)
                             .await
                             .inspect_err(|err| {
                                 error!("failed to send persistent piece content stream: {}", err);
@@ -349,7 +373,7 @@ impl TCPServerHandler {
 
                         let error_response: Bytes =
                             Vortex::Error(Header::new_error(err.len() as u32), err).into();
-                        self.write_response(error_response, &mut writer).await?;
+                        self.write_response(error_response, writer).await?;
                     }
                 }
 
@@ -357,7 +381,7 @@ impl TCPServerHandler {
             }
             Tag::DownloadPersistentCachePiece => {
                 let download_persistent_cache_piece: DownloadPersistentCachePiece = self
-                    .read_download_piece(&mut reader, header.length() as usize)
+                    .read_download_piece(reader, header.length() as usize)
                     .await?;
 
                 // Generate the host id.
@@ -373,7 +397,7 @@ impl TCPServerHandler {
                 let piece_id = self.storage.piece_id(task_id, piece_number);
 
                 Span::current().record("host_id", host_id);
-                Span::current().record("remote_address", remote_address.as_str());
+                Span::current().record("remote_address", remote_address);
                 Span::current().record("task_id", task_id);
                 Span::current().record("piece_id", piece_id.as_str());
 
@@ -402,7 +426,7 @@ impl TCPServerHandler {
                         response.extend_from_slice(&header_bytes);
                         response.extend_from_slice(&persistent_cache_piece_content_bytes);
 
-                        self.write_response(response.freeze(), &mut writer)
+                        self.write_response(response.freeze(), writer)
                             .await
                             .inspect_err(|err| {
                                 error!(
@@ -414,7 +438,7 @@ impl TCPServerHandler {
                                 collect_upload_piece_failure_metrics();
                             })?;
 
-                        self.write_stream(content_reader, &mut writer)
+                        self.write_stream(content_reader, writer)
                             .await
                             .inspect_err(|err| {
                                 error!(
@@ -438,7 +462,7 @@ impl TCPServerHandler {
 
                         let error_response: Bytes =
                             Vortex::Error(Header::new_error(err.len() as u32), err).into();
-                        self.write_response(error_response, &mut writer).await?;
+                        self.write_response(error_response, writer).await?;
                     }
                 }
 
@@ -651,13 +675,7 @@ impl TCPServerHandler {
     async fn read_header(&self, reader: &mut OwnedReadHalf) -> ClientResult<Header> {
         let mut header_bytes = BytesMut::with_capacity(HEADER_SIZE);
         header_bytes.resize(HEADER_SIZE, 0);
-        reader
-            .read_exact(&mut header_bytes)
-            .await
-            .inspect_err(|err| {
-                error!("failed to receive header: {}", err);
-            })?;
-
+        reader.read_exact(&mut header_bytes).await?;
         Header::try_from(header_bytes.freeze()).map_err(Into::into)
     }
 
@@ -721,11 +739,17 @@ impl TCPServerHandler {
     ) -> ClientResult<()> {
         debug!("start to write stream to tcp writer");
         let (fd, offset, remaining) = reader.into_parts();
-        sendfile_range(writer.as_ref(), &fd, offset, remaining)
+        let sent = sendfile_range(writer.as_ref(), &fd, offset, remaining)
             .await
             .inspect_err(|err| {
                 error!("sendfile failed: {}", err);
             })?;
+
+        if sent != remaining {
+            return Err(ClientError::Unknown(format!(
+                "expected length {remaining} but sent {sent}"
+            )));
+        }
 
         writer.flush().await.inspect_err(|err| {
             error!("flush failed: {}", err);
@@ -750,9 +774,16 @@ impl TCPServerHandler {
         writer: &mut OwnedWriteHalf,
     ) -> ClientResult<()> {
         debug!("start to write stream to tcp writer");
-        copy_buf(&mut reader, writer).await.inspect_err(|err| {
+        let remaining = reader.remaining();
+        let sent = copy_buf(&mut reader, writer).await.inspect_err(|err| {
             error!("copy failed: {}", err);
         })?;
+
+        if sent != remaining {
+            return Err(ClientError::Unknown(format!(
+                "expected length {remaining} but sent {sent}"
+            )));
+        }
 
         writer.flush().await.inspect_err(|err| {
             error!("flush failed: {}", err);
@@ -764,18 +795,21 @@ impl TCPServerHandler {
 }
 
 /// Sends `remaining` bytes of the file starting at `offset` to the TCP stream
-/// with sendfile. The socket is nonblocking, so each sendfile call is driven
-/// by the write readiness of the stream and retried when the socket buffer is
-/// full. The file offset is passed explicitly to every call, so the file
-/// cursor of the shared descriptor never moves. Stops at the end of the file
-/// even if the range is longer, matching the RangeReader semantics.
+/// with sendfile and returns the sent length. The socket is nonblocking, so
+/// each sendfile call is driven by the write readiness of the stream and
+/// retried when the socket buffer is full. The file offset is passed
+/// explicitly to every call, so the file cursor of the shared descriptor never
+/// moves. Stops at the end of the file even if the range is longer, matching
+/// the RangeReader semantics.
 #[cfg(target_os = "linux")]
 async fn sendfile_range(
     stream: &TcpStream,
     fd: &std::fs::File,
     mut offset: u64,
     mut remaining: u64,
-) -> std::io::Result<()> {
+) -> std::io::Result<u64> {
+    let mut sent = 0;
+
     // The maximum number of bytes of a single sendfile call, limited by the
     // kernel to 0x7ffff000 on Linux.
     const MAX_SENDFILE_COUNT: u64 = 0x7fff_f000;
@@ -793,6 +827,7 @@ async fn sendfile_range(
             Ok(n) => {
                 offset += n;
                 remaining -= n;
+                sent += n;
             }
             Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => continue,
             Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -800,15 +835,36 @@ async fn sendfile_range(
         }
     }
 
-    Ok(())
+    Ok(sent)
 }
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    use crate::client::tcp::TCPClient;
+    use bytesize::ByteSize;
+    use dragonfly_client_util::{buffer_pool::BufferPool, ratelimiter::new_bandwidth_limiter};
+    use futures::StreamExt;
+    use std::io::Seek;
+    use std::path::Path;
+    use std::time::Duration;
 
-    fn pattern(length: usize) -> Vec<u8> {
-        (0..length).map(|i| (i % 251) as u8).collect()
+    const DATA_LENGTH: u64 = 8 * 1024 * 1024;
+    const TASK_ID: &str = "d3add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14a";
+    const CONTENT: &[u8] = b"piece content";
+    const CONTENT_DIGEST: &str = "crc32:2533597436";
+
+    async fn handler(dir: &Path) -> TCPServerHandler {
+        let config = Arc::new(Config::default());
+        TCPServerHandler {
+            id_generator: Arc::new(IDGenerator::new(
+                "127.0.0.1".to_string(),
+                "localhost".to_string(),
+                false,
+            )),
+            storage: Arc::new(Storage::new(config, dir, dir.to_path_buf()).await.unwrap()),
+            upload_bandwidth_limiter: Arc::new(new_bandwidth_limiter(ByteSize::gb(1))),
+        }
     }
 
     async fn tcp_pair() -> (TcpStream, TcpStream) {
@@ -816,92 +872,137 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let sender = TcpStream::connect(addr).await.unwrap();
         let (receiver, _) = listener.accept().await.unwrap();
+        socket2::SockRef::from(&sender)
+            .set_send_buffer_size(16 * 1024)
+            .unwrap();
         (sender, receiver)
     }
 
     #[tokio::test]
-    async fn test_sendfile_range() {
+    async fn sendfile_range_sends_the_range_until_eof() {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().join("task");
-        let data = pattern(8 * 1024 * 1024);
+        let data: Vec<u8> = (0..DATA_LENGTH).map(|i| (i % 251) as u8).collect();
         tokio::fs::write(&path, &data).await.unwrap();
-        let fd = std::fs::File::open(&path).unwrap();
 
-        let (sender, mut receiver) = tcp_pair().await;
-        socket2::SockRef::from(&sender)
-            .set_send_buffer_size(16 * 1024)
-            .unwrap();
+        let test_cases: Vec<(u64, u64, &[u8])> = vec![
+            (0, DATA_LENGTH, &data[..]),
+            (1_000, 50_000, &data[1_000..51_000]),
+            (0, DATA_LENGTH + 4096, &data[..]),
+            (0, 0, &[]),
+            (DATA_LENGTH, 5, &[]),
+        ];
 
-        let length = data.len() as u64;
-        let sender_handle = tokio::spawn(async move {
-            sendfile_range(&sender, &fd, 0, length).await.unwrap();
-            fd
-        });
+        for (offset, remaining, expected) in test_cases {
+            let fd = std::fs::File::open(&path).unwrap();
+            let (sender, mut receiver) = tcp_pair().await;
+            let sender_handle = tokio::spawn(async move {
+                let sent = sendfile_range(&sender, &fd, offset, remaining)
+                    .await
+                    .unwrap();
+                (fd, sent)
+            });
 
-        let mut received = Vec::new();
-        receiver.read_to_end(&mut received).await.unwrap();
-        assert_eq!(received, data);
+            let mut received = Vec::new();
+            receiver.read_to_end(&mut received).await.unwrap();
+            assert_eq!(received, expected);
 
-        use std::io::Seek as _;
-        let fd = sender_handle.await.unwrap();
-        assert_eq!((&fd).stream_position().unwrap(), 0);
+            let (fd, sent) = sender_handle.await.unwrap();
+            assert_eq!(sent, expected.len() as u64);
+            assert_eq!((&fd).stream_position().unwrap(), 0);
+        }
     }
 
     #[tokio::test]
-    async fn test_sendfile_range_sub_range() {
+    async fn sendfile_range_fails_when_the_peer_closed() {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().join("task");
-        let data = pattern(64 * 1024);
-        tokio::fs::write(&path, &data).await.unwrap();
-        let fd = std::fs::File::open(&path).unwrap();
-
-        let (sender, mut receiver) = tcp_pair().await;
-        tokio::spawn(async move {
-            sendfile_range(&sender, &fd, 1_000, 50_000).await.unwrap();
-        });
-
-        let mut received = Vec::new();
-        receiver.read_to_end(&mut received).await.unwrap();
-        assert_eq!(received, &data[1_000..51_000]);
-    }
-
-    #[tokio::test]
-    async fn test_sendfile_range_stops_at_eof() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let path = temp_dir.path().join("task");
-        let data = pattern(64 * 1024);
-        tokio::fs::write(&path, &data).await.unwrap();
-        let fd = std::fs::File::open(&path).unwrap();
-
-        let (sender, mut receiver) = tcp_pair().await;
-        let length = data.len() as u64;
-        tokio::spawn(async move {
-            sendfile_range(&sender, &fd, 0, length + 4096)
-                .await
-                .unwrap();
-        });
-
-        let mut received = Vec::new();
-        receiver.read_to_end(&mut received).await.unwrap();
-        assert_eq!(received, data);
-    }
-
-    #[tokio::test]
-    async fn test_sendfile_range_peer_closed() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let path = temp_dir.path().join("task");
-        let data = pattern(8 * 1024 * 1024);
+        let data: Vec<u8> = (0..DATA_LENGTH).map(|i| (i % 251) as u8).collect();
         tokio::fs::write(&path, &data).await.unwrap();
         let fd = std::fs::File::open(&path).unwrap();
 
         let (sender, receiver) = tcp_pair().await;
-        socket2::SockRef::from(&sender)
-            .set_send_buffer_size(16 * 1024)
-            .unwrap();
         drop(receiver);
 
-        assert!(sendfile_range(&sender, &fd, 0, data.len() as u64)
+        let result = sendfile_range(&sender, &fd, 0, DATA_LENGTH).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn handle_serves_the_requests_on_the_connection_until_the_client_closes_it() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let handler = handler(temp_dir.path()).await;
+        handler
+            .storage
+            .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
             .await
-            .is_err());
+            .unwrap();
+        let piece_id = handler.storage.piece_id(TASK_ID, 0);
+        handler
+            .storage
+            .download_piece_started(&piece_id, 0, 0, CONTENT.len() as u64)
+            .await
+            .unwrap();
+        let mut stream = futures::stream::iter([Ok(Bytes::from_static(CONTENT))]);
+        handler
+            .storage
+            .download_piece_from_source_finished(
+                &piece_id,
+                TASK_ID,
+                0,
+                CONTENT.len() as u64,
+                &mut stream,
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, remote_address) = listener.accept().await.unwrap();
+            handler.handle(stream, remote_address.to_string()).await
+        });
+
+        let client = TCPClient::new(Arc::new(Config::default()), addr.to_string());
+        for _ in 0..2 {
+            let (mut content, offset, digest) = client.download_piece(0, TASK_ID).await.unwrap();
+            let mut received = Vec::new();
+            while let Some(chunk) = content.next().await {
+                received.extend_from_slice(&chunk.unwrap());
+            }
+
+            assert_eq!(offset, 0);
+            assert_eq!(digest, CONTENT_DIGEST);
+            assert_eq!(received, CONTENT);
+        }
+        assert!(!server.is_finished());
+
+        drop(client);
+        assert!(server.await.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn write_stream_fails_on_a_short_send() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let handler = handler(temp_dir.path()).await;
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, CONTENT).await.unwrap();
+        let fd = Arc::new(std::fs::File::open(&path).unwrap());
+
+        let test_cases = vec![
+            (CONTENT.len() as u64, true),
+            (CONTENT.len() as u64 + 1, false),
+        ];
+
+        for (length, expected_ok) in test_cases {
+            let (sender, _receiver) = tcp_pair().await;
+            let (_, mut writer) = sender.into_split();
+            let reader = RangeReader::new(fd.clone(), 0, length, 4096, BufferPool::new(1024));
+            assert_eq!(
+                handler.write_stream(reader, &mut writer).await.is_ok(),
+                expected_ok
+            );
+        }
     }
 }

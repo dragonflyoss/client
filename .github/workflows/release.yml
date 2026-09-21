@@ -14,13 +14,13 @@ jobs:
     strategy:
       matrix:
         include:
-          - runner: [oracle-vm-24cpu-96gb-x86-64]
+          - runner: [cncf-ubuntu-24-96-x86]
             target: x86_64-unknown-linux-gnu
-          - runner: [oracle-vm-24cpu-96gb-x86-64]
+          - runner: [cncf-ubuntu-24-96-x86]
             target: x86_64-unknown-linux-musl
-          - runner: [oracle-vm-32cpu-128gb-arm64]
+          - runner: [cncf-ubuntu-32-128-arm]
             target: aarch64-unknown-linux-gnu
-          - runner: [oracle-vm-32cpu-128gb-arm64]
+          - runner: [cncf-ubuntu-32-128-arm]
             target: aarch64-unknown-linux-musl
 
     steps:
@@ -69,7 +69,7 @@ jobs:
           tool: cargo-deb@2.10.0
 
       - name: Install cargo-generate-rpm
-        uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d
+        uses: taiki-e/install-action@4076c08d76dba979c11a7285295b0716c1d67908
         with:
           tool: cargo-generate-rpm@0.16.0
 
@@ -149,7 +149,7 @@ jobs:
   publish-crates:
     runs-on:
       group: Default
-      labels: [oracle-vm-24cpu-96gb-x86-64]
+      labels: [cncf-ubuntu-24-96-x86]
     timeout-minutes: 360
     steps:
       - name: Free Disk Space (Ubuntu)

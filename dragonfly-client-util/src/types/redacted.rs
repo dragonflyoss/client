@@ -273,128 +273,176 @@ fn scrub_open_csg(csg: &mut Option<OpenCsg>) {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
 
-    fn make_object_storage() -> ObjectStorage {
-        ObjectStorage {
-            access_key_id: Some("AKIAIOSFODNN7EXAMPLE".to_string()),
-            access_key_secret: Some("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string()),
-            session_token: Some("FQoGZXIvYXdzEJr...".to_string()),
-            security_token: Some("sec-token-xyz".to_string()),
-            credential_path: Some("/etc/gcp/creds.json".to_string()),
-            ..Default::default()
+    const ACCESS_KEY_SECRET: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+
+    #[test]
+    fn scrub_object_storage_redacts_only_present_secrets() {
+        let test_cases: Vec<(Option<ObjectStorage>, fn(Option<ObjectStorage>))> = vec![
+            (
+                Some(ObjectStorage {
+                    access_key_id: Some("AKIAIOSFODNN7EXAMPLE".to_string()),
+                    access_key_secret: Some(ACCESS_KEY_SECRET.to_string()),
+                    session_token: Some("FQoGZXIvYXdzEJr...".to_string()),
+                    security_token: Some("sec-token-xyz".to_string()),
+                    credential_path: Some("/etc/gcp/creds.json".to_string()),
+                    ..Default::default()
+                }),
+                |object_storage| {
+                    let object_storage = object_storage.unwrap();
+                    assert_eq!(object_storage.access_key_secret.as_deref(), Some(REDACTED));
+                    assert_eq!(object_storage.session_token.as_deref(), Some(REDACTED));
+                    assert_eq!(object_storage.security_token.as_deref(), Some(REDACTED));
+                    assert_eq!(object_storage.credential_path.as_deref(), Some(REDACTED));
+                    assert_eq!(
+                        object_storage.access_key_id.as_deref(),
+                        Some("AKIAIOSFODNN7EXAMPLE")
+                    );
+                },
+            ),
+            (
+                Some(ObjectStorage {
+                    access_key_id: Some("AKIA...".to_string()),
+                    ..Default::default()
+                }),
+                |object_storage| {
+                    let object_storage = object_storage.unwrap();
+                    assert!(object_storage.access_key_secret.is_none());
+                    assert!(object_storage.session_token.is_none());
+                    assert!(object_storage.security_token.is_none());
+                    assert!(object_storage.credential_path.is_none());
+                    assert_eq!(object_storage.access_key_id.as_deref(), Some("AKIA..."));
+                },
+            ),
+            (None, |object_storage| assert!(object_storage.is_none())),
+        ];
+
+        for (mut object_storage, expect) in test_cases {
+            scrub_object_storage(&mut object_storage);
+            expect(object_storage);
         }
     }
 
     #[test]
-    fn scrub_object_storage_redacts_all_secret_fields() {
-        let mut os = Some(make_object_storage());
-        scrub_object_storage(&mut os);
-        let os = os.unwrap();
+    fn scrub_backends_redact_only_present_tokens() {
+        let test_cases: Vec<(fn() -> Option<String>, Option<&str>)> = vec![
+            (
+                || {
+                    let mut hdfs = Some(Hdfs {
+                        delegation_token: Some("super-secret-token".to_string()),
+                    });
+                    scrub_hdfs(&mut hdfs);
+                    hdfs.unwrap().delegation_token
+                },
+                Some(REDACTED),
+            ),
+            (
+                || {
+                    let mut hdfs = Some(Hdfs {
+                        delegation_token: None,
+                    });
+                    scrub_hdfs(&mut hdfs);
+                    hdfs.unwrap().delegation_token
+                },
+                None,
+            ),
+            (
+                || {
+                    let mut hugging_face = Some(HuggingFace {
+                        token: Some("hf_xxxxx".to_string()),
+                        ..Default::default()
+                    });
+                    scrub_hugging_face(&mut hugging_face);
+                    hugging_face.unwrap().token
+                },
+                Some(REDACTED),
+            ),
+            (
+                || {
+                    let mut hugging_face = Some(HuggingFace::default());
+                    scrub_hugging_face(&mut hugging_face);
+                    hugging_face.unwrap().token
+                },
+                None,
+            ),
+            (
+                || {
+                    let mut model_scope = Some(ModelScope {
+                        token: Some("ms_xxxxx".to_string()),
+                        ..Default::default()
+                    });
+                    scrub_model_scope(&mut model_scope);
+                    model_scope.unwrap().token
+                },
+                Some(REDACTED),
+            ),
+            (
+                || {
+                    let mut model_scope = Some(ModelScope::default());
+                    scrub_model_scope(&mut model_scope);
+                    model_scope.unwrap().token
+                },
+                None,
+            ),
+            (
+                || {
+                    let mut open_csg = Some(OpenCsg {
+                        token: Some("csg_xxxxx".to_string()),
+                        ..Default::default()
+                    });
+                    scrub_open_csg(&mut open_csg);
+                    open_csg.unwrap().token
+                },
+                Some(REDACTED),
+            ),
+            (
+                || {
+                    let mut open_csg = Some(OpenCsg::default());
+                    scrub_open_csg(&mut open_csg);
+                    open_csg.unwrap().token
+                },
+                None,
+            ),
+        ];
 
-        assert_eq!(os.access_key_secret.as_deref(), Some(REDACTED));
-        assert_eq!(os.session_token.as_deref(), Some(REDACTED));
-        assert_eq!(os.security_token.as_deref(), Some(REDACTED));
-        assert_eq!(os.credential_path.as_deref(), Some(REDACTED));
-        assert_eq!(
-            os.access_key_id.as_deref(),
-            Some("AKIAIOSFODNN7EXAMPLE"),
-            "access_key_id must not be redacted"
-        );
+        for (scrub, expected) in test_cases {
+            assert_eq!(scrub().as_deref(), expected);
+        }
     }
 
     #[test]
-    fn scrub_object_storage_leaves_none_fields_as_none() {
-        let mut os = Some(ObjectStorage {
-            access_key_id: Some("AKIA...".to_string()),
-            access_key_secret: None,
-            session_token: None,
-            security_token: None,
-            credential_path: None,
-            ..Default::default()
-        });
-        scrub_object_storage(&mut os);
-        let os = os.unwrap();
+    fn is_key_request_header_matches_case_insensitively() {
+        let test_cases = vec![
+            ("Range", true),
+            ("RANGE", true),
+            ("user-agent", true),
+            ("Host", true),
+            ("X-Request-Id", true),
+            ("x-request-id", true),
+            ("Accept", false),
+            ("Authorization", false),
+            ("", false),
+        ];
 
-        assert!(os.access_key_secret.is_none());
-        assert!(os.session_token.is_none());
-        assert!(os.security_token.is_none());
-        assert!(os.credential_path.is_none());
-        assert_eq!(os.access_key_id.as_deref(), Some("AKIA..."));
-    }
-
-    #[test]
-    fn scrub_object_storage_handles_none_outer() {
-        let mut os: Option<ObjectStorage> = None;
-        scrub_object_storage(&mut os);
-        assert!(os.is_none());
-    }
-
-    #[test]
-    fn scrub_hdfs_redacts_delegation_token() {
-        let mut hdfs = Some(Hdfs {
-            delegation_token: Some("super-secret-token".to_string()),
-        });
-
-        scrub_hdfs(&mut hdfs);
-        assert_eq!(hdfs.unwrap().delegation_token.as_deref(), Some(REDACTED));
-    }
-
-    #[test]
-    fn scrub_hdfs_leaves_none_token_alone() {
-        let mut hdfs = Some(Hdfs {
-            delegation_token: None,
-        });
-
-        scrub_hdfs(&mut hdfs);
-        assert!(hdfs.unwrap().delegation_token.is_none());
-    }
-
-    #[test]
-    fn scrub_hugging_face_redacts_token() {
-        let mut hf = Some(HuggingFace {
-            token: Some("hf_xxxxx".to_string()),
-            ..Default::default()
-        });
-
-        scrub_hugging_face(&mut hf);
-        assert_eq!(hf.unwrap().token.as_deref(), Some(REDACTED));
-    }
-
-    #[test]
-    fn scrub_model_scope_redacts_token() {
-        let mut ms = Some(ModelScope {
-            token: Some("ms_xxxxx".to_string()),
-            ..Default::default()
-        });
-
-        scrub_model_scope(&mut ms);
-        assert_eq!(ms.unwrap().token.as_deref(), Some(REDACTED));
-    }
-
-    /// Verifies OpenCSG access tokens are replaced before logging.
-    #[test]
-    fn scrub_open_csg_redacts_token() {
-        let mut csg = Some(OpenCsg {
-            token: Some("csg_xxxxx".to_string()),
-            ..Default::default()
-        });
-
-        scrub_open_csg(&mut csg);
-        assert_eq!(csg.unwrap().token.as_deref(), Some(REDACTED));
+        for (name, expected) in test_cases {
+            assert_eq!(is_key_request_header(name), expected);
+        }
     }
 
     #[test]
     fn redacted_download_debug_does_not_leak_secrets() {
-        let mut header = HashMap::new();
-        header.insert(
-            "Authorization".to_string(),
-            "Bearer SECRET_BEARER".to_string(),
-        );
-        header.insert("X-Request-Id".to_string(), "req-42".to_string());
-
         let download = Download {
-            object_storage: Some(make_object_storage()),
+            object_storage: Some(ObjectStorage {
+                access_key_id: Some("AKIAIOSFODNN7EXAMPLE".to_string()),
+                access_key_secret: Some(ACCESS_KEY_SECRET.to_string()),
+                session_token: Some("FQoGZXIvYXdzEJr...".to_string()),
+                security_token: Some("sec-token-xyz".to_string()),
+                credential_path: Some("/etc/gcp/creds.json".to_string()),
+                ..Default::default()
+            }),
             hdfs: Some(Hdfs {
                 delegation_token: Some("HDFS_SECRET".to_string()),
             }),
@@ -410,13 +458,19 @@ mod tests {
                 token: Some("CSG_SECRET".to_string()),
                 ..Default::default()
             }),
-            request_header: header,
+            request_header: HashMap::from([
+                (
+                    "Authorization".to_string(),
+                    "Bearer SECRET_BEARER".to_string(),
+                ),
+                ("X-Request-Id".to_string(), "req-42".to_string()),
+            ]),
             ..Default::default()
         };
 
-        let download = format!("{:?}", RedactedDownload(&download));
+        let output = format!("{:?}", RedactedDownload(&download));
         for secret in [
-            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            ACCESS_KEY_SECRET,
             "FQoGZXIvYXdzEJr",
             "sec-token-xyz",
             "/etc/gcp/creds.json",
@@ -426,41 +480,49 @@ mod tests {
             "CSG_SECRET",
             "SECRET_BEARER",
         ] {
-            assert!(!download.contains(secret),);
+            assert!(!output.contains(secret));
         }
-        assert!(download.contains(REDACTED));
-        assert!(download.contains("AKIAIOSFODNN7EXAMPLE"),);
 
-        // The key request headers are printed, the rest are omitted, even
-        // their names.
-        assert!(download.contains("req-42"));
-        assert!(!download.contains("Authorization"));
+        assert!(output.contains(REDACTED));
+        assert!(output.contains("AKIAIOSFODNN7EXAMPLE"));
+        assert!(output.contains("req-42"));
+        assert!(!output.contains("Authorization"));
     }
 
     #[test]
     fn redacted_download_debug_prints_only_key_request_headers() {
-        let mut header = HashMap::new();
-        header.insert("Range".to_string(), "bytes=0-1023".to_string());
-        header.insert("User-Agent".to_string(), "dfget/2.3".to_string());
-        header.insert("Host".to_string(), "registry.example.com".to_string());
-        header.insert("Accept".to_string(), "application/octet-stream".to_string());
+        let test_cases = vec![
+            ("Range", "bytes=0-1023", true),
+            ("User-Agent", "dfget/2.3", true),
+            ("host", "registry.example.com", true),
+            ("X-Request-Id", "req-42", true),
+            ("Accept", "application/octet-stream", false),
+            ("Authorization", "Bearer SECRET_BEARER", false),
+        ];
 
-        let download = Download {
-            request_header: header,
-            ..Default::default()
-        };
+        for (name, value, expected) in test_cases {
+            let download = Download {
+                request_header: HashMap::from([(name.to_string(), value.to_string())]),
+                ..Default::default()
+            };
 
-        let out = format!("{:?}", RedactedDownload(&download));
-        assert!(out.contains("bytes=0-1023"));
-        assert!(out.contains("dfget/2.3"));
-        assert!(out.contains("registry.example.com"));
-        assert!(!out.contains("application/octet-stream"));
+            let output = format!("{:?}", RedactedDownload(&download));
+            assert_eq!(output.contains(name), expected);
+            assert_eq!(output.contains(value), expected);
+        }
     }
 
     #[test]
-    fn redacted_download_debug_does_not_mutate_original() {
+    fn redacted_download_debug_does_not_mutate_the_original() {
         let download = Download {
-            object_storage: Some(make_object_storage()),
+            object_storage: Some(ObjectStorage {
+                access_key_id: Some("AKIAIOSFODNN7EXAMPLE".to_string()),
+                access_key_secret: Some(ACCESS_KEY_SECRET.to_string()),
+                session_token: Some("FQoGZXIvYXdzEJr...".to_string()),
+                security_token: Some("sec-token-xyz".to_string()),
+                credential_path: Some("/etc/gcp/creds.json".to_string()),
+                ..Default::default()
+            }),
             hugging_face: Some(HuggingFace {
                 token: Some("HF_SECRET".to_string()),
                 ..Default::default()
@@ -468,11 +530,11 @@ mod tests {
             ..Default::default()
         };
         let _ = format!("{:?}", RedactedDownload(&download));
-        let os = download.object_storage.as_ref().unwrap();
 
+        let object_storage = download.object_storage.as_ref().unwrap();
         assert_eq!(
-            os.access_key_secret.as_deref(),
-            Some("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+            object_storage.access_key_secret.as_deref(),
+            Some(ACCESS_KEY_SECRET)
         );
         assert_eq!(
             download.hugging_face.as_ref().unwrap().token.as_deref(),
@@ -481,23 +543,37 @@ mod tests {
     }
 
     #[test]
+    fn redacted_download_debug_omits_redacted_without_secrets() {
+        let output = format!("{:?}", RedactedDownload(&Download::default()));
+        assert!(!output.contains(REDACTED));
+    }
+
+    #[test]
     fn redacted_persistent_task_request_debug_redacts_object_storage_only() {
         let request = DownloadPersistentTaskRequest {
-            object_storage: Some(make_object_storage()),
+            object_storage: Some(ObjectStorage {
+                access_key_id: Some("AKIAIOSFODNN7EXAMPLE".to_string()),
+                access_key_secret: Some(ACCESS_KEY_SECRET.to_string()),
+                session_token: Some("FQoGZXIvYXdzEJr...".to_string()),
+                security_token: Some("sec-token-xyz".to_string()),
+                credential_path: Some("/etc/gcp/creds.json".to_string()),
+                ..Default::default()
+            }),
             ..Default::default()
         };
 
-        let download = format!("{:?}", RedactedDownloadPersistentTaskRequest(&request));
+        let output = format!("{:?}", RedactedDownloadPersistentTaskRequest(&request));
         for secret in [
-            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            ACCESS_KEY_SECRET,
             "FQoGZXIvYXdzEJr",
             "sec-token-xyz",
             "/etc/gcp/creds.json",
         ] {
-            assert!(!download.contains(secret), "leaked {secret:?}: {download}");
+            assert!(!output.contains(secret));
         }
-        assert!(download.contains(REDACTED));
-        assert!(download.contains("AKIAIOSFODNN7EXAMPLE"));
+
+        assert!(output.contains(REDACTED));
+        assert!(output.contains("AKIAIOSFODNN7EXAMPLE"));
         assert_eq!(
             request
                 .object_storage
@@ -505,13 +581,7 @@ mod tests {
                 .unwrap()
                 .access_key_secret
                 .as_deref(),
-            Some("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+            Some(ACCESS_KEY_SECRET)
         );
-    }
-
-    #[test]
-    fn redacted_download_handles_all_optional_fields_absent() {
-        let download = format!("{:?}", RedactedDownload(&Download::default()));
-        assert!(!download.contains(REDACTED));
     }
 }

@@ -137,17 +137,26 @@ impl ManagerClient {
 
 #[cfg(test)]
 mod tests {
-    use super::ManagerClient;
-    use dragonfly_client_config::dfdaemon::Manager;
+    #![allow(clippy::type_complexity)]
+
+    use super::*;
 
     #[tokio::test]
-    async fn invalid_uri_should_fail() {
-        let addr = "htt:/xxx".to_string();
-        let result = ManagerClient::new(&Manager::default(), addr).await;
-        assert!(result.is_err());
-        match result {
-            Err(e) => assert_eq!(e.to_string(), "invalid parameter"),
-            _ => panic!("unexpected error"),
+    async fn new_fails_on_an_invalid_addr() {
+        let test_cases: Vec<(&str, fn(Option<Error>))> = vec![
+            ("htt:/xxx", |err| {
+                assert!(matches!(err, Some(Error::InvalidParameter)));
+            }),
+            ("xxx", |err| {
+                assert!(matches!(err, Some(Error::URLParseError(_))));
+            }),
+        ];
+
+        for (addr, expect) in test_cases {
+            let err = ManagerClient::new(&Manager::default(), addr.to_string())
+                .await
+                .err();
+            expect(err);
         }
     }
 }

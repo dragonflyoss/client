@@ -1449,12 +1449,12 @@ impl PersistentCacheTask {
 
                     return Err(Error::DownloadFromParentFailed(err));
                 }
-                Err(Error::SendTimeout) => {
+                Err(err @ Error::SendTimeout) => {
                     join_set.shutdown().await;
 
                     // If the send timeout with scheduler or download progress, return the error
                     // and interrupt the collector.
-                    return Err(Error::SendTimeout);
+                    return Err(err);
                 }
                 Err(err) => {
                     join_set.shutdown().await;

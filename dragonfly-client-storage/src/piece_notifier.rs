@@ -84,18 +84,19 @@ mod tests {
     use std::time::Duration;
 
     #[tokio::test]
-    async fn test_piece_notifier_wakes_enabled_waiters() {
+    async fn claim_elects_one_owner_and_remove_wakes_waiters() {
         let piece_notifier = PieceNotifier::default();
         let piece_id = "d3add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14a-0";
         assert!(piece_notifier.get(piece_id).is_none());
 
         assert!(matches!(piece_notifier.claim(piece_id), Claim::Owner));
+
         let notifier = piece_notifier.get(piece_id).unwrap();
 
-        match piece_notifier.claim(piece_id) {
-            Claim::InFlight(in_flight) => assert!(Arc::ptr_eq(&notifier, &in_flight)),
-            Claim::Owner => panic!("expected the second claim to lose"),
-        }
+        let Claim::InFlight(in_flight) = piece_notifier.claim(piece_id) else {
+            unreachable!()
+        };
+        assert!(Arc::ptr_eq(&notifier, &in_flight));
 
         let notified = notifier.notified();
         tokio::pin!(notified);
@@ -107,7 +108,26 @@ mod tests {
             .unwrap();
 
         assert!(piece_notifier.get(piece_id).is_none());
+
         piece_notifier.remove_and_notify(piece_id);
         assert!(matches!(piece_notifier.claim(piece_id), Claim::Owner));
+    }
+
+    #[test]
+    fn claim_is_keyed_by_piece_id() {
+        let piece_notifier = PieceNotifier::default();
+        let piece_id = "d3add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14a-0";
+        let other_piece_id = "d3add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14a-1";
+
+        assert!(matches!(piece_notifier.claim(piece_id), Claim::Owner));
+        assert!(matches!(piece_notifier.claim(other_piece_id), Claim::Owner));
+        assert!(!Arc::ptr_eq(
+            &piece_notifier.get(piece_id).unwrap(),
+            &piece_notifier.get(other_piece_id).unwrap()
+        ));
+
+        piece_notifier.remove_and_notify(piece_id);
+        assert!(piece_notifier.get(piece_id).is_none());
+        assert!(piece_notifier.get(other_piece_id).is_some());
     }
 }

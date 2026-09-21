@@ -135,11 +135,31 @@ where
 mod tests {
     use super::*;
     use dragonfly_client_util::ratelimiter::bbr::BBRConfig;
+    use std::convert::Infallible;
+    use tower::{service_fn, ServiceExt};
 
     #[tokio::test]
-    async fn test_bbr_layer_creation() {
-        let bbr = Arc::new(BBR::new(BBRConfig::default()).await);
-        let layer = BBRLayer::new(bbr);
-        let _ = layer.clone();
+    async fn bbr_service_forwards_requests_when_not_overloaded() {
+        let bbr = Arc::new(
+            BBR::new(BBRConfig {
+                cpu_threshold: 100,
+                memory_threshold: 100,
+                ..Default::default()
+            })
+            .await,
+        );
+        let mut service = BBRLayer::new(bbr).layer(service_fn(|_request: Request<Body>| async {
+            Ok::<_, Infallible>(Response::new(Body::empty()))
+        }));
+
+        let response = service
+            .ready()
+            .await
+            .unwrap()
+            .call(Request::new(Body::empty()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), http::StatusCode::OK);
+        assert!(response.headers().get("grpc-status").is_none());
     }
 }

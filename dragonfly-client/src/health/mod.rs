@@ -112,7 +112,7 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
 
     #[test]
-    fn test_health_new() {
+    fn health_new_keeps_the_addr() {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
         let shutdown = shutdown::Shutdown::new();
         let (shutdown_complete_tx, _shutdown_complete_rx) = mpsc::unbounded_channel();
@@ -122,21 +122,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handler() {
-        let request = Request::builder()
-            .method(Method::GET)
-            .uri("/healthy")
-            .body(())
-            .unwrap();
-        let response = Health::handler(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+    async fn handler_serves_only_get_healthy() {
+        let test_cases = vec![
+            (Method::GET, "/healthy", StatusCode::OK),
+            (Method::GET, "/unknown", StatusCode::NOT_FOUND),
+            (Method::POST, "/healthy", StatusCode::NOT_FOUND),
+        ];
 
-        let request = Request::builder()
-            .method(Method::GET)
-            .uri("/unknown")
-            .body(())
-            .unwrap();
-        let response = Health::handler(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        for (method, path, expected) in test_cases {
+            let request = Request::builder()
+                .method(method.clone())
+                .uri(path)
+                .body(())
+                .unwrap();
+            let response = Health::handler(request).await.unwrap();
+            assert_eq!(response.status(), expected);
+        }
     }
 }

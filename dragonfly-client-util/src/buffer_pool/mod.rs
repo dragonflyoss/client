@@ -139,7 +139,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_buffer_pool_reuse() {
+    fn checkout_reuses_idle_buffers_within_the_idle_capacity() {
         let pool = BufferPool::new(4096);
 
         let buffer = pool.checkout(1024);
@@ -148,20 +148,16 @@ mod tests {
 
         let ptr = buffer.as_ptr();
         pool.give_back(buffer);
-
-        // A smaller request reuses the idle buffer.
         let buffer = pool.checkout(512);
         assert_eq!(buffer.as_ptr(), ptr);
         assert_eq!(buffer.capacity(), 1024);
-        pool.give_back(buffer);
 
-        // An undersized idle buffer is dropped and a new one is created.
+        pool.give_back(buffer);
         let buffer = pool.checkout(2048);
         assert_eq!(buffer.capacity(), 2048);
         assert!(pool.inner.idle.lock().unwrap().0.is_empty());
-        pool.give_back(buffer);
 
-        // Buffers beyond the idle capacity are dropped.
+        pool.give_back(buffer);
         pool.give_back(BytesMut::zeroed(4096));
         let idle = pool.inner.idle.lock().unwrap();
         assert_eq!(idle.0.len(), 1);
@@ -169,34 +165,44 @@ mod tests {
     }
 
     #[test]
-    fn test_buffer_pool_checkout_for_read() {
+    fn checkout_for_read_exposes_initialized_bytes() {
         let pool = BufferPool::new(4096);
 
         let mut buffer = pool.checkout_for_read(256);
         assert_eq!(buffer.len(), 256);
+
         buffer.fill(0xAB);
         pool.give_back(buffer);
-
-        // The reused buffer keeps its full capacity initialized and readable.
         let buffer = pool.checkout_for_read(128);
         assert_eq!(buffer.len(), 128);
-        assert!(buffer.iter().all(|&b| b == 0xAB));
+        assert!(buffer.iter().all(|&byte| byte == 0xAB));
     }
 
     #[test]
-    fn test_buffer_pool_freeze() {
+    fn freeze_returns_the_buffer_to_the_pool_on_drop() {
         let pool = BufferPool::new(4096);
 
         let mut buffer = pool.checkout(1024);
         buffer.extend_from_slice(b"hello, world!");
         let ptr = buffer.as_ptr();
-
         let bytes = pool.freeze(buffer);
         assert_eq!(&bytes[..], b"hello, world!");
 
-        // Dropping the last reference returns the buffer to the pool.
         drop(bytes);
         let buffer = pool.checkout(1024);
         assert_eq!(buffer.as_ptr(), ptr);
+    }
+
+    #[test]
+    fn clones_share_the_idle_buffers() {
+        let pool = BufferPool::new(4096);
+        let clone = pool.clone();
+
+        let buffer = pool.checkout(1024);
+        let ptr = buffer.as_ptr();
+        clone.give_back(buffer);
+        let buffer = pool.checkout(1024);
+        assert_eq!(buffer.as_ptr(), ptr);
+        assert_eq!(clone.inner.idle.lock().unwrap().1, 0);
     }
 }

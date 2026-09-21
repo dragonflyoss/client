@@ -174,12 +174,10 @@ mod tests {
     use std::ffi::OsStr;
 
     #[test]
-    fn version_value_parser_references_non_real_values() {
+    fn version_value_parser_returns_false_for_non_true_value() {
         let parser = VersionValueParser;
         let cmd = Command::new("test_app");
-        let value = OsStr::new("false");
-        let result = parser.parse_ref(&cmd, None, value);
-        assert!(result.is_ok());
+        let result = parser.parse_ref(&cmd, None, OsStr::new("false"));
         assert!(!result.unwrap());
     }
 }

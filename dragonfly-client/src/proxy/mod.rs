@@ -57,7 +57,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Barrier};
 use tokio_rustls::TlsAcceptor;
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{debug, error, info, instrument, Instrument, Span};
+use tracing::{debug, error, info, instrument, warn, Instrument, Span};
 
 pub mod header;
 pub mod query;
@@ -164,7 +164,7 @@ impl Proxy {
                     .refill(config.proxy.server.request_rate_limit as usize)
                     .max(config.proxy.server.request_rate_limit as usize)
                     .interval(Duration::from_secs(1))
-                    .fair(false)
+                    .fair(true)
                     .build(),
             ),
             dynconfig,
@@ -237,6 +237,12 @@ impl Proxy {
                 tcp_accepted = listener.accept() => {
                     // A new client connection has been established.
                     let (tcp, remote_address) = tcp_accepted?;
+
+                    // Disable Nagle so the short tail segment of each response is sent
+                    // immediately instead of waiting for the in-flight data to be acked.
+                    tcp.set_nodelay(true).unwrap_or_else(|err| {
+                        warn!("set nodelay for {} failed: {}", remote_address, err);
+                    });
 
                     // Spawn a task to handle the connection.
                     let io = TokioIo::new(tcp);
@@ -436,8 +442,8 @@ pub async fn http_handler(
     if let Some(basic_auth) = config.proxy.server.basic_auth.as_ref() {
         match basic_auth.credentials().verify(request.headers()) {
             Ok(_) => {}
-            Err(ClientError::Unauthorized) => {
-                error!("basic auth failed");
+            Err(err @ ClientError::Unauthorized) => {
+                error!("basic auth failed: {}", err);
                 return Ok(make_error_response(
                     header::ErrorType::Proxy,
                     http::StatusCode::UNAUTHORIZED,
@@ -693,7 +699,8 @@ pub async fn upgraded_handler(
     if let Some(basic_auth) = config.proxy.server.basic_auth.as_ref() {
         match basic_auth.credentials().verify(request.headers()) {
             Ok(_) => {}
-            Err(ClientError::Unauthorized) => {
+            Err(err @ ClientError::Unauthorized) => {
+                error!("basic auth failed: {}", err);
                 return Ok(make_error_response(
                     header::ErrorType::Proxy,
                     http::StatusCode::UNAUTHORIZED,
@@ -817,7 +824,7 @@ async fn proxy_via_dfdaemon(
                 error!("make download task request failed: {}", err);
                 return Ok(make_error_response(
                     header::ErrorType::Proxy,
-                    http::StatusCode::INTERNAL_SERVER_ERROR,
+                    http::StatusCode::BAD_REQUEST,
                     None,
                 ));
             }
@@ -833,8 +840,8 @@ async fn proxy_via_dfdaemon(
     .await
     {
         Ok(out_stream) => out_stream,
-        Err(ClientError::PermissionDenied) => {
-            error!("download task rejected by blocklist policy");
+        Err(err @ ClientError::PermissionDenied) => {
+            error!("download task rejected by blocklist policy: {}", err);
             return Ok(make_error_response(
                 header::ErrorType::Proxy,
                 http::StatusCode::FORBIDDEN,
@@ -848,6 +855,30 @@ async fn proxy_via_dfdaemon(
                     .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
                 err.header.clone(),
                 err.body.clone(),
+            ));
+        }
+        Err(err @ ClientError::NoSpace(_)) => {
+            error!("download task failed: {}", err);
+            return Ok(make_error_response(
+                header::ErrorType::Dfdaemon,
+                http::StatusCode::INSUFFICIENT_STORAGE,
+                None,
+            ));
+        }
+        Err(err @ (ClientError::InvalidContentLength | ClientError::InvalidPieceLength)) => {
+            error!("download task failed: {}", err);
+            return Ok(make_error_response(
+                header::ErrorType::Dfdaemon,
+                http::StatusCode::UNPROCESSABLE_ENTITY,
+                None,
+            ));
+        }
+        Err(err @ (ClientError::InvalidParameter | ClientError::InvalidURI(_))) => {
+            error!("download task failed: {}", err);
+            return Ok(make_error_response(
+                header::ErrorType::Dfdaemon,
+                http::StatusCode::BAD_REQUEST,
+                None,
             ));
         }
         Err(err) => {
@@ -871,10 +902,8 @@ async fn proxy_via_dfdaemon(
                         backend
                     );
                     return Ok(make_backend_error_response(
-                        http::StatusCode::from_u16(
-                            backend.status_code.unwrap_or_default() as u16,
-                        )
-                        .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
+                        http::StatusCode::from_u16(backend.status_code.unwrap_or_default() as u16)
+                            .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
                         Some(hashmap_to_headermap(&backend.header).unwrap_or_default()),
                         Some(backend.body),
                     ));
@@ -887,7 +916,7 @@ async fn proxy_via_dfdaemon(
                         );
                         return Ok(make_backend_error_response(
                             http::StatusCode::from_u16(
-                                backend.status_code.unwrap_or_default() as u16,
+                                backend.status_code.unwrap_or_default() as u16
                             )
                             .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
                             Some(hashmap_to_headermap(&backend.header).unwrap_or_default()),
@@ -902,7 +931,7 @@ async fn proxy_via_dfdaemon(
                             None,
                         ));
                     }
-                }
+                },
             }
         }
         None => {
@@ -969,7 +998,9 @@ async fn proxy_via_dfdaemon(
                 );
             }
             // If the task is already prefetched, ignore the error.
-            Err(ClientError::InvalidState(_)) => debug!("task is already prefetched"),
+            Err(err @ ClientError::InvalidState(_)) => {
+                debug!("task is already prefetched: {}", err)
+            }
             Err(err) => {
                 error!("prefetch task started: {}", err);
             }
@@ -1200,7 +1231,7 @@ async fn proxy_via_dfdaemon(
                                         .await
                                         .unwrap_or_default();
                                 }
-                            }
+                            },
                         }
 
                         return;
@@ -1595,4 +1626,281 @@ fn full(body: Vec<u8>) -> BoxBody<Bytes, ClientError> {
     Full::new(Bytes::from(body))
         .map_err(|never| match never {})
         .boxed()
+}
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::type_complexity)]
+
+    use super::*;
+    use dragonfly_api::common::v2::Range;
+    use regex::Regex;
+
+    #[test]
+    fn find_matching_rule_returns_the_first_match_ignoring_query_and_fragment() {
+        let test_cases = vec![
+            (None, "http://example.com/v2/blobs/sha256:abc", None),
+            (
+                Some(vec!["^http://other\\.com/.*"]),
+                "http://example.com/v2/blobs/sha256:abc",
+                None,
+            ),
+            (
+                Some(vec![".*", "^http://example\\.com/.*"]),
+                "http://example.com/v2/blobs/sha256:abc",
+                Some(".*"),
+            ),
+            (
+                Some(vec!["ns=docker\\.io"]),
+                "http://example.com/v2/blobs/sha256:abc?ns=docker.io",
+                None,
+            ),
+            (
+                Some(vec!["#layer"]),
+                "http://example.com/v2/blobs/sha256:abc#layer",
+                None,
+            ),
+            (
+                Some(vec!["^http://example\\.com/v2/blobs/sha256:abc$"]),
+                "http://example.com/v2/blobs/sha256:abc?ns=docker.io#layer",
+                Some("^http://example\\.com/v2/blobs/sha256:abc$"),
+            ),
+        ];
+
+        for (regexes, url, expected) in test_cases {
+            let rules: Option<Vec<Rule>> = regexes.map(|regexes| {
+                regexes
+                    .into_iter()
+                    .map(|regex| Rule {
+                        regex: Regex::new(regex).unwrap(),
+                        ..Default::default()
+                    })
+                    .collect()
+            });
+            let matched = find_matching_rule(rules.as_deref(), url::Url::parse(url).unwrap());
+            assert_eq!(matched.map(|rule| rule.regex.as_str()), expected);
+        }
+    }
+
+    #[test]
+    fn make_download_url_applies_tls_and_redirect() {
+        let test_cases: Vec<(&str, bool, Option<&str>, fn(ClientResult<String>))> = vec![
+            ("http://example.com/path?x=1", false, None, |result| {
+                assert_eq!(result.unwrap(), "http://example.com/path?x=1");
+            }),
+            ("http://example.com/path", true, None, |result| {
+                assert_eq!(result.unwrap(), "https://example.com/path");
+            }),
+            (
+                "http://example.com/path",
+                false,
+                Some("mirror.example.com"),
+                |result| {
+                    assert_eq!(result.unwrap(), "http://mirror.example.com/path");
+                },
+            ),
+            (
+                "http://example.com/path",
+                true,
+                Some("mirror.example.com:8443"),
+                |result| {
+                    assert_eq!(result.unwrap(), "https://mirror.example.com:8443/path");
+                },
+            ),
+            (
+                "http://example.com/path",
+                false,
+                Some("bad host"),
+                |result| {
+                    assert!(matches!(
+                        result,
+                        Err(ClientError::ExternalError(err)) if err.etype == ErrorType::ParseError
+                    ));
+                },
+            ),
+        ];
+
+        for (uri, use_tls, redirect, expect) in test_cases {
+            let uri = uri.parse::<hyper::Uri>().unwrap();
+            expect(make_download_url(&uri, use_tls, redirect));
+        }
+    }
+
+    #[test]
+    fn need_prefetch_requires_a_range_header_and_prefers_the_prefetch_header() {
+        let test_cases = vec![
+            (true, vec![], false),
+            (
+                true,
+                vec![(header::DRAGONFLY_PREFETCH_HEADER, "true")],
+                false,
+            ),
+            (
+                false,
+                vec![
+                    ("range", "bytes=0-1023"),
+                    (header::DRAGONFLY_PREFETCH_HEADER, "true"),
+                ],
+                true,
+            ),
+            (
+                true,
+                vec![
+                    ("range", "bytes=0-1023"),
+                    (header::DRAGONFLY_PREFETCH_HEADER, "false"),
+                ],
+                false,
+            ),
+            (true, vec![("range", "bytes=0-1023")], true),
+            (false, vec![("range", "bytes=0-1023")], false),
+        ];
+
+        for (prefetch, pairs, expected) in test_cases {
+            let mut config = Config::default();
+            config.proxy.prefetch = prefetch;
+            let headers: http::HeaderMap = pairs
+                .into_iter()
+                .map(|(name, value)| {
+                    (
+                        http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                        http::HeaderValue::from_str(value).unwrap(),
+                    )
+                })
+                .collect();
+            assert_eq!(need_prefetch(&config, &headers), expected);
+        }
+    }
+
+    #[test]
+    fn make_response_headers_adds_range_and_finished_headers() {
+        let test_cases: Vec<(Option<Range>, bool, fn(&hyper::header::HeaderMap))> = vec![
+            (
+                Some(Range {
+                    start: 100,
+                    length: 50,
+                }),
+                false,
+                |headers| {
+                    assert_eq!(
+                        headers.get(reqwest::header::CONTENT_RANGE).unwrap(),
+                        "bytes 100-149/1000"
+                    );
+                    assert_eq!(headers.get(reqwest::header::CONTENT_LENGTH).unwrap(), "50");
+                    assert!(!headers.contains_key(header::DRAGONFLY_TASK_DOWNLOAD_FINISHED_HEADER));
+                },
+            ),
+            (None, false, |headers| {
+                assert!(!headers.contains_key(reqwest::header::CONTENT_RANGE));
+                assert!(!headers.contains_key(reqwest::header::CONTENT_LENGTH));
+                assert!(!headers.contains_key(header::DRAGONFLY_TASK_DOWNLOAD_FINISHED_HEADER));
+            }),
+            (None, true, |headers| {
+                assert_eq!(
+                    headers
+                        .get(header::DRAGONFLY_TASK_DOWNLOAD_FINISHED_HEADER)
+                        .unwrap(),
+                    "true"
+                );
+            }),
+        ];
+
+        for (range, is_finished, expect) in test_cases {
+            let response = DownloadTaskStartedResponse {
+                content_length: 1000,
+                range,
+                response_header: HashMap::from([(
+                    "content-type".to_string(),
+                    "text/plain".to_string(),
+                )]),
+                is_finished,
+                ..Default::default()
+            };
+            let headers =
+                make_response_headers("task-id", "127.0.0.1".parse().unwrap(), &response).unwrap();
+            assert_eq!(
+                headers.get(header::DRAGONFLY_TASK_ID_HEADER).unwrap(),
+                "task-id"
+            );
+            assert_eq!(
+                headers.get(header::DRAGONFLY_SERVER_IP_HEADER).unwrap(),
+                "127.0.0.1"
+            );
+            assert_eq!(
+                headers.get(reqwest::header::CONTENT_TYPE).unwrap(),
+                "text/plain"
+            );
+
+            expect(&headers);
+        }
+    }
+
+    #[test]
+    fn make_response_headers_rejects_an_invalid_response_header_name() {
+        let response = DownloadTaskStartedResponse {
+            response_header: HashMap::from([("bad header".to_string(), "value".to_string())]),
+            ..Default::default()
+        };
+
+        let result = make_response_headers("task-id", "127.0.0.1".parse().unwrap(), &response);
+        assert!(matches!(
+            result,
+            Err(ClientError::ExternalError(err)) if err.etype == ErrorType::ParseError
+        ));
+    }
+
+    #[test]
+    fn make_error_response_sets_status_and_error_type_over_extra_headers() {
+        let test_cases: Vec<(
+            header::ErrorType,
+            http::StatusCode,
+            Option<Vec<(&str, &str)>>,
+            fn(&http::HeaderMap),
+        )> = vec![
+            (
+                header::ErrorType::Backend,
+                http::StatusCode::BAD_GATEWAY,
+                None,
+                |headers| assert_eq!(headers.len(), 1),
+            ),
+            (
+                header::ErrorType::Proxy,
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                Some(vec![("retry-after", "1")]),
+                |headers| {
+                    assert_eq!(headers.len(), 2);
+                    assert_eq!(headers.get("retry-after").unwrap(), "1");
+                },
+            ),
+            (
+                header::ErrorType::Dfdaemon,
+                http::StatusCode::NOT_FOUND,
+                Some(vec![(header::DRAGONFLY_ERROR_TYPE_HEADER, "proxy")]),
+                |headers| assert_eq!(headers.len(), 1),
+            ),
+        ];
+
+        for (error_type, status, extra, expect) in test_cases {
+            let extra: Option<http::HeaderMap> = extra.map(|extra| {
+                extra
+                    .into_iter()
+                    .map(|(name, value)| {
+                        (
+                            http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                            http::HeaderValue::from_str(value).unwrap(),
+                        )
+                    })
+                    .collect()
+            });
+            let response = make_error_response(error_type, status, extra);
+            assert_eq!(response.status(), status);
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::DRAGONFLY_ERROR_TYPE_HEADER)
+                    .unwrap(),
+                error_type.as_str()
+            );
+
+            expect(response.headers());
+        }
+    }
 }

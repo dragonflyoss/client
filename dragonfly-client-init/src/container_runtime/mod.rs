@@ -88,37 +88,48 @@ impl ContainerRuntime {
 }
 
 #[cfg(test)]
-mod test {
-    use dragonfly_client_config::dfinit::Containerd;
+mod tests {
+    #![allow(clippy::type_complexity)]
 
     use super::*;
-
-    #[tokio::test]
-    async fn should_return_ok_if_container_runtime_not_set() {
-        let runtime = ContainerRuntime::new(&Config {
-            ..Default::default()
-        });
-        assert!(runtime.run().await.is_ok());
-    }
+    use dragonfly_client_config::dfinit;
 
     #[test]
-    fn should_get_engine_from_config() {
-        let runtime = ContainerRuntime::new(&Config {
-            container_runtime: dragonfly_client_config::dfinit::ContainerRuntime {
-                config: Some(ContainerRuntimeConfig::Containerd(Containerd {
-                    ..Default::default()
-                })),
-            },
-            ..Default::default()
-        });
-        assert!(runtime.engine.is_some());
+    fn new_picks_engine_matching_config() {
+        let test_cases: Vec<(Option<ContainerRuntimeConfig>, fn(Option<&Engine>))> = vec![
+            (None, |engine| assert!(engine.is_none())),
+            (
+                Some(ContainerRuntimeConfig::Containerd(Default::default())),
+                |engine| assert!(matches!(engine, Some(Engine::Containerd(_)))),
+            ),
+            (
+                Some(ContainerRuntimeConfig::Docker(Default::default())),
+                |engine| assert!(matches!(engine, Some(Engine::Docker(_)))),
+            ),
+            (
+                Some(ContainerRuntimeConfig::CRIO(Default::default())),
+                |engine| assert!(matches!(engine, Some(Engine::Crio(_)))),
+            ),
+            (
+                Some(ContainerRuntimeConfig::Podman(Default::default())),
+                |engine| assert!(matches!(engine, Some(Engine::Podman(_)))),
+            ),
+        ];
 
-        let runtime = ContainerRuntime::new(&Config {
-            container_runtime: dragonfly_client_config::dfinit::ContainerRuntime {
-                config: Some(ContainerRuntimeConfig::CRIO(Default::default())),
-            },
-            ..Default::default()
-        });
-        assert!(runtime.engine.is_some());
+        for (container_runtime_config, expect) in test_cases {
+            let runtime = ContainerRuntime::new(&Config {
+                container_runtime: dfinit::ContainerRuntime {
+                    config: container_runtime_config,
+                },
+                ..Default::default()
+            });
+            expect(runtime.engine.as_ref());
+        }
+    }
+
+    #[tokio::test]
+    async fn run_returns_ok_without_engine() {
+        let runtime = ContainerRuntime::new(&Config::default());
+        assert!(runtime.run().await.is_ok());
     }
 }
