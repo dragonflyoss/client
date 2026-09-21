@@ -35,4 +35,4 @@ const DEFAULT_KEEPALIVE_TIME: Duration = Duration::from_secs(5);
 const DEFAULT_KEEPALIVE_RETRIES: u32 = 3;
 
 /// The default maximum idle timeout for connections.
-const DEFAULT_MAX_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+const DEFAULT_MAX_IDLE_TIMEOUT: Duration = Duration::from_secs(30);

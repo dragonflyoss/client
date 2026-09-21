@@ -119,6 +119,11 @@ impl RangeReader {
         )
     }
 
+    /// Returns the number of bytes left in the range.
+    pub fn remaining(&self) -> u64 {
+        self.remaining + (self.filled - self.pos) as u64
+    }
+
     /// Reads the next chunk of the range with a positional read on the
     /// blocking thread pool, directly into the owned buffer it returns, so
     /// callers that send the chunk downstream get the bytes without copying
@@ -629,6 +634,8 @@ mod tests {
 
                 reader.consume(consumed);
             }
+
+            assert_eq!(reader.remaining(), expected_remaining);
 
             let (parts_fd, offset, remaining) = reader.into_parts();
             assert!(Arc::ptr_eq(&parts_fd, &fd));
