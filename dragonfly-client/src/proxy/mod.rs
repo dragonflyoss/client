@@ -1622,6 +1622,12 @@ fn empty() -> BoxBody<Bytes, ClientError> {
         .boxed()
 }
 
+fn full(body: Vec<u8>) -> BoxBody<Bytes, ClientError> {
+    Full::new(Bytes::from(body))
+        .map_err(|never| match never {})
+        .boxed()
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::type_complexity)]
@@ -1906,10 +1912,38 @@ mod tests {
             expect(response.headers());
         }
     }
-}
+    #[test]
+    fn make_backend_error_response_preserves_status_header_and_body() {
+        let response = make_backend_error_response(
+            http::StatusCode::BAD_GATEWAY,
+            None,
+            Some(b"upstream error".to_vec()),
+        );
 
-fn full(body: Vec<u8>) -> BoxBody<Bytes, ClientError> {
-    Full::new(Bytes::from(body))
-        .map_err(|never| match never {})
-        .boxed()
+        assert_eq!(response.status(), http::StatusCode::BAD_GATEWAY);
+
+        assert_eq!(
+            response
+                .headers()
+                .get(header::DRAGONFLY_ERROR_TYPE_HEADER)
+                .unwrap(),
+            "backend"
+        );
+
+        assert_eq!(
+            response
+                .headers()
+                .get(header::DRAGONFLY_BACKEND_STATUS_CODE_HEADER)
+                .unwrap(),
+            "502"
+        );
+
+        assert_eq!(
+            response
+                .headers()
+                .get(http::header::CONTENT_LENGTH)
+                .unwrap(),
+            "14"
+        );
+    }
 }
