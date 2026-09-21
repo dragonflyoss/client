@@ -825,13 +825,13 @@ impl Storage {
             }
         }?;
 
-        self.piece_notifier.remove_and_notify(piece_id);
         self.page_cache.download_piece_finished(
             piece_id,
             self.content.get_task_path(task_id),
             piece.offset,
             piece.length,
         );
+        self.piece_notifier.remove_and_notify(piece_id);
         Ok(piece)
     }
 
@@ -889,13 +889,13 @@ impl Storage {
             }
         }?;
 
-        self.piece_notifier.remove_and_notify(piece_id);
         self.page_cache.download_piece_finished(
             piece_id,
             self.content.get_task_path(task_id),
             piece.offset,
             piece.length,
         );
+        self.piece_notifier.remove_and_notify(piece_id);
         Ok(piece)
     }
 
@@ -1122,13 +1122,13 @@ impl Storage {
             Some(parent_id.to_string()),
         )?;
 
-        self.piece_notifier.remove_and_notify(piece_id);
         self.page_cache.download_piece_finished(
             piece_id,
             self.content.get_persistent_task_path(task_id),
             piece.offset,
             piece.length,
         );
+        self.piece_notifier.remove_and_notify(piece_id);
         Ok(piece)
     }
 
@@ -1156,13 +1156,13 @@ impl Storage {
             }
         }?;
 
-        self.piece_notifier.remove_and_notify(piece_id);
         self.page_cache.download_piece_finished(
             piece_id,
             self.content.get_persistent_task_path(task_id),
             piece.offset,
             piece.length,
         );
+        self.piece_notifier.remove_and_notify(piece_id);
         Ok(piece)
     }
 
@@ -1362,13 +1362,13 @@ impl Storage {
             Some(parent_id.to_string()),
         )?;
 
-        self.piece_notifier.remove_and_notify(piece_id);
         self.page_cache.download_piece_finished(
             piece_id,
             self.content.get_persistent_cache_task_path(task_id),
             piece.offset,
             piece.length,
         );
+        self.piece_notifier.remove_and_notify(piece_id);
         Ok(piece)
     }
 
