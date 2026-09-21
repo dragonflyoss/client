@@ -28,8 +28,9 @@ use tracing::{error, instrument};
 /// The default capacity of the downloader to store the clients.
 const DEFAULT_DOWNLOADER_CAPACITY: usize = 2000;
 
-/// The default idle timeout for the downloader.
-const DEFAULT_DOWNLOADER_IDLE_TIMEOUT: Duration = Duration::from_secs(420);
+/// The default idle timeout for the downloader, twice the idle timeout of the
+/// connections the clients hold, so the clients outlive their connections.
+const DEFAULT_DOWNLOADER_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The interface for downloading pieces, which is implemented by different
 /// protocols. The downloader is used to download pieces from the other peers.
@@ -286,9 +287,6 @@ impl Factory<String, TCPClient> for TCPClientFactory {
 
 /// Implements the downloader with the TCP protocol.
 impl TCPDownloader {
-    /// The maximum number of connections per address.
-    const MAX_CONNECTIONS_PER_ADDRESS: usize = 32;
-
     /// Returns a new TCPDownloader.
     pub fn new(config: Arc<Config>, capacity: usize, idle_timeout: Duration) -> Self {
         Self {
@@ -301,25 +299,11 @@ impl TCPDownloader {
         }
     }
 
-    /// Returns a client entry by the address.
-    async fn get_client_entry(&self, key: String, addr: String) -> Result<Entry<TCPClient>> {
-        self.client_pool.entry(&key, &addr).await
-    }
-
-    /// Removes the client if it is idle.
-    async fn remove_client_entry(&self, key: String) {
-        self.client_pool.remove_entry(&key).await;
-    }
-
-    /// Generates a semi-random key by combining the client address with
-    /// a random number. The randomization helps distribute connections across multiple
-    /// slots when the same address attempts to establish multiple concurrent connections.
-    fn get_entry_key(&self, addr: &str) -> String {
-        format!(
-            "{}-{}",
-            addr,
-            fastrand::usize(..Self::MAX_CONNECTIONS_PER_ADDRESS)
-        )
+    /// Returns the client of the address, which holds the idle connections to
+    /// it, so the pieces from the same parent reuse the connections.
+    async fn get_client_entry(&self, addr: &str) -> Result<Entry<TCPClient>> {
+        let key = addr.to_string();
+        self.client_pool.entry(&key, &key).await
     }
 }
 
@@ -335,20 +319,9 @@ impl Downloader for TCPDownloader {
         _host_id: &str,
         task_id: &str,
     ) -> Result<(PieceContentStream, u64, String)> {
-        let key = self.get_entry_key(addr);
-        let entry = self.get_client_entry(key.clone(), addr.to_string()).await?;
-        let request_guard = entry.request_guard();
-
-        match entry.client.download_piece(number, task_id).await {
-            Ok((stream, offset, digest)) => Ok((stream, offset, digest)),
-            Err(err) => {
-                // If the request fails, it will drop the request guard and remove the client
-                // entry to avoid using the invalid client.
-                drop(request_guard);
-                self.remove_client_entry(key).await;
-                Err(err)
-            }
-        }
+        let entry = self.get_client_entry(addr).await?;
+        let _request_guard = entry.request_guard();
+        entry.client.download_piece(number, task_id).await
     }
 
     /// Downloads a persistent piece from the other peer by
@@ -361,24 +334,12 @@ impl Downloader for TCPDownloader {
         _host_id: &str,
         task_id: &str,
     ) -> Result<(PieceContentStream, u64, String)> {
-        let key = self.get_entry_key(addr);
-        let entry = self.get_client_entry(key.clone(), addr.to_string()).await?;
-        let request_guard = entry.request_guard();
-
-        match entry
+        let entry = self.get_client_entry(addr).await?;
+        let _request_guard = entry.request_guard();
+        entry
             .client
             .download_persistent_piece(number, task_id)
             .await
-        {
-            Ok((stream, offset, digest)) => Ok((stream, offset, digest)),
-            Err(err) => {
-                // If the request fails, it will drop the request guard and remove the client
-                // entry to avoid using the invalid client.
-                drop(request_guard);
-                self.remove_client_entry(key).await;
-                Err(err)
-            }
-        }
     }
 
     /// Downloads a persistent cache piece from the other peer by
@@ -391,23 +352,11 @@ impl Downloader for TCPDownloader {
         _host_id: &str,
         task_id: &str,
     ) -> Result<(PieceContentStream, u64, String)> {
-        let key = self.get_entry_key(addr);
-        let entry = self.get_client_entry(key.clone(), addr.to_string()).await?;
-        let request_guard = entry.request_guard();
-
-        match entry
+        let entry = self.get_client_entry(addr).await?;
+        let _request_guard = entry.request_guard();
+        entry
             .client
             .download_persistent_cache_piece(number, task_id)
             .await
-        {
-            Ok((stream, offset, digest)) => Ok((stream, offset, digest)),
-            Err(err) => {
-                // If the request fails, it will drop the request guard and remove the client
-                // entry to avoid using the invalid client.
-                drop(request_guard);
-                self.remove_client_entry(key).await;
-                Err(err)
-            }
-        }
     }
 }
