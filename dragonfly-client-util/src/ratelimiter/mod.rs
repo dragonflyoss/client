@@ -32,7 +32,7 @@ pub fn new_bandwidth_limiter(limit: ByteSize) -> RateLimiter {
         .refill(refill)
         .max(refill)
         .interval(Duration::from_secs(1) / BANDWIDTH_LIMITER_REFILLS_PER_SECOND)
-        .fair(false)
+        .fair(true)
         .build()
 }
 
@@ -50,6 +50,7 @@ mod tests {
             assert_eq!(limiter.max(), refill);
             assert_eq!(limiter.balance(), refill);
             assert_eq!(limiter.interval(), Duration::from_millis(100));
+            assert!(limiter.is_fair());
         }
     }
 }
