@@ -1859,7 +1859,15 @@ mod tests {
                 header::ErrorType::Backend,
                 http::StatusCode::BAD_GATEWAY,
                 None,
-                |headers| assert_eq!(headers.len(), 1),
+                |headers| {
+                    assert_eq!(headers.len(), 2);
+                    assert_eq!(
+                        headers
+                            .get(header::DRAGONFLY_BACKEND_STATUS_CODE_HEADER)
+                            .unwrap(),
+                        "502"
+                    );
+                },
             ),
             (
                 header::ErrorType::Proxy,
