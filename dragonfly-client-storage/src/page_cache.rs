@@ -155,6 +155,18 @@ impl PageCache {
             downloaded_length += piece.length;
             pieces.push_back(piece);
 
+            // The pieces beyond the limit are reclaimed by the kernel already.
+            while pieces_length > limit {
+                let Some(piece) = pieces.pop_front() else {
+                    break;
+                };
+
+                pieces_length -= piece.length;
+                if let Ok(mut referenced) = self.referenced.lock() {
+                    referenced.remove(&piece.id);
+                }
+            }
+
             // Sample every half of the room above the threshold, keeping the
             // downloads between two samples below the limit.
             let threshold = limit / 100 * DEFAULT_MEMORY_THRESHOLD_PERCENT as u64;
@@ -176,18 +188,6 @@ impl PageCache {
                         break;
                     }
                 };
-
-                // The pieces beyond the limit are reclaimed by the kernel already.
-                while pieces_length > limit {
-                    let Some(piece) = pieces.pop_front() else {
-                        break;
-                    };
-
-                    pieces_length -= piece.length;
-                    if let Ok(mut referenced) = self.referenced.lock() {
-                        referenced.remove(&piece.id);
-                    }
-                }
 
                 // Drop what exceeds the threshold, but keep the room above it in
                 // pieces when other memory fills the limit, e.g. the page cache of
@@ -237,11 +237,11 @@ impl PageCache {
                 break;
             }
 
-            let Some(piece) = pieces.pop_front() else {
+            let Ok(mut referenced) = referenced.lock() else {
                 break;
             };
 
-            let Ok(mut referenced) = referenced.lock() else {
+            let Some(piece) = pieces.pop_front() else {
                 break;
             };
 
