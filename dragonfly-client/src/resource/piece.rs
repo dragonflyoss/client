@@ -606,7 +606,8 @@ impl Piece {
             let error_message = response.error_message.unwrap_or_default();
             error!(
                 "backend get failed: {} {}",
-                error_message, body_preview.as_ref()
+                error_message,
+                body_preview.as_ref()
             );
 
             return Err(Error::BackendError(Box::new(BackendError {

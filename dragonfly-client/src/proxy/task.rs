@@ -16,8 +16,8 @@
 
 use crate::dynconfig::block_list::DownloadBlockListCheckParams;
 use crate::dynconfig::Dynconfig;
-use crate::proxy::header::BackendErrorDetails;
 use crate::grpc::DOWNLOAD_STREAM_BUFFER_SIZE;
+use crate::proxy::header::BackendErrorDetails;
 use crate::resource::task::Task;
 use dragonfly_api::common::v2::TaskType;
 use dragonfly_api::dfdaemon::v2::{DownloadTaskRequest, DownloadTaskResponse};

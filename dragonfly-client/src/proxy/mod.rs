@@ -902,10 +902,8 @@ async fn proxy_via_dfdaemon(
                         backend
                     );
                     return Ok(make_backend_error_response(
-                        http::StatusCode::from_u16(
-                            backend.status_code.unwrap_or_default() as u16,
-                        )
-                        .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
+                        http::StatusCode::from_u16(backend.status_code.unwrap_or_default() as u16)
+                            .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
                         Some(hashmap_to_headermap(&backend.header).unwrap_or_default()),
                         Some(backend.body),
                     ));
@@ -918,7 +916,7 @@ async fn proxy_via_dfdaemon(
                         );
                         return Ok(make_backend_error_response(
                             http::StatusCode::from_u16(
-                                backend.status_code.unwrap_or_default() as u16,
+                                backend.status_code.unwrap_or_default() as u16
                             )
                             .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
                             Some(hashmap_to_headermap(&backend.header).unwrap_or_default()),
@@ -933,7 +931,7 @@ async fn proxy_via_dfdaemon(
                             None,
                         ));
                     }
-                }
+                },
             }
         }
         None => {
@@ -1233,7 +1231,7 @@ async fn proxy_via_dfdaemon(
                                         .await
                                         .unwrap_or_default();
                                 }
-                            }
+                            },
                         }
 
                         return;
