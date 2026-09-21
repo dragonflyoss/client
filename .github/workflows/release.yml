@@ -81,6 +81,9 @@ jobs:
       - name: Build binaries
         shell: bash
         run: |
+          if [[ "${{ matrix.target }}" == *-musl ]]; then
+            export ROCKSDB_CXX_STD=c++2a
+          fi
           cargo build --release --bins --workspace --exclude hdfs --target ${{ matrix.target }}
 
       - name: Build archive client(DEB)
