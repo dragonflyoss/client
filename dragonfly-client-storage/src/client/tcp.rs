@@ -671,6 +671,9 @@ mod tests {
                 let (stream, server) = tcp_pair().await;
                 if open {
                     servers.push(server);
+                } else {
+                    drop(server);
+                    stream.readable().await.unwrap();
                 }
 
                 client
