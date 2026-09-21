@@ -87,7 +87,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
-use super::middleware::BBRLayer;
+use super::middleware::{BBRLayer, HealthCheckBypassLayer};
 
 /// The interval for re-checking the interested pieces when none of them is in-flight,
 /// since a piece whose download has not started has no notifier to subscribe to.
@@ -194,9 +194,9 @@ impl DfdaemonUploadServer {
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .http2_keepalive_interval(Some(super::HTTP2_KEEP_ALIVE_INTERVAL))
             .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
-            .layer(option_layer(self.bbr.clone().map(BBRLayer::new)))
-            .layer(
+            .layer(HealthCheckBypassLayer::new(
                 ServiceBuilder::new()
+                    .layer(option_layer(self.bbr.clone().map(BBRLayer::new)))
                     .map_err(|err: Box<dyn std::error::Error + Send + Sync>| {
                         if err.is::<Overloaded>() {
                             Status::resource_exhausted(
@@ -206,14 +206,14 @@ impl DfdaemonUploadServer {
                             Status::internal(err.to_string())
                         }
                     })
-                    .layer(LoadShedLayer::new()),
-            )
-            .layer(BufferLayer::new(
-                self.config.upload.server.request_buffer_size,
-            ))
-            .layer(RateLimitLayer::new(
-                self.config.upload.server.request_rate_limit,
-                Duration::from_secs(1),
+                    .layer(LoadShedLayer::new())
+                    .layer(BufferLayer::new(
+                        self.config.upload.server.request_buffer_size,
+                    ))
+                    .layer(RateLimitLayer::new(
+                        self.config.upload.server.request_rate_limit,
+                        Duration::from_secs(1),
+                    )),
             ))
             .add_service(reflection)
             .add_service(health_service)

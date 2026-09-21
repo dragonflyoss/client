@@ -100,7 +100,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
-use super::middleware::BBRLayer;
+use super::middleware::{BBRLayer, HealthCheckBypassLayer};
 
 /// gRPC Unix server for download operations.
 pub struct DfdaemonDownloadServer {
@@ -207,9 +207,9 @@ impl DfdaemonDownloadServer {
             .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
             .initial_stream_window_size(super::INITIAL_WINDOW_SIZE)
             .initial_connection_window_size(super::INITIAL_CONNECTION_WINDOW_SIZE)
-            .layer(option_layer(self.bbr.clone().map(BBRLayer::new)))
-            .layer(
+            .layer(HealthCheckBypassLayer::new(
                 ServiceBuilder::new()
+                    .layer(option_layer(self.bbr.clone().map(BBRLayer::new)))
                     .map_err(|err: Box<dyn std::error::Error + Send + Sync>| {
                         if err.is::<Overloaded>() {
                             Status::resource_exhausted(
@@ -220,11 +220,13 @@ impl DfdaemonDownloadServer {
                         }
                     })
                     .layer(LoadShedLayer::new())
-            )
-            .layer(BufferLayer::new(self.config.download.server.request_buffer_size))
-            .layer(RateLimitLayer::new(
-                self.config.download.server.request_rate_limit,
-                Duration::from_secs(1),
+                    .layer(BufferLayer::new(
+                        self.config.download.server.request_buffer_size,
+                    ))
+                    .layer(RateLimitLayer::new(
+                        self.config.download.server.request_rate_limit,
+                        Duration::from_secs(1),
+                    )),
             ))
             .add_service(reflection)
             .add_service(health_service)
