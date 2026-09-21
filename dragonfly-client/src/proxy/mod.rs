@@ -164,12 +164,6 @@ impl Proxy {
                     .refill(config.proxy.server.request_rate_limit as usize)
                     .max(config.proxy.server.request_rate_limit as usize)
                     .interval(Duration::from_secs(1))
-                    // Keep the limiter fair: the unfair mode of leaky-bucket takes a
-                    // lock-free fast path whose stale `State` snapshot is written back on
-                    // drop. Under concurrent `try_acquire` calls it can overwrite the bucket
-                    // with `available = false`, after which `try_acquire` returns before
-                    // refilling forever and the proxy rejects every request with 429 even
-                    // when idle. The fair mode always takes the mutex and has no fast path.
                     .fair(true)
                     .build(),
             ),
