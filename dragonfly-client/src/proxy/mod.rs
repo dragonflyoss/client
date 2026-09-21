@@ -164,7 +164,7 @@ impl Proxy {
                     .refill(config.proxy.server.request_rate_limit as usize)
                     .max(config.proxy.server.request_rate_limit as usize)
                     .interval(Duration::from_secs(1))
-                    .fair(false)
+                    .fair(true)
                     .build(),
             ),
             dynconfig,
