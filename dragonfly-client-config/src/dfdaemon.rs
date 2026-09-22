@@ -474,6 +474,9 @@ pub struct DownloadServer {
     /// including:
     /// - Multiple requests within a single connection.
     /// - Single requests across different connections.
+    ///
+    /// The gRPC health checking service is exempt, so liveness and readiness probes
+    /// are not affected.
     #[serde(default = "default_download_request_rate_limit")]
     pub request_rate_limit: u64,
 
@@ -589,6 +592,9 @@ pub struct UploadServer {
     /// including:
     /// - Multiple requests within a single connection.
     /// - Single requests across different connections.
+    ///
+    /// The gRPC health checking service is exempt, so liveness and readiness probes
+    /// are not affected.
     #[serde(default = "default_upload_request_rate_limit")]
     pub request_rate_limit: u64,
 

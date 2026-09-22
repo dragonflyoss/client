@@ -75,19 +75,12 @@ use tonic::{
     transport::{Channel, Server},
     Code, Request, Response, Status,
 };
-use tower::util::option_layer;
-use tower::{
-    buffer::BufferLayer,
-    limit::rate::RateLimitLayer,
-    load_shed::{error::Overloaded, LoadShedLayer},
-    ServiceBuilder,
-};
 use tracing::{debug, error, info, instrument, Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
-use super::middleware::BBRLayer;
+use super::middleware::rate_limit;
 
 /// The interval for re-checking the interested pieces when none of them is in-flight,
 /// since a piece whose download has not started has no notifier to subscribe to.
@@ -194,30 +187,14 @@ impl DfdaemonUploadServer {
             .tcp_keepalive(Some(super::TCP_KEEPALIVE))
             .http2_keepalive_interval(Some(super::HTTP2_KEEP_ALIVE_INTERVAL))
             .http2_keepalive_timeout(Some(super::HTTP2_KEEP_ALIVE_TIMEOUT))
-            .layer(option_layer(self.bbr.clone().map(BBRLayer::new)))
-            .layer(
-                ServiceBuilder::new()
-                    .map_err(|err: Box<dyn std::error::Error + Send + Sync>| {
-                        if err.is::<Overloaded>() {
-                            Status::resource_exhausted(
-                                "server is overloaded: too many requests, please retry later",
-                            )
-                        } else {
-                            Status::internal(err.to_string())
-                        }
-                    })
-                    .layer(LoadShedLayer::new()),
-            )
-            .layer(BufferLayer::new(
-                self.config.upload.server.request_buffer_size,
-            ))
-            .layer(RateLimitLayer::new(
-                self.config.upload.server.request_rate_limit,
-                Duration::from_secs(1),
-            ))
             .add_service(reflection)
             .add_service(health_service)
-            .add_service(service)
+            .add_service(rate_limit(
+                service,
+                self.config.upload.server.request_rate_limit,
+                self.config.upload.server.request_buffer_size,
+                self.bbr.clone(),
+            ))
             .serve_with_shutdown(self.addr, async move {
                 // When the grpc server is started, notify the barrier. If the shutdown signal is received
                 // before barrier is waited successfully, the server will shutdown immediately.

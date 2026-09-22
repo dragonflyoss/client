@@ -1298,6 +1298,7 @@ version = "1.5.7"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum",
  "bytes",
  "bytesize",
  "chrono",

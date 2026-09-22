@@ -14,15 +14,78 @@
  * limitations under the License.
  */
 
+use axum::body::HttpBody;
+use axum::error_handling::HandleErrorLayer;
+use bytes::Bytes;
 use dragonfly_client_util::ratelimiter::bbr::BBR;
+use std::convert::Infallible;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 use tonic::body::Body;
 use tonic::codegen::http::{Request, Response};
+use tonic::service::{LayerExt, Layered};
 use tonic::Status;
-use tower::{Layer, Service};
+use tower::{
+    buffer::BufferLayer,
+    limit::rate::RateLimitLayer,
+    load_shed::{error::Overloaded, LoadShedLayer},
+    util::option_layer,
+    BoxError, Layer, Service, ServiceBuilder,
+};
+
+/// Wraps a gRPC service with the request rate limiting middlewares. Applying them per
+/// service instead of on the whole server keeps the gRPC health checking service exempt,
+/// so liveness and readiness probes are not affected by the rate limit.
+pub fn rate_limit<S, B>(
+    service: S,
+    request_rate_limit: u64,
+    request_buffer_size: usize,
+    bbr: Option<Arc<BBR>>,
+) -> Layered<
+    impl Service<
+            Request<Body>,
+            Response = axum::response::Response,
+            Error = Infallible,
+            Future: Send + 'static,
+        > + Clone
+        + Send
+        + Sync
+        + 'static,
+    S,
+>
+where
+    S: Service<Request<Body>, Response = Response<B>, Error = Infallible>
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    S::Future: Send + 'static,
+    B: HttpBody<Data = Bytes> + Send + 'static,
+    B::Error: Into<BoxError>,
+{
+    ServiceBuilder::new()
+        .layer(option_layer(bbr.map(BBRLayer::new)))
+        .layer(HandleErrorLayer::new(|err: BoxError| async move {
+            if err.is::<Overloaded>() {
+                Status::resource_exhausted(
+                    "server is overloaded: too many requests, please retry later",
+                )
+            } else {
+                Status::internal(err.to_string())
+            }
+            .into_http::<Body>()
+        }))
+        .layer(LoadShedLayer::new())
+        .layer(BufferLayer::new(request_buffer_size))
+        .layer(RateLimitLayer::new(
+            request_rate_limit,
+            Duration::from_secs(1),
+        ))
+        .named_layer(service)
+}
 
 /// gRPC middleware that performs BBR-based adaptive rate limiting.
 ///
@@ -85,9 +148,10 @@ pub struct BBRService<S> {
 /// `RESOURCE_EXHAUSTED` status immediately without calling the inner service. Otherwise, it
 /// forwards the request and holds the guard until the response completes, ensuring accurate
 /// in-flight tracking and response time measurement.
-impl<S> Service<Request<Body>> for BBRService<S>
+impl<S, B> Service<Request<Body>> for BBRService<S>
 where
-    S: Service<Request<Body>, Response = Response<Body>> + Clone + Send + 'static,
+    S: Service<Request<Body>, Response = Response<B>> + Clone + Send + 'static,
+    B: Default,
     S::Future: Send + 'static,
     S::Error: Send + 'static,
 {
@@ -135,8 +199,45 @@ where
 mod tests {
     use super::*;
     use dragonfly_client_util::ratelimiter::bbr::BBRConfig;
-    use std::convert::Infallible;
+    use futures::future::join_all;
     use tower::{service_fn, ServiceExt};
+
+    #[tokio::test]
+    async fn rate_limit_sheds_requests_over_the_buffer_with_resource_exhausted() {
+        let mut service = rate_limit(
+            service_fn(|_request: Request<Body>| async {
+                Ok::<_, Infallible>(Response::new(Body::empty()))
+            }),
+            1,
+            1,
+            None,
+        );
+
+        let mut responses = Vec::new();
+        for _ in 0..4 {
+            responses.push(
+                service
+                    .ready()
+                    .await
+                    .unwrap()
+                    .call(Request::new(Body::empty())),
+            );
+        }
+
+        let grpc_statuses: Vec<Option<String>> = join_all(responses)
+            .await
+            .into_iter()
+            .map(|response| {
+                response
+                    .unwrap()
+                    .headers()
+                    .get("grpc-status")
+                    .map(|status| status.to_str().unwrap().to_string())
+            })
+            .collect();
+        assert!(grpc_statuses[0].is_none());
+        assert!(grpc_statuses.contains(&Some("8".to_string())));
+    }
 
     #[tokio::test]
     async fn bbr_service_forwards_requests_when_not_overloaded() {
