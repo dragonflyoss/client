@@ -223,6 +223,15 @@ fn default_backend_enable_hickory_dns() -> bool {
     true
 }
 
+/// Returns the default connect timeout for the backend's HTTP client, default is 10 seconds.
+///
+/// This bounds only TCP/TLS connection establishment, not the overall request duration,
+/// so it will not abort slow but otherwise healthy downloads.
+#[inline]
+fn default_backend_connect_timeout() -> Duration {
+    Duration::from_secs(10)
+}
+
 /// Returns the default max count of schedule.
 #[inline]
 fn default_download_max_schedule_count() -> u32 {
@@ -1697,6 +1706,16 @@ pub struct Backend {
         rename = "enableHickoryDNS"
     )]
     pub enable_hickory_dns: bool,
+
+    /// Specifies the maximum duration allowed to establish a TCP/TLS connection to the
+    /// backend (e.g. origin server or registry). This bounds connection establishment only,
+    /// not the overall request; it does not limit how long a subsequent download may take,
+    /// so it is safe to keep low even when downloading large, slow files.
+    ///
+    /// When an origin/registry endpoint is unreachable or its TCP handshake hangs, this
+    /// timeout allows the request to fail fast instead of stalling for a long time.
+    #[serde(default = "default_backend_connect_timeout", with = "humantime_serde")]
+    pub connect_timeout: Duration,
 }
 
 /// Implement Default for Backend.
@@ -1711,6 +1730,7 @@ impl Default for Backend {
             put_chunk_size: default_backend_put_chunk_size(),
             put_timeout: default_backend_put_timeout(),
             enable_hickory_dns: default_backend_enable_hickory_dns(),
+            connect_timeout: default_backend_connect_timeout(),
         }
     }
 }
@@ -2801,7 +2821,8 @@ mod tests {
                     "putConcurrentChunkCount": 2,
                     "putChunkSize": "2mib",
                     "putTimeout": "1m",
-                    "enableHickoryDNS": false
+                    "enableHickoryDNS": false,
+                    "connectTimeout": "2s"
                 }"#,
                 |backend| {
                     assert_eq!(
@@ -2822,6 +2843,7 @@ mod tests {
                     assert_eq!(backend.put_chunk_size, ByteSize::mib(2));
                     assert_eq!(backend.put_timeout, Duration::from_secs(60));
                     assert!(!backend.enable_hickory_dns);
+                    assert_eq!(backend.connect_timeout, Duration::from_secs(2));
                 },
             ),
             ("{}", |backend| {
@@ -2836,6 +2858,7 @@ mod tests {
                 assert_eq!(backend.put_chunk_size, ByteSize::mib(8));
                 assert_eq!(backend.put_timeout, Duration::from_secs(900));
                 assert!(backend.enable_hickory_dns);
+                assert_eq!(backend.connect_timeout, Duration::from_secs(10));
             }),
         ];
 
