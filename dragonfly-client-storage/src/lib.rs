@@ -164,11 +164,17 @@ impl Storage {
         piece_length: u64,
         content_length: u64,
         response_header: Option<HeaderMap>,
+        content_category: Option<String>,
     ) -> Result<metadata::Task> {
         self.content.create_task(id, content_length).await?;
 
-        self.metadata
-            .download_task_started(id, piece_length, content_length, response_header)
+        self.metadata.download_task_started(
+            id,
+            piece_length,
+            content_length,
+            response_header,
+            content_category,
+        )
     }
 
     /// Updates the metadata of the task when the task downloads finished.
@@ -2038,7 +2044,13 @@ mod tests {
         let dir = tempdir().unwrap();
         let storage = storage(dir.path()).await;
         storage
-            .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
+            .download_task_started(
+                TASK_ID,
+                CONTENT.len() as u64,
+                CONTENT.len() as u64,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -2089,7 +2101,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let storage = storage(dir.path()).await;
         storage
-            .download_task_started(TASK_ID, 1024, 1024, None)
+            .download_task_started(TASK_ID, 1024, 1024, None, None)
             .await
             .unwrap();
 
@@ -2125,7 +2137,13 @@ mod tests {
         let dir = tempdir().unwrap();
         let storage = storage(dir.path()).await;
         storage
-            .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
+            .download_task_started(
+                TASK_ID,
+                CONTENT.len() as u64,
+                CONTENT.len() as u64,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -2233,7 +2251,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let storage = storage(dir.path()).await;
         storage
-            .download_task_started(TASK_ID, 1024, 1024, None)
+            .download_task_started(TASK_ID, 1024, 1024, None, None)
             .await
             .unwrap();
 
@@ -2258,7 +2276,13 @@ mod tests {
         let dir = tempdir().unwrap();
         let storage = storage(dir.path()).await;
         storage
-            .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
+            .download_task_started(
+                TASK_ID,
+                CONTENT.len() as u64,
+                CONTENT.len() as u64,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -2321,7 +2345,13 @@ mod tests {
             let dir = tempdir().unwrap();
             let storage = storage(dir.path()).await;
             storage
-                .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
+                .download_task_started(
+                    TASK_ID,
+                    CONTENT.len() as u64,
+                    CONTENT.len() as u64,
+                    None,
+                    None,
+                )
                 .await
                 .unwrap();
 
@@ -2353,7 +2383,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let storage = storage(dir.path()).await;
         storage
-            .download_task_started(TASK_ID, 1024, 1024, None)
+            .download_task_started(TASK_ID, 1024, 1024, None, None)
             .await
             .unwrap();
 

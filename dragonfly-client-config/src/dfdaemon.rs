@@ -1368,6 +1368,12 @@ pub struct Rule {
     #[serde(default = "default_proxy_rule_filtered_query_params")]
     pub filtered_query_params: Vec<String>,
 
+    /// A low-cardinality label identifying what kind of content this rule matches
+    /// (e.g. "registry_mirror", "s3_model_artifact"). Surfaced on download metrics
+    /// as the `content_category` label so traffic can be split by content type,
+    /// independent of traffic source (local/p2p/back-to-source).
+    pub content_category: Option<String>,
+
     /// Represents how the download interacts with the scheduler, default is auto.
     /// Auto downloads small files from the source directly, skipping the scheduler.
     /// Always downloads through the scheduler even for small files, so that the peer
@@ -1383,6 +1389,7 @@ impl Default for Rule {
             use_tls: false,
             redirect: None,
             filtered_query_params: default_proxy_rule_filtered_query_params(),
+            content_category: None,
             scheduling_policy: SchedulingPolicy::default(),
         }
     }
@@ -2596,6 +2603,7 @@ mod tests {
                     rule.filtered_query_params,
                     default_proxy_rule_filtered_query_params()
                 );
+                assert!(rule.content_category.is_none());
                 assert_eq!(rule.scheduling_policy, SchedulingPolicy::Auto);
             }),
             (
@@ -2603,6 +2611,13 @@ mod tests {
                 |result| {
                     let rule = result.unwrap();
                     assert!(rule.filtered_query_params.is_empty());
+                },
+            ),
+            (
+                "regex: 'blobs/sha256.*'\ncontentCategory: registry_mirror\n",
+                |result| {
+                    let rule = result.unwrap();
+                    assert_eq!(rule.content_category.as_deref(), Some("registry_mirror"));
                 },
             ),
             ("{}", |result| {

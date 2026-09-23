@@ -1316,6 +1316,12 @@ fn make_download_task_request(
     // Registry will return the 403 status code if the Host header is set.
     let mut request_header = headermap_to_hashmap(header);
     request_header.remove(reqwest::header::HOST.as_str());
+    if let Some(content_category) = &rule.content_category {
+        request_header.insert(
+            header::DRAGONFLY_CONTENT_CATEGORY_HEADER.to_string(),
+            content_category.clone(),
+        );
+    }
 
     Ok(DownloadTaskRequest {
         download: Some(Download {
