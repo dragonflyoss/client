@@ -2014,6 +2014,7 @@ impl PersistentTask {
         let semaphore = Arc::new(Semaphore::new(
             self.config.download.concurrent_piece_count as usize,
         ));
+        let content_category = task.content_category.clone().unwrap_or_default();
         while let Some(collect_piece) = piece_collector_rx.recv().await {
             if interrupt.load(Ordering::SeqCst) {
                 // If the interrupt is true, break the collector loop.
@@ -2038,6 +2039,7 @@ impl PersistentTask {
                 finished_pieces: Arc<Mutex<Vec<metadata::Piece>>>,
                 protocol: String,
                 parent_selector: Arc<PersistentParentSelector>,
+                content_category: String,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 let mut collected_parents = parents;
@@ -2059,6 +2061,7 @@ impl PersistentTask {
                             offset,
                             length,
                             parent.clone(),
+                            content_category.as_str(),
                         )
                         .await
                     {
@@ -2227,6 +2230,7 @@ impl PersistentTask {
             let finished_pieces = finished_pieces.clone();
             let protocol = self.config.download.protocol.clone();
             let parent_selector = self.parent_selector.clone();
+            let content_category = content_category.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
@@ -2247,6 +2251,7 @@ impl PersistentTask {
                         finished_pieces,
                         protocol,
                         parent_selector,
+                        content_category,
                     )
                     .await
                 }
@@ -2345,6 +2350,7 @@ impl PersistentTask {
         let semaphore = Arc::new(Semaphore::new(
             self.config.download.back_to_source_concurrent_piece_count as usize,
         ));
+        let content_category = task.content_category.clone().unwrap_or_default();
         for interested_piece in interested_pieces {
             async fn download_from_source(
                 task_id: String,
@@ -2364,6 +2370,7 @@ impl PersistentTask {
                 hugging_face: Option<HuggingFace>,
                 model_scope: Option<ModelScope>,
                 open_csg: Option<OpenCsg>,
+                content_category: String,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 debug!("start to download piece {} from source", piece_id);
@@ -2382,6 +2389,7 @@ impl PersistentTask {
                         hugging_face,
                         model_scope,
                         open_csg,
+                        content_category.as_str(),
                     )
                     .await?;
 
@@ -2507,6 +2515,7 @@ impl PersistentTask {
             let download_progress_tx = download_progress_tx.clone();
             let in_stream_tx = in_stream_tx.clone();
             let object_storage = request.object_storage.clone();
+            let content_category = content_category.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
@@ -2529,6 +2538,7 @@ impl PersistentTask {
                         None,
                         None,
                         None,
+                        content_category,
                     )
                     .await
                 }
@@ -2678,7 +2688,10 @@ impl PersistentTask {
             }
 
             // Fake the download from the local.
-            self.piece.download_persistent_from_local(piece.length);
+            self.piece.download_persistent_from_local(
+                task.content_category.as_deref().unwrap_or_default(),
+                piece.length,
+            );
             info!("finished piece {} from local", piece_id,);
 
             // Construct the piece.
@@ -2793,6 +2806,7 @@ impl PersistentTask {
         let semaphore = Arc::new(Semaphore::new(
             self.config.download.back_to_source_concurrent_piece_count as usize,
         ));
+        let content_category = task.content_category.clone().unwrap_or_default();
         for interested_piece in interested_pieces.clone() {
             async fn download_from_source(
                 task_id: String,
@@ -2811,6 +2825,7 @@ impl PersistentTask {
                 hugging_face: Option<HuggingFace>,
                 model_scope: Option<ModelScope>,
                 open_csg: Option<OpenCsg>,
+                content_category: String,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 debug!("start to download piece {} from source", piece_id);
@@ -2829,6 +2844,7 @@ impl PersistentTask {
                         hugging_face,
                         model_scope,
                         open_csg,
+                        content_category.as_str(),
                     )
                     .await?;
 
@@ -2932,6 +2948,7 @@ impl PersistentTask {
             let piece_manager = self.piece.clone();
             let download_progress_tx = download_progress_tx.clone();
             let object_storage = request.object_storage.clone();
+            let content_category = content_category.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
@@ -2953,6 +2970,7 @@ impl PersistentTask {
                         None,
                         None,
                         None,
+                        content_category,
                     )
                     .await
                 }
