@@ -1494,9 +1494,9 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-request"
-version = "1.7.4"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c5239d9bb7cce25998722fa50fe6d6165ef9ad0f10754714bc654482a70402c"
+checksum = "9ce97978e45c4bac9253f5930120a5b3e68f0853aa7159f5c0a40f8bb8440811"
 dependencies = [
  "async-trait",
  "backon",
@@ -2735,7 +2735,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -4941,7 +4941,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -5608,7 +5608,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.3",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
