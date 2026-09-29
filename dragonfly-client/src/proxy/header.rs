@@ -17,7 +17,8 @@
 use bytesize::ByteSize;
 use dragonfly_api::common::v2::{Priority, SchedulingPolicy};
 use reqwest::header::HeaderMap;
-use std::{fmt, str::FromStr};
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, fmt, str::FromStr};
 use tracing::error;
 
 /// The header key of tag in http request.
@@ -116,6 +117,21 @@ pub const DRAGONFLY_SERVER_IP_HEADER: &str = "X-Dragonfly-Server-IP";
 /// - "proxy": Indicates a proxy error occurred during the request.
 /// - "dfdaemon": Indicates a dfdaemon error occurred during the request.
 pub const DRAGONFLY_ERROR_TYPE_HEADER: &str = "X-Dragonfly-Error-Type";
+
+/// The response header key of backend/origin HTTP status code.
+/// It is set when dfdaemon returns a backend error before the response body
+/// streaming starts, so upper-layer proxies can inspect or override it.
+pub const DRAGONFLY_BACKEND_STATUS_CODE_HEADER: &str = "X-Dragonfly-Backend-Status-Code";
+
+/// Backend error details serialized into tonic status details for proxy-only path.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackendErrorDetails {
+    pub message: String,
+    pub header: HashMap<String, String>,
+    pub status_code: Option<i32>,
+    #[serde(default)]
+    pub body: Vec<u8>,
+}
 
 /// Represents the type of error that occurred during the request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

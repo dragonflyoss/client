@@ -129,6 +129,9 @@ pub struct StatResponse {
     /// The information of the entries in the directory.
     pub entries: Vec<DirEntry>,
 
+    /// The body of the non-success response.
+    pub body: Option<Vec<u8>>,
+
     /// The error message of the response.
     pub error_message: Option<String>,
 }

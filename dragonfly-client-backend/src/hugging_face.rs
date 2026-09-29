@@ -415,6 +415,7 @@ impl Backend for HuggingFace {
                             message: err.to_string(),
                             status_code: None,
                             header: None,
+                            body: None,
                         }))
                     })?;
 
@@ -435,6 +436,7 @@ impl Backend for HuggingFace {
                         message: response_status_code.to_string(),
                         status_code: Some(response_status_code),
                         header: Some(response_header),
+                        body: None,
                     })));
                 }
 
@@ -454,6 +456,7 @@ impl Backend for HuggingFace {
                     http_status_code: Some(response_status_code),
                     error_message: Some(response_status_code.to_string()),
                     entries: Vec::new(),
+                    body: None,
                 })
             }
             None => {
@@ -480,6 +483,7 @@ impl Backend for HuggingFace {
                             message: err.to_string(),
                             status_code: None,
                             header: None,
+                            body: None,
                         }))
                     })?;
 
@@ -500,6 +504,7 @@ impl Backend for HuggingFace {
                         message: response_status_code.to_string(),
                         status_code: Some(response_status_code),
                         header: Some(response_header),
+                        body: None,
                     })));
                 }
 
@@ -513,6 +518,7 @@ impl Backend for HuggingFace {
                         message: err.to_string(),
                         status_code: None,
                         header: None,
+                        body: None,
                     }))
                 })?;
 
@@ -526,6 +532,7 @@ impl Backend for HuggingFace {
                         message: err.to_string(),
                         status_code: None,
                         header: None,
+                        body: None,
                     }))
                 })?;
 
@@ -568,6 +575,7 @@ impl Backend for HuggingFace {
                     http_status_code: Some(response_status_code),
                     error_message: Some(response_status_code.to_string()),
                     entries,
+                    body: None,
                 })
             }
         }
