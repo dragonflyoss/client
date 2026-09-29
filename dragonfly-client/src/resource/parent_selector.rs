@@ -221,7 +221,7 @@ impl ParentSelector {
             let dfdaemon_upload_client = match DfdaemonUploadClient::new(
                 self.config.clone(),
                 format_url(
-                    "http",
+                    self.config.upload.client.scheme(),
                     IpAddr::from_str(&parent_host.ip)?,
                     parent_host.port as u16,
                 ),
@@ -542,7 +542,7 @@ impl PersistentParentSelector {
             let dfdaemon_upload_client = match DfdaemonUploadClient::new(
                 self.config.clone(),
                 format_url(
-                    "http",
+                    self.config.upload.client.scheme(),
                     IpAddr::from_str(&parent_host.ip)?,
                     parent_host.port as u16,
                 ),
@@ -866,7 +866,7 @@ impl PersistentCacheParentSelector {
             let dfdaemon_upload_client = match DfdaemonUploadClient::new(
                 self.config.clone(),
                 format_url(
-                    "http",
+                    self.config.upload.client.scheme(),
                     IpAddr::from_str(&parent_host.ip)?,
                     parent_host.port as u16,
                 ),

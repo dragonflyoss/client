@@ -601,7 +601,8 @@ impl SchedulerClient {
             return Ok(channel.clone());
         }
 
-        let addr = format!("http://{socket_addr}");
+        let scheme = self.config.scheduler.scheme();
+        let addr = format!("{scheme}://{socket_addr}");
         let domain_name = Url::parse(addr.as_str())?
             .host_str()
             .ok_or(Error::InvalidParameter)

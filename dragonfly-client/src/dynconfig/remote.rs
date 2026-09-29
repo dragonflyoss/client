@@ -139,7 +139,7 @@ impl Remote {
             }
 
             let addr = format_url(
-                "http",
+                self.config.scheduler.scheme(),
                 IpAddr::from_str(&scheduler.ip)?,
                 scheduler.port as u16,
             );
