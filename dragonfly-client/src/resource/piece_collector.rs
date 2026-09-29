@@ -245,13 +245,10 @@ impl PieceCollector {
                 })?;
 
                 // Create a dfdaemon client.
+                let scheme = config.upload.client.scheme();
                 let dfdaemon_upload_client = DfdaemonUploadClient::new(
                     config,
-                    format_url(
-                        config.upload.client.scheme(),
-                        IpAddr::from_str(&host.ip)?,
-                        host.port as u16,
-                    ),
+                    format_url(scheme, IpAddr::from_str(&host.ip)?, host.port as u16),
                     false,
                 )
                 .await
@@ -550,13 +547,10 @@ impl PersistentPieceCollector {
                 })?;
 
                 // Create a dfdaemon client.
+                let scheme = config.upload.client.scheme();
                 let dfdaemon_upload_client = DfdaemonUploadClient::new(
                     config,
-                    format_url(
-                        config.upload.client.scheme(),
-                        IpAddr::from_str(&host.ip)?,
-                        host.port as u16,
-                    ),
+                    format_url(scheme, IpAddr::from_str(&host.ip)?, host.port as u16),
                     false,
                 )
                 .await
@@ -863,13 +857,10 @@ impl PersistentCachePieceCollector {
                 })?;
 
                 // Create a dfdaemon client.
+                let scheme = config.upload.client.scheme();
                 let dfdaemon_upload_client = DfdaemonUploadClient::new(
                     config,
-                    format_url(
-                        config.upload.client.scheme(),
-                        IpAddr::from_str(&host.ip)?,
-                        host.port as u16,
-                    ),
+                    format_url(scheme, IpAddr::from_str(&host.ip)?, host.port as u16),
                     false,
                 )
                 .await
