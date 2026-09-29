@@ -23,7 +23,7 @@ use dragonfly_api::dfdaemon::v2::{
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_storage::metadata;
-use dragonfly_client_util::net::{format_url, scheme_for_tls};
+use dragonfly_client_util::net::format_url;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -245,14 +245,13 @@ impl PieceCollector {
                 })?;
 
                 // Create a dfdaemon client.
-                let scheme = scheme_for_tls(
-                    config.upload.client.ca_cert.as_deref(),
-                    config.upload.client.cert.as_deref(),
-                    config.upload.client.key.as_deref(),
-                );
                 let dfdaemon_upload_client = DfdaemonUploadClient::new(
                     config,
-                    format_url(scheme, IpAddr::from_str(&host.ip)?, host.port as u16),
+                    format_url(
+                        config.upload.client.scheme(),
+                        IpAddr::from_str(&host.ip)?,
+                        host.port as u16,
+                    ),
                     false,
                 )
                 .await
@@ -551,14 +550,13 @@ impl PersistentPieceCollector {
                 })?;
 
                 // Create a dfdaemon client.
-                let scheme = scheme_for_tls(
-                    config.upload.client.ca_cert.as_deref(),
-                    config.upload.client.cert.as_deref(),
-                    config.upload.client.key.as_deref(),
-                );
                 let dfdaemon_upload_client = DfdaemonUploadClient::new(
                     config,
-                    format_url(scheme, IpAddr::from_str(&host.ip)?, host.port as u16),
+                    format_url(
+                        config.upload.client.scheme(),
+                        IpAddr::from_str(&host.ip)?,
+                        host.port as u16,
+                    ),
                     false,
                 )
                 .await
@@ -865,14 +863,13 @@ impl PersistentCachePieceCollector {
                 })?;
 
                 // Create a dfdaemon client.
-                let scheme = scheme_for_tls(
-                    config.upload.client.ca_cert.as_deref(),
-                    config.upload.client.cert.as_deref(),
-                    config.upload.client.key.as_deref(),
-                );
                 let dfdaemon_upload_client = DfdaemonUploadClient::new(
                     config,
-                    format_url(scheme, IpAddr::from_str(&host.ip)?, host.port as u16),
+                    format_url(
+                        config.upload.client.scheme(),
+                        IpAddr::from_str(&host.ip)?,
+                        host.port as u16,
+                    ),
                     false,
                 )
                 .await

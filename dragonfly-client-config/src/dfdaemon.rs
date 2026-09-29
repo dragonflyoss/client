@@ -660,6 +660,15 @@ pub struct UploadClient {
 
 /// Implement UploadClient.
 impl UploadClient {
+    /// Returns the scheme to dial with: `https` if the tls is configured, otherwise `http`.
+    pub fn scheme(&self) -> &'static str {
+        if self.ca_cert.is_some() && self.cert.is_some() && self.key.is_some() {
+            "https"
+        } else {
+            "http"
+        }
+    }
+
     // Load the client tls config.
     pub async fn load_client_tls_config(
         &self,
@@ -852,6 +861,15 @@ impl Default for Scheduler {
 
 /// Implement Scheduler.
 impl Scheduler {
+    /// Returns the scheme to dial with: `https` if the tls is configured, otherwise `http`.
+    pub fn scheme(&self) -> &'static str {
+        if self.ca_cert.is_some() && self.cert.is_some() && self.key.is_some() {
+            "https"
+        } else {
+            "http"
+        }
+    }
+
     /// Load the client tls config.
     pub async fn load_client_tls_config(
         &self,
@@ -2186,6 +2204,35 @@ mod tests {
                 ..Default::default()
             };
             expect(scheduler.load_client_tls_config("example.com").await);
+        }
+    }
+
+    #[test]
+    fn scheme_is_https_only_with_all_pem_paths() {
+        let pem = Some(PathBuf::from("/etc/tls/tls.pem"));
+        let test_cases = vec![
+            ((pem.clone(), pem.clone(), pem.clone()), "https"),
+            ((None, pem.clone(), pem.clone()), "http"),
+            ((pem.clone(), None, pem.clone()), "http"),
+            ((pem.clone(), pem.clone(), None), "http"),
+            ((None, None, None), "http"),
+        ];
+
+        for ((ca_cert, cert, key), expected) in test_cases {
+            let upload_client = UploadClient {
+                ca_cert: ca_cert.clone(),
+                cert: cert.clone(),
+                key: key.clone(),
+            };
+            assert_eq!(upload_client.scheme(), expected);
+
+            let scheduler = Scheduler {
+                ca_cert,
+                cert,
+                key,
+                ..Default::default()
+            };
+            assert_eq!(scheduler.scheme(), expected);
         }
     }
 
