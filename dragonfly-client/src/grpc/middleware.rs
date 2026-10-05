@@ -30,7 +30,7 @@ use tonic::service::{LayerExt, Layered};
 use tonic::Status;
 use tower::{
     buffer::BufferLayer,
-    limit::rate::RateLimitLayer,
+    limit::{rate::RateLimitLayer, ConcurrencyLimitLayer},
     load_shed::{error::Overloaded, LoadShedLayer},
     util::option_layer,
     BoxError, Layer, Service, ServiceBuilder,
@@ -43,6 +43,7 @@ pub fn rate_limit<S, B>(
     service: S,
     request_rate_limit: u64,
     request_buffer_size: usize,
+    max_concurrent_requests: u64,
     bbr: Option<Arc<BBR>>,
 ) -> Layered<
     impl Service<
@@ -84,7 +85,24 @@ where
             request_rate_limit,
             Duration::from_secs(1),
         ))
+        // `u64::MAX` is the default and means unbounded. Tower implements this
+        // limit with a tokio semaphore, which rejects counts above
+        // `Semaphore::MAX_PERMITS`, so skip the layer in that case.
+        .layer(option_layer(concurrency_limit_layer(
+            max_concurrent_requests,
+        )))
         .named_layer(service)
+}
+
+/// Builds a concurrency-limit layer when `max_concurrent_requests` fits in a
+/// tokio semaphore. Larger values, including the `u64::MAX` default, stay
+/// unbounded instead of panicking when the layer is constructed.
+fn concurrency_limit_layer(max_concurrent_requests: u64) -> Option<ConcurrencyLimitLayer> {
+    let max = usize::try_from(max_concurrent_requests).ok()?;
+    if max > tokio::sync::Semaphore::MAX_PERMITS {
+        return None;
+    }
+    Some(ConcurrencyLimitLayer::new(max))
 }
 
 /// gRPC middleware that performs BBR-based adaptive rate limiting.
@@ -210,11 +228,53 @@ mod tests {
             }),
             1,
             1,
+            u64::MAX,
             None,
         );
 
         let mut responses = Vec::new();
         for _ in 0..4 {
+            responses.push(
+                service
+                    .ready()
+                    .await
+                    .unwrap()
+                    .call(Request::new(Body::empty())),
+            );
+        }
+
+        let grpc_statuses: Vec<Option<String>> = join_all(responses)
+            .await
+            .into_iter()
+            .map(|response| {
+                response
+                    .unwrap()
+                    .headers()
+                    .get("grpc-status")
+                    .map(|status| status.to_str().unwrap().to_string())
+            })
+            .collect();
+        assert!(grpc_statuses[0].is_none());
+        assert!(grpc_statuses.contains(&Some("8".to_string())));
+    }
+
+    #[tokio::test]
+    async fn rate_limit_sheds_requests_over_the_concurrency_limit_with_resource_exhausted() {
+        let mut service = rate_limit(
+            service_fn(|_request: Request<Body>| async {
+                // Hold the concurrency slot long enough for a second request
+                // to queue behind it and a third to arrive with no room left.
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                Ok::<_, Infallible>(Response::new(Body::empty()))
+            }),
+            1000,
+            1,
+            1,
+            None,
+        );
+
+        let mut responses = Vec::new();
+        for _ in 0..3 {
             responses.push(
                 service
                     .ready()
