@@ -662,6 +662,10 @@ pub struct UploadClient {
     /// The client key path with PEM format for the upload client and it is used for
     /// mutual TLS.
     pub key: Option<PathBuf>,
+
+    /// The TLS server name used when verifying the certificate of a peer or seed
+    /// peer. If not configured, the dial host is used as the domain name.
+    pub server_name: Option<String>,
 }
 
 /// Implement UploadClient.
@@ -689,6 +693,8 @@ impl UploadClient {
 
             let ca_cert = fs::read(&ca_cert_path).await?;
             let ca_cert = TonicCertificate::from_pem(ca_cert);
+
+            let domain_name = self.server_name.as_deref().unwrap_or(domain_name);
 
             // TODO(gaius): Use trust_anchor to skip the verify of hostname.
             return Ok(Some(
@@ -2062,7 +2068,8 @@ mod tests {
                     "client": {
                         "caCert": "/etc/ssl/certs/ca.crt",
                         "cert": "/etc/ssl/certs/client.crt",
-                        "key": "/etc/ssl/private/client.pem"
+                        "key": "/etc/ssl/private/client.pem",
+                        "serverName": "peer.example.com"
                     },
                     "disableShared": false,
                     "bandwidthLimit": "10GB"
@@ -2096,6 +2103,10 @@ mod tests {
                         upload.client.key,
                         Some(PathBuf::from("/etc/ssl/private/client.pem"))
                     );
+                    assert_eq!(
+                        upload.client.server_name,
+                        Some("peer.example.com".to_string())
+                    );
                     assert!(!upload.disable_shared);
                     assert_eq!(upload.bandwidth_limit, ByteSize::gb(10));
                 },
@@ -2111,6 +2122,7 @@ mod tests {
                 assert!(upload.client.ca_cert.is_none());
                 assert!(upload.client.cert.is_none());
                 assert!(upload.client.key.is_none());
+                assert!(upload.client.server_name.is_none());
                 assert!(!upload.disable_shared);
                 assert_eq!(upload.bandwidth_limit, ByteSize::gb(50));
             }),
@@ -2202,6 +2214,7 @@ mod tests {
                 ca_cert: ca_cert.clone(),
                 cert: cert.clone(),
                 key: key.clone(),
+                ..Default::default()
             };
             expect(upload_client.load_client_tls_config("example.com").await);
 
@@ -2257,6 +2270,38 @@ mod tests {
         assert!(format!("{tls_config:?}").contains("127.0.0.1"));
     }
 
+    #[tokio::test]
+    async fn upload_client_load_client_tls_config_uses_server_name_when_set() {
+        let (ca_file, cert_file, key_file) = temp_certs().await;
+
+        let upload_client_with_server_name = UploadClient {
+            ca_cert: Some(ca_file.path().to_path_buf()),
+            cert: Some(cert_file.path().to_path_buf()),
+            key: Some(key_file.path().to_path_buf()),
+            server_name: Some("custom-peer.example.com".to_string()),
+        };
+        let tls_config = upload_client_with_server_name
+            .load_client_tls_config("127.0.0.1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(format!("{tls_config:?}").contains("custom-peer.example.com"));
+        assert!(!format!("{tls_config:?}").contains("127.0.0.1"));
+
+        let upload_client_without_server_name = UploadClient {
+            ca_cert: Some(ca_file.path().to_path_buf()),
+            cert: Some(cert_file.path().to_path_buf()),
+            key: Some(key_file.path().to_path_buf()),
+            server_name: None,
+        };
+        let tls_config = upload_client_without_server_name
+            .load_client_tls_config("127.0.0.1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(format!("{tls_config:?}").contains("127.0.0.1"));
+    }
+
     #[test]
     fn scheme_is_https_only_with_all_pem_paths() {
         let pem = Some(PathBuf::from("/etc/tls/tls.pem"));
@@ -2273,6 +2318,7 @@ mod tests {
                 ca_cert: ca_cert.clone(),
                 cert: cert.clone(),
                 key: key.clone(),
+                ..Default::default()
             };
             assert_eq!(upload_client.scheme(), expected);
 
