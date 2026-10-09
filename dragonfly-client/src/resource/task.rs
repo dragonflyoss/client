@@ -181,6 +181,13 @@ impl Task {
             return Ok(task);
         }
 
+        let content_category = request
+            .request_header
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case("X-Dragonfly-Content-Category"))
+            .map(|(_, value)| value.clone())
+            .filter(|value| !value.is_empty());
+
         // Handle the request header.
         let mut request_header =
             hashmap_to_headermap(&request.request_header).inspect_err(|err| {
@@ -191,6 +198,7 @@ impl Task {
         // returning a 206 partial content and returning
         // a 200 full content.
         request_header.remove(reqwest::header::RANGE);
+        request_header.remove("X-Dragonfly-Content-Category");
 
         // Head the url to get the content length.
         let backend = self.backend_factory.build(request.url.as_str())?;
@@ -274,7 +282,13 @@ impl Task {
 
         let task = self
             .storage
-            .download_task_started(id, piece_length, content_length, response.http_header)
+            .download_task_started(
+                id,
+                piece_length,
+                content_length,
+                response.http_header,
+                content_category,
+            )
             .await;
 
         // Attempt to create a hard link from the task file to the output path.
@@ -1300,6 +1314,7 @@ impl Task {
         let semaphore = Arc::new(Semaphore::new(
             self.config.download.concurrent_piece_count as usize,
         ));
+        let content_category = task.content_category.clone().unwrap_or_default();
 
         while let Some(collect_piece) = piece_collector_rx.recv().await {
             if interrupt.load(Ordering::SeqCst) {
@@ -1326,6 +1341,7 @@ impl Task {
                 need_piece_content: bool,
                 protocol: String,
                 parent_selector: Arc<ParentSelector>,
+                content_category: String,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 let mut collected_parents = parents;
@@ -1348,6 +1364,7 @@ impl Task {
                             length,
                             parent.clone(),
                             is_prefetch,
+                            content_category.as_str(),
                         )
                         .await
                     {
@@ -1510,6 +1527,7 @@ impl Task {
             let finished_pieces = finished_pieces.clone();
             let protocol = self.config.download.protocol.clone();
             let parent_selector = self.parent_selector.clone();
+            let content_category = content_category.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
@@ -1531,6 +1549,7 @@ impl Task {
                         need_piece_content,
                         protocol,
                         parent_selector,
+                        content_category,
                     )
                     .await
                 }
@@ -1634,6 +1653,7 @@ impl Task {
         let semaphore = Arc::new(Semaphore::new(
             self.config.download.back_to_source_concurrent_piece_count as usize,
         ));
+        let content_category = task.content_category.clone().unwrap_or_default();
         for interested_piece in interested_pieces {
             async fn download_from_source(
                 task_id: String,
@@ -1654,6 +1674,7 @@ impl Task {
                 hugging_face: Option<HuggingFace>,
                 model_scope: Option<ModelScope>,
                 open_csg: Option<OpenCsg>,
+                content_category: String,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 debug!("start to download piece {} from source", piece_id);
@@ -1673,6 +1694,7 @@ impl Task {
                         hugging_face,
                         model_scope,
                         open_csg,
+                        content_category.as_str(),
                     )
                     .await?;
 
@@ -1799,6 +1821,7 @@ impl Task {
             let hugging_face = request.hugging_face.clone();
             let model_scope = request.model_scope.clone();
             let open_csg = request.open_csg.clone();
+            let content_category = content_category.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
@@ -1822,6 +1845,7 @@ impl Task {
                         hugging_face,
                         model_scope,
                         open_csg,
+                        content_category,
                     )
                     .await
                 }
@@ -1981,7 +2005,10 @@ impl Task {
             }
 
             // Fake the download from the local.
-            self.piece.download_from_local(piece.length);
+            self.piece.download_from_local(
+                task.content_category.as_deref().unwrap_or_default(),
+                piece.length,
+            );
             debug!("finished piece {} from local", piece_id,);
 
             // Construct the piece.
@@ -2207,6 +2234,7 @@ impl Task {
         let semaphore = Arc::new(Semaphore::new(
             self.config.download.back_to_source_concurrent_piece_count as usize,
         ));
+        let content_category = task.content_category.clone().unwrap_or_default();
         for interested_piece in interested_pieces.clone() {
             async fn download_from_source(
                 task_id: String,
@@ -2226,6 +2254,7 @@ impl Task {
                 hugging_face: Option<HuggingFace>,
                 model_scope: Option<ModelScope>,
                 open_csg: Option<OpenCsg>,
+                content_category: String,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 debug!("start to download piece {} from source", piece_id);
@@ -2245,6 +2274,7 @@ impl Task {
                         hugging_face,
                         model_scope,
                         open_csg,
+                        content_category.as_str(),
                     )
                     .await?;
 
@@ -2349,6 +2379,7 @@ impl Task {
             let hugging_face = request.hugging_face.clone();
             let model_scope = request.model_scope.clone();
             let open_csg = request.open_csg.clone();
+            let content_category = content_category.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
@@ -2371,6 +2402,7 @@ impl Task {
                         hugging_face,
                         model_scope,
                         open_csg,
+                        content_category,
                     )
                     .await
                 }
@@ -2553,7 +2585,7 @@ mod tests {
 
         let task_id = "test-task-id";
         storage
-            .download_task_started(task_id, 1024, 4096, None)
+            .download_task_started(task_id, 1024, 4096, None, None)
             .await
             .unwrap();
 

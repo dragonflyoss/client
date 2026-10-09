@@ -49,6 +49,13 @@ pub struct Task {
     /// The header of the response.
     pub response_header: HashMap<String, String>,
 
+    /// A low-cardinality label identifying what kind of content this task is for
+    /// (e.g. "registry_mirror", "s3_model_artifact"), copied from the proxy Rule's
+    /// content_category at task-creation time. None for tasks with no matching rule
+    /// or no content_category configured on the rule.
+    #[serde(default)]
+    pub content_category: Option<String>,
+
     /// The count of the task being uploaded by other peers.
     pub uploading_count: i64,
 
@@ -173,6 +180,13 @@ pub struct PersistentTask {
     /// The length of the content.
     pub content_length: u64,
 
+    /// A low-cardinality label identifying what kind of content this task is for
+    /// (e.g. "registry_mirror", "s3_model_artifact"), copied from the proxy Rule's
+    /// content_category at task-creation time. None for tasks with no matching rule
+    /// or no content_category configured on the rule.
+    #[serde(default)]
+    pub content_category: Option<String>,
+
     /// The count of the task being uploaded by other peers.
     pub uploading_count: i64,
 
@@ -290,6 +304,13 @@ pub struct PersistentCacheTask {
 
     /// The length of the content.
     pub content_length: u64,
+
+    /// A low-cardinality label identifying what kind of content this task is for
+    /// (e.g. "registry_mirror", "s3_model_artifact"), copied from the proxy Rule's
+    /// content_category at task-creation time. None for tasks with no matching rule
+    /// or no content_category configured on the rule.
+    #[serde(default)]
+    pub content_category: Option<String>,
 
     /// The count of the task being uploaded by other peers.
     pub uploading_count: i64,
@@ -656,6 +677,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
         piece_length: u64,
         content_length: u64,
         response_header: Option<HeaderMap>,
+        content_category: Option<String>,
     ) -> Result<Task> {
         // Convert the response header to hashmap.
         let response_header = response_header
@@ -671,6 +693,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
                 task.content_length = Some(content_length);
                 task.piece_length = Some(piece_length);
                 task.response_header = response_header;
+                task.content_category = content_category.or(task.content_category);
                 task
             }
             None => Task {
@@ -678,6 +701,7 @@ impl<E: StorageEngineOwned> Metadata<E> {
                 piece_length: Some(piece_length),
                 content_length: Some(content_length),
                 response_header,
+                content_category,
                 updated_at: Utc::now().naive_utc(),
                 created_at: Utc::now().naive_utc(),
                 ..Default::default()
@@ -1880,7 +1904,7 @@ mod tests {
             (
                 |metadata, id| {
                     metadata
-                        .download_task_started(id, 1024, 4096, None)
+                        .download_task_started(id, 1024, 4096, None, None)
                         .unwrap();
                 },
                 |task, reused| {
@@ -1892,7 +1916,7 @@ mod tests {
             (
                 |metadata, id| {
                     metadata
-                        .download_task_started(id, 1024, 4096, None)
+                        .download_task_started(id, 1024, 4096, None, None)
                         .unwrap();
                     metadata.download_task_failed(id).unwrap();
                 },
@@ -1930,7 +1954,7 @@ mod tests {
         let metadata = metadata(dir.path());
 
         metadata
-            .download_task_started(TASK_ID, 1024, 4096, None)
+            .download_task_started(TASK_ID, 1024, 4096, None, None)
             .unwrap();
         let task = metadata.get_task(TASK_ID).unwrap().unwrap();
         assert_eq!(task.id, TASK_ID);
@@ -1948,7 +1972,7 @@ mod tests {
         let mut response_header = HeaderMap::new();
         response_header.insert("content-type", "text/plain".parse().unwrap());
         let task = metadata
-            .download_task_started(TASK_ID, 2048, 4096, Some(response_header))
+            .download_task_started(TASK_ID, 2048, 4096, Some(response_header), None)
             .unwrap();
         assert!(!task.is_failed());
         assert_eq!(task.piece_length(), Some(2048));
@@ -1982,7 +2006,7 @@ mod tests {
         assert_eq!(task.uploaded_count, 1);
 
         metadata
-            .download_task_started(OTHER_TASK_ID, 1024, 0, None)
+            .download_task_started(OTHER_TASK_ID, 1024, 0, None, None)
             .unwrap();
         let tasks = metadata.get_tasks().unwrap();
         assert_eq!(tasks.len(), 2);
@@ -1996,11 +2020,44 @@ mod tests {
     }
 
     #[test]
+    fn download_task_started_persists_content_category_and_keeps_existing() {
+        let dir = tempdir().unwrap();
+        let metadata = metadata(dir.path());
+
+        let task = metadata
+            .download_task_started(
+                TASK_ID,
+                1024,
+                4096,
+                None,
+                Some("registry_mirror".to_string()),
+            )
+            .unwrap();
+        assert_eq!(task.content_category.as_deref(), Some("registry_mirror"));
+
+        let task = metadata
+            .download_task_started(TASK_ID, 1024, 4096, None, None)
+            .unwrap();
+        assert_eq!(task.content_category.as_deref(), Some("registry_mirror"));
+
+        let task = metadata
+            .download_task_started(
+                TASK_ID,
+                1024,
+                4096,
+                None,
+                Some("s3_model_artifact".to_string()),
+            )
+            .unwrap();
+        assert_eq!(task.content_category.as_deref(), Some("s3_model_artifact"));
+    }
+
+    #[test]
     fn prefetch_task_starts_once_and_resets_on_failure() {
         let dir = tempdir().unwrap();
         let metadata = metadata(dir.path());
         metadata
-            .download_task_started(TASK_ID, 1024, 4096, None)
+            .download_task_started(TASK_ID, 1024, 4096, None, None)
             .unwrap();
 
         let task = metadata.prefetch_task_started(TASK_ID).unwrap();

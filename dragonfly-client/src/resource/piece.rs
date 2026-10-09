@@ -341,7 +341,7 @@ impl Piece {
 
         // Upload the piece content.
         let (_, reader) = self.storage.upload_piece(piece_id, task_id, range).await?;
-        collect_download_piece_duration_metrics(&TrafficType::LocalPeer, start_time.elapsed());
+        collect_download_piece_duration_metrics(&TrafficType::LocalPeer, "", start_time.elapsed());
 
         Ok(reader)
     }
@@ -349,8 +349,8 @@ impl Piece {
     /// Downloads a single piece from local cache. Fake the download piece
     /// from the local cache, just collect the metrics.
     #[instrument(level = "debug", skip_all)]
-    pub fn download_from_local(&self, length: u64) {
-        collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
+    pub fn download_from_local(&self, content_category: &str, length: u64) {
+        collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, content_category, length);
     }
 
     /// Downloads a single piece from a parent.
@@ -366,6 +366,7 @@ impl Piece {
         length: u64,
         parent: piece_collector::CollectedParent,
         is_prefetch: bool,
+        content_category: &str,
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
@@ -381,7 +382,11 @@ impl Piece {
         // return the piece directly.
         if piece.is_finished() {
             debug!("finished piece {} from local", piece_id);
-            collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
+            collect_download_piece_traffic_metrics(
+                &TrafficType::LocalPeer,
+                content_category,
+                length,
+            );
             return Ok(piece);
         }
 
@@ -468,9 +473,14 @@ impl Piece {
             .await
         {
             Ok(piece) => {
-                collect_download_piece_traffic_metrics(&TrafficType::RemotePeer, length);
+                collect_download_piece_traffic_metrics(
+                    &TrafficType::RemotePeer,
+                    content_category,
+                    length,
+                );
                 collect_download_piece_duration_metrics(
                     &TrafficType::RemotePeer,
+                    content_category,
                     start_time.elapsed(),
                 );
 
@@ -502,6 +512,7 @@ impl Piece {
         hugging_face: Option<HuggingFace>,
         model_scope: Option<ModelScope>,
         open_csg: Option<OpenCsg>,
+        content_category: &str,
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
@@ -517,7 +528,11 @@ impl Piece {
         // return the piece directly.
         if piece.is_finished() {
             debug!("finished piece {} from local", piece_id);
-            collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
+            collect_download_piece_traffic_metrics(
+                &TrafficType::LocalPeer,
+                content_category,
+                length,
+            );
             return Ok(piece);
         }
 
@@ -634,9 +649,14 @@ impl Piece {
             .await
         {
             Ok(piece) => {
-                collect_download_piece_traffic_metrics(&TrafficType::BackToSource, length);
+                collect_download_piece_traffic_metrics(
+                    &TrafficType::BackToSource,
+                    content_category,
+                    length,
+                );
                 collect_download_piece_duration_metrics(
                     &TrafficType::BackToSource,
+                    content_category,
                     start_time.elapsed(),
                 );
 
@@ -712,7 +732,7 @@ impl Piece {
             .storage
             .upload_persistent_piece(piece_id, task_id, range)
             .await?;
-        collect_download_piece_duration_metrics(&TrafficType::LocalPeer, start_time.elapsed());
+        collect_download_piece_duration_metrics(&TrafficType::LocalPeer, "", start_time.elapsed());
 
         Ok(reader)
     }
@@ -720,8 +740,8 @@ impl Piece {
     /// Downloads a persistent piece from local cache. Fake the download
     /// persistent piece from the local cache, just collect the metrics.
     #[instrument(level = "debug", skip_all)]
-    pub fn download_persistent_from_local(&self, length: u64) {
-        collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
+    pub fn download_persistent_from_local(&self, content_category: &str, length: u64) {
+        collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, content_category, length);
     }
 
     /// Downloads a persistent piece from a parent.
@@ -736,6 +756,7 @@ impl Piece {
         offset: u64,
         length: u64,
         parent: piece_collector::CollectedParent,
+        content_category: &str,
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
@@ -756,7 +777,11 @@ impl Piece {
         // return the piece directly.
         if piece.is_finished() {
             debug!("finished persistent piece {} from local", piece_id);
-            collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
+            collect_download_piece_traffic_metrics(
+                &TrafficType::LocalPeer,
+                content_category,
+                length,
+            );
             return Ok(piece);
         }
 
@@ -834,9 +859,14 @@ impl Piece {
             .await
         {
             Ok(piece) => {
-                collect_download_piece_traffic_metrics(&TrafficType::RemotePeer, length);
+                collect_download_piece_traffic_metrics(
+                    &TrafficType::RemotePeer,
+                    content_category,
+                    length,
+                );
                 collect_download_piece_duration_metrics(
                     &TrafficType::RemotePeer,
+                    content_category,
                     start_time.elapsed(),
                 );
 
@@ -867,6 +897,7 @@ impl Piece {
         hugging_face: Option<HuggingFace>,
         model_scope: Option<ModelScope>,
         open_csg: Option<OpenCsg>,
+        content_category: &str,
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
@@ -882,7 +913,11 @@ impl Piece {
         // return the piece directly.
         if piece.is_finished() {
             debug!("finished piece {} from local", piece_id);
-            collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
+            collect_download_piece_traffic_metrics(
+                &TrafficType::LocalPeer,
+                content_category,
+                length,
+            );
             return Ok(piece);
         }
 
@@ -998,9 +1033,14 @@ impl Piece {
             .await
         {
             Ok(piece) => {
-                collect_download_piece_traffic_metrics(&TrafficType::BackToSource, length);
+                collect_download_piece_traffic_metrics(
+                    &TrafficType::BackToSource,
+                    content_category,
+                    length,
+                );
                 collect_download_piece_duration_metrics(
                     &TrafficType::BackToSource,
+                    content_category,
                     start_time.elapsed(),
                 );
 
@@ -1076,7 +1116,7 @@ impl Piece {
             .storage
             .upload_persistent_cache_piece(piece_id, task_id, range)
             .await?;
-        collect_download_piece_duration_metrics(&TrafficType::LocalPeer, start_time.elapsed());
+        collect_download_piece_duration_metrics(&TrafficType::LocalPeer, "", start_time.elapsed());
 
         Ok(reader)
     }
@@ -1084,8 +1124,8 @@ impl Piece {
     /// Downloads a persistent cache piece from local cache. Fake the download
     /// persistent cache piece from the local cache, just collect the metrics.
     #[instrument(level = "debug", skip_all)]
-    pub fn download_persistent_cache_from_local(&self, length: u64) {
-        collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
+    pub fn download_persistent_cache_from_local(&self, content_category: &str, length: u64) {
+        collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, content_category, length);
     }
 
     /// Downloads a persistent cache piece from a parent.
@@ -1100,6 +1140,7 @@ impl Piece {
         offset: u64,
         length: u64,
         parent: piece_collector::CollectedParent,
+        content_category: &str,
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
@@ -1120,7 +1161,11 @@ impl Piece {
         // return the piece directly.
         if piece.is_finished() {
             debug!("finished persistent cache piece {} from local", piece_id);
-            collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
+            collect_download_piece_traffic_metrics(
+                &TrafficType::LocalPeer,
+                content_category,
+                length,
+            );
             return Ok(piece);
         }
 
@@ -1198,9 +1243,14 @@ impl Piece {
             .await
         {
             Ok(piece) => {
-                collect_download_piece_traffic_metrics(&TrafficType::RemotePeer, length);
+                collect_download_piece_traffic_metrics(
+                    &TrafficType::RemotePeer,
+                    content_category,
+                    length,
+                );
                 collect_download_piece_duration_metrics(
                     &TrafficType::RemotePeer,
+                    content_category,
                     start_time.elapsed(),
                 );
 

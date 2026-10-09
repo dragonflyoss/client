@@ -210,7 +210,7 @@ pub static DOWNLOAD_TRAFFIC: LazyLock<IntCounterVec> = LazyLock::new(|| {
         )
         .namespace(dragonfly_client_config::SERVICE_NAME)
         .subsystem(dragonfly_client_config::NAME),
-        &["type"],
+        &["type", "content_category"],
     )
     .expect("metric can be created")
 });
@@ -225,7 +225,7 @@ pub static DOWNLOAD_PIECE_DURATION: LazyLock<HistogramVec> = LazyLock::new(|| {
         .namespace(dragonfly_client_config::SERVICE_NAME)
         .subsystem(dragonfly_client_config::NAME)
         .buckets(exponential_buckets(1.0, 2.0, 24).unwrap()),
-        &["type"],
+        &["type", "content_category"],
     )
     .expect("metric can be created")
 });
@@ -1065,16 +1065,24 @@ pub fn collect_prefetch_task_failure_metrics(typ: i32, tag: &str, app: &str, pri
 }
 
 /// Collects the download piece traffic metrics.
-pub fn collect_download_piece_traffic_metrics(typ: &TrafficType, length: u64) {
+pub fn collect_download_piece_traffic_metrics(
+    typ: &TrafficType,
+    content_category: &str,
+    length: u64,
+) {
     DOWNLOAD_TRAFFIC
-        .with_label_values(&[typ.as_str_name()])
+        .with_label_values(&[typ.as_str_name(), content_category])
         .inc_by(length);
 }
 
 /// Collects the download piece duration metrics.
-pub fn collect_download_piece_duration_metrics(typ: &TrafficType, cost: Duration) {
+pub fn collect_download_piece_duration_metrics(
+    typ: &TrafficType,
+    content_category: &str,
+    cost: Duration,
+) {
     DOWNLOAD_PIECE_DURATION
-        .with_label_values(&[typ.as_str_name()])
+        .with_label_values(&[typ.as_str_name(), content_category])
         .observe(cost.as_millis() as f64);
 }
 
@@ -1752,9 +1760,9 @@ mod tests {
 
     #[test]
     fn download_piece_traffic_adds_length_for_the_traffic_type() {
-        let labels = [TrafficType::RemotePeer.as_str_name()];
+        let labels = [TrafficType::RemotePeer.as_str_name(), "registry_mirror"];
         let traffic_before = DOWNLOAD_TRAFFIC.with_label_values(&labels).get();
-        collect_download_piece_traffic_metrics(&TrafficType::RemotePeer, 2048);
+        collect_download_piece_traffic_metrics(&TrafficType::RemotePeer, "registry_mirror", 2048);
         assert_eq!(
             DOWNLOAD_TRAFFIC.with_label_values(&labels).get(),
             traffic_before + 2048
@@ -1763,12 +1771,13 @@ mod tests {
 
     #[test]
     fn download_piece_duration_observes_a_sample_for_the_traffic_type() {
-        let labels = [TrafficType::RemotePeer.as_str_name()];
+        let labels = [TrafficType::RemotePeer.as_str_name(), "registry_mirror"];
         let samples_before = DOWNLOAD_PIECE_DURATION
             .with_label_values(&labels)
             .get_sample_count();
         collect_download_piece_duration_metrics(
             &TrafficType::RemotePeer,
+            "registry_mirror",
             Duration::from_millis(42),
         );
         assert_eq!(
