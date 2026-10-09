@@ -228,6 +228,7 @@ impl ModelScope {
             .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
             .tcp_keepalive(KEEP_ALIVE_INTERVAL)
             .tcp_nodelay(true)
+            .connect_timeout(config.backend.connect_timeout)
             .build()?;
 
         Ok(Self {

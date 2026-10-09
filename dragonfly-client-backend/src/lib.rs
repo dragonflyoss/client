@@ -376,6 +376,7 @@ impl BackendFactory {
         backend_factory.load_builtin_backends(
             config.backend.enable_cache_temporary_redirect,
             config.backend.cache_temporary_redirect_ttl,
+            config.backend.connect_timeout,
         )?;
         if let Some(plugin_dir) = plugin_dir {
             backend_factory
@@ -413,6 +414,7 @@ impl BackendFactory {
         &mut self,
         enable_cache_temporary_redirect: bool,
         cache_temporary_redirect_ttl: Duration,
+        connect_timeout: Duration,
     ) -> Result<()> {
         self.backends.insert(
             "http".to_string(),
@@ -423,6 +425,7 @@ impl BackendFactory {
                 enable_cache_temporary_redirect,
                 cache_temporary_redirect_ttl,
                 self.config.backend.enable_hickory_dns,
+                connect_timeout,
             )?),
         );
         info!("load [http] builtin backend");
@@ -436,6 +439,7 @@ impl BackendFactory {
                 enable_cache_temporary_redirect,
                 cache_temporary_redirect_ttl,
                 self.config.backend.enable_hickory_dns,
+                connect_timeout,
             )?),
         );
         info!("load [https] builtin backend");
