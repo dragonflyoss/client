@@ -48,6 +48,7 @@ mod content_macos;
 pub mod cache;
 pub mod client;
 pub mod content;
+pub mod encryption;
 pub mod io;
 pub mod metadata;
 pub mod server;
@@ -100,14 +101,84 @@ impl Storage {
 
         // Create temporary directory for output operations.
         fs::create_dir_all(&dir.join(DEFAULT_TMP_DIR)).await?;
-        Ok(Storage {
+        let storage = Storage {
             config,
             metadata,
             content,
             cache,
             piece_notifier: PieceNotifier::default(),
             page_cache: PageCache::new(),
-        })
+        };
+
+        storage.purge_encryption_incompatible_tasks().await;
+        Ok(storage)
+    }
+
+    /// Returns whether the content is encrypted at rest.
+    pub fn is_encrypted(&self) -> bool {
+        self.content.is_encrypted()
+    }
+
+    /// Deletes the kept tasks whose content on disk is not usable under the
+    /// current encryption configuration: the plaintext content when the
+    /// encryption at rest is enabled, the encrypted content when it is disabled,
+    /// and the encrypted content whose key encryption key is no longer available.
+    /// Such content cannot be served, so the tasks are deleted and downloaded
+    /// again on demand.
+    #[instrument(skip_all)]
+    async fn purge_encryption_incompatible_tasks(&self) {
+        match self.metadata.get_tasks() {
+            Ok(tasks) => {
+                for task in tasks {
+                    if let Ok(false) = self.content.is_task_encryption_compatible(&task.id).await {
+                        warn!(
+                            "delete task {} whose content is incompatible with the encryption configuration",
+                            task.id
+                        );
+                        self.delete_task(&task.id).await;
+                    }
+                }
+            }
+            Err(err) => error!("get tasks failed: {}", err),
+        }
+
+        match self.metadata.get_persistent_tasks() {
+            Ok(tasks) => {
+                for task in tasks {
+                    if let Ok(false) = self
+                        .content
+                        .is_persistent_task_encryption_compatible(&task.id)
+                        .await
+                    {
+                        warn!(
+                            "delete persistent task {} whose content is incompatible with the encryption configuration",
+                            task.id
+                        );
+                        self.delete_persistent_task(&task.id).await;
+                    }
+                }
+            }
+            Err(err) => error!("get persistent tasks failed: {}", err),
+        }
+
+        match self.metadata.get_persistent_cache_tasks() {
+            Ok(tasks) => {
+                for task in tasks {
+                    if let Ok(false) = self
+                        .content
+                        .is_persistent_cache_task_encryption_compatible(&task.id)
+                        .await
+                    {
+                        warn!(
+                            "delete persistent cache task {} whose content is incompatible with the encryption configuration",
+                            task.id
+                        );
+                        self.delete_persistent_cache_task(&task.id).await;
+                    }
+                }
+            }
+            Err(err) => error!("get persistent cache tasks failed: {}", err),
+        }
     }
 
     /// Returns the total space of the disk.
@@ -165,7 +236,9 @@ impl Storage {
         content_length: u64,
         response_header: Option<HeaderMap>,
     ) -> Result<metadata::Task> {
-        self.content.create_task(id, content_length).await?;
+        self.content
+            .create_task(id, piece_length, content_length)
+            .await?;
 
         self.metadata
             .download_task_started(id, piece_length, content_length, response_header)
@@ -282,9 +355,14 @@ impl Storage {
 
     /// Creates and fallocates the persistent task content.
     #[instrument(level = "debug", skip_all)]
-    pub async fn create_persistent_task(&self, id: &str, content_length: u64) -> Result<()> {
+    pub async fn create_persistent_task(
+        &self,
+        id: &str,
+        piece_length: u64,
+        content_length: u64,
+    ) -> Result<()> {
         self.content
-            .create_persistent_task(id, content_length)
+            .create_persistent_task(id, piece_length, content_length)
             .await
             .map(|_| ())
     }
@@ -328,7 +406,7 @@ impl Storage {
         )?;
 
         self.content
-            .create_persistent_task(id, content_length)
+            .create_persistent_task(id, piece_length, content_length)
             .await?;
         Ok(metadata)
     }
@@ -460,9 +538,14 @@ impl Storage {
 
     /// Creates and fallocates the persistent cache task content.
     #[instrument(level = "debug", skip_all)]
-    pub async fn create_persistent_cache_task(&self, id: &str, content_length: u64) -> Result<()> {
+    pub async fn create_persistent_cache_task(
+        &self,
+        id: &str,
+        piece_length: u64,
+        content_length: u64,
+    ) -> Result<()> {
         self.content
-            .create_persistent_cache_task(id, content_length)
+            .create_persistent_cache_task(id, piece_length, content_length)
             .await
             .map(|_| ())
     }
@@ -506,7 +589,7 @@ impl Storage {
         )?;
 
         self.content
-            .create_persistent_cache_task(id, content_length)
+            .create_persistent_cache_task(id, piece_length, content_length)
             .await?;
         Ok(metadata)
     }
@@ -825,11 +908,15 @@ impl Storage {
             }
         }?;
 
+        let (disk_offset, disk_length) = self
+            .content
+            .task_piece_disk_range(task_id, piece.offset, piece.length)
+            .await;
         self.page_cache.download_piece_finished(
             piece_id,
             self.content.get_task_path(task_id),
-            piece.offset,
-            piece.length,
+            disk_offset,
+            disk_length,
         );
         self.piece_notifier.remove_and_notify(piece_id);
         Ok(piece)
@@ -889,11 +976,15 @@ impl Storage {
             }
         }?;
 
+        let (disk_offset, disk_length) = self
+            .content
+            .task_piece_disk_range(task_id, piece.offset, piece.length)
+            .await;
         self.page_cache.download_piece_finished(
             piece_id,
             self.content.get_task_path(task_id),
-            piece.offset,
-            piece.length,
+            disk_offset,
+            disk_length,
         );
         self.piece_notifier.remove_and_notify(piece_id);
         Ok(piece)
@@ -1122,11 +1213,15 @@ impl Storage {
             Some(parent_id.to_string()),
         )?;
 
+        let (disk_offset, disk_length) = self
+            .content
+            .persistent_task_piece_disk_range(task_id, piece.offset, piece.length)
+            .await;
         self.page_cache.download_piece_finished(
             piece_id,
             self.content.get_persistent_task_path(task_id),
-            piece.offset,
-            piece.length,
+            disk_offset,
+            disk_length,
         );
         self.piece_notifier.remove_and_notify(piece_id);
         Ok(piece)
@@ -1156,11 +1251,15 @@ impl Storage {
             }
         }?;
 
+        let (disk_offset, disk_length) = self
+            .content
+            .persistent_task_piece_disk_range(task_id, piece.offset, piece.length)
+            .await;
         self.page_cache.download_piece_finished(
             piece_id,
             self.content.get_persistent_task_path(task_id),
-            piece.offset,
-            piece.length,
+            disk_offset,
+            disk_length,
         );
         self.piece_notifier.remove_and_notify(piece_id);
         Ok(piece)
@@ -1362,11 +1461,15 @@ impl Storage {
             Some(parent_id.to_string()),
         )?;
 
+        let (disk_offset, disk_length) = self
+            .content
+            .persistent_cache_task_piece_disk_range(task_id, piece.offset, piece.length)
+            .await;
         self.page_cache.download_piece_finished(
             piece_id,
             self.content.get_persistent_cache_task_path(task_id),
-            piece.offset,
-            piece.length,
+            disk_offset,
+            disk_length,
         );
         self.piece_notifier.remove_and_notify(piece_id);
         Ok(piece)
@@ -2176,7 +2279,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let storage = storage(dir.path()).await;
         storage
-            .create_persistent_task(TASK_ID, CONTENT.len() as u64)
+            .create_persistent_task(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64)
             .await
             .unwrap();
 
@@ -2382,5 +2485,203 @@ mod tests {
             .unwrap()
             .unwrap()
             .is_finished());
+    }
+
+    /// Returns a kept storage configuration with the encryption at rest
+    /// enabled by a key encryption key written to the directory.
+    async fn encrypted_config(dir: &Path, key: u8) -> Arc<Config> {
+        let key_file = dir.join("kek.key");
+        fs::write(&key_file, [key; 32]).await.unwrap();
+
+        let mut config = Config::default();
+        config.storage.keep = true;
+        config.storage.encryption.enable = true;
+        config.storage.encryption.kms.file.key_file = Some(key_file);
+        Arc::new(config)
+    }
+
+    /// Downloads a task of one piece from the source and returns the
+    /// finished piece.
+    async fn download_task(storage: &Storage, task_id: &str, content: &[u8]) -> metadata::Piece {
+        storage
+            .download_task_started(task_id, content.len() as u64, content.len() as u64, None)
+            .await
+            .unwrap();
+
+        let piece_id = storage.piece_id(task_id, 0);
+        let piece = storage
+            .download_piece_started(piece_id.as_str(), 0, 0, content.len() as u64)
+            .await
+            .unwrap();
+        assert!(!piece.is_finished());
+
+        let mut stream = futures::stream::iter([Ok(Bytes::copy_from_slice(content))]);
+        let piece = storage
+            .download_piece_from_source_finished(
+                piece_id.as_str(),
+                task_id,
+                0,
+                content.len() as u64,
+                &mut stream,
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+        assert!(piece.is_finished());
+        storage.download_task_finished(task_id).unwrap();
+        piece
+    }
+
+    #[tokio::test]
+    async fn test_encrypted_storage_download_and_upload() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage_dir = dir.path().join("storage");
+        fs::create_dir_all(&storage_dir).await.unwrap();
+        let config = encrypted_config(dir.path(), 1).await;
+        let storage = Storage::new(config.clone(), &storage_dir, dir.path().to_path_buf())
+            .await
+            .unwrap();
+        assert!(storage.is_encrypted());
+
+        const TASK_ID: &str = "0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9";
+        let content: Vec<u8> = (0..200_000u32).map(|i| (i % 253) as u8).collect();
+        let piece = download_task(&storage, TASK_ID, &content).await;
+
+        // The piece digest is the digest of the plaintext, as the peers
+        // verify it.
+        assert_eq!(
+            piece.digest,
+            Digest::new(Algorithm::Crc32, crc32fast::hash(&content).to_string()).to_string()
+        );
+
+        // Uploading the piece serves the plaintext, including ranges.
+        let piece_id = storage.piece_id(TASK_ID, 0);
+        let (_, mut reader) = storage
+            .upload_piece(&piece_id, TASK_ID, None)
+            .await
+            .unwrap();
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await.unwrap();
+        assert_eq!(buffer, content);
+
+        let (_, mut reader) = storage
+            .upload_piece(
+                &piece_id,
+                TASK_ID,
+                Some(Range {
+                    start: 100_000,
+                    length: 1_000,
+                }),
+            )
+            .await
+            .unwrap();
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await.unwrap();
+        assert_eq!(buffer, &content[100_000..101_000]);
+
+        // A peer downloading the piece from this parent verifies the
+        // plaintext digest.
+        const OTHER_TASK_ID: &str =
+            "1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a";
+        storage
+            .download_task_started(
+                OTHER_TASK_ID,
+                content.len() as u64,
+                content.len() as u64,
+                None,
+            )
+            .await
+            .unwrap();
+        let other_piece_id = storage.piece_id(OTHER_TASK_ID, 0);
+        storage
+            .download_piece_started(other_piece_id.as_str(), 0, 0, content.len() as u64)
+            .await
+            .unwrap();
+        let mut stream = futures::stream::iter([Ok(Bytes::copy_from_slice(&content))]);
+        let other = storage
+            .download_piece_from_parent_finished(
+                other_piece_id.as_str(),
+                OTHER_TASK_ID,
+                0,
+                content.len() as u64,
+                piece.digest.as_str(),
+                "parent",
+                &mut stream,
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+        assert_eq!(other.digest, piece.digest);
+
+        // The content is kept across restarts with the same key.
+        drop(storage);
+        let storage = Storage::new(config, &storage_dir, dir.path().to_path_buf())
+            .await
+            .unwrap();
+        assert!(storage.get_task(TASK_ID).unwrap().is_some());
+        let (_, mut reader) = storage
+            .upload_piece(&piece_id, TASK_ID, None)
+            .await
+            .unwrap();
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await.unwrap();
+        assert_eq!(buffer, content);
+    }
+
+    #[tokio::test]
+    async fn test_purge_encryption_incompatible_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage_dir = dir.path().join("storage");
+        fs::create_dir_all(&storage_dir).await.unwrap();
+
+        const TASK_ID: &str = "2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b";
+        const CONTENT: &[u8] = b"plaintext piece content";
+
+        // A plaintext task is deleted when the encryption is enabled.
+        let mut plaintext = Config::default();
+        plaintext.storage.keep = true;
+        let plaintext = Arc::new(plaintext);
+        {
+            let storage = Storage::new(plaintext.clone(), &storage_dir, dir.path().to_path_buf())
+                .await
+                .unwrap();
+            download_task(&storage, TASK_ID, CONTENT).await;
+        }
+
+        let encrypted = encrypted_config(dir.path(), 1).await;
+        {
+            let storage = Storage::new(encrypted.clone(), &storage_dir, dir.path().to_path_buf())
+                .await
+                .unwrap();
+            assert!(storage.get_task(TASK_ID).unwrap().is_none());
+            assert!(storage.get_pieces(TASK_ID).unwrap().is_empty());
+
+            // Download it again, encrypted this time.
+            download_task(&storage, TASK_ID, CONTENT).await;
+        }
+
+        // The task survives a restart with the same key.
+        {
+            let storage = Storage::new(encrypted.clone(), &storage_dir, dir.path().to_path_buf())
+                .await
+                .unwrap();
+            assert!(storage.get_task(TASK_ID).unwrap().is_some());
+        }
+
+        // The task is deleted when its key encryption key is lost.
+        let rotated = encrypted_config(dir.path(), 2).await;
+        {
+            let storage = Storage::new(rotated, &storage_dir, dir.path().to_path_buf())
+                .await
+                .unwrap();
+            assert!(storage.get_task(TASK_ID).unwrap().is_none());
+            download_task(&storage, TASK_ID, CONTENT).await;
+        }
+
+        // An encrypted task is deleted when the encryption is disabled.
+        let storage = Storage::new(plaintext, &storage_dir, dir.path().to_path_buf())
+            .await
+            .unwrap();
+        assert!(storage.get_task(TASK_ID).unwrap().is_none());
     }
 }

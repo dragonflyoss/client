@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+use crate::encryption::{write_encrypted_range, EncryptedRangeReader, Encryptor};
+use crate::io::{RangeReader, WriteRangeResponse};
 use bytes::Bytes;
 use bytesize::ByteSize;
 use dragonfly_api::common::v2::Range;
@@ -30,7 +32,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs;
 use tokio::io::AsyncRead;
-use tracing::{error, info, instrument, warn};
+use tokio_util::io::StreamReader;
+use tracing::{debug, error, info, instrument, warn};
 use walkdir::WalkDir;
 
 /// The content of a piece.
@@ -49,6 +52,9 @@ pub struct Content {
 
     /// Initiates writeback of written piece ranges per storage.writebackMode.
     writeback: super::content::Writeback,
+
+    /// The encryptor of the content at rest, when enabled.
+    encryptor: Option<Arc<Encryptor>>,
 }
 
 /// Implements the content storage.
@@ -69,7 +75,13 @@ impl Content {
         fs::create_dir_all(&dir.join(super::content::DEFAULT_PERSISTENT_CACHE_TASK_DIR)).await?;
         info!("content initialized directory: {:?}", dir);
 
+        let encryptor = Encryptor::from_config(&config).await?.map(Arc::new);
+        if encryptor.is_some() {
+            info!("content encryption at rest enabled");
+        }
+
         Ok(Content {
+            encryptor,
             buffer_pool: BufferPool::new(
                 super::content::MAX_BUFFER_POOL_IDLE_BUFFERS
                     * max(
@@ -138,6 +150,315 @@ impl Content {
         Ok(true)
     }
 
+    /// Returns whether the content is encrypted at rest.
+    pub fn is_encrypted(&self) -> bool {
+        self.encryptor.is_some()
+    }
+
+    /// Checks whether the content file is usable under the current encryption
+    /// configuration: a plaintext file when the encryption is disabled, or an
+    /// encrypted file whose data key the key provider unwraps when it is
+    /// enabled.
+    async fn is_encryption_compatible(&self, path: &Path) -> Result<bool> {
+        match &self.encryptor {
+            Some(encryptor) => encryptor.is_readable(path).await,
+            None => Ok(!Encryptor::is_encrypted_file(path).await?),
+        }
+    }
+
+    /// Checks whether the task content is usable under the current encryption
+    /// configuration.
+    pub async fn is_task_encryption_compatible(&self, task_id: &str) -> Result<bool> {
+        self.is_encryption_compatible(&self.get_task_path(task_id))
+            .await
+    }
+
+    /// Checks whether the persistent task content is usable under the current
+    /// encryption configuration.
+    pub async fn is_persistent_task_encryption_compatible(&self, task_id: &str) -> Result<bool> {
+        self.is_encryption_compatible(&self.get_persistent_task_path(task_id))
+            .await
+    }
+
+    /// Checks whether the persistent cache task content is usable under the
+    /// current encryption configuration.
+    pub async fn is_persistent_cache_task_encryption_compatible(
+        &self,
+        task_id: &str,
+    ) -> Result<bool> {
+        self.is_encryption_compatible(&self.get_persistent_cache_task_path(task_id))
+            .await
+    }
+
+    /// Returns the range on disk holding the piece at `offset` with `length`
+    /// bytes of the content file: the plaintext range itself, or the
+    /// ciphertext of its chunks when the content is encrypted at rest. It
+    /// falls back to the plaintext range when the layout is unavailable, as
+    /// the callers only advise the kernel about it.
+    async fn piece_disk_range(&self, path: &Path, offset: u64, length: u64) -> (u64, u64) {
+        if let Some(encryptor) = &self.encryptor {
+            if let Ok(cipher) = encryptor.cipher(path).await {
+                if let Ok(range) = cipher.layout().piece_disk_range(offset, length) {
+                    return range;
+                }
+            }
+        }
+
+        (offset, length)
+    }
+
+    /// Returns the range on disk holding the piece of the task content.
+    pub async fn task_piece_disk_range(
+        &self,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+    ) -> (u64, u64) {
+        self.piece_disk_range(&self.get_task_path(task_id), offset, length)
+            .await
+    }
+
+    /// Returns the range on disk holding the piece of the persistent task
+    /// content.
+    pub async fn persistent_task_piece_disk_range(
+        &self,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+    ) -> (u64, u64) {
+        self.piece_disk_range(&self.get_persistent_task_path(task_id), offset, length)
+            .await
+    }
+
+    /// Returns the range on disk holding the piece of the persistent cache
+    /// task content.
+    pub async fn persistent_cache_task_piece_disk_range(
+        &self,
+        task_id: &str,
+        offset: u64,
+        length: u64,
+    ) -> (u64, u64) {
+        self.piece_disk_range(
+            &self.get_persistent_cache_task_path(task_id),
+            offset,
+            length,
+        )
+        .await
+    }
+
+    /// Creates the content file of a task, preallocated to the length of the
+    /// content, and encrypted when the encryption at rest is enabled.
+    async fn create_file(&self, path: &Path, piece_length: u64, length: u64) -> Result<()> {
+        if let Some(encryptor) = &self.encryptor {
+            return encryptor.create_file(path, piece_length, length).await;
+        }
+
+        let f = fs::File::create(path).await.inspect_err(|err| {
+            error!("create {:?} failed: {}", path, err);
+        })?;
+
+        fallocate(&f, length).await.inspect_err(|err| {
+            error!("fallocate {:?} failed: {}", path, err);
+        })?;
+
+        Ok(())
+    }
+
+    /// Refuses the hard links of the content encrypted at rest, since a hard
+    /// link would expose the ciphertext or import a plaintext file into the
+    /// encrypted storage. The callers fall back to copying the content.
+    fn check_hard_link(&self) -> Result<()> {
+        if self.encryptor.is_some() {
+            debug!("hard link is not supported for the content encrypted at rest");
+            return Err(Error::Encryption(
+                "hard link is not supported for the content encrypted at rest".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Copies the content file to the destination, decrypting it when the
+    /// encryption at rest is enabled.
+    async fn copy_file(&self, path: &Path, to: &Path) -> Result<()> {
+        let length = match &self.encryptor {
+            Some(encryptor) => {
+                encryptor
+                    .copy_file(
+                        path,
+                        to,
+                        self.config.storage.read_buffer_size,
+                        &self.buffer_pool,
+                    )
+                    .await?
+            }
+            None => fs::copy(path, to).await?,
+        };
+
+        // Triggers writeback of the copied content per storage.writebackMode.
+        if let Ok(f) = fs::File::open(to).await {
+            self.writeback
+                .trigger(&Arc::new(f.into_std().await), 0, length)
+                .await;
+        }
+
+        info!("copy to {:?} success", to);
+        Ok(())
+    }
+
+    /// Returns the reader of the plaintext range `[offset, offset + length)` of
+    /// the piece at `piece_offset` with `piece_length` bytes of the content
+    /// file, decrypting it when the encryption at rest is enabled.
+    async fn read_range(
+        &self,
+        path: &Path,
+        piece_offset: u64,
+        piece_length: u64,
+        offset: u64,
+        length: u64,
+    ) -> Result<RangeReader> {
+        let fd = self.fd_cache.open(path).await.inspect_err(|err| {
+            error!("open {:?} failed: {}", path, err);
+        })?;
+
+        if let Some(encryptor) = &self.encryptor {
+            let cipher = encryptor.cipher(path).await?;
+            let reader = EncryptedRangeReader::new(
+                fd.clone(),
+                cipher,
+                piece_offset,
+                piece_length,
+                offset,
+                length,
+                self.config.storage.read_buffer_size,
+                self.buffer_pool.clone(),
+            )?;
+
+            // Queue readahead of the ciphertext of the range explicitly, see
+            // the plaintext case below.
+            if length >= MIN_PIECE_LENGTH {
+                let (ciphertext_offset, ciphertext_length) = reader.ciphertext_span();
+                fadvise_willneed(&fd, ciphertext_offset, ciphertext_length)
+                    .await
+                    .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
+            }
+
+            return Ok(RangeReader::Encrypted(Box::new(reader)));
+        }
+
+        // Queue readahead of the range explicitly, since interleaved uploads
+        // on the shared descriptor break the sequential detection. Skip the
+        // small ranges, which the kernel readahead covers quickly.
+        if length >= MIN_PIECE_LENGTH {
+            fadvise_willneed(&fd, offset, length)
+                .await
+                .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
+        }
+
+        Ok(RangeReader::new(
+            fd,
+            offset,
+            length,
+            self.config.storage.read_buffer_size,
+            self.buffer_pool.clone(),
+        ))
+    }
+
+    /// Writes the piece at `offset` from the reader to the content file and
+    /// calculates the hash of the piece by crc32, encrypting it when the
+    /// encryption at rest is enabled, and triggers writeback of the written
+    /// range per storage.writebackMode.
+    async fn write_range<R: AsyncRead + Unpin + ?Sized>(
+        &self,
+        path: &Path,
+        offset: u64,
+        expected_length: u64,
+        reader: &mut R,
+    ) -> Result<WriteRangeResponse> {
+        let fd = self.fd_cache.open_write(path).await.inspect_err(|err| {
+            error!("open {:?} failed: {}", path, err);
+        })?;
+
+        if let Some(encryptor) = &self.encryptor {
+            let cipher = encryptor.cipher(path).await?;
+            let response = write_encrypted_range(
+                fd.clone(),
+                cipher.clone(),
+                offset,
+                expected_length,
+                self.config.storage.write_buffer_size,
+                reader,
+                &self.buffer_pool,
+            )
+            .await
+            .inspect_err(|err| {
+                error!("write {:?} failed: {}", path, err);
+            })?;
+
+            let (disk_offset, disk_length) =
+                cipher.layout().piece_disk_range(offset, response.length)?;
+            self.writeback.trigger(&fd, disk_offset, disk_length).await;
+            return Ok(response);
+        }
+
+        let response = super::io::write_range(
+            fd.clone(),
+            offset,
+            expected_length,
+            self.config.storage.write_buffer_size,
+            reader,
+            &self.buffer_pool,
+        )
+        .await
+        .inspect_err(|err| {
+            error!("write {:?} failed: {}", path, err);
+        })?;
+
+        self.writeback.trigger(&fd, offset, response.length).await;
+        Ok(response)
+    }
+
+    /// Writes the piece at `offset` from the stream of bytes chunks to the
+    /// content file and calculates the hash of the piece by crc32, encrypting
+    /// it when the encryption at rest is enabled, and triggers writeback of
+    /// the written range per storage.writebackMode.
+    async fn write_range_from_stream<S>(
+        &self,
+        path: &Path,
+        offset: u64,
+        expected_length: u64,
+        stream: &mut S,
+    ) -> Result<WriteRangeResponse>
+    where
+        S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
+    {
+        if self.encryptor.is_some() {
+            let mut reader = StreamReader::new(&mut *stream);
+            return self
+                .write_range(path, offset, expected_length, &mut reader)
+                .await;
+        }
+
+        let fd = self.fd_cache.open_write(path).await.inspect_err(|err| {
+            error!("open {:?} failed: {}", path, err);
+        })?;
+
+        let response = super::io::write_range_from_stream(
+            fd.clone(),
+            offset,
+            expected_length,
+            self.config.storage.write_buffer_size,
+            stream,
+        )
+        .await
+        .inspect_err(|err| {
+            error!("write {:?} failed: {}", path, err);
+        })?;
+
+        self.writeback.trigger(&fd, offset, response.length).await;
+        Ok(response)
+    }
+
     /// Checks if the source and target are the same device and inode.
     async fn is_same_dev_inode<P: AsRef<Path>, Q: AsRef<Path>>(
         &self,
@@ -163,7 +484,12 @@ impl Content {
     /// 1. If the task already exists, return the task path.
     /// 2. If the task does not exist, create the task directory and file.
     #[instrument(level = "debug", skip_all)]
-    pub async fn create_task(&self, task_id: &str, length: u64) -> Result<PathBuf> {
+    pub async fn create_task(
+        &self,
+        task_id: &str,
+        piece_length: u64,
+        length: u64,
+    ) -> Result<PathBuf> {
         let task_path = self.get_task_path(task_id);
         if task_path.exists() {
             return Ok(task_path);
@@ -177,17 +503,8 @@ impl Content {
             error!("create {:?} failed: {}", task_dir, err);
         })?;
 
-        let f = fs::File::create(task_dir.join(task_id))
-            .await
-            .inspect_err(|err| {
-                error!("create {:?} failed: {}", task_dir, err);
-            })?;
-
-        fallocate(&f, length).await.inspect_err(|err| {
-            error!("fallocate {:?} failed: {}", task_dir, err);
-        })?;
-
-        Ok(task_dir.join(task_id))
+        self.create_file(&task_path, piece_length, length).await?;
+        Ok(task_path)
     }
 
     /// Hard links the task content to the destination.
@@ -201,6 +518,8 @@ impl Content {
     ///    2.2. If the hard link fails, copy the task content to the destination once the task is finished, then return immediately.
     #[instrument(level = "debug", skip_all)]
     pub async fn hard_link_task(&self, task_id: &str, to: &Path) -> Result<()> {
+        self.check_hard_link()?;
+
         let task_path = self.get_task_path(task_id);
         if let Err(err) = fs::hard_link(task_path.clone(), to).await {
             if err.kind() == std::io::ErrorKind::AlreadyExists {
@@ -229,6 +548,8 @@ impl Content {
     ///    2.2. If hard link fails, return an error.
     #[instrument(level = "debug", skip_all)]
     pub async fn hard_link_to_task(&self, from: &Path, task_id: &str) -> Result<()> {
+        self.check_hard_link()?;
+
         let task_path = self.get_task_path(task_id);
         if let Err(err) = fs::hard_link(from, &task_path).await {
             if err.kind() == std::io::ErrorKind::AlreadyExists {
@@ -249,17 +570,7 @@ impl Content {
     /// Copies the task content to the destination.
     #[instrument(skip_all)]
     pub async fn copy_task(&self, task_id: &str, to: &Path) -> Result<()> {
-        let length = fs::copy(self.get_task_path(task_id), to).await?;
-
-        // Triggers writeback of the copied content per storage.writebackMode.
-        if let Ok(f) = fs::File::open(to).await {
-            self.writeback
-                .trigger(&Arc::new(f.into_std().await), 0, length)
-                .await;
-        }
-
-        info!("copy to {:?} success", to);
-        Ok(())
+        self.copy_file(&self.get_task_path(task_id), to).await
     }
 
     /// Deletes the task content.
@@ -270,6 +581,10 @@ impl Content {
         self.fd_cache.remove(&task_path).unwrap_or_else(|err| {
             error!("remove {:?} from fd_cache failed: {}", task_path, err);
         });
+
+        if let Some(encryptor) = &self.encryptor {
+            encryptor.evict(&task_path);
+        }
 
         fs::remove_file(task_path.as_path())
             .await
@@ -294,33 +609,15 @@ impl Content {
         offset: u64,
         length: u64,
         range: Option<Range>,
-    ) -> Result<super::io::RangeReader> {
+    ) -> Result<RangeReader> {
         let task_path = self.get_task_path(task_id);
 
         // Calculate the target offset and length based on the range.
         let (target_offset, target_length) =
             super::content::calculate_piece_range(offset, length, range);
 
-        let fd = self.fd_cache.open(&task_path).await.inspect_err(|err| {
-            error!("open {:?} failed: {}", task_path, err);
-        })?;
-
-        // Queue readahead of the range explicitly, since interleaved uploads
-        // on the shared descriptor break the sequential detection. Skip the
-        // small ranges, which the kernel readahead covers quickly.
-        if target_length >= MIN_PIECE_LENGTH {
-            fadvise_willneed(&fd, target_offset, target_length)
-                .await
-                .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
-        }
-
-        Ok(super::io::RangeReader::new(
-            fd,
-            target_offset,
-            target_length,
-            self.config.storage.read_buffer_size,
-            self.buffer_pool.clone(),
-        ))
+        self.read_range(&task_path, offset, length, target_offset, target_length)
+            .await
     }
 
     /// Writes the piece from the stream of bytes chunks to the content and
@@ -332,33 +629,13 @@ impl Content {
         offset: u64,
         expected_length: u64,
         stream: &mut S,
-    ) -> Result<super::io::WriteRangeResponse>
+    ) -> Result<WriteRangeResponse>
     where
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
         let task_path = self.get_task_path(task_id);
-        let fd = self
-            .fd_cache
-            .open_write(&task_path)
+        self.write_range_from_stream(&task_path, offset, expected_length, stream)
             .await
-            .inspect_err(|err| {
-                error!("open {:?} failed: {}", task_path, err);
-            })?;
-
-        let response = super::io::write_range_from_stream(
-            fd.clone(),
-            offset,
-            expected_length,
-            self.config.storage.write_buffer_size,
-            stream,
-        )
-        .await
-        .inspect_err(|err| {
-            error!("write {:?} failed: {}", task_path, err);
-        })?;
-
-        self.writeback.trigger(&fd, offset, response.length).await;
-        Ok(response)
     }
 
     /// Returns the task path by task id.
@@ -389,7 +666,12 @@ impl Content {
     /// 1. If the persistent task already exists, return the persistent task path.
     /// 2. If the persistent task does not exist, create the persistent task directory and file.
     #[instrument(level = "debug", skip_all)]
-    pub async fn create_persistent_task(&self, task_id: &str, length: u64) -> Result<PathBuf> {
+    pub async fn create_persistent_task(
+        &self,
+        task_id: &str,
+        piece_length: u64,
+        length: u64,
+    ) -> Result<PathBuf> {
         let task_path = self.get_persistent_task_path(task_id);
         if task_path.exists() {
             return Ok(task_path);
@@ -403,17 +685,8 @@ impl Content {
             error!("create {:?} failed: {}", task_dir, err);
         })?;
 
-        let f = fs::File::create(task_dir.join(task_id))
-            .await
-            .inspect_err(|err| {
-                error!("create {:?} failed: {}", task_dir, err);
-            })?;
-
-        fallocate(&f, length).await.inspect_err(|err| {
-            error!("fallocate {:?} failed: {}", task_dir, err);
-        })?;
-
-        Ok(task_dir.join(task_id))
+        self.create_file(&task_path, piece_length, length).await?;
+        Ok(task_path)
     }
 
     /// Creates only the directory for the persistent task.
@@ -446,6 +719,8 @@ impl Content {
     ///    2.2. If the hard link fails, copy the persistent task content to the destination once the task is finished, then return immediately.
     #[instrument(level = "debug", skip_all)]
     pub async fn hard_link_persistent_task(&self, task_id: &str, to: &Path) -> Result<()> {
+        self.check_hard_link()?;
+
         let task_path = self.get_persistent_task_path(task_id);
         if let Err(err) = fs::hard_link(task_path.clone(), to).await {
             if err.kind() == std::io::ErrorKind::AlreadyExists {
@@ -474,6 +749,8 @@ impl Content {
     ///    2.2. If hard link fails, return an error.
     #[instrument(level = "debug", skip_all)]
     pub async fn hard_link_to_persistent_task(&self, from: &Path, task_id: &str) -> Result<()> {
+        self.check_hard_link()?;
+
         let task_path = self.get_persistent_task_path(task_id);
         if let Err(err) = fs::hard_link(from, &task_path).await {
             if err.kind() == std::io::ErrorKind::AlreadyExists {
@@ -494,17 +771,8 @@ impl Content {
     /// Copies the persistent task content to the destination.
     #[instrument(level = "debug", skip_all)]
     pub async fn copy_persistent_task(&self, task_id: &str, to: &Path) -> Result<()> {
-        let length = fs::copy(self.get_persistent_task_path(task_id), to).await?;
-
-        // Triggers writeback of the copied content per storage.writebackMode.
-        if let Ok(f) = fs::File::open(to).await {
-            self.writeback
-                .trigger(&Arc::new(f.into_std().await), 0, length)
-                .await;
-        }
-
-        info!("copy to {:?} success", to);
-        Ok(())
+        self.copy_file(&self.get_persistent_task_path(task_id), to)
+            .await
     }
 
     /// Reads the persistent piece from the content.
@@ -515,33 +783,15 @@ impl Content {
         offset: u64,
         length: u64,
         range: Option<Range>,
-    ) -> Result<super::io::RangeReader> {
+    ) -> Result<RangeReader> {
         let task_path = self.get_persistent_task_path(task_id);
 
         // Calculate the target offset and length based on the range.
         let (target_offset, target_length) =
             super::content::calculate_piece_range(offset, length, range);
 
-        let fd = self.fd_cache.open(&task_path).await.inspect_err(|err| {
-            error!("open {:?} failed: {}", task_path, err);
-        })?;
-
-        // Queue readahead of the range explicitly, since interleaved uploads
-        // on the shared descriptor break the sequential detection. Skip the
-        // small ranges, which the kernel readahead covers quickly.
-        if target_length >= MIN_PIECE_LENGTH {
-            fadvise_willneed(&fd, target_offset, target_length)
-                .await
-                .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
-        }
-
-        Ok(super::io::RangeReader::new(
-            fd,
-            target_offset,
-            target_length,
-            self.config.storage.read_buffer_size,
-            self.buffer_pool.clone(),
-        ))
+        self.read_range(&task_path, offset, length, target_offset, target_length)
+            .await
     }
 
     /// Writes the persistent piece to the content and
@@ -553,31 +803,10 @@ impl Content {
         offset: u64,
         expected_length: u64,
         reader: &mut R,
-    ) -> Result<super::io::WriteRangeResponse> {
+    ) -> Result<WriteRangeResponse> {
         let task_path = self.get_persistent_task_path(task_id);
-        let fd = self
-            .fd_cache
-            .open_write(&task_path)
+        self.write_range(&task_path, offset, expected_length, reader)
             .await
-            .inspect_err(|err| {
-                error!("open {:?} failed: {}", task_path, err);
-            })?;
-
-        let response = super::io::write_range(
-            fd.clone(),
-            offset,
-            expected_length,
-            self.config.storage.write_buffer_size,
-            reader,
-            &self.buffer_pool,
-        )
-        .await
-        .inspect_err(|err| {
-            error!("write {:?} failed: {}", task_path, err);
-        })?;
-
-        self.writeback.trigger(&fd, offset, response.length).await;
-        Ok(response)
     }
 
     /// Writes the persistent piece from the stream of bytes chunks to the
@@ -589,33 +818,13 @@ impl Content {
         offset: u64,
         expected_length: u64,
         stream: &mut S,
-    ) -> Result<super::io::WriteRangeResponse>
+    ) -> Result<WriteRangeResponse>
     where
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
         let task_path = self.get_persistent_task_path(task_id);
-        let fd = self
-            .fd_cache
-            .open_write(&task_path)
+        self.write_range_from_stream(&task_path, offset, expected_length, stream)
             .await
-            .inspect_err(|err| {
-                error!("open {:?} failed: {}", task_path, err);
-            })?;
-
-        let response = super::io::write_range_from_stream(
-            fd.clone(),
-            offset,
-            expected_length,
-            self.config.storage.write_buffer_size,
-            stream,
-        )
-        .await
-        .inspect_err(|err| {
-            error!("write {:?} failed: {}", task_path, err);
-        })?;
-
-        self.writeback.trigger(&fd, offset, response.length).await;
-        Ok(response)
     }
 
     /// Deletes the persistent task content.
@@ -631,6 +840,10 @@ impl Content {
                     persistent_task_path, err
                 );
             });
+
+        if let Some(encryptor) = &self.encryptor {
+            encryptor.evict(&persistent_task_path);
+        }
 
         fs::remove_file(persistent_task_path.as_path())
             .await
@@ -677,6 +890,7 @@ impl Content {
     pub async fn create_persistent_cache_task(
         &self,
         task_id: &str,
+        piece_length: u64,
         length: u64,
     ) -> Result<PathBuf> {
         let task_path = self.get_persistent_cache_task_path(task_id);
@@ -692,17 +906,8 @@ impl Content {
             error!("create {:?} failed: {}", task_dir, err);
         })?;
 
-        let f = fs::File::create(task_dir.join(task_id))
-            .await
-            .inspect_err(|err| {
-                error!("create {:?} failed: {}", task_dir, err);
-            })?;
-
-        fallocate(&f, length).await.inspect_err(|err| {
-            error!("fallocate {:?} failed: {}", task_dir, err);
-        })?;
-
-        Ok(task_dir.join(task_id))
+        self.create_file(&task_path, piece_length, length).await?;
+        Ok(task_path)
     }
 
     /// Creates only the directory for the persistent cache task.
@@ -735,6 +940,8 @@ impl Content {
     ///    2.2. If the hard link fails, copy the persistent cache task content to the destination once the task is finished, then return immediately.
     #[instrument(level = "debug", skip_all)]
     pub async fn hard_link_persistent_cache_task(&self, task_id: &str, to: &Path) -> Result<()> {
+        self.check_hard_link()?;
+
         let task_path = self.get_persistent_cache_task_path(task_id);
         if let Err(err) = fs::hard_link(task_path.clone(), to).await {
             if err.kind() == std::io::ErrorKind::AlreadyExists {
@@ -767,6 +974,8 @@ impl Content {
         from: &Path,
         task_id: &str,
     ) -> Result<()> {
+        self.check_hard_link()?;
+
         let task_path = self.get_persistent_cache_task_path(task_id);
         if let Err(err) = fs::hard_link(from, &task_path).await {
             if err.kind() == std::io::ErrorKind::AlreadyExists {
@@ -787,17 +996,8 @@ impl Content {
     /// Copies the persistent cache task content to the destination.
     #[instrument(level = "debug", skip_all)]
     pub async fn copy_persistent_cache_task(&self, task_id: &str, to: &Path) -> Result<()> {
-        let length = fs::copy(self.get_persistent_cache_task_path(task_id), to).await?;
-
-        // Triggers writeback of the copied content per storage.writebackMode.
-        if let Ok(f) = fs::File::open(to).await {
-            self.writeback
-                .trigger(&Arc::new(f.into_std().await), 0, length)
-                .await;
-        }
-
-        info!("copy to {:?} success", to);
-        Ok(())
+        self.copy_file(&self.get_persistent_cache_task_path(task_id), to)
+            .await
     }
 
     /// Reads the persistent cache piece from the content.
@@ -808,33 +1008,15 @@ impl Content {
         offset: u64,
         length: u64,
         range: Option<Range>,
-    ) -> Result<super::io::RangeReader> {
+    ) -> Result<RangeReader> {
         let task_path = self.get_persistent_cache_task_path(task_id);
 
         // Calculate the target offset and length based on the range.
         let (target_offset, target_length) =
             super::content::calculate_piece_range(offset, length, range);
 
-        let fd = self.fd_cache.open(&task_path).await.inspect_err(|err| {
-            error!("open {:?} failed: {}", task_path, err);
-        })?;
-
-        // Queue readahead of the range explicitly, since interleaved uploads
-        // on the shared descriptor break the sequential detection. Skip the
-        // small ranges, which the kernel readahead covers quickly.
-        if target_length >= MIN_PIECE_LENGTH {
-            fadvise_willneed(&fd, target_offset, target_length)
-                .await
-                .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
-        }
-
-        Ok(super::io::RangeReader::new(
-            fd,
-            target_offset,
-            target_length,
-            self.config.storage.read_buffer_size,
-            self.buffer_pool.clone(),
-        ))
+        self.read_range(&task_path, offset, length, target_offset, target_length)
+            .await
     }
 
     /// Writes the persistent cache piece to the content and
@@ -846,31 +1028,10 @@ impl Content {
         offset: u64,
         expected_length: u64,
         reader: &mut R,
-    ) -> Result<super::io::WriteRangeResponse> {
+    ) -> Result<WriteRangeResponse> {
         let task_path = self.get_persistent_cache_task_path(task_id);
-        let fd = self
-            .fd_cache
-            .open_write(&task_path)
+        self.write_range(&task_path, offset, expected_length, reader)
             .await
-            .inspect_err(|err| {
-                error!("open {:?} failed: {}", task_path, err);
-            })?;
-
-        let response = super::io::write_range(
-            fd.clone(),
-            offset,
-            expected_length,
-            self.config.storage.write_buffer_size,
-            reader,
-            &self.buffer_pool,
-        )
-        .await
-        .inspect_err(|err| {
-            error!("write {:?} failed: {}", task_path, err);
-        })?;
-
-        self.writeback.trigger(&fd, offset, response.length).await;
-        Ok(response)
     }
 
     /// Writes the persistent cache piece from the stream of bytes chunks to
@@ -883,33 +1044,13 @@ impl Content {
         offset: u64,
         expected_length: u64,
         stream: &mut S,
-    ) -> Result<super::io::WriteRangeResponse>
+    ) -> Result<WriteRangeResponse>
     where
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
         let task_path = self.get_persistent_cache_task_path(task_id);
-        let fd = self
-            .fd_cache
-            .open_write(&task_path)
+        self.write_range_from_stream(&task_path, offset, expected_length, stream)
             .await
-            .inspect_err(|err| {
-                error!("open {:?} failed: {}", task_path, err);
-            })?;
-
-        let response = super::io::write_range_from_stream(
-            fd.clone(),
-            offset,
-            expected_length,
-            self.config.storage.write_buffer_size,
-            stream,
-        )
-        .await
-        .inspect_err(|err| {
-            error!("write {:?} failed: {}", task_path, err);
-        })?;
-
-        self.writeback.trigger(&fd, offset, response.length).await;
-        Ok(response)
     }
 
     /// Deletes the persistent cache task content.
@@ -925,6 +1066,10 @@ impl Content {
                     persistent_cache_task_path, err
                 );
             });
+
+        if let Some(encryptor) = &self.encryptor {
+            encryptor.evict(&persistent_cache_task_path);
+        }
 
         fs::remove_file(persistent_cache_task_path.as_path())
             .await
@@ -974,7 +1119,7 @@ mod tests {
             let task_id = "60409bd0ec44160f44c53c39b3fe1c5fdfb23faded0228c68bee83bc15a200e3";
             let task_path = content(Config::default(), temp_dir.path())
                 .await
-                .create_task(task_id, 0)
+                .create_task(task_id, 0, 0)
                 .await
                 .unwrap();
             assert!(task_path.exists());
@@ -992,11 +1137,11 @@ mod tests {
         let content = content(Config::default(), temp_dir.path()).await;
 
         let task_id = "60409bd0ec44160f44c53c39b3fe1c5fdfb23faded0228c68bee83bc15a200e3";
-        let task_path = content.create_task(task_id, 0).await.unwrap();
+        let task_path = content.create_task(task_id, 0, 0).await.unwrap();
         assert!(task_path.exists());
         assert_eq!(task_path, temp_dir.path().join("content/tasks/604/60409bd0ec44160f44c53c39b3fe1c5fdfb23faded0228c68bee83bc15a200e3"));
 
-        let task_path_exists = content.create_task(task_id, 0).await.unwrap();
+        let task_path_exists = content.create_task(task_id, 0, 0).await.unwrap();
         assert_eq!(task_path, task_path_exists);
     }
 
@@ -1006,7 +1151,7 @@ mod tests {
         let content = content(Config::default(), temp_dir.path()).await;
 
         let task_id = "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4";
-        content.create_task(task_id, 0).await.unwrap();
+        content.create_task(task_id, 0, 0).await.unwrap();
 
         let to = temp_dir
             .path()
@@ -1027,7 +1172,7 @@ mod tests {
         let content = content(Config::default(), temp_dir.path()).await;
 
         let task_id = "bfd3c02fb31a7373e25b405fd5fd3082987ccfbaf210889153af9e65bbf13002";
-        content.create_task(task_id, 64).await.unwrap();
+        content.create_task(task_id, 64, 64).await.unwrap();
 
         let to = temp_dir
             .path()
@@ -1042,7 +1187,7 @@ mod tests {
         let content = content(Config::default(), temp_dir.path()).await;
 
         let task_id = "4e19f03b0fceb38f23ff4f657681472a53ef335db3660ae5494912570b7a2bb7";
-        let task_path = content.create_task(task_id, 0).await.unwrap();
+        let task_path = content.create_task(task_id, 0, 0).await.unwrap();
         assert!(task_path.exists());
 
         content.delete_task(task_id).await.unwrap();
@@ -1064,7 +1209,7 @@ mod tests {
             let content = content(config, temp_dir.path()).await;
 
             let task_id = "60409bd0ec44160f44c53c39b3fe1c5fdfb23faded0228c68bee83bc15a200e3";
-            content.create_task(task_id, 13).await.unwrap();
+            content.create_task(task_id, 13, 13).await.unwrap();
 
             let data = b"hello, world!";
             let response = content
@@ -1095,7 +1240,7 @@ mod tests {
         let content = content(Config::default(), temp_dir.path()).await;
 
         let task_id = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
-        content.create_task(task_id, 13).await.unwrap();
+        content.create_task(task_id, 13, 13).await.unwrap();
 
         let data = b"hello, world!";
         content
@@ -1135,7 +1280,10 @@ mod tests {
         let content = content(Config::default(), temp_dir.path()).await;
 
         let task_id = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
-        content.create_persistent_task(task_id, 13).await.unwrap();
+        content
+            .create_persistent_task(task_id, 13, 13)
+            .await
+            .unwrap();
 
         let test_cases = vec![
             (task_id, true),
@@ -1163,7 +1311,7 @@ mod tests {
 
         let task_id = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
         content
-            .create_persistent_cache_task(task_id, 13)
+            .create_persistent_cache_task(task_id, 13, 13)
             .await
             .unwrap();
 
@@ -1192,7 +1340,7 @@ mod tests {
         let content = content(Config::default(), temp_dir.path()).await;
 
         let task_id = "c794a3bbae81e06d1c8d362509bdd42a7c105b0fb28d80ffe27f94b8f04fc845";
-        content.create_task(task_id, 13).await.unwrap();
+        content.create_task(task_id, 13, 13).await.unwrap();
         content
             .write_piece_from_stream(
                 task_id,
@@ -1235,7 +1383,7 @@ mod tests {
         let content = content(Config::default(), temp_dir.path()).await;
 
         let task_id = "60b48845606946cea72084f14ed5cce61ec96e69f80a30f891a6963dccfd5b4f";
-        content.create_task(task_id, 4).await.unwrap();
+        content.create_task(task_id, 4, 4).await.unwrap();
 
         let response = content
             .write_piece_from_stream(
@@ -1256,11 +1404,11 @@ mod tests {
         let content = content(Config::default(), temp_dir.path()).await;
 
         let task_id = "c4f108ab1d2b8cfdffe89ea9676af35123fa02e3c25167d62538f630d5d44745";
-        let task_path = content.create_persistent_task(task_id, 0).await.unwrap();
+        let task_path = content.create_persistent_task(task_id, 0, 0).await.unwrap();
         assert!(task_path.exists());
         assert_eq!(task_path, temp_dir.path().join("content/persistent-tasks/c4f/c4f108ab1d2b8cfdffe89ea9676af35123fa02e3c25167d62538f630d5d44745"));
 
-        let task_path_exists = content.create_persistent_task(task_id, 0).await.unwrap();
+        let task_path_exists = content.create_persistent_task(task_id, 0, 0).await.unwrap();
         assert_eq!(task_path, task_path_exists);
     }
 
@@ -1270,7 +1418,7 @@ mod tests {
         let content = content(Config::default(), temp_dir.path()).await;
 
         let task_id = "5e81970eb2b048910cc84cab026b951f2ceac0a09c72c0717193bb6e466e11cd";
-        content.create_persistent_task(task_id, 0).await.unwrap();
+        content.create_persistent_task(task_id, 0, 0).await.unwrap();
 
         let to = temp_dir
             .path()
@@ -1333,7 +1481,10 @@ mod tests {
         let content = content(Config::default(), temp_dir.path()).await;
 
         let task_id = "194b9c2018429689fb4e596a506c7e9db564c187b9709b55b33b96881dfb6dd5";
-        content.create_persistent_task(task_id, 64).await.unwrap();
+        content
+            .create_persistent_task(task_id, 64, 64)
+            .await
+            .unwrap();
 
         let to = temp_dir
             .path()
@@ -1348,7 +1499,7 @@ mod tests {
         let content = content(Config::default(), temp_dir.path()).await;
 
         let task_id = "17430ba545c3ce82790e9c9f77e64dca44bb6d6a0c9e18be175037c16c73713d";
-        let task_path = content.create_persistent_task(task_id, 0).await.unwrap();
+        let task_path = content.create_persistent_task(task_id, 0, 0).await.unwrap();
         assert!(task_path.exists());
 
         content.delete_persistent_task(task_id).await.unwrap();
@@ -1361,7 +1512,10 @@ mod tests {
         let content = content(Config::default(), temp_dir.path()).await;
 
         let task_id = "9cb27a4af09aee4eb9f904170217659683f4a0ea7cd55e1a9fbcb99ddced659a";
-        content.create_persistent_task(task_id, 13).await.unwrap();
+        content
+            .create_persistent_task(task_id, 13, 13)
+            .await
+            .unwrap();
         content
             .write_persistent_piece(task_id, 0, 13, &mut Cursor::new(b"hello, world!"))
             .await
@@ -1402,7 +1556,7 @@ mod tests {
         let content = content(Config::default(), temp_dir.path()).await;
 
         let task_id = "ca1afaf856e8a667fbd48093ca3ca1b8eeb4bf735912fbe551676bc5817a720a";
-        content.create_persistent_task(task_id, 4).await.unwrap();
+        content.create_persistent_task(task_id, 4, 4).await.unwrap();
 
         let response = content
             .write_persistent_piece(task_id, 0, 4, &mut Cursor::new(b"test"))
@@ -1431,14 +1585,14 @@ mod tests {
 
         let task_id = "c4f108ab1d2b8cfdffe89ea9676af35123fa02e3c25167d62538f630d5d44745";
         let task_path = content
-            .create_persistent_cache_task(task_id, 0)
+            .create_persistent_cache_task(task_id, 0, 0)
             .await
             .unwrap();
         assert!(task_path.exists());
         assert_eq!(task_path, temp_dir.path().join("content/persistent-cache-tasks/c4f/c4f108ab1d2b8cfdffe89ea9676af35123fa02e3c25167d62538f630d5d44745"));
 
         let task_path_exists = content
-            .create_persistent_cache_task(task_id, 0)
+            .create_persistent_cache_task(task_id, 0, 0)
             .await
             .unwrap();
         assert_eq!(task_path, task_path_exists);
@@ -1451,7 +1605,7 @@ mod tests {
 
         let task_id = "5e81970eb2b048910cc84cab026b951f2ceac0a09c72c0717193bb6e466e11cd";
         content
-            .create_persistent_cache_task(task_id, 0)
+            .create_persistent_cache_task(task_id, 0, 0)
             .await
             .unwrap();
 
@@ -1520,7 +1674,7 @@ mod tests {
 
         let task_id = "194b9c2018429689fb4e596a506c7e9db564c187b9709b55b33b96881dfb6dd5";
         content
-            .create_persistent_cache_task(task_id, 64)
+            .create_persistent_cache_task(task_id, 64, 64)
             .await
             .unwrap();
 
@@ -1541,7 +1695,7 @@ mod tests {
 
         let task_id = "17430ba545c3ce82790e9c9f77e64dca44bb6d6a0c9e18be175037c16c73713d";
         let task_path = content
-            .create_persistent_cache_task(task_id, 0)
+            .create_persistent_cache_task(task_id, 0, 0)
             .await
             .unwrap();
         assert!(task_path.exists());
@@ -1557,7 +1711,7 @@ mod tests {
 
         let task_id = "9cb27a4af09aee4eb9f904170217659683f4a0ea7cd55e1a9fbcb99ddced659a";
         content
-            .create_persistent_cache_task(task_id, 13)
+            .create_persistent_cache_task(task_id, 13, 13)
             .await
             .unwrap();
         content
@@ -1601,7 +1755,7 @@ mod tests {
 
         let task_id = "ca1afaf856e8a667fbd48093ca3ca1b8eeb4bf735912fbe551676bc5817a720a";
         content
-            .create_persistent_cache_task(task_id, 4)
+            .create_persistent_cache_task(task_id, 4, 4)
             .await
             .unwrap();
 
@@ -1678,5 +1832,362 @@ mod tests {
                 expected_enough
             );
         }
+    }
+
+    /// Returns a configuration with the encryption at rest enabled by a key
+    /// encryption key written to the directory.
+    async fn encrypted_config(dir: &Path) -> Arc<Config> {
+        let key_file = dir.join("kek.key");
+        fs::write(&key_file, [1u8; 32]).await.unwrap();
+
+        let mut config = Config::default();
+        config.storage.encryption.enable = true;
+        config.storage.encryption.kms.file.key_file = Some(key_file);
+        Arc::new(config)
+    }
+
+    fn pattern(length: usize) -> Vec<u8> {
+        (0..length).map(|i| (i % 251) as u8).collect()
+    }
+
+    #[tokio::test]
+    async fn test_encrypted_content_requires_key_file() {
+        let temp_dir = tempdir().unwrap();
+        let mut config = Config::default();
+        config.storage.encryption.enable = true;
+        assert!(Content::new(Arc::new(config), temp_dir.path())
+            .await
+            .is_err());
+
+        let mut config = Config::default();
+        config.storage.encryption.enable = true;
+        config.storage.encryption.kms.file.key_file = Some(temp_dir.path().join("missing"));
+        assert!(Content::new(Arc::new(config), temp_dir.path())
+            .await
+            .is_err());
+
+        let config = encrypted_config(temp_dir.path()).await;
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+        assert!(content.is_encrypted());
+    }
+
+    #[tokio::test]
+    async fn test_encrypted_task_write_read_copy() {
+        let temp_dir = tempdir().unwrap();
+        let config = encrypted_config(temp_dir.path()).await;
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        // Three pieces, the last one short, written out of order.
+        let piece_length = 100_000u64;
+        let data = pattern(250_000);
+        let task_id = "a3f8c2d1e5b7490612fd3e9a8c7b6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c";
+        let task_path = content
+            .create_task(task_id, piece_length, data.len() as u64)
+            .await
+            .unwrap();
+        assert!(task_path.exists());
+        assert!(Encryptor::is_encrypted_file(&task_path).await.unwrap());
+        assert!(content
+            .is_task_encryption_compatible(task_id)
+            .await
+            .unwrap());
+
+        for number in [2u64, 0, 1] {
+            let offset = number * piece_length;
+            let piece = &data
+                [offset as usize..std::cmp::min(offset + piece_length, data.len() as u64) as usize];
+            let mut stream = futures::stream::iter([
+                Ok(Bytes::copy_from_slice(&piece[..piece.len() / 2])),
+                Ok(Bytes::copy_from_slice(&piece[piece.len() / 2..])),
+            ]);
+            let response = content
+                .write_piece_from_stream(task_id, offset, piece.len() as u64, &mut stream)
+                .await
+                .unwrap();
+            assert_eq!(response.length, piece.len() as u64);
+            assert_eq!(response.hash, crc32fast::hash(piece).to_string());
+        }
+
+        // The plaintext never reaches the disk.
+        let on_disk = fs::read(&task_path).await.unwrap();
+        assert!(!on_disk.windows(32).any(|window| window == &data[..32]));
+
+        // Whole pieces and ranges within them read back as plaintext.
+        for number in 0..3u64 {
+            let offset = number * piece_length;
+            let length = std::cmp::min(piece_length, data.len() as u64 - offset);
+            let mut reader = content
+                .read_piece(task_id, offset, length, None)
+                .await
+                .unwrap();
+            let mut buffer = Vec::new();
+            reader.read_to_end(&mut buffer).await.unwrap();
+            assert_eq!(buffer, &data[offset as usize..(offset + length) as usize]);
+        }
+
+        let mut reader = content
+            .read_piece(
+                task_id,
+                piece_length,
+                piece_length,
+                Some(Range {
+                    start: piece_length + 65_000,
+                    length: 2_000,
+                }),
+            )
+            .await
+            .unwrap();
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await.unwrap();
+        assert_eq!(buffer, &data[165_000..167_000]);
+
+        // The reader has no file descriptor to send from.
+        let reader = content
+            .read_piece(task_id, 0, piece_length, None)
+            .await
+            .unwrap();
+        assert!(reader.into_parts().is_err());
+
+        // Hard links are refused and the copy decrypts.
+        let to = temp_dir.path().join("output");
+        assert!(content.hard_link_task(task_id, &to).await.is_err());
+        assert!(!to.exists());
+        content.copy_task(task_id, &to).await.unwrap();
+        assert_eq!(fs::read(&to).await.unwrap(), data);
+        assert!(!content
+            .is_same_dev_inode_as_task(task_id, &to)
+            .await
+            .unwrap());
+
+        content.fadvise_dontneed_task(task_id).await.unwrap();
+        content.delete_task(task_id).await.unwrap();
+        assert!(!task_path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_encrypted_task_survives_restart() {
+        let temp_dir = tempdir().unwrap();
+        let config = encrypted_config(temp_dir.path()).await;
+        let mut kept = (*config).clone();
+        kept.storage.keep = true;
+        let config = Arc::new(kept);
+
+        let data = pattern(70_000);
+        let task_id = "b4e9d3c2f6a8501723ae4f0b9d8c7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d";
+        {
+            let content = Content::new(config.clone(), temp_dir.path()).await.unwrap();
+            content
+                .create_task(task_id, data.len() as u64, data.len() as u64)
+                .await
+                .unwrap();
+            let mut stream = futures::stream::iter([Ok(Bytes::copy_from_slice(&data))]);
+            content
+                .write_piece_from_stream(task_id, 0, data.len() as u64, &mut stream)
+                .await
+                .unwrap();
+        }
+
+        // A new content with the same key encryption key reads the task.
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+        assert!(content
+            .is_task_encryption_compatible(task_id)
+            .await
+            .unwrap());
+        let mut reader = content
+            .read_piece(task_id, 0, data.len() as u64, None)
+            .await
+            .unwrap();
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await.unwrap();
+        assert_eq!(buffer, data);
+
+        // A content with another key encryption key cannot read the task, and
+        // a content without the encryption does not accept it either.
+        let mut other = (*encrypted_config(temp_dir.path()).await).clone();
+        other.storage.keep = true;
+        fs::write(
+            other.storage.encryption.kms.file.key_file.as_ref().unwrap(),
+            [2u8; 32],
+        )
+        .await
+        .unwrap();
+        let content = Content::new(Arc::new(other), temp_dir.path())
+            .await
+            .unwrap();
+        assert!(!content
+            .is_task_encryption_compatible(task_id)
+            .await
+            .unwrap());
+        assert!(content
+            .read_piece(task_id, 0, data.len() as u64, None)
+            .await
+            .is_err());
+
+        let mut plaintext = Config::default();
+        plaintext.storage.keep = true;
+        let content = Content::new(Arc::new(plaintext), temp_dir.path())
+            .await
+            .unwrap();
+        assert!(!content
+            .is_task_encryption_compatible(task_id)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_plaintext_task_is_incompatible_with_encryption() {
+        let temp_dir = tempdir().unwrap();
+        let mut plaintext = Config::default();
+        plaintext.storage.keep = true;
+
+        let task_id = "c5fa0e4d3b7962834bf5a1c0e9d8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0";
+        {
+            let content = Content::new(Arc::new(plaintext.clone()), temp_dir.path())
+                .await
+                .unwrap();
+            content.create_task(task_id, 13, 13).await.unwrap();
+            let mut stream = futures::stream::iter([Ok(Bytes::from_static(b"hello, world!"))]);
+            content
+                .write_piece_from_stream(task_id, 0, 13, &mut stream)
+                .await
+                .unwrap();
+            assert!(content
+                .is_task_encryption_compatible(task_id)
+                .await
+                .unwrap());
+
+            // A missing task is an error rather than incompatible.
+            assert!(content
+                .is_task_encryption_compatible(
+                    "aaa6963dccfd5b4f60b48845606946cea72084f14ed5cce61ec96e69f80a30f8"
+                )
+                .await
+                .is_err());
+        }
+
+        let mut encrypted = (*encrypted_config(temp_dir.path()).await).clone();
+        encrypted.storage.keep = true;
+        let content = Content::new(Arc::new(encrypted), temp_dir.path())
+            .await
+            .unwrap();
+        assert!(!content
+            .is_task_encryption_compatible(task_id)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_encrypted_persistent_tasks() {
+        let temp_dir = tempdir().unwrap();
+        let config = encrypted_config(temp_dir.path()).await;
+        let content = Content::new(config, temp_dir.path()).await.unwrap();
+
+        let data = pattern(150_000);
+        let piece_length = 100_000u64;
+
+        // Importing a local file by hard link is refused, so the pieces are
+        // written through the encrypting writer.
+        let source = temp_dir.path().join("source");
+        fs::write(&source, &data).await.unwrap();
+
+        let task_id = "d6ab1f5e4c8a73945cf6b2d1f0e9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1";
+        assert!(content
+            .hard_link_to_persistent_task(&source, task_id)
+            .await
+            .is_err());
+        content
+            .create_persistent_task(task_id, piece_length, data.len() as u64)
+            .await
+            .unwrap();
+        for (number, piece) in data.chunks(piece_length as usize).enumerate() {
+            let offset = number as u64 * piece_length;
+            let response = content
+                .write_persistent_piece(
+                    task_id,
+                    offset,
+                    piece.len() as u64,
+                    &mut Cursor::new(piece.to_vec()),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.hash, crc32fast::hash(piece).to_string());
+        }
+        assert!(content
+            .is_persistent_task_encryption_compatible(task_id)
+            .await
+            .unwrap());
+
+        let mut reader = content
+            .read_persistent_piece(
+                task_id,
+                piece_length,
+                50_000,
+                Some(Range {
+                    start: piece_length + 10,
+                    length: 100,
+                }),
+            )
+            .await
+            .unwrap();
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await.unwrap();
+        assert_eq!(buffer, &data[100_010..100_110]);
+
+        let to = temp_dir.path().join("persistent-output");
+        assert!(content
+            .hard_link_persistent_task(task_id, &to)
+            .await
+            .is_err());
+        content.copy_persistent_task(task_id, &to).await.unwrap();
+        assert_eq!(fs::read(&to).await.unwrap(), data);
+        content.delete_persistent_task(task_id).await.unwrap();
+
+        // The persistent cache tasks behave the same.
+        let task_id = "e7bc2a6f5d9b84a56df7c3e2a1f0b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2";
+        assert!(content
+            .hard_link_to_persistent_cache_task(&source, task_id)
+            .await
+            .is_err());
+        content
+            .create_persistent_cache_task(task_id, piece_length, data.len() as u64)
+            .await
+            .unwrap();
+        for (number, piece) in data.chunks(piece_length as usize).enumerate() {
+            let offset = number as u64 * piece_length;
+            let mut stream = futures::stream::iter([Ok(Bytes::copy_from_slice(piece))]);
+            content
+                .write_persistent_cache_piece_from_stream(
+                    task_id,
+                    offset,
+                    piece.len() as u64,
+                    &mut stream,
+                )
+                .await
+                .unwrap();
+        }
+        assert!(content
+            .is_persistent_cache_task_encryption_compatible(task_id)
+            .await
+            .unwrap());
+
+        let mut reader = content
+            .read_persistent_cache_piece(task_id, 0, piece_length, None)
+            .await
+            .unwrap();
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await.unwrap();
+        assert_eq!(buffer, &data[..piece_length as usize]);
+
+        let to = temp_dir.path().join("persistent-cache-output");
+        assert!(content
+            .hard_link_persistent_cache_task(task_id, &to)
+            .await
+            .is_err());
+        content
+            .copy_persistent_cache_task(task_id, &to)
+            .await
+            .unwrap();
+        assert_eq!(fs::read(&to).await.unwrap(), data);
+        content.delete_persistent_cache_task(task_id).await.unwrap();
     }
 }

@@ -25,9 +25,11 @@ keywords = ["container", "docker-image", "dragonfly", "dragonfly-client", "p2p"]
 [workspace.dependencies]
 anyhow = "1.0.102"
 async-trait = "0.1"
+aws-lc-rs = "1.17.0"
 bytes = "1.11"
 bytesize = { version = "1.3.3", features = ["serde"] }
 bytesize-serde = "0.2.1"
+base64 = "0.23.1"
 cgroups-rs = "0.5"
 chrono = { version = "0.4.45", features = ["clock", "serde"] }
 clap = { version = "4.6.1", features = ["derive", "env"] }
@@ -138,6 +140,7 @@ url = "2.5.4"
 uuid = { version = "1.20", features = ["v4"] }
 validator = { version = "0.16", features = ["derive"] }
 vortex-protocol = "0.2.0"
+zeroize = "1.8.2"
 
 # TODO(Gaius): Remove the git dependency after the next release of mocktail, refer to https://github.com/IBM/mocktail/issues/65.
 mocktail = { git = "https://github.com/IBM/mocktail", rev = "860e75e171a8eb818083813dbeed4401d1a40b3b", version = "0.3.0" }

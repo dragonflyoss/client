@@ -51,7 +51,6 @@ use vortex_protocol::{
     Header, Message, HEADER_SIZE,
 };
 
-#[cfg(not(target_os = "linux"))]
 use tokio::io::copy_buf;
 
 /// A TCP-based server for dfdaemon upload service.
@@ -712,7 +711,9 @@ impl TCPServerHandler {
 
     /// Streams the remaining range of the piece file directly to the TCP
     /// socket with sendfile, so the piece bytes move from the page cache to
-    /// the socket inside the kernel without passing through user space.
+    /// the socket inside the kernel without passing through user space. The
+    /// content encrypted on disk cannot be sent from the file descriptor, so
+    /// its reader is copied through user space instead, decrypting it.
     #[cfg(target_os = "linux")]
     #[instrument(skip_all)]
     async fn write_stream(
@@ -721,12 +722,25 @@ impl TCPServerHandler {
         writer: &mut OwnedWriteHalf,
     ) -> ClientResult<()> {
         debug!("start to write stream to tcp writer");
-        let (fd, offset, remaining) = reader.into_parts();
-        let sent = sendfile_range(writer.as_ref(), &fd, offset, remaining)
-            .await
-            .inspect_err(|err| {
-                error!("sendfile failed: {}", err);
-            })?;
+        let (sent, remaining) = match reader.into_parts() {
+            Ok((fd, offset, remaining)) => (
+                sendfile_range(writer.as_ref(), &fd, offset, remaining)
+                    .await
+                    .inspect_err(|err| {
+                        error!("sendfile failed: {}", err);
+                    })?,
+                remaining,
+            ),
+            Err(mut reader) => {
+                let remaining = reader.remaining();
+                (
+                    copy_buf(&mut reader, writer).await.inspect_err(|err| {
+                        error!("copy failed: {}", err);
+                    })?,
+                    remaining,
+                )
+            }
+        };
 
         if sent != remaining {
             return Err(ClientError::Unknown(format!(

@@ -1100,6 +1100,10 @@ pub struct Storage {
     ///```
     #[serde(with = "bytesize_serde", default = "default_storage_cache_capacity")]
     pub cache_capacity: ByteSize,
+
+    /// The encryption at rest configuration of the task content stored on disk.
+    #[validate]
+    pub encryption: Encryption,
 }
 
 /// Implement Default for Storage.
@@ -1114,8 +1118,100 @@ impl Default for Storage {
             write_buffer_size: default_storage_write_buffer_size(),
             read_buffer_size: default_storage_read_buffer_size(),
             cache_capacity: default_storage_cache_capacity(),
+            encryption: Encryption::default(),
         }
     }
+}
+
+/// The encryption at rest configuration for the storage.
+///
+/// When enabled, dfdaemon encrypts the content of every task before it is
+/// written to disk and decrypts it when serving the content, so a stolen or
+/// re-mounted disk does not expose the cached artifacts. Each task is encrypted
+/// with its own data encryption key (DEK) using AES-256-GCM over fixed-size
+/// chunks, and the DEK is wrapped (envelope encryption) by a key encryption key
+/// (KEK) managed by the configured key management service (KMS).
+///
+/// Encryption is applied to the cached content on disk only. Peers that are
+/// authorized to download a piece still receive the plaintext over the
+/// (optionally TLS protected) transport, exactly as without encryption.
+///
+/// Hard links between the cache and the output path are not possible for
+/// encrypted content, so `force_hard_link` requests fail and the content is
+/// copied (decrypted) to the output path instead.
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+#[validate(schema(function = "validate_encryption", skip_on_field_errors = false))]
+pub struct Encryption {
+    /// Indicates whether to encrypt the task content on disk.
+    pub enable: bool,
+
+    /// The key management service configuration providing the key encryption key.
+    #[validate]
+    pub kms: Kms,
+}
+
+/// Validates the encryption configuration.
+fn validate_encryption(
+    encryption: &Encryption,
+) -> std::result::Result<(), validator::ValidationError> {
+    if !encryption.enable {
+        return Ok(());
+    }
+
+    match encryption.kms.provider {
+        KmsProvider::File => {
+            if encryption.kms.file.key_file.is_none() {
+                let mut err = validator::ValidationError::new("key_file");
+                err.message = Some(
+                    "storage.encryption.kms.file.keyFile is required when encryption is enabled"
+                        .into(),
+                );
+                return Err(err);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// The key management service provider of the key encryption key.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KmsProvider {
+    /// The key encryption key is loaded from a local file, e.g. a mounted
+    /// Kubernetes secret or a file written by an external secret manager.
+    #[default]
+    File,
+}
+
+/// The key management service configuration for the encryption at rest.
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Kms {
+    /// The provider of the key encryption key, only `file` is supported now.
+    pub provider: KmsProvider,
+
+    /// The configuration of the `file` provider.
+    #[validate]
+    pub file: FileKms,
+}
+
+/// The configuration of the `file` key management service provider.
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct FileKms {
+    /// The path of the file holding the active 256-bit key encryption key. The
+    /// file contains either the 32 raw key bytes, the key as 64 hex characters
+    /// or the key as standard base64. New data encryption keys are wrapped with
+    /// this key.
+    pub key_file: Option<PathBuf>,
+
+    /// The paths of the files holding the previous key encryption keys. They are
+    /// only used to unwrap the data encryption keys of the tasks created before
+    /// a key rotation, so the tasks stay readable until they are garbage
+    /// collected or re-downloaded.
+    pub previous_key_files: Vec<PathBuf>,
 }
 
 /// The policy configuration for gc.
@@ -2963,5 +3059,64 @@ mod tests {
             fs::write(file.path(), content).await.unwrap();
             expect(Config::load(&file.path().to_path_buf()).await);
         }
+    }
+
+    #[test]
+    fn deserialize_storage_encryption_correctly() {
+        let json_data = r#"
+        {
+            "encryption": {
+                "enable": true,
+                "kms": {
+                    "provider": "file",
+                    "file": {
+                        "keyFile": "/etc/dragonfly/kek.key",
+                        "previousKeyFiles": ["/etc/dragonfly/kek-old.key"]
+                    }
+                }
+            }
+        }"#;
+
+        let storage: Storage = serde_json::from_str(json_data).unwrap();
+        assert!(storage.encryption.enable);
+        assert_eq!(storage.encryption.kms.provider, KmsProvider::File);
+        assert_eq!(
+            storage.encryption.kms.file.key_file,
+            Some(PathBuf::from("/etc/dragonfly/kek.key"))
+        );
+        assert_eq!(
+            storage.encryption.kms.file.previous_key_files,
+            vec![PathBuf::from("/etc/dragonfly/kek-old.key")]
+        );
+        assert!(storage.validate().is_ok());
+
+        let storage = Storage::default();
+        assert!(!storage.encryption.enable);
+        assert_eq!(storage.encryption.kms.provider, KmsProvider::File);
+        assert!(storage.encryption.kms.file.key_file.is_none());
+        assert!(storage.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_storage_encryption_requires_key_file() {
+        let json_data = r#"
+        {
+            "encryption": {
+                "enable": true
+            }
+        }"#;
+
+        let storage: Storage = serde_json::from_str(json_data).unwrap();
+        assert!(storage.validate().is_err());
+
+        let json_data = r#"
+        {
+            "encryption": {
+                "enable": false
+            }
+        }"#;
+
+        let storage: Storage = serde_json::from_str(json_data).unwrap();
+        assert!(storage.validate().is_ok());
     }
 }
