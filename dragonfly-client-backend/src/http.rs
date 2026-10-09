@@ -147,10 +147,10 @@ pub struct HTTP {
     /// will be considered expired and removed from the cache.
     cache_temporary_redirect_ttl: Duration,
 
-    /// The metadata request method selected for each origin. HEAD is preferred because it has no
-    /// response body; GET is retained as a compatibility fallback for origins and signed URLs
-    /// that do not support HEAD.
-    metadata_methods: Arc<DashMap<String, MetadataMethod>>,
+    /// The metadata request method selected for each origin (LRU eviction). HEAD is preferred
+    /// because it has no response body; GET is retained only for origins that explicitly report
+    /// that HEAD is unsupported.
+    metadata_methods: Arc<Mutex<LruCache<String, MetadataMethod>>>,
 
     /// Enable hickory DNS resolver for reqwest client. It can be enabled to improve DNS resolution
     /// performance
@@ -164,6 +164,9 @@ impl HTTP {
 
     /// The default capacity for temporary redirect cache.
     const DEFAULT_CACHE_TEMPORARY_REDIRECT_CAPACITY: usize = 1000;
+
+    /// The default capacity for metadata method cache.
+    const DEFAULT_METADATA_METHOD_CACHE_CAPACITY: usize = 1000;
 
     /// Create a new HTTP backend.
     pub fn new(
@@ -239,7 +242,9 @@ impl HTTP {
             ))),
             enable_cache_temporary_redirect,
             cache_temporary_redirect_ttl,
-            metadata_methods: Arc::new(DashMap::new()),
+            metadata_methods: Arc::new(Mutex::new(LruCache::new(
+                NonZeroUsize::new(Self::DEFAULT_METADATA_METHOD_CACHE_CAPACITY).unwrap(),
+            ))),
             enable_hickory_dns,
         })
     }
@@ -351,6 +356,16 @@ impl HTTP {
             .or_err(ErrorType::ParseError)?
             .origin()
             .ascii_serialization())
+    }
+
+    /// Returns the cached metadata method for an origin and refreshes its LRU position.
+    async fn get_metadata_method(&self, origin: &str) -> Option<MetadataMethod> {
+        self.metadata_methods.lock().await.get(origin).copied()
+    }
+
+    /// Stores the metadata method for an origin with LRU eviction.
+    async fn store_metadata_method(&self, origin: String, method: MetadataMethod) {
+        self.metadata_methods.lock().await.put(origin, method);
     }
 
     /// Returns headers for a stat request using the selected metadata method.
@@ -555,19 +570,18 @@ impl Backend for HTTP {
 
         let method_cache_key = Self::metadata_method_cache_key(&request.url)?;
         let selected_method = self
-            .metadata_methods
-            .get(&method_cache_key)
-            .map(|method| *method)
+            .get_metadata_method(&method_cache_key)
+            .await
             .unwrap_or(MetadataMethod::Head);
         let mut used_method = selected_method;
         let mut outcome = self
             .send_stat_request(&request, &request_url, &request_header, selected_method)
             .await?;
 
-        // Prefer HEAD because it cannot leave an unread response body. If the first HEAD request
-        // is not successful or does not provide a usable object length, retain GET as the
-        // compatibility fallback for this origin. A cached HEAD selection is re-evaluated on
-        // failure so GET-signed URLs continue to work.
+        // Prefer HEAD because it cannot leave an unread response body. If HEAD is not successful
+        // or does not provide a usable object length, use GET for this request. Cache GET only
+        // when the origin explicitly reports that HEAD is unsupported; ambiguous failures such as
+        // a GET-only signed URL must not downgrade every later request to the same origin.
         if selected_method == MetadataMethod::Head {
             let head_explicitly_unsupported = matches!(
                 &outcome,
@@ -585,8 +599,8 @@ impl Backend for HTTP {
             };
 
             if head_is_usable {
-                self.metadata_methods
-                    .insert(method_cache_key, MetadataMethod::Head);
+                self.store_metadata_method(method_cache_key, MetadataMethod::Head)
+                    .await;
             } else {
                 debug!(
                     "stat HEAD response is not usable, falling back to GET {} {}",
@@ -597,16 +611,9 @@ impl Backend for HTTP {
                     .send_stat_request(&request, &request_url, &request_header, MetadataMethod::Get)
                     .await?;
 
-                let get_is_usable = match &outcome {
-                    StatRequestOutcome::Response(response) => {
-                        Self::is_usable_stat_response(response)
-                    }
-                    StatRequestOutcome::RequestFailed(_)
-                    | StatRequestOutcome::MissingRedirectLocation => false,
-                };
-                if head_explicitly_unsupported || get_is_usable {
-                    self.metadata_methods
-                        .insert(method_cache_key, MetadataMethod::Get);
+                if head_explicitly_unsupported {
+                    self.store_metadata_method(method_cache_key, MetadataMethod::Get)
+                        .await;
                 }
             }
         }
@@ -1444,7 +1451,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     }
 
     #[tokio::test]
-    async fn stat_switches_cached_head_to_get_for_get_only_urls() {
+    async fn stat_does_not_downgrade_origin_for_get_only_url() {
         install_crypto_provider();
 
         let server = MockServer::start().await;
@@ -1468,14 +1475,9 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             )
             .mount(&server)
             .await;
-        Mock::given(method("GET"))
+        Mock::given(method("HEAD"))
             .and(path("/next"))
-            .and(header("range", "bytes=0-0"))
-            .respond_with(
-                ResponseTemplate::new(206)
-                    .insert_header("Content-Range", "bytes 0-0/126")
-                    .set_body_bytes(vec![0u8]),
-            )
+            .respond_with(ResponseTemplate::new(200).insert_header("Content-Length", "126"))
             .mount(&server)
             .await;
 
@@ -1506,7 +1508,39 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .iter()
             .map(|request| request.method.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(methods, vec!["HEAD", "HEAD", "GET", "GET"]);
+        assert_eq!(methods, vec!["HEAD", "HEAD", "GET", "HEAD"]);
+        assert!(requests[0].headers.get("range").is_none());
+        assert!(requests[1].headers.get("range").is_none());
+        assert_eq!(requests[2].headers.get("range").unwrap(), "bytes=0-0");
+        assert!(requests[3].headers.get("range").is_none());
+    }
+
+    #[tokio::test]
+    async fn metadata_method_cache_is_bounded() {
+        install_crypto_provider();
+
+        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+        for index in 0..=HTTP::DEFAULT_METADATA_METHOD_CACHE_CAPACITY {
+            http.store_metadata_method(
+                format!("http://origin-{index}.example"),
+                MetadataMethod::Head,
+            )
+            .await;
+        }
+
+        let metadata_methods = http.metadata_methods.lock().await;
+        assert_eq!(
+            metadata_methods.len(),
+            HTTP::DEFAULT_METADATA_METHOD_CACHE_CAPACITY
+        );
+        assert!(metadata_methods.peek("http://origin-0.example").is_none());
+        assert_eq!(
+            metadata_methods.peek(&format!(
+                "http://origin-{}.example",
+                HTTP::DEFAULT_METADATA_METHOD_CACHE_CAPACITY
+            )),
+            Some(&MetadataMethod::Head)
+        );
     }
 
     #[tokio::test]
