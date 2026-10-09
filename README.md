@@ -15,6 +15,8 @@ Dragonfly client written in Rust. It can serve as both a peer and a seed peer.
 
 You can find the full documentation on the [d7y.io](https://d7y.io).
 
+For a Python gRPC integration, see the [S3 range reader example](examples/python-s3-range).
+
 ## Community
 
 Join the conversation and help the community grow. Here are the ways to get involved:
