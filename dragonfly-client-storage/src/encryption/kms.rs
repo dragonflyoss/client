@@ -17,7 +17,7 @@
 use async_trait::async_trait;
 use aws_lc_rs::aead::{Aad, Nonce, RandomizedNonceKey, AES_256_GCM, NONCE_LEN};
 use aws_lc_rs::digest::{digest, SHA256};
-use base64::Engine;
+use base64ct::{Base64, Encoding};
 use dragonfly_client_config::dfdaemon::{Config, KmsProvider};
 use dragonfly_client_core::{Error, Result};
 use std::path::{Path, PathBuf};
@@ -255,7 +255,10 @@ async fn load_key_file(path: &Path) -> Result<DataKey> {
 }
 
 /// Parses a key encryption key from the content of a key file: the 32 raw key
-/// bytes, the key as 64 hex characters or the key as standard base64.
+/// bytes, the key as 64 hex characters or the key as standard base64. The
+/// decoders run in constant time with respect to the key material, so the
+/// decoding leaks nothing about the key through the cache or the branch
+/// predictor.
 pub fn parse_key(content: &[u8]) -> Option<DataKey> {
     let mut key = DataKey::new([0u8; KEY_LEN]);
     if content.len() == KEY_LEN {
@@ -265,23 +268,61 @@ pub fn parse_key(content: &[u8]) -> Option<DataKey> {
 
     let trimmed = content.trim_ascii();
     if trimmed.len() == KEY_LEN * 2 {
-        if let Ok(decoded) = hex::decode(trimmed) {
-            key.copy_from_slice(&decoded);
-            return Some(key);
+        return decode_hex_ct(trimmed, key.as_mut()).then_some(key);
+    }
+
+    let mut decoded = Zeroizing::new([0u8; KEY_LEN]);
+    match Base64::decode(trimmed, decoded.as_mut()) {
+        Ok(decoded) if decoded.len() == KEY_LEN => {
+            key.copy_from_slice(decoded);
+            Some(key)
         }
+        _ => None,
+    }
+}
+
+/// Decodes the hex characters into `out` in constant time, returning whether
+/// every character was a hex digit. Each character is mapped to its nibble
+/// with branchless arithmetic, so neither the control flow nor the memory
+/// accesses depend on the key material.
+fn decode_hex_ct(hex: &[u8], out: &mut [u8]) -> bool {
+    if hex.len() != out.len() * 2 {
+        return false;
     }
 
-    let decoded = Zeroizing::new(
-        base64::engine::general_purpose::STANDARD
-            .decode(trimmed)
-            .ok()?,
-    );
-    if decoded.len() != KEY_LEN {
-        return None;
+    let mut invalid: u8 = 0;
+    for (byte, pair) in out.iter_mut().zip(hex.chunks_exact(2)) {
+        let (high, high_invalid) = decode_hex_digit_ct(pair[0]);
+        let (low, low_invalid) = decode_hex_digit_ct(pair[1]);
+        *byte = (high << 4) | low;
+        invalid |= high_invalid | low_invalid;
     }
 
-    key.copy_from_slice(&decoded);
-    Some(key)
+    invalid == 0
+}
+
+/// Decodes one hex character in constant time, returning its value and a
+/// non-zero flag when it is not a hex digit.
+fn decode_hex_digit_ct(c: u8) -> (u8, u8) {
+    // Each range test yields 0xff when the character is in the range, using
+    // the borrow of a wrapping subtraction instead of a comparison.
+    let is_digit = in_range_ct(c, b'0', b'9');
+    let is_lower = in_range_ct(c, b'a', b'f');
+    let is_upper = in_range_ct(c, b'A', b'F');
+
+    let value = (is_digit & c.wrapping_sub(b'0'))
+        | (is_lower & (c.wrapping_sub(b'a').wrapping_add(10)))
+        | (is_upper & (c.wrapping_sub(b'A').wrapping_add(10)));
+    (value, !(is_digit | is_lower | is_upper))
+}
+
+/// Returns 0xff when `low <= c <= high` and 0 otherwise, without branching.
+fn in_range_ct(c: u8, low: u8, high: u8) -> u8 {
+    // (c - low) borrows when c < low, and (high - c) borrows when c > high;
+    // the borrow sets the top bit of the 16 bit difference.
+    let above = (c as u16).wrapping_sub(low as u16) >> 8;
+    let below = (high as u16).wrapping_sub(c as u16) >> 8;
+    (((above | below) & 1) as u8).wrapping_sub(1)
 }
 
 #[cfg(test)]
@@ -300,11 +341,40 @@ mod tests {
         let hex_key = format!("{}\n", hex::encode(raw));
         assert_eq!(parse_key(hex_key.as_bytes()).unwrap().as_ref(), &raw);
 
-        let base64_key = base64::engine::general_purpose::STANDARD.encode(raw);
+        let base64_key = Base64::encode_string(&raw);
         assert_eq!(parse_key(base64_key.as_bytes()).unwrap().as_ref(), &raw);
+
+        let upper_hex_key = hex::encode_upper(raw);
+        assert_eq!(parse_key(upper_hex_key.as_bytes()).unwrap().as_ref(), &raw);
 
         assert!(parse_key(b"too short").is_none());
         assert!(parse_key(&[0u8; 33]).is_none());
+
+        // 64 characters that are not all hex digits are rejected rather than
+        // decoded as garbage.
+        let mut invalid = hex::encode(raw).into_bytes();
+        invalid[10] = b'g';
+        assert!(parse_key(&invalid).is_none());
+    }
+
+    #[test]
+    fn test_decode_hex_ct() {
+        for c in 0u8..=255 {
+            let (value, invalid) = decode_hex_digit_ct(c);
+            match (c as char).to_digit(16) {
+                Some(expected) => {
+                    assert_eq!(value, expected as u8, "character {c}");
+                    assert_eq!(invalid, 0, "character {c}");
+                }
+                None => assert_ne!(invalid, 0, "character {c}"),
+            }
+        }
+
+        let mut out = [0u8; 4];
+        assert!(decode_hex_ct(b"00ffA5c3", &mut out));
+        assert_eq!(out, [0x00, 0xff, 0xa5, 0xc3]);
+        assert!(!decode_hex_ct(b"00ffA5", &mut out));
+        assert!(!decode_hex_ct(b"00ffA5cz", &mut out));
     }
 
     #[tokio::test]

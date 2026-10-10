@@ -97,10 +97,13 @@ impl Header {
         Layout::new(self.chunk_size, self.piece_length, self.content_length)
     }
 
-    /// Returns the context binding the wrapped data key to the layout
-    /// parameters of the header, used as the associated data of the wrapping.
-    fn context(&self) -> Result<Vec<u8>> {
+    /// Returns the context binding the wrapped data key to the identity of the
+    /// content file and to the layout parameters of the header, used as the
+    /// associated data of the wrapping. A file moved to another task or
+    /// another kind of task fails to unwrap its data key.
+    fn context(&self, identity: &str) -> Result<Vec<u8>> {
         bincode::serialize(&(
+            identity,
             self.version,
             self.chunk_size,
             self.piece_length,
@@ -291,7 +294,10 @@ impl Encryptor {
             key_id: String::new(),
             wrapped_key: Vec::new(),
         };
-        let wrapped_key = self.provider.wrap(&data_key, &header.context()?).await?;
+        let wrapped_key = self
+            .provider
+            .wrap(&data_key, &header.context(&file_identity(path)?)?)
+            .await?;
         header.key_id = wrapped_key.key_id;
         header.wrapped_key = wrapped_key.ciphertext;
         let bytes = header.encode()?;
@@ -357,7 +363,7 @@ impl Encryptor {
         };
         let data_key = self
             .provider
-            .unwrap(&wrapped_key, &header.context()?)
+            .unwrap(&wrapped_key, &header.context(&file_identity(path)?)?)
             .await?;
         TaskCipher::new(&data_key, header.layout()?)
     }
@@ -444,6 +450,21 @@ async fn read_header(path: &Path) -> Result<Option<Header>> {
     }
 
     Header::decode(&bytes[..filled])
+}
+
+/// Returns the identity of a content file bound to its data key: the kind of
+/// task and the task id, i.e. the directory of the kind and the file name of
+/// the path `<kind>/<prefix>/<task id>` laid out by the content storage.
+fn file_identity(path: &Path) -> Result<String> {
+    let mut components = path
+        .components()
+        .rev()
+        .filter_map(|component| component.as_os_str().to_str());
+    let task_id = components
+        .next()
+        .ok_or_else(|| Error::Encryption(format!("invalid content path {path:?}")))?;
+    let kind = components.nth(1).unwrap_or_default();
+    Ok(format!("{kind}/{task_id}"))
 }
 
 /// Returns the path of the temporary file the content file is created as.
@@ -556,10 +577,64 @@ mod tests {
         unsupported.version = 2;
         assert!(Header::decode(&unsupported.encode().unwrap()).is_err());
 
-        // The context binds the layout parameters.
+        // The context binds the identity of the file and the layout parameters.
         let mut other = header.clone();
         other.content_length += 1;
-        assert_ne!(header.context().unwrap(), other.context().unwrap());
+        assert_ne!(
+            header.context("tasks/a").unwrap(),
+            other.context("tasks/a").unwrap()
+        );
+        assert_ne!(
+            header.context("tasks/a").unwrap(),
+            header.context("tasks/b").unwrap()
+        );
+        assert_ne!(
+            header.context("tasks/a").unwrap(),
+            header.context("persistent-tasks/a").unwrap()
+        );
+    }
+
+    #[test]
+    fn test_file_identity() {
+        assert_eq!(
+            file_identity(Path::new("/var/lib/dragonfly/content/tasks/abc/abcdef")).unwrap(),
+            "tasks/abcdef"
+        );
+        assert_eq!(
+            file_identity(Path::new("content/persistent-tasks/abc/abcdef")).unwrap(),
+            "persistent-tasks/abcdef"
+        );
+        assert_eq!(file_identity(Path::new("abcdef")).unwrap(), "/abcdef");
+    }
+
+    #[tokio::test]
+    async fn test_file_identity_is_bound_to_the_data_key() {
+        let dir = tempdir().unwrap();
+        let encryptor = encryptor();
+        let tasks = dir.path().join("tasks").join("abc");
+        let persistent = dir.path().join("persistent-tasks").join("abc");
+        fs::create_dir_all(&tasks).await.unwrap();
+        fs::create_dir_all(&persistent).await.unwrap();
+
+        let path = tasks.join("abcdef");
+        encryptor.create_file(&path, 100, 250).await.unwrap();
+        encryptor.evict(&path);
+        assert!(encryptor.is_readable(&path).await.unwrap());
+
+        // The same file under another task id or another kind of task is not
+        // readable, as its data key is bound to the original identity.
+        let other = tasks.join("abcxyz");
+        fs::rename(&path, &other).await.unwrap();
+        assert!(!encryptor.is_readable(&other).await.unwrap());
+        assert!(encryptor.cipher(&other).await.is_err());
+
+        let other_kind = persistent.join("abcdef");
+        fs::rename(&other, &other_kind).await.unwrap();
+        assert!(!encryptor.is_readable(&other_kind).await.unwrap());
+
+        // Moved back, it reads again.
+        fs::rename(&other_kind, &path).await.unwrap();
+        assert!(encryptor.is_readable(&path).await.unwrap());
     }
 
     #[tokio::test]

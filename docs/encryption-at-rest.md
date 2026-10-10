@@ -33,8 +33,11 @@ digests, response headers) is not encrypted by this feature.
 - **Envelope encryption through a KMS.** The DEK is wrapped by a key encryption
   key (KEK) managed by the configured key management service and stored in a
   4 KiB header at the start of the content file, together with the layout
-  parameters. Any dfdaemon holding the KEK can read the file, so the storage
-  can be kept across restarts (`storage.keep: true`).
+  parameters. The wrapping is bound to the identity of the file (the kind of
+  task and the task id) and to the layout parameters, so a content file moved
+  to another task, or a header with altered parameters, fails to unwrap its
+  DEK. Any dfdaemon holding the KEK can read the file, so the storage can be
+  kept across restarts (`storage.keep: true`).
 - **Piece-based layout.** The pieces are encrypted independently and stored in
   disjoint regions of the file at a fixed stride, so concurrent and
   out-of-order piece writes, partial downloads and random-access range reads
@@ -82,7 +85,8 @@ chmod 0400 /etc/dragonfly/kek.key
 ```
 
 dfdaemon refuses to start when the encryption is enabled and the active key
-file is missing or invalid.
+file is missing or invalid. The hex and base64 forms are decoded in constant
+time, so the decoding does not leak the key through timing.
 
 ### Key rotation
 
