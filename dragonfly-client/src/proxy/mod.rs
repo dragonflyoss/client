@@ -27,7 +27,8 @@ use dragonfly_client_config::dfdaemon::{Config, Rule};
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_metric::{
-    collect_proxy_request_failure_metrics, collect_proxy_request_started_metrics,
+    collect_proxy_request_failure_metrics, collect_proxy_request_rate_limited_metrics,
+    collect_proxy_request_started_metrics, collect_proxy_request_tunneled_metrics,
     collect_proxy_request_via_dfdaemon_metrics,
 };
 use dragonfly_client_util::{
@@ -309,6 +310,7 @@ pub async fn handler(
     // response to the client.
     if !request_rate_limiter.try_acquire(1) {
         error!("proxy request rate limit exceeded");
+        collect_proxy_request_rate_limited_metrics();
         return Ok(make_error_response(
             header::ErrorType::Proxy,
             http::StatusCode::TOO_MANY_REQUESTS,
@@ -682,12 +684,19 @@ pub async fn upgraded_handler(
     Span::current().record("method", request.method().as_str());
     Span::current().record("remote_ip", remote_ip.to_string().as_str());
 
+    // Record the proxy request tunneled metrics. Every request sent inside
+    // the HTTPS tunnel is counted here, unlike the single CONNECT request
+    // that established the tunnel and is counted by
+    // collect_proxy_request_started_metrics() in handler().
+    collect_proxy_request_tunneled_metrics();
+
     // HTTPS requests are tunneled over a single upgraded connection, so a
     // per-connection check is not enough. The rate limit must be enforced on
     // every request. If the limit is exceeded, return 429 Too Many Requests
     // to the client.
     if !request_rate_limiter.try_acquire(1) {
         error!("proxy request rate limit exceeded");
+        collect_proxy_request_rate_limited_metrics();
         return Ok(make_error_response(
             header::ErrorType::Proxy,
             http::StatusCode::TOO_MANY_REQUESTS,

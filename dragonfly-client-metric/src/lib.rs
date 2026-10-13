@@ -344,6 +344,50 @@ pub static PROXY_REQUEST_VIA_DFDAEMON_COUNT: LazyLock<IntCounterVec> = LazyLock:
     .expect("metric can be created")
 });
 
+/// Used to count the number of proxy requests sent inside an HTTPS tunnel
+/// (CONNECT) established by the proxy.
+pub static PROXY_REQUEST_TUNNELED_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "proxy_request_tunneled_total",
+            "Counter of the number of the proxy request tunneled by the proxy.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &[],
+    )
+    .expect("metric can be created")
+});
+
+/// Used to count the number of proxy requests rejected by the request rate
+/// limiter with 429 Too Many Requests.
+pub static PROXY_REQUEST_RATE_LIMITED_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    IntCounterVec::new(
+        Opts::new(
+            "proxy_request_rate_limited_total",
+            "Counter of the number of the proxy request rejected by the request rate limiter.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &[],
+    )
+    .expect("metric can be created")
+});
+
+/// Used to record the configured proxy request rate limit.
+pub static PROXY_REQUEST_RATE_LIMIT: LazyLock<IntGaugeVec> = LazyLock::new(|| {
+    IntGaugeVec::new(
+        Opts::new(
+            "proxy_request_rate_limit",
+            "Gauge of the configured proxy request rate limit.",
+        )
+        .namespace(dragonfly_client_config::SERVICE_NAME)
+        .subsystem(dragonfly_client_config::NAME),
+        &[],
+    )
+    .expect("metric can be created")
+});
+
 /// Used to count the number of update tasks.
 pub static UPDATE_TASK_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
     IntCounterVec::new(
@@ -689,6 +733,18 @@ fn register_custom_metrics() {
         .expect("metric can be registered");
 
     REGISTRY
+        .register(Box::new(PROXY_REQUEST_TUNNELED_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(PROXY_REQUEST_RATE_LIMITED_COUNT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
+        .register(Box::new(PROXY_REQUEST_RATE_LIMIT.clone()))
+        .expect("metric can be registered");
+
+    REGISTRY
         .register(Box::new(UPDATE_TASK_COUNT.clone()))
         .expect("metric can be registered");
 
@@ -780,6 +836,8 @@ fn reset_custom_metrics() {
     PROXY_REQUEST_COUNT.reset();
     PROXY_REQUEST_FAILURE_COUNT.reset();
     PROXY_REQUEST_VIA_DFDAEMON_COUNT.reset();
+    PROXY_REQUEST_TUNNELED_COUNT.reset();
+    PROXY_REQUEST_RATE_LIMITED_COUNT.reset();
     UPDATE_TASK_COUNT.reset();
     UPDATE_TASK_FAILURE_COUNT.reset();
     STAT_TASK_COUNT.reset();
@@ -1136,6 +1194,21 @@ pub fn collect_proxy_request_via_dfdaemon_metrics() {
         .inc();
 }
 
+/// Collects the proxy request tunneled metrics. Called for every request
+/// sent inside an HTTPS tunnel (CONNECT) established by the proxy.
+pub fn collect_proxy_request_tunneled_metrics() {
+    PROXY_REQUEST_TUNNELED_COUNT.with_label_values(&[]).inc();
+}
+
+/// Collects the proxy request rate limited metrics. Called when a proxy
+/// request is rejected by the request rate limiter with 429 Too Many
+/// Requests.
+pub fn collect_proxy_request_rate_limited_metrics() {
+    PROXY_REQUEST_RATE_LIMITED_COUNT
+        .with_label_values(&[])
+        .inc();
+}
+
 /// Collects the update task started metrics.
 pub fn collect_update_task_started_metrics(typ: i32) {
     UPDATE_TASK_COUNT
@@ -1324,6 +1397,13 @@ impl Metrics {
             ])
             .unwrap()
             .set(1);
+
+        // PROXY_REQUEST_RATE_LIMIT records the configured proxy request
+        // rate limit so operators can compare the observed request rate
+        // against the limit.
+        PROXY_REQUEST_RATE_LIMIT
+            .with_label_values(&[])
+            .set(self.config.proxy.server.request_rate_limit as i64);
 
         // Clone the config.
         let config = self.config.clone();
@@ -1890,6 +1970,14 @@ mod tests {
             (
                 collect_proxy_request_via_dfdaemon_metrics,
                 &PROXY_REQUEST_VIA_DFDAEMON_COUNT,
+            ),
+            (
+                collect_proxy_request_tunneled_metrics,
+                &PROXY_REQUEST_TUNNELED_COUNT,
+            ),
+            (
+                collect_proxy_request_rate_limited_metrics,
+                &PROXY_REQUEST_RATE_LIMITED_COUNT,
             ),
             (collect_delete_host_started_metrics, &DELETE_HOST_COUNT),
             (
