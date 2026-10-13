@@ -169,7 +169,9 @@ impl Operations for RocksdbStorageEngine {
     /// Gets the object by key.
     fn get<O: DatabaseObject>(&self, key: &[u8]) -> Result<Option<O>> {
         let cf = cf_handle::<O>(self)?;
-        let value = self.get_cf(cf, key).or_err(ErrorType::StorageError)?;
+        let value = self
+            .get_pinned_cf(cf, key)
+            .or_err(ErrorType::StorageError)?;
         match value {
             Some(value) => Ok(Some(O::deserialize_from(&value)?)),
             None => Ok(None),
@@ -192,7 +194,7 @@ impl Operations for RocksdbStorageEngine {
     fn exists<O: DatabaseObject>(&self, key: &[u8]) -> Result<bool> {
         let cf = cf_handle::<O>(self)?;
         Ok(self
-            .get_cf(cf, key)
+            .get_pinned_cf(cf, key)
             .or_err(ErrorType::StorageError)?
             .is_some())
     }
