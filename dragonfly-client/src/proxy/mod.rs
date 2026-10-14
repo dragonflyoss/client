@@ -27,8 +27,8 @@ use dragonfly_client_config::dfdaemon::{Config, Rule};
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use dragonfly_client_metric::{
-    collect_proxy_request_failure_metrics, collect_proxy_request_started_metrics,
-    collect_proxy_request_via_dfdaemon_metrics,
+    collect_proxy_request_failure_metrics, collect_proxy_request_rate_limited_metrics,
+    collect_proxy_request_started_metrics, collect_proxy_request_via_dfdaemon_metrics,
 };
 use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
@@ -303,11 +303,18 @@ pub async fn handler(
 
     // Record the proxy request started metrics. The metrics will be recorded
     // when the request is kept alive.
-    collect_proxy_request_started_metrics();
+    collect_proxy_request_started_metrics(
+        request
+            .uri()
+            .scheme_str()
+            .unwrap_or(http::uri::Scheme::HTTP.as_str()),
+        request.method().as_str(),
+    );
 
     // If the request rate limit is exceeded, return a 429 Too Many Requests
     // response to the client.
     if !request_rate_limiter.try_acquire(1) {
+        collect_proxy_request_rate_limited_metrics();
         error!("proxy request rate limit exceeded");
         return Ok(make_error_response(
             header::ErrorType::Proxy,
@@ -682,11 +689,20 @@ pub async fn upgraded_handler(
     Span::current().record("method", request.method().as_str());
     Span::current().record("remote_ip", remote_ip.to_string().as_str());
 
+    // Record the proxy request started metrics. Every request sent inside the
+    // HTTPS tunnel is counted here, the CONNECT request that established the
+    // tunnel is counted in handler().
+    collect_proxy_request_started_metrics(
+        http::uri::Scheme::HTTPS.as_str(),
+        request.method().as_str(),
+    );
+
     // HTTPS requests are tunneled over a single upgraded connection, so a
     // per-connection check is not enough. The rate limit must be enforced on
     // every request. If the limit is exceeded, return 429 Too Many Requests
     // to the client.
     if !request_rate_limiter.try_acquire(1) {
+        collect_proxy_request_rate_limited_metrics();
         error!("proxy request rate limit exceeded");
         return Ok(make_error_response(
             header::ErrorType::Proxy,
