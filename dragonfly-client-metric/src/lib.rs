@@ -344,13 +344,12 @@ pub static PROXY_REQUEST_VIA_DFDAEMON_COUNT: LazyLock<IntCounterVec> = LazyLock:
     .expect("metric can be created")
 });
 
-/// Used to count the number of proxy requests sent inside an HTTPS tunnel
-/// (CONNECT) established by the proxy.
+/// Used to count the number of proxy request tunneled.
 pub static PROXY_REQUEST_TUNNELED_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
     IntCounterVec::new(
         Opts::new(
             "proxy_request_tunneled_total",
-            "Counter of the number of the proxy request tunneled by the proxy.",
+            "Counter of the number of the proxy request tunneled.",
         )
         .namespace(dragonfly_client_config::SERVICE_NAME)
         .subsystem(dragonfly_client_config::NAME),
@@ -359,27 +358,12 @@ pub static PROXY_REQUEST_TUNNELED_COUNT: LazyLock<IntCounterVec> = LazyLock::new
     .expect("metric can be created")
 });
 
-/// Used to count the number of proxy requests rejected by the request rate
-/// limiter with 429 Too Many Requests.
+/// Used to count the number of proxy request rate limited.
 pub static PROXY_REQUEST_RATE_LIMITED_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
     IntCounterVec::new(
         Opts::new(
             "proxy_request_rate_limited_total",
-            "Counter of the number of the proxy request rejected by the request rate limiter.",
-        )
-        .namespace(dragonfly_client_config::SERVICE_NAME)
-        .subsystem(dragonfly_client_config::NAME),
-        &[],
-    )
-    .expect("metric can be created")
-});
-
-/// Used to record the configured proxy request rate limit.
-pub static PROXY_REQUEST_RATE_LIMIT: LazyLock<IntGaugeVec> = LazyLock::new(|| {
-    IntGaugeVec::new(
-        Opts::new(
-            "proxy_request_rate_limit",
-            "Gauge of the configured proxy request rate limit.",
+            "Counter of the number of the proxy request rate limited.",
         )
         .namespace(dragonfly_client_config::SERVICE_NAME)
         .subsystem(dragonfly_client_config::NAME),
@@ -738,10 +722,6 @@ fn register_custom_metrics() {
 
     REGISTRY
         .register(Box::new(PROXY_REQUEST_RATE_LIMITED_COUNT.clone()))
-        .expect("metric can be registered");
-
-    REGISTRY
-        .register(Box::new(PROXY_REQUEST_RATE_LIMIT.clone()))
         .expect("metric can be registered");
 
     REGISTRY
@@ -1194,15 +1174,12 @@ pub fn collect_proxy_request_via_dfdaemon_metrics() {
         .inc();
 }
 
-/// Collects the proxy request tunneled metrics. Called for every request
-/// sent inside an HTTPS tunnel (CONNECT) established by the proxy.
+/// Collects the proxy request tunneled metrics.
 pub fn collect_proxy_request_tunneled_metrics() {
     PROXY_REQUEST_TUNNELED_COUNT.with_label_values(&[]).inc();
 }
 
-/// Collects the proxy request rate limited metrics. Called when a proxy
-/// request is rejected by the request rate limiter with 429 Too Many
-/// Requests.
+/// Collects the proxy request rate limited metrics.
 pub fn collect_proxy_request_rate_limited_metrics() {
     PROXY_REQUEST_RATE_LIMITED_COUNT
         .with_label_values(&[])
@@ -1397,13 +1374,6 @@ impl Metrics {
             ])
             .unwrap()
             .set(1);
-
-        // PROXY_REQUEST_RATE_LIMIT records the configured proxy request
-        // rate limit so operators can compare the observed request rate
-        // against the limit.
-        PROXY_REQUEST_RATE_LIMIT
-            .with_label_values(&[])
-            .set(self.config.proxy.server.request_rate_limit as i64);
 
         // Clone the config.
         let config = self.config.clone();

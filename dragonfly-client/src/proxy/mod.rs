@@ -309,8 +309,8 @@ pub async fn handler(
     // If the request rate limit is exceeded, return a 429 Too Many Requests
     // response to the client.
     if !request_rate_limiter.try_acquire(1) {
-        error!("proxy request rate limit exceeded");
         collect_proxy_request_rate_limited_metrics();
+        error!("proxy request rate limit exceeded");
         return Ok(make_error_response(
             header::ErrorType::Proxy,
             http::StatusCode::TOO_MANY_REQUESTS,
@@ -684,10 +684,8 @@ pub async fn upgraded_handler(
     Span::current().record("method", request.method().as_str());
     Span::current().record("remote_ip", remote_ip.to_string().as_str());
 
-    // Record the proxy request tunneled metrics. Every request sent inside
-    // the HTTPS tunnel is counted here, unlike the single CONNECT request
-    // that established the tunnel and is counted by
-    // collect_proxy_request_started_metrics() in handler().
+    // Record the proxy request tunneled metrics. The CONNECT request that
+    // established the tunnel is counted by the proxy request started metrics.
     collect_proxy_request_tunneled_metrics();
 
     // HTTPS requests are tunneled over a single upgraded connection, so a
@@ -695,8 +693,8 @@ pub async fn upgraded_handler(
     // every request. If the limit is exceeded, return 429 Too Many Requests
     // to the client.
     if !request_rate_limiter.try_acquire(1) {
-        error!("proxy request rate limit exceeded");
         collect_proxy_request_rate_limited_metrics();
+        error!("proxy request rate limit exceeded");
         return Ok(make_error_response(
             header::ErrorType::Proxy,
             http::StatusCode::TOO_MANY_REQUESTS,
