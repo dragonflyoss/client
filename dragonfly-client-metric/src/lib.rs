@@ -311,7 +311,7 @@ pub static PROXY_REQUEST_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
         )
         .namespace(dragonfly_client_config::SERVICE_NAME)
         .subsystem(dragonfly_client_config::NAME),
-        &[],
+        &["scheme", "method"],
     )
     .expect("metric can be created")
 });
@@ -336,20 +336,6 @@ pub static PROXY_REQUEST_VIA_DFDAEMON_COUNT: LazyLock<IntCounterVec> = LazyLock:
         Opts::new(
             "proxy_request_via_dfdaemon_total",
             "Counter of the number of the proxy request via dfdaemon.",
-        )
-        .namespace(dragonfly_client_config::SERVICE_NAME)
-        .subsystem(dragonfly_client_config::NAME),
-        &[],
-    )
-    .expect("metric can be created")
-});
-
-/// Used to count the number of proxy request tunneled.
-pub static PROXY_REQUEST_TUNNELED_COUNT: LazyLock<IntCounterVec> = LazyLock::new(|| {
-    IntCounterVec::new(
-        Opts::new(
-            "proxy_request_tunneled_total",
-            "Counter of the number of the proxy request tunneled.",
         )
         .namespace(dragonfly_client_config::SERVICE_NAME)
         .subsystem(dragonfly_client_config::NAME),
@@ -717,10 +703,6 @@ fn register_custom_metrics() {
         .expect("metric can be registered");
 
     REGISTRY
-        .register(Box::new(PROXY_REQUEST_TUNNELED_COUNT.clone()))
-        .expect("metric can be registered");
-
-    REGISTRY
         .register(Box::new(PROXY_REQUEST_RATE_LIMITED_COUNT.clone()))
         .expect("metric can be registered");
 
@@ -816,7 +798,6 @@ fn reset_custom_metrics() {
     PROXY_REQUEST_COUNT.reset();
     PROXY_REQUEST_FAILURE_COUNT.reset();
     PROXY_REQUEST_VIA_DFDAEMON_COUNT.reset();
-    PROXY_REQUEST_TUNNELED_COUNT.reset();
     PROXY_REQUEST_RATE_LIMITED_COUNT.reset();
     UPDATE_TASK_COUNT.reset();
     UPDATE_TASK_FAILURE_COUNT.reset();
@@ -1158,8 +1139,10 @@ pub fn collect_backend_request_finished_metrics(scheme: &str, method: &str, cost
 }
 
 /// Collects the proxy request started metrics.
-pub fn collect_proxy_request_started_metrics() {
-    PROXY_REQUEST_COUNT.with_label_values(&[]).inc();
+pub fn collect_proxy_request_started_metrics(scheme: &str, method: &str) {
+    PROXY_REQUEST_COUNT
+        .with_label_values(&[scheme, method])
+        .inc();
 }
 
 /// Collects the proxy request failure metrics.
@@ -1172,11 +1155,6 @@ pub fn collect_proxy_request_via_dfdaemon_metrics() {
     PROXY_REQUEST_VIA_DFDAEMON_COUNT
         .with_label_values(&[])
         .inc();
-}
-
-/// Collects the proxy request tunneled metrics.
-pub fn collect_proxy_request_tunneled_metrics() {
-    PROXY_REQUEST_TUNNELED_COUNT.with_label_values(&[]).inc();
 }
 
 /// Collects the proxy request rate limited metrics.
@@ -1932,7 +1910,6 @@ mod tests {
     #[test]
     fn unlabeled_counters_increment_on_each_call() {
         let test_cases: Vec<(fn(), &IntCounterVec)> = vec![
-            (collect_proxy_request_started_metrics, &PROXY_REQUEST_COUNT),
             (
                 collect_proxy_request_failure_metrics,
                 &PROXY_REQUEST_FAILURE_COUNT,
@@ -1940,10 +1917,6 @@ mod tests {
             (
                 collect_proxy_request_via_dfdaemon_metrics,
                 &PROXY_REQUEST_VIA_DFDAEMON_COUNT,
-            ),
-            (
-                collect_proxy_request_tunneled_metrics,
-                &PROXY_REQUEST_TUNNELED_COUNT,
             ),
             (
                 collect_proxy_request_rate_limited_metrics,
@@ -1960,6 +1933,24 @@ mod tests {
             let count_before = metric.with_label_values(&[]).get();
             collect();
             assert_eq!(metric.with_label_values(&[]).get(), count_before + 1);
+        }
+    }
+
+    #[test]
+    fn collect_proxy_request_started_metrics_counts_by_scheme_and_method() {
+        let test_cases = vec![("http", "GET"), ("http", "CONNECT"), ("https", "GET")];
+
+        for (scheme, method) in test_cases {
+            let count_before = PROXY_REQUEST_COUNT
+                .with_label_values(&[scheme, method])
+                .get();
+            collect_proxy_request_started_metrics(scheme, method);
+            assert_eq!(
+                PROXY_REQUEST_COUNT
+                    .with_label_values(&[scheme, method])
+                    .get(),
+                count_before + 1
+            );
         }
     }
 
