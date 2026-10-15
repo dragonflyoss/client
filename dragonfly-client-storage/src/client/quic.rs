@@ -37,9 +37,9 @@ use vortex_protocol::{
         download_persistent_cache_piece::DownloadPersistentCachePiece,
         download_persistent_piece::DownloadPersistentPiece, download_piece::DownloadPiece,
         error::Error as VortexError, persistent_cache_piece_content, persistent_piece_content,
-        piece_content, Tag,
+        piece_content, piece_metadata::METADATA_LENGTH_SIZE, Tag,
     },
-    Header, Vortex, HEADER_SIZE,
+    Header, Message, HEADER_SIZE,
 };
 
 /// A QUIC-based client for quic storage service.
@@ -173,21 +173,18 @@ impl QUICClient {
         number: u32,
         task_id: &str,
     ) -> ClientResult<(super::PieceContentStream, u64, String)> {
-        let request: Bytes = Vortex::DownloadPiece(
-            Header::new_download_piece(),
-            DownloadPiece::new(task_id.to_string(), number),
-        )
-        .into();
+        let download_piece = DownloadPiece::new(task_id.to_string(), number);
+        let mut request = BytesMut::with_capacity(HEADER_SIZE + download_piece.encoded_len());
+        download_piece.encode_packet(&mut request);
 
-        let mut reader = self.send_request(request).await?;
+        let mut reader = self.send_request(request.freeze()).await?;
         let header = self.recv_header(&mut reader).await?;
         match header.tag() {
             Tag::PieceContent => {
-                let piece_content: piece_content::PieceContent = self
-                    .recv_piece_content(&mut reader, piece_content::METADATA_LENGTH_SIZE)
-                    .await?;
+                let piece_content: piece_content::PieceContent =
+                    self.recv_piece_content(&mut reader).await?;
 
-                let metadata = piece_content.metadata();
+                let metadata = piece_content.metadata;
                 Ok((
                     self.content_stream(reader),
                     metadata.offset,
@@ -231,24 +228,19 @@ impl QUICClient {
         number: u32,
         task_id: &str,
     ) -> ClientResult<(super::PieceContentStream, u64, String)> {
-        let request: Bytes = Vortex::DownloadPersistentPiece(
-            Header::new_download_persistent_piece(),
-            DownloadPersistentPiece::new(task_id.to_string(), number),
-        )
-        .into();
+        let download_persistent_piece = DownloadPersistentPiece::new(task_id.to_string(), number);
+        let mut request =
+            BytesMut::with_capacity(HEADER_SIZE + download_persistent_piece.encoded_len());
+        download_persistent_piece.encode_packet(&mut request);
 
-        let mut reader = self.send_request(request).await?;
+        let mut reader = self.send_request(request.freeze()).await?;
         let header = self.recv_header(&mut reader).await?;
         match header.tag() {
             Tag::PersistentPieceContent => {
                 let persistent_piece_content: persistent_piece_content::PersistentPieceContent =
-                    self.recv_piece_content(
-                        &mut reader,
-                        persistent_piece_content::METADATA_LENGTH_SIZE,
-                    )
-                    .await?;
+                    self.recv_piece_content(&mut reader).await?;
 
-                let metadata = persistent_piece_content.metadata();
+                let metadata = persistent_piece_content.metadata;
                 Ok((
                     self.content_stream(reader),
                     metadata.offset,
@@ -292,21 +284,21 @@ impl QUICClient {
         number: u32,
         task_id: &str,
     ) -> ClientResult<(super::PieceContentStream, u64, String)> {
-        let request: Bytes = Vortex::DownloadPersistentCachePiece(
-            Header::new_download_persistent_cache_piece(),
-            DownloadPersistentCachePiece::new(task_id.to_string(), number),
-        )
-        .into();
+        let download_persistent_cache_piece =
+            DownloadPersistentCachePiece::new(task_id.to_string(), number);
+        let mut request =
+            BytesMut::with_capacity(HEADER_SIZE + download_persistent_cache_piece.encoded_len());
+        download_persistent_cache_piece.encode_packet(&mut request);
 
-        let mut reader = self.send_request(request).await?;
+        let mut reader = self.send_request(request.freeze()).await?;
         let header = self.recv_header(&mut reader).await?;
         match header.tag() {
             Tag::PersistentCachePieceContent => {
                 let persistent_cache_piece_content: persistent_cache_piece_content::PersistentCachePieceContent =
-                self.recv_piece_content(&mut reader, persistent_cache_piece_content::METADATA_LENGTH_SIZE)
+                self.recv_piece_content(&mut reader)
                 .await?;
 
-                let metadata = persistent_cache_piece_content.metadata();
+                let metadata = persistent_cache_piece_content.metadata;
                 Ok((
                     self.content_stream(reader),
                     metadata.offset,
@@ -351,15 +343,14 @@ impl QUICClient {
     /// proper protocol message framing.
     #[instrument(skip_all)]
     async fn recv_header(&self, reader: &mut RecvStream) -> ClientResult<Header> {
-        let mut header_bytes = BytesMut::with_capacity(HEADER_SIZE);
-        header_bytes.resize(HEADER_SIZE, 0);
+        let mut header_bytes = [0u8; HEADER_SIZE];
         reader
             .read_exact(&mut header_bytes)
             .await
             .inspect_err(|err| error!("failed to receive header: {}", err))
             .or_err(ErrorType::ConnectError)?;
 
-        Header::try_from(header_bytes.freeze()).map_err(Into::into)
+        Header::decode(&header_bytes).map_err(Into::into)
     }
 
     /// Receives and parses piece content with variable-length metadata.
@@ -368,35 +359,27 @@ impl QUICClient {
     /// piece content: first reading the metadata length, then reading
     /// the actual metadata, and finally constructing the complete message.
     #[instrument(skip_all)]
-    async fn recv_piece_content<T>(
-        &self,
-        reader: &mut RecvStream,
-        metadata_length_size: usize,
-    ) -> ClientResult<T>
+    async fn recv_piece_content<T>(&self, reader: &mut RecvStream) -> ClientResult<T>
     where
-        T: TryFrom<Bytes, Error: Into<ClientError>>,
+        T: Message,
     {
-        let mut metadata_length_bytes = BytesMut::with_capacity(metadata_length_size);
-        metadata_length_bytes.resize(metadata_length_size, 0);
+        let mut metadata_length_bytes = [0u8; METADATA_LENGTH_SIZE];
         reader
             .read_exact(&mut metadata_length_bytes)
             .await
             .inspect_err(|err| error!("failed to receive metadata length: {}", err))
             .or_err(ErrorType::ConnectError)?;
-        let metadata_length = u32::from_be_bytes(metadata_length_bytes[..].try_into()?) as usize;
+        let metadata_length = u32::from_be_bytes(metadata_length_bytes) as usize;
 
-        let mut metadata_bytes = BytesMut::with_capacity(metadata_length);
-        metadata_bytes.resize(metadata_length, 0);
+        let mut content_bytes = BytesMut::zeroed(METADATA_LENGTH_SIZE + metadata_length);
+        content_bytes[..METADATA_LENGTH_SIZE].copy_from_slice(&metadata_length_bytes);
         reader
-            .read_exact(&mut metadata_bytes)
+            .read_exact(&mut content_bytes[METADATA_LENGTH_SIZE..])
             .await
             .inspect_err(|err| error!("failed to receive metadata: {}", err))
             .or_err(ErrorType::ConnectError)?;
 
-        let mut content_bytes = BytesMut::with_capacity(metadata_length_size + metadata_length);
-        content_bytes.extend_from_slice(&metadata_length_bytes);
-        content_bytes.extend_from_slice(&metadata_bytes);
-        content_bytes.freeze().try_into().map_err(Into::into)
+        T::decode(&content_bytes).map_err(Into::into)
     }
 
     /// Receives and processes error responses from the server.
@@ -413,12 +396,8 @@ impl QUICClient {
             return ClientError::Unknown(err.to_string());
         };
 
-        error_bytes
-            .freeze()
-            .try_into()
-            .map(|error: VortexError| {
-                ClientError::VortexProtocolStatus(error.code(), error.message().to_string())
-            })
+        VortexError::decode(&error_bytes)
+            .map(|error| ClientError::VortexProtocolStatus(error.code, error.message))
             .unwrap_or_else(|err| {
                 error!("failed to extract error: {}", err);
                 ClientError::Unknown(format!("failed to extract error: {err}"))

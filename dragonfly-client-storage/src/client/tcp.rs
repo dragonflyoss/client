@@ -35,9 +35,9 @@ use vortex_protocol::{
         download_persistent_cache_piece::DownloadPersistentCachePiece,
         download_persistent_piece::DownloadPersistentPiece, download_piece::DownloadPiece,
         error::Error as VortexError, persistent_cache_piece_content, persistent_piece_content,
-        piece_content, Tag,
+        piece_content, piece_metadata::METADATA_LENGTH_SIZE, Tag,
     },
-    Header, Vortex, HEADER_SIZE,
+    Header, Message, HEADER_SIZE,
 };
 
 /// The idle connections to a server with the time they became idle.
@@ -115,21 +115,18 @@ impl TCPClient {
         number: u32,
         task_id: &str,
     ) -> ClientResult<(super::PieceContentStream, u64, String)> {
-        let request: Bytes = Vortex::DownloadPiece(
-            Header::new_download_piece(),
-            DownloadPiece::new(task_id.to_string(), number),
-        )
-        .into();
+        let download_piece = DownloadPiece::new(task_id.to_string(), number);
+        let mut request = BytesMut::with_capacity(HEADER_SIZE + download_piece.encoded_len());
+        download_piece.encode_packet(&mut request);
 
-        let (mut stream, header) = self.request(request).await?;
+        let (mut stream, header) = self.request(request.freeze()).await?;
         match header.tag() {
             Tag::PieceContent => {
-                let piece_content: piece_content::PieceContent = self
-                    .recv_piece_content(&mut stream, piece_content::METADATA_LENGTH_SIZE)
-                    .await?;
-                debug!("received piece content: {:?}", piece_content.metadata());
+                let piece_content: piece_content::PieceContent =
+                    self.recv_piece_content(&mut stream).await?;
+                let metadata = piece_content.metadata;
 
-                let metadata = piece_content.metadata();
+                debug!("received piece content: {:?}", metadata);
                 Ok((
                     self.content_stream(stream, metadata.length),
                     metadata.offset,
@@ -173,24 +170,19 @@ impl TCPClient {
         number: u32,
         task_id: &str,
     ) -> ClientResult<(super::PieceContentStream, u64, String)> {
-        let request: Bytes = Vortex::DownloadPersistentPiece(
-            Header::new_download_persistent_piece(),
-            DownloadPersistentPiece::new(task_id.to_string(), number),
-        )
-        .into();
+        let download_persistent_piece = DownloadPersistentPiece::new(task_id.to_string(), number);
+        let mut request =
+            BytesMut::with_capacity(HEADER_SIZE + download_persistent_piece.encoded_len());
+        download_persistent_piece.encode_packet(&mut request);
 
-        let (mut stream, header) = self.request(request).await?;
+        let (mut stream, header) = self.request(request.freeze()).await?;
         match header.tag() {
             Tag::PersistentPieceContent => {
                 let persistent_piece_content: persistent_piece_content::PersistentPieceContent =
-                    self.recv_piece_content(&mut stream, piece_content::METADATA_LENGTH_SIZE)
-                        .await?;
-                debug!(
-                    "received piece content: {:?}",
-                    persistent_piece_content.metadata()
-                );
+                    self.recv_piece_content(&mut stream).await?;
+                let metadata = persistent_piece_content.metadata;
 
-                let metadata = persistent_piece_content.metadata();
+                debug!("received piece content: {:?}", metadata);
                 Ok((
                     self.content_stream(stream, metadata.length),
                     metadata.offset,
@@ -234,24 +226,21 @@ impl TCPClient {
         number: u32,
         task_id: &str,
     ) -> ClientResult<(super::PieceContentStream, u64, String)> {
-        let request: Bytes = Vortex::DownloadPersistentCachePiece(
-            Header::new_download_persistent_cache_piece(),
-            DownloadPersistentCachePiece::new(task_id.to_string(), number),
-        )
-        .into();
+        let download_persistent_cache_piece =
+            DownloadPersistentCachePiece::new(task_id.to_string(), number);
+        let mut request =
+            BytesMut::with_capacity(HEADER_SIZE + download_persistent_cache_piece.encoded_len());
+        download_persistent_cache_piece.encode_packet(&mut request);
 
-        let (mut stream, header) = self.request(request).await?;
+        let (mut stream, header) = self.request(request.freeze()).await?;
         match header.tag() {
             Tag::PersistentCachePieceContent => {
                 let persistent_cache_piece_content: persistent_cache_piece_content::PersistentCachePieceContent =
-                    self.recv_piece_content(&mut stream, piece_content::METADATA_LENGTH_SIZE)
+                    self.recv_piece_content(&mut stream)
                         .await?;
-                debug!(
-                    "received piece content: {:?}",
-                    persistent_cache_piece_content.metadata()
-                );
+                let metadata = persistent_cache_piece_content.metadata;
 
-                let metadata = persistent_cache_piece_content.metadata();
+                debug!("received piece content: {:?}", metadata);
                 Ok((
                     self.content_stream(stream, metadata.length),
                     metadata.offset,
@@ -380,8 +369,7 @@ impl TCPClient {
     /// proper protocol message framing.
     #[instrument(skip_all)]
     async fn recv_header(&self, stream: &mut TcpStream) -> ClientResult<Header> {
-        let mut header_bytes = BytesMut::with_capacity(HEADER_SIZE);
-        header_bytes.resize(HEADER_SIZE, 0);
+        let mut header_bytes = [0u8; HEADER_SIZE];
         stream
             .read_exact(&mut header_bytes)
             .await
@@ -389,7 +377,7 @@ impl TCPClient {
                 error!("failed to receive header: {}", err);
             })?;
 
-        Header::try_from(header_bytes.freeze()).map_err(Into::into)
+        Header::decode(&header_bytes).map_err(Into::into)
     }
 
     /// Receives and parses piece content with variable-length metadata.
@@ -398,37 +386,29 @@ impl TCPClient {
     /// piece content: first reading the metadata length, then reading
     /// the actual metadata, and finally constructing the complete message.
     #[instrument(skip_all)]
-    async fn recv_piece_content<T>(
-        &self,
-        stream: &mut TcpStream,
-        metadata_length_size: usize,
-    ) -> ClientResult<T>
+    async fn recv_piece_content<T>(&self, stream: &mut TcpStream) -> ClientResult<T>
     where
-        T: TryFrom<Bytes, Error: Into<ClientError>>,
+        T: Message,
     {
-        let mut metadata_length_bytes = BytesMut::with_capacity(metadata_length_size);
-        metadata_length_bytes.resize(metadata_length_size, 0);
+        let mut metadata_length_bytes = [0u8; METADATA_LENGTH_SIZE];
         stream
             .read_exact(&mut metadata_length_bytes)
             .await
             .inspect_err(|err| {
                 error!("failed to receive metadata length: {}", err);
             })?;
-        let metadata_length = u32::from_be_bytes(metadata_length_bytes[..].try_into()?) as usize;
+        let metadata_length = u32::from_be_bytes(metadata_length_bytes) as usize;
 
-        let mut metadata_bytes = BytesMut::with_capacity(metadata_length);
-        metadata_bytes.resize(metadata_length, 0);
+        let mut content_bytes = BytesMut::zeroed(METADATA_LENGTH_SIZE + metadata_length);
+        content_bytes[..METADATA_LENGTH_SIZE].copy_from_slice(&metadata_length_bytes);
         stream
-            .read_exact(&mut metadata_bytes)
+            .read_exact(&mut content_bytes[METADATA_LENGTH_SIZE..])
             .await
             .inspect_err(|err| {
                 error!("failed to receive metadata: {}", err);
             })?;
 
-        let mut content_bytes = BytesMut::with_capacity(metadata_length_size + metadata_length);
-        content_bytes.extend_from_slice(&metadata_length_bytes);
-        content_bytes.extend_from_slice(&metadata_bytes);
-        content_bytes.freeze().try_into().map_err(Into::into)
+        T::decode(&content_bytes).map_err(Into::into)
     }
 
     /// Receives and processes error responses from the server.
@@ -445,12 +425,8 @@ impl TCPClient {
             return ClientError::IO(err);
         };
 
-        error_bytes
-            .freeze()
-            .try_into()
-            .map(|error: VortexError| {
-                ClientError::VortexProtocolStatus(error.code(), error.message().to_string())
-            })
+        VortexError::decode(&error_bytes)
+            .map(|error| ClientError::VortexProtocolStatus(error.code, error.message))
             .unwrap_or_else(|err| {
                 error!("failed to extract error: {}", err);
                 ClientError::Unknown(format!("failed to extract error: {err}"))
@@ -551,25 +527,26 @@ mod tests {
                         return;
                     }
 
-                    let header = Header::try_from(Bytes::copy_from_slice(&header)).unwrap();
+                    let header = Header::decode(&header).unwrap();
                     let mut body = vec![0u8; header.length() as usize];
                     stream.read_exact(&mut body).await.unwrap();
-                    let request = DownloadPiece::try_from(Bytes::from(body)).unwrap();
+                    let request = DownloadPiece::decode(&body).unwrap();
 
-                    let content: Bytes = piece_content::PieceContent::new(
-                        request.piece_number(),
-                        0,
-                        CONTENT.len() as u64,
-                        "crc32:1".to_string(),
-                        "parent".to_string(),
-                        TrafficType::RemotePeer as u8,
-                        Duration::ZERO,
-                        Utc::now().naive_utc(),
-                    )
-                    .into();
-                    let header: Bytes = Header::new_piece_content(content.len() as u32).into();
-                    stream.write_all(&header).await.unwrap();
-                    stream.write_all(&content).await.unwrap();
+                    let mut response = BytesMut::new();
+                    piece_content::PieceContent {
+                        metadata: vortex_protocol::tlv::piece_metadata::PieceMetadata {
+                            number: request.piece_number,
+                            offset: 0,
+                            length: CONTENT.len() as u64,
+                            digest: "crc32:1".to_string(),
+                            parent_id: "parent".to_string(),
+                            traffic_type: TrafficType::RemotePeer as u8,
+                            cost: Duration::ZERO,
+                            created_at: Utc::now().naive_utc(),
+                        },
+                    }
+                    .encode_packet(&mut response);
+                    stream.write_all(&response).await.unwrap();
                     stream.write_all(CONTENT).await.unwrap();
                 }
             });

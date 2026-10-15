@@ -233,7 +233,7 @@ impl IDGenerator {
                 let mut hasher = Sha256::new();
 
                 let f = std::fs::File::open(path)?;
-                let mut buffer = [0; 4096];
+                let mut buffer = vec![0; digest::DEFAULT_READ_BUFFER_SIZE];
                 let mut reader = io::BufReader::with_capacity(buffer.len(), f);
                 loop {
                     match reader.read(&mut buffer) {

@@ -27,6 +27,9 @@ use tracing::instrument;
 /// The separator character for digest formatting.
 pub const SEPARATOR: &str = ":";
 
+/// The buffer size for reading the file to calculate the digest.
+pub const DEFAULT_READ_BUFFER_SIZE: usize = 2 * 1024 * 1024;
+
 /// Regex pattern for OCI blob URLs, e.g. http(s)://<registry>/v2/<repository>/blobs/<digest>.
 static BLOB_URL_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(.*)://(.*)/v2/(.*)/blobs/([^?]+)(?:\?.*)?$").unwrap());
@@ -192,10 +195,10 @@ impl FromStr for Digest {
 #[instrument(level = "debug", skip_all)]
 pub fn calculate_file_digest(algorithm: Algorithm, path: &Path) -> ClientResult<Digest> {
     let f = std::fs::File::open(path)?;
-    let mut reader = io::BufReader::new(f);
+    let mut reader = io::BufReader::with_capacity(DEFAULT_READ_BUFFER_SIZE, f);
     match algorithm {
         Algorithm::Crc32 => {
-            let mut buffer = [0; 4096];
+            let mut buffer = vec![0; DEFAULT_READ_BUFFER_SIZE];
             let mut hasher = crc32fast::Hasher::new();
             loop {
                 match reader.read(&mut buffer) {
