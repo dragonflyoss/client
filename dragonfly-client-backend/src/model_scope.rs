@@ -388,6 +388,7 @@ impl Backend for ModelScope {
                             message: err.to_string(),
                             status_code: None,
                             header: None,
+                            body: None,
                         }))
                     })?;
 
@@ -408,6 +409,7 @@ impl Backend for ModelScope {
                         message: response_status_code.to_string(),
                         status_code: Some(response_status_code),
                         header: Some(response_header),
+                        body: None,
                     })));
                 }
 
@@ -428,6 +430,7 @@ impl Backend for ModelScope {
                     http_status_code: Some(response_status_code),
                     error_message: Some(response_status_code.to_string()),
                     entries: Vec::new(),
+                    body: None,
                 })
             }
             None => {
@@ -451,6 +454,7 @@ impl Backend for ModelScope {
                             message: err.to_string(),
                             status_code: None,
                             header: None,
+                            body: None,
                         }))
                     })?;
 
@@ -471,6 +475,7 @@ impl Backend for ModelScope {
                         message: response_status_code.to_string(),
                         status_code: Some(response_status_code),
                         header: Some(response_header),
+                        body: None,
                     })));
                 }
 
@@ -484,6 +489,7 @@ impl Backend for ModelScope {
                         message: err.to_string(),
                         status_code: None,
                         header: None,
+                        body: None,
                     }))
                 })?;
 
@@ -497,6 +503,7 @@ impl Backend for ModelScope {
                         message: err.to_string(),
                         status_code: None,
                         header: None,
+                        body: None,
                     }))
                 })?;
 
@@ -509,6 +516,7 @@ impl Backend for ModelScope {
                             response.code,
                             response.message.unwrap_or_default()
                         ),
+                        body: None,
                     })));
                 }
 
@@ -547,6 +555,7 @@ impl Backend for ModelScope {
                     http_status_code: Some(response_status_code),
                     error_message: Some(response_status_code.to_string()),
                     entries,
+                    body: None,
                 })
             }
         }
