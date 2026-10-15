@@ -45,9 +45,10 @@ use vortex_protocol::{
         persistent_cache_piece_content::PersistentCachePieceContent,
         persistent_piece_content::PersistentPieceContent,
         piece_content::PieceContent,
+        piece_metadata::PieceMetadata,
         Tag,
     },
-    Header, Vortex, HEADER_SIZE,
+    Header, Message, HEADER_SIZE,
 };
 
 #[cfg(not(target_os = "linux"))]
@@ -232,10 +233,10 @@ impl TCPServerHandler {
                 let host_id = self.id_generator.host_id();
 
                 // Get the task id from the request.
-                let task_id = download_piece.task_id();
+                let task_id = download_piece.task_id.as_str();
 
                 // Get the interested piece number from the request.
-                let piece_number = download_piece.piece_number();
+                let piece_number = download_piece.piece_number;
 
                 // Generate the piece id.
                 let piece_id = self.storage.piece_id(task_id, piece_number);
@@ -251,16 +252,10 @@ impl TCPServerHandler {
 
                 match self.handle_piece(piece_id.as_str(), task_id).await {
                     Ok((piece_content, content_reader)) => {
-                        let piece_length = piece_content.metadata().length;
-                        let piece_content_bytes: Bytes = piece_content.into();
-
-                        let header = Header::new_piece_content(piece_content_bytes.len() as u32);
-                        let header_bytes: Bytes = header.into();
-
                         let mut response =
-                            BytesMut::with_capacity(HEADER_SIZE + piece_content_bytes.len());
-                        response.extend_from_slice(&header_bytes);
-                        response.extend_from_slice(&piece_content_bytes);
+                            BytesMut::with_capacity(HEADER_SIZE + piece_content.encoded_len());
+                        piece_content.encode_packet(&mut response);
+                        let piece_length = piece_content.metadata.length;
 
                         self.write_response(response.freeze(), writer)
                             .await
@@ -290,9 +285,9 @@ impl TCPServerHandler {
                         // Collect upload piece failure metrics.
                         collect_upload_piece_failure_metrics();
 
-                        let error_response: Bytes =
-                            Vortex::Error(Header::new_error(err.len() as u32), err).into();
-                        self.write_response(error_response, writer).await?;
+                        let mut response = BytesMut::with_capacity(HEADER_SIZE + err.encoded_len());
+                        err.encode_packet(&mut response);
+                        self.write_response(response.freeze(), writer).await?;
                     }
                 }
 
@@ -307,10 +302,10 @@ impl TCPServerHandler {
                 let host_id = self.id_generator.host_id();
 
                 // Get the task id from the request.
-                let task_id = download_persistent_piece.task_id();
+                let task_id = download_persistent_piece.task_id.as_str();
 
                 // Get the interested piece number from the request.
-                let piece_number = download_persistent_piece.piece_number();
+                let piece_number = download_persistent_piece.piece_number;
 
                 // Generate the piece id.
                 let piece_id = self.storage.piece_id(task_id, piece_number);
@@ -329,19 +324,11 @@ impl TCPServerHandler {
                     .await
                 {
                     Ok((persistent_piece_content, content_reader)) => {
-                        let persistent_piece_length = persistent_piece_content.metadata().length;
-                        let persistent_piece_content_bytes: Bytes = persistent_piece_content.into();
-
-                        let header = Header::new_persistent_piece_content(
-                            persistent_piece_content_bytes.len() as u32,
-                        );
-                        let header_bytes: Bytes = header.into();
-
                         let mut response = BytesMut::with_capacity(
-                            HEADER_SIZE + persistent_piece_content_bytes.len(),
+                            HEADER_SIZE + persistent_piece_content.encoded_len(),
                         );
-                        response.extend_from_slice(&header_bytes);
-                        response.extend_from_slice(&persistent_piece_content_bytes);
+                        persistent_piece_content.encode_packet(&mut response);
+                        let persistent_piece_length = persistent_piece_content.metadata.length;
 
                         self.write_response(response.freeze(), writer)
                             .await
@@ -371,9 +358,9 @@ impl TCPServerHandler {
                         // Collect upload piece failure metrics.
                         collect_upload_piece_failure_metrics();
 
-                        let error_response: Bytes =
-                            Vortex::Error(Header::new_error(err.len() as u32), err).into();
-                        self.write_response(error_response, writer).await?;
+                        let mut response = BytesMut::with_capacity(HEADER_SIZE + err.encoded_len());
+                        err.encode_packet(&mut response);
+                        self.write_response(response.freeze(), writer).await?;
                     }
                 }
 
@@ -388,10 +375,10 @@ impl TCPServerHandler {
                 let host_id = self.id_generator.host_id();
 
                 // Get the task id from the request.
-                let task_id = download_persistent_cache_piece.task_id();
+                let task_id = download_persistent_cache_piece.task_id.as_str();
 
                 // Get the interested piece number from the request.
-                let piece_number = download_persistent_cache_piece.piece_number();
+                let piece_number = download_persistent_cache_piece.piece_number;
 
                 // Generate the piece id.
                 let piece_id = self.storage.piece_id(task_id, piece_number);
@@ -410,21 +397,12 @@ impl TCPServerHandler {
                     .await
                 {
                     Ok((persistent_cache_piece_content, content_reader)) => {
-                        let persistent_cache_piece_length =
-                            persistent_cache_piece_content.metadata().length;
-                        let persistent_cache_piece_content_bytes: Bytes =
-                            persistent_cache_piece_content.into();
-
-                        let header = Header::new_persistent_cache_piece_content(
-                            persistent_cache_piece_content_bytes.len() as u32,
-                        );
-                        let header_bytes: Bytes = header.into();
-
                         let mut response = BytesMut::with_capacity(
-                            HEADER_SIZE + persistent_cache_piece_content_bytes.len(),
+                            HEADER_SIZE + persistent_cache_piece_content.encoded_len(),
                         );
-                        response.extend_from_slice(&header_bytes);
-                        response.extend_from_slice(&persistent_cache_piece_content_bytes);
+                        persistent_cache_piece_content.encode_packet(&mut response);
+                        let persistent_cache_piece_length =
+                            persistent_cache_piece_content.metadata.length;
 
                         self.write_response(response.freeze(), writer)
                             .await
@@ -460,9 +438,9 @@ impl TCPServerHandler {
                         // Collect upload piece failure metrics.
                         collect_upload_piece_failure_metrics();
 
-                        let error_response: Bytes =
-                            Vortex::Error(Header::new_error(err.len() as u32), err).into();
-                        self.write_response(error_response, writer).await?;
+                        let mut response = BytesMut::with_capacity(HEADER_SIZE + err.encoded_len());
+                        err.encode_packet(&mut response);
+                        self.write_response(response.freeze(), writer).await?;
                     }
                 }
 
@@ -525,16 +503,18 @@ impl TCPServerHandler {
             })?;
 
         Ok((
-            PieceContent::new(
-                piece.number,
-                piece.offset,
-                piece.length,
-                piece.digest.clone(),
-                piece.parent_id.clone().unwrap_or_default(),
-                TrafficType::RemotePeer as u8,
-                piece.cost().unwrap_or_default(),
-                piece.created_at,
-            ),
+            PieceContent {
+                metadata: PieceMetadata {
+                    number: piece.number,
+                    offset: piece.offset,
+                    length: piece.length,
+                    digest: piece.digest.clone(),
+                    parent_id: piece.parent_id.clone().unwrap_or_default(),
+                    traffic_type: TrafficType::RemotePeer as u8,
+                    cost: piece.cost().unwrap_or_default(),
+                    created_at: piece.created_at,
+                },
+            },
             reader,
         ))
     }
@@ -589,16 +569,18 @@ impl TCPServerHandler {
             })?;
 
         Ok((
-            PersistentPieceContent::new(
-                piece.number,
-                piece.offset,
-                piece.length,
-                piece.digest.clone(),
-                piece.parent_id.clone().unwrap_or_default(),
-                TrafficType::RemotePeer as u8,
-                piece.cost().unwrap_or_default(),
-                piece.created_at,
-            ),
+            PersistentPieceContent {
+                metadata: PieceMetadata {
+                    number: piece.number,
+                    offset: piece.offset,
+                    length: piece.length,
+                    digest: piece.digest.clone(),
+                    parent_id: piece.parent_id.clone().unwrap_or_default(),
+                    traffic_type: TrafficType::RemotePeer as u8,
+                    cost: piece.cost().unwrap_or_default(),
+                    created_at: piece.created_at,
+                },
+            },
             reader,
         ))
     }
@@ -653,16 +635,18 @@ impl TCPServerHandler {
             })?;
 
         Ok((
-            PersistentCachePieceContent::new(
-                piece.number,
-                piece.offset,
-                piece.length,
-                piece.digest.clone(),
-                piece.parent_id.clone().unwrap_or_default(),
-                TrafficType::RemotePeer as u8,
-                piece.cost().unwrap_or_default(),
-                piece.created_at,
-            ),
+            PersistentCachePieceContent {
+                metadata: PieceMetadata {
+                    number: piece.number,
+                    offset: piece.offset,
+                    length: piece.length,
+                    digest: piece.digest.clone(),
+                    parent_id: piece.parent_id.clone().unwrap_or_default(),
+                    traffic_type: TrafficType::RemotePeer as u8,
+                    cost: piece.cost().unwrap_or_default(),
+                    created_at: piece.created_at,
+                },
+            },
             reader,
         ))
     }
@@ -673,24 +657,23 @@ impl TCPServerHandler {
     /// the message type (tag) and payload length. This is critical for
     /// proper protocol message framing.
     async fn read_header(&self, reader: &mut OwnedReadHalf) -> ClientResult<Header> {
-        let mut header_bytes = BytesMut::with_capacity(HEADER_SIZE);
-        header_bytes.resize(HEADER_SIZE, 0);
+        let mut header_bytes = [0u8; HEADER_SIZE];
         reader.read_exact(&mut header_bytes).await?;
-        Header::try_from(header_bytes.freeze()).map_err(Into::into)
+        Header::decode(&header_bytes).map_err(Into::into)
     }
 
     /// Reads and parses a download piece message from the TCP stream.
     ///
     /// This function reads a fixed-length payload based on the header length
     /// and attempts to parse it into the specified type T. The type T must
-    /// implement TryFrom<Bytes> for deserialization from the raw bytes.
+    /// implement Message for decoding from the raw bytes.
     pub async fn read_download_piece<T>(
         &self,
         reader: &mut OwnedReadHalf,
         header_length: usize,
     ) -> ClientResult<T>
     where
-        T: TryFrom<Bytes, Error: Into<ClientError>>,
+        T: Message,
     {
         let mut download_piece_bytes = BytesMut::with_capacity(header_length);
         download_piece_bytes.resize(header_length, 0);
@@ -702,7 +685,7 @@ impl TCPServerHandler {
                 error!("failed to receive download piece: {}", err);
             })?;
 
-        download_piece_bytes.freeze().try_into().map_err(Into::into)
+        T::decode(&download_piece_bytes).map_err(Into::into)
     }
 
     /// Writes a complete response message to the TCP stream.

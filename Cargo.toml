@@ -137,7 +137,7 @@ tracing = "0.1"
 url = "2.5.4"
 uuid = { version = "1.20", features = ["v4"] }
 validator = { version = "0.16", features = ["derive"] }
-vortex-protocol = "0.1.5"
+vortex-protocol = "0.2.0"
 
 # TODO(Gaius): Remove the git dependency after the next release of mocktail, refer to https://github.com/IBM/mocktail/issues/65.
 mocktail = { git = "https://github.com/IBM/mocktail", rev = "860e75e171a8eb818083813dbeed4401d1a40b3b", version = "0.3.0" }
