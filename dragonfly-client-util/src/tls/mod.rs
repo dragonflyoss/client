@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::vec::Vec;
 use std::{fs, io};
-use tracing::instrument;
+use tracing::{instrument, warn};
 
 /// The default capacity of the certificates cache.
 const DEFAULT_CERTS_CACHE_CAPACITY: usize = 1000;
@@ -118,6 +118,40 @@ impl rustls::client::danger::ServerCertVerifier for NoVerifier {
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
         self.0.signature_verification_algorithms.supported_schemes()
     }
+}
+
+/// Builds a TLS client config that verifies the server certificate against the
+/// native root certificates and the given CA certificates.
+#[instrument(skip_all)]
+pub fn verified_client_config(
+    ca_certs: Option<Vec<CertificateDer<'static>>>,
+) -> ClientResult<rustls::ClientConfig> {
+    let mut root_cert_store = rustls::RootCertStore::empty();
+
+    let native_certs = rustls_native_certs::load_native_certs();
+    for err in native_certs.errors {
+        warn!("load native root certificates failed: {}", err);
+    }
+    root_cert_store.add_parsable_certificates(native_certs.certs);
+
+    if let Some(ca_certs) = ca_certs {
+        let (added, _) = root_cert_store.add_parsable_certificates(ca_certs);
+        if added == 0 {
+            return Err(ClientError::Unknown(
+                "no valid certificates found in the CA certificates".to_string(),
+            ));
+        }
+    }
+
+    if root_cert_store.is_empty() {
+        return Err(ClientError::Unknown(
+            "no root certificates found to verify the server certificate".to_string(),
+        ));
+    }
+
+    Ok(rustls::ClientConfig::builder()
+        .with_root_certificates(root_cert_store)
+        .with_no_client_auth())
 }
 
 /// Generate a CA certificate from PEM format files.
@@ -330,6 +364,24 @@ Z+yQ5jhu/fmSBNhqO/8Lp+Y=
         );
         assert!(result.is_ok());
         assert!(!verifier.supported_verify_schemes().is_empty());
+    }
+
+    #[test]
+    fn verified_client_config_requires_valid_ca_certs() {
+        install_crypto_provider();
+
+        let test_cases: Vec<(Vec<CertificateDer<'static>>, bool)> = vec![
+            (load_certs_from_pem(SERVER_CERT).unwrap(), true),
+            (vec![], false),
+            (
+                vec![CertificateDer::from(b"not a certificate".to_vec())],
+                false,
+            ),
+        ];
+
+        for (ca_certs, ok) in test_cases {
+            assert_eq!(verified_client_config(Some(ca_certs)).is_ok(), ok);
+        }
     }
 
     #[test]
