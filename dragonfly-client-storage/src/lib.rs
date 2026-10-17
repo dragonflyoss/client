@@ -52,6 +52,7 @@ pub mod io;
 pub mod metadata;
 pub mod server;
 pub mod storage_engine;
+pub mod tls;
 
 /// The fallback interval for re-checking the piece metadata while waiting for an
 /// in-flight piece completion notification, guarding against missed notifications

@@ -989,6 +989,16 @@ pub struct StorageServer {
     /// The port to the quic server.
     #[serde(default = "default_storage_server_quic_port")]
     pub quic_port: u16,
+
+    /// Indicates whether the piece transport between peers over tcp and quic
+    /// uses mutual TLS. The storage servers present the `upload.server`
+    /// certificate and require a client certificate issued by its CA, and the
+    /// piece downloaders present the `upload.client` certificate and verify the
+    /// certificate of the parent against its CA. The peers are dialed by ip,
+    /// so the certificate of the parent is verified against the CA without
+    /// checking its name. Enable it on every node of the cluster at once, a
+    /// node with mutual TLS and a node without it can not exchange pieces.
+    pub mtls: bool,
 }
 
 /// Implement Default for StorageServer.
@@ -999,6 +1009,7 @@ impl Default for StorageServer {
             tcp_port: default_storage_server_tcp_port(),
             tcp_fastopen: false,
             quic_port: default_storage_server_quic_port(),
+            mtls: false,
         }
     }
 }
@@ -2410,7 +2421,8 @@ mod tests {
                         "ip": "128.0.0.1",
                         "tcpPort": 4005,
                         "tcpFastopen": true,
-                        "quicPort": 4006
+                        "quicPort": 4006,
+                        "mtls": true
                     },
                     "writebackMode": "sync",
                     "dir": "/tmp/storage",
@@ -2425,6 +2437,7 @@ mod tests {
                     assert_eq!(storage.server.tcp_port, 4005);
                     assert!(storage.server.tcp_fastopen);
                     assert_eq!(storage.server.quic_port, 4006);
+                    assert!(storage.server.mtls);
                     assert_eq!(storage.writeback_mode, WritebackMode::Sync);
                     assert_eq!(storage.dir, PathBuf::from("/tmp/storage"));
                     assert!(storage.keep);
@@ -2439,6 +2452,7 @@ mod tests {
                 assert_eq!(storage.server.tcp_port, 4005);
                 assert!(!storage.server.tcp_fastopen);
                 assert_eq!(storage.server.quic_port, 4006);
+                assert!(!storage.server.mtls);
                 assert_eq!(storage.writeback_mode, WritebackMode::Async);
                 assert_eq!(storage.dir, crate::default_storage_dir());
                 assert!(!storage.keep);
