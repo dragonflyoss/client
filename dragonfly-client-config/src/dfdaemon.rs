@@ -1049,17 +1049,18 @@ pub enum WritebackMode {
 pub enum PieceDigestAlgorithm {
     /// Crc32 calculates CRC32 piece digests. It detects accidental corruption
     /// only, and the pieces downloaded from parents are verified with the
-    /// algorithm of the digest announced by the parent, so a node keeps
-    /// interoperating with parents that calculate SHA-256 piece digests.
-    #[default]
+    /// algorithm of the expected digest, so a node keeps interoperating with
+    /// parents that calculate SHA-256 piece digests. Use it during a rolling
+    /// upgrade from a version calculating CRC32 piece digests.
     Crc32,
 
     /// Sha256 calculates SHA-256 piece digests, and the pieces downloaded from
-    /// parents must carry a SHA-256 digest, a CRC32 digest announced by a
-    /// parent is rejected instead of downgrading the verification. Enable it
-    /// on every node of the cluster after all of them run a version that
-    /// understands SHA-256 piece digests, older nodes fail to verify the
-    /// pieces downloaded from the nodes that enabled it.
+    /// parents must be verified against a SHA-256 digest, a CRC32 expected
+    /// digest is rejected instead of downgrading the verification. Nodes of a
+    /// version calculating CRC32 piece digests can not verify the pieces of
+    /// the nodes calculating SHA-256 piece digests and the other way around,
+    /// so they download those pieces from other parents or the source.
+    #[default]
     Sha256,
 }
 
@@ -1075,7 +1076,7 @@ pub struct Storage {
     pub writeback_mode: WritebackMode,
 
     /// The algorithm of the digests calculated for the written pieces, default
-    /// is crc32.
+    /// is sha256.
     #[serde(default)]
     pub piece_digest_algorithm: PieceDigestAlgorithm,
 
@@ -2461,7 +2462,10 @@ mod tests {
         }
 
         assert!(serde_json::from_str::<PieceDigestAlgorithm>("\"md5\"").is_err());
-        assert_eq!(PieceDigestAlgorithm::default(), PieceDigestAlgorithm::Crc32);
+        assert_eq!(
+            PieceDigestAlgorithm::default(),
+            PieceDigestAlgorithm::Sha256
+        );
     }
 
     #[test]
@@ -2476,7 +2480,7 @@ mod tests {
                         "quicPort": 4006
                     },
                     "writebackMode": "sync",
-                    "pieceDigestAlgorithm": "sha256",
+                    "pieceDigestAlgorithm": "crc32",
                     "dir": "/tmp/storage",
                     "keep": true,
                     "writePieceTimeout": "20s",
@@ -2490,7 +2494,7 @@ mod tests {
                     assert!(storage.server.tcp_fastopen);
                     assert_eq!(storage.server.quic_port, 4006);
                     assert_eq!(storage.writeback_mode, WritebackMode::Sync);
-                    assert_eq!(storage.piece_digest_algorithm, PieceDigestAlgorithm::Sha256);
+                    assert_eq!(storage.piece_digest_algorithm, PieceDigestAlgorithm::Crc32);
                     assert_eq!(storage.dir, PathBuf::from("/tmp/storage"));
                     assert!(storage.keep);
                     assert_eq!(storage.write_piece_timeout, Duration::from_secs(20));
@@ -2505,7 +2509,7 @@ mod tests {
                 assert!(!storage.server.tcp_fastopen);
                 assert_eq!(storage.server.quic_port, 4006);
                 assert_eq!(storage.writeback_mode, WritebackMode::Async);
-                assert_eq!(storage.piece_digest_algorithm, PieceDigestAlgorithm::Crc32);
+                assert_eq!(storage.piece_digest_algorithm, PieceDigestAlgorithm::Sha256);
                 assert_eq!(storage.dir, crate::default_storage_dir());
                 assert!(!storage.keep);
                 assert_eq!(storage.write_piece_timeout, Duration::from_secs(360));
