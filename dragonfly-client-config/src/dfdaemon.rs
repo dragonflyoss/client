@@ -183,6 +183,13 @@ fn default_back_to_source_concurrent_piece_count() -> u32 {
     8
 }
 
+/// Returns whether to verify the downloaded OCI blobs against the digest in
+/// their URL by default.
+#[inline]
+fn default_download_verify_blob_digest() -> bool {
+    true
+}
+
 /// Returns the default max retries for backend request, default is 1.
 #[inline]
 fn default_backend_max_retries() -> u32 {
@@ -545,6 +552,15 @@ pub struct Download {
     #[serde(default = "default_back_to_source_concurrent_piece_count")]
     #[validate(range(min = 1))]
     pub back_to_source_concurrent_piece_count: u32,
+
+    /// Indicates whether to verify an OCI blob downloaded to an output path
+    /// against the digest in its URL when the request carries no digest.
+    /// The piece digests are announced by the parent serving the pieces, so
+    /// they detect corruption but not a malicious parent, the digest of the
+    /// blob is the trust anchor of its content. On a mismatch the task is
+    /// deleted from the local storage so it is not served to other peers.
+    #[serde(default = "default_download_verify_blob_digest")]
+    pub verify_blob_digest: bool,
 }
 
 /// Implement Default for Download.
@@ -559,6 +575,7 @@ impl Default for Download {
             collected_piece_timeout: default_collected_download_piece_timeout(),
             concurrent_piece_count: default_download_concurrent_piece_count(),
             back_to_source_concurrent_piece_count: default_back_to_source_concurrent_piece_count(),
+            verify_blob_digest: default_download_verify_blob_digest(),
         }
     }
 }
@@ -1025,6 +1042,27 @@ pub enum WritebackMode {
     Off,
 }
 
+/// PieceDigestAlgorithm is the algorithm of the digests calculated for the
+/// pieces written to the storage.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PieceDigestAlgorithm {
+    /// Crc32 calculates CRC32 piece digests. It detects accidental corruption
+    /// only, and the pieces downloaded from parents are verified with the
+    /// algorithm of the digest announced by the parent, so a node keeps
+    /// interoperating with parents that calculate SHA-256 piece digests.
+    #[default]
+    Crc32,
+
+    /// Sha256 calculates SHA-256 piece digests, and the pieces downloaded from
+    /// parents must carry a SHA-256 digest, a CRC32 digest announced by a
+    /// parent is rejected instead of downgrading the verification. Enable it
+    /// on every node of the cluster after all of them run a version that
+    /// understands SHA-256 piece digests, older nodes fail to verify the
+    /// pieces downloaded from the nodes that enabled it.
+    Sha256,
+}
+
 /// The storage configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -1035,6 +1073,11 @@ pub struct Storage {
     /// The writeback mode for written piece ranges, default is async.
     #[serde(default)]
     pub writeback_mode: WritebackMode,
+
+    /// The algorithm of the digests calculated for the written pieces, default
+    /// is crc32.
+    #[serde(default)]
+    pub piece_digest_algorithm: PieceDigestAlgorithm,
 
     /// The directory to store task's metadata and content.
     #[serde(default = "crate::default_storage_dir")]
@@ -1108,6 +1151,7 @@ impl Default for Storage {
         Storage {
             server: StorageServer::default(),
             writeback_mode: WritebackMode::default(),
+            piece_digest_algorithm: PieceDigestAlgorithm::default(),
             dir: crate::default_storage_dir(),
             keep: default_storage_keep(),
             write_piece_timeout: default_storage_write_piece_timeout(),
@@ -1997,7 +2041,8 @@ mod tests {
                     "pieceTimeout": "30s",
                     "collectedPieceTimeout": "40s",
                     "concurrentPieceCount": 10,
-                    "backToSourceConcurrentPieceCount": 4
+                    "backToSourceConcurrentPieceCount": 4,
+                    "verifyBlobDigest": false
                 }"#,
                 |download| {
                     assert_eq!(
@@ -2013,6 +2058,7 @@ mod tests {
                     assert_eq!(download.collected_piece_timeout, Duration::from_secs(40));
                     assert_eq!(download.concurrent_piece_count, 10);
                     assert_eq!(download.back_to_source_concurrent_piece_count, 4);
+                    assert!(!download.verify_blob_digest);
                 },
             ),
             ("{}", |download| {
@@ -2029,6 +2075,7 @@ mod tests {
                 assert_eq!(download.collected_piece_timeout, Duration::from_secs(360));
                 assert_eq!(download.concurrent_piece_count, 8);
                 assert_eq!(download.back_to_source_concurrent_piece_count, 8);
+                assert!(download.verify_blob_digest);
             }),
         ];
 
@@ -2402,6 +2449,22 @@ mod tests {
     }
 
     #[test]
+    fn piece_digest_algorithm_deserializes_from_lowercase_name() {
+        let test_cases = vec![
+            ("\"crc32\"", PieceDigestAlgorithm::Crc32),
+            ("\"sha256\"", PieceDigestAlgorithm::Sha256),
+        ];
+
+        for (json, expected) in test_cases {
+            let algorithm: PieceDigestAlgorithm = serde_json::from_str(json).unwrap();
+            assert_eq!(algorithm, expected);
+        }
+
+        assert!(serde_json::from_str::<PieceDigestAlgorithm>("\"md5\"").is_err());
+        assert_eq!(PieceDigestAlgorithm::default(), PieceDigestAlgorithm::Crc32);
+    }
+
+    #[test]
     fn storage_deserializes_fields_and_defaults() {
         let test_cases: Vec<(&str, fn(&Storage))> = vec![
             (
@@ -2413,6 +2476,7 @@ mod tests {
                         "quicPort": 4006
                     },
                     "writebackMode": "sync",
+                    "pieceDigestAlgorithm": "sha256",
                     "dir": "/tmp/storage",
                     "keep": true,
                     "writePieceTimeout": "20s",
@@ -2426,6 +2490,7 @@ mod tests {
                     assert!(storage.server.tcp_fastopen);
                     assert_eq!(storage.server.quic_port, 4006);
                     assert_eq!(storage.writeback_mode, WritebackMode::Sync);
+                    assert_eq!(storage.piece_digest_algorithm, PieceDigestAlgorithm::Sha256);
                     assert_eq!(storage.dir, PathBuf::from("/tmp/storage"));
                     assert!(storage.keep);
                     assert_eq!(storage.write_piece_timeout, Duration::from_secs(20));
@@ -2440,6 +2505,7 @@ mod tests {
                 assert!(!storage.server.tcp_fastopen);
                 assert_eq!(storage.server.quic_port, 4006);
                 assert_eq!(storage.writeback_mode, WritebackMode::Async);
+                assert_eq!(storage.piece_digest_algorithm, PieceDigestAlgorithm::Crc32);
                 assert_eq!(storage.dir, crate::default_storage_dir());
                 assert!(!storage.keep);
                 assert_eq!(storage.write_piece_timeout, Duration::from_secs(360));
