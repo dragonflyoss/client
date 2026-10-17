@@ -191,6 +191,59 @@ impl FromStr for Digest {
     }
 }
 
+/// Hasher calculates the digest of a stream of data with an algorithm chosen
+/// at runtime.
+pub enum Hasher {
+    /// CRC32 hasher.
+    Crc32(crc32fast::Hasher),
+
+    /// SHA-256 hasher.
+    Sha256(sha2::Sha256),
+
+    /// SHA-512 hasher.
+    Sha512(sha2::Sha512),
+}
+
+/// Implements the Hasher.
+impl Hasher {
+    /// Creates a new hasher for the algorithm.
+    pub fn new(algorithm: Algorithm) -> Self {
+        match algorithm {
+            Algorithm::Crc32 => Hasher::Crc32(crc32fast::Hasher::new()),
+            Algorithm::Sha256 => Hasher::Sha256(sha2::Sha256::new()),
+            Algorithm::Sha512 => Hasher::Sha512(sha2::Sha512::new()),
+        }
+    }
+
+    /// Returns the algorithm of the hasher.
+    pub fn algorithm(&self) -> Algorithm {
+        match self {
+            Hasher::Crc32(_) => Algorithm::Crc32,
+            Hasher::Sha256(_) => Algorithm::Sha256,
+            Hasher::Sha512(_) => Algorithm::Sha512,
+        }
+    }
+
+    /// Feeds the data into the hasher.
+    pub fn update(&mut self, data: &[u8]) {
+        match self {
+            Hasher::Crc32(hasher) => hasher.update(data),
+            Hasher::Sha256(hasher) => Sha2Digest::update(hasher, data),
+            Hasher::Sha512(hasher) => Sha2Digest::update(hasher, data),
+        }
+    }
+
+    /// Returns the encoded digest of the data fed into the hasher, in the
+    /// same encoding as calculate_file_digest.
+    pub fn finalize(self) -> String {
+        match self {
+            Hasher::Crc32(hasher) => hasher.finalize().to_string(),
+            Hasher::Sha256(hasher) => hex::encode(hasher.finalize()),
+            Hasher::Sha512(hasher) => hex::encode(hasher.finalize()),
+        }
+    }
+}
+
 /// Calculates the digest of a file.
 #[instrument(level = "debug", skip_all)]
 pub fn calculate_file_digest(algorithm: Algorithm, path: &Path) -> ClientResult<Digest> {
@@ -249,6 +302,24 @@ mod tests {
 
     use super::*;
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn hasher_matches_calculate_file_digest() {
+        let data = b"Hello, world!";
+        let mut file = NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut file, data).unwrap();
+
+        for algorithm in [Algorithm::Crc32, Algorithm::Sha256, Algorithm::Sha512] {
+            // Feed the data in uneven chunks.
+            let mut hasher = Hasher::new(algorithm);
+            assert_eq!(hasher.algorithm(), algorithm);
+            hasher.update(&data[..3]);
+            hasher.update(&data[3..]);
+
+            let expected = calculate_file_digest(algorithm, file.path()).unwrap();
+            assert_eq!(hasher.finalize(), expected.encoded());
+        }
+    }
 
     #[test]
     fn is_blob_url_matches_oci_blob_urls() {
