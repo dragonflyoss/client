@@ -33,7 +33,10 @@ use dragonfly_client_metric::{
 use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
     shutdown,
-    tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
+    tls::{
+        generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs,
+        new_client_tls_config, new_client_tls_config_with_roots,
+    },
 };
 use futures::TryStreamExt;
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, StreamBody};
@@ -48,7 +51,7 @@ use hyper_util::{
 };
 use leaky_bucket::RateLimiter;
 use rcgen::Certificate;
-use rustls::{RootCertStore, ServerConfig};
+use rustls::ServerConfig;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, LazyLock};
@@ -126,20 +129,11 @@ impl Proxy {
         };
 
         let client_config_builder = match registry_cert {
-            Some(registry_cert) => {
-                let mut root_cert_store = RootCertStore::empty();
-                root_cert_store.add_parsable_certificates(registry_cert);
-
-                // TLS client config using the custom CA store for lookups.
-                rustls::ClientConfig::builder()
-                    .with_root_certificates(root_cert_store)
-                    .with_no_client_auth()
-            }
-            // Default TLS client config with native roots.
-            None => rustls::ClientConfig::builder()
-                .dangerous()
-                .with_custom_certificate_verifier(NoVerifier::new())
-                .with_no_client_auth(),
+            // TLS client config using the custom CA store for lookups.
+            Some(registry_cert) => new_client_tls_config_with_roots(registry_cert),
+            // Default TLS client config verifying against the native roots, unless
+            // the verification is explicitly skipped.
+            None => new_client_tls_config(config.proxy.registry_mirror.insecure_skip_verify),
         };
 
         let mut proxy = Self {
