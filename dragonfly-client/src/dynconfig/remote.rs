@@ -26,8 +26,9 @@ use dragonfly_client_util::net::format_url;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
+use tokio::task::JoinSet;
 use tonic_health::pb::health_check_response::ServingStatus;
-use tracing::{error, instrument};
+use tracing::{error, instrument, Instrument};
 use url::Url;
 
 /// Remote backend of the dynamic configuration, fetching it from the manager.
@@ -53,9 +54,8 @@ impl Remote {
     #[instrument(skip_all)]
     pub async fn refresh(&self) -> Result<Data> {
         let schedulers = self.list_schedulers().await?;
-        let available_schedulers = self
-            .get_available_schedulers(&schedulers.schedulers)
-            .await?;
+        let available_schedulers =
+            Self::get_available_schedulers(&self.config, &schedulers.schedulers).await;
 
         let Some(available_scheduler) = available_schedulers.first() else {
             return Err(Error::AvailableSchedulersNotFound);
@@ -125,66 +125,190 @@ impl Remote {
     /// Gets the available schedulers by checking the health of each scheduler and filtering out
     /// the unhealthy ones. If scheduler_cluster_id is specified, only returns the schedulers of
     /// the specified scheduler cluster.
+    /// Checks the health of the schedulers concurrently and returns the serving
+    /// ones in the order of the manager, limited to the scheduler cluster of the
+    /// first serving scheduler.
     #[instrument(skip_all)]
-    async fn get_available_schedulers(&self, schedulers: &[Scheduler]) -> Result<Vec<Scheduler>> {
-        let mut available_schedulers: Vec<Scheduler> = Vec::new();
-        let mut available_scheduler_cluster_id: Option<u64> = None;
-        for scheduler in schedulers {
-            // If scheduler_cluster_id is specified, only return the schedulers
-            // of the specified scheduler cluster.
-            if let Some(scheduler_cluster_id) = available_scheduler_cluster_id {
-                if scheduler.scheduler_cluster_id != scheduler_cluster_id {
-                    continue;
+    async fn get_available_schedulers(
+        config: &Arc<Config>,
+        schedulers: &[Scheduler],
+    ) -> Vec<Scheduler> {
+        let mut join_set = JoinSet::new();
+        for (i, scheduler) in schedulers.iter().enumerate() {
+            let config = config.clone();
+            let scheduler = scheduler.clone();
+            join_set.spawn(
+                async move {
+                    (
+                        i,
+                        Self::check_health(&config, &scheduler)
+                            .await
+                            .then_some(scheduler),
+                    )
                 }
-            }
-
-            let addr = format_url(
-                self.config.scheduler.scheme(),
-                IpAddr::from_str(&scheduler.ip)?,
-                scheduler.port as u16,
+                .in_current_span(),
             );
-            let domain_name = Url::parse(addr.as_str())?
-                .host_str()
-                .ok_or(Error::InvalidParameter)
-                .inspect_err(|_err| {
-                    error!("invalid address: {}", addr);
-                })?
-                .to_string();
+        }
 
-            // Check the health of the scheduler.
-            let health_client = match HealthClient::new(
-                &addr,
-                self.config
-                    .scheduler
-                    .load_client_tls_config(domain_name.as_str())
-                    .await?,
-            )
-            .await
-            {
-                Ok(client) => client,
-                Err(err) => {
-                    error!(
-                        "create health client for scheduler {}:{} failed: {}",
-                        scheduler.ip, scheduler.port, err
-                    );
-                    continue;
-                }
-            };
-
-            match health_client.check().await {
-                Ok(resp) => {
-                    if resp.status == ServingStatus::Serving as i32 {
-                        available_schedulers.push(scheduler.clone());
-                        available_scheduler_cluster_id = Some(scheduler.scheduler_cluster_id);
-                    }
-                }
-                Err(err) => {
-                    error!("check scheduler health failed: {}", err);
-                    continue;
-                }
+        let mut healthy = vec![None; schedulers.len()];
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok((i, scheduler)) => healthy[i] = scheduler,
+                Err(err) => error!("check scheduler health failed: {}", err),
             }
         }
 
-        Ok(available_schedulers)
+        let mut available_schedulers = Vec::new();
+        let mut available_scheduler_cluster_id = None;
+        for scheduler in healthy.into_iter().flatten() {
+            if available_scheduler_cluster_id.is_some_and(|id| scheduler.scheduler_cluster_id != id)
+            {
+                continue;
+            }
+
+            available_scheduler_cluster_id = Some(scheduler.scheduler_cluster_id);
+            available_schedulers.push(scheduler);
+        }
+
+        available_schedulers
+    }
+
+    /// Returns whether the scheduler is serving, a scheduler that cannot be
+    /// addressed or checked is logged and treated as not serving.
+    async fn check_health(config: &Config, scheduler: &Scheduler) -> bool {
+        let ip = match IpAddr::from_str(&scheduler.ip) {
+            Ok(ip) => ip,
+            Err(err) => {
+                error!(
+                    "invalid ip {} of scheduler {}: {}",
+                    scheduler.ip, scheduler.hostname, err
+                );
+                return false;
+            }
+        };
+
+        let addr = format_url(config.scheduler.scheme(), ip, scheduler.port as u16);
+        let Some(domain_name) = Url::parse(&addr)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_string))
+        else {
+            error!("invalid address: {}", addr);
+            return false;
+        };
+
+        let client_tls_config = match config.scheduler.load_client_tls_config(&domain_name).await {
+            Ok(client_tls_config) => client_tls_config,
+            Err(err) => {
+                error!(
+                    "load client tls config for scheduler {} failed: {}",
+                    addr, err
+                );
+                return false;
+            }
+        };
+
+        let health_client = match HealthClient::new(&addr, client_tls_config).await {
+            Ok(health_client) => health_client,
+            Err(err) => {
+                error!(
+                    "create health client for scheduler {} failed: {}",
+                    addr, err
+                );
+                return false;
+            }
+        };
+
+        match health_client.check().await {
+            Ok(resp) if resp.status == ServingStatus::Serving as i32 => true,
+            Ok(resp) => {
+                error!("scheduler {} is not serving: {}", addr, resp.status);
+                false
+            }
+            Err(err) => {
+                error!("check scheduler {} health failed: {}", addr, err);
+                false
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::SocketAddr;
+    use tokio_stream::wrappers::TcpListenerStream;
+
+    async fn spawn_health_server() -> SocketAddr {
+        let (health_reporter, health_service) = tonic_health::server::health_reporter();
+        health_reporter
+            .set_service_status("", tonic_health::ServingStatus::Serving)
+            .await;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(health_service)
+                .serve_with_incoming(TcpListenerStream::new(listener))
+                .await
+                .unwrap();
+        });
+
+        addr
+    }
+
+    fn scheduler(hostname: &str, ip: &str, port: u16, scheduler_cluster_id: u64) -> Scheduler {
+        Scheduler {
+            hostname: hostname.to_string(),
+            ip: ip.to_string(),
+            port: port as i32,
+            scheduler_cluster_id,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn get_available_schedulers_keeps_the_cluster_of_the_first_serving_scheduler() {
+        let config = Arc::new(Config::default());
+        let serving_a = spawn_health_server().await;
+        let serving_b = spawn_health_server().await;
+        let serving_c = spawn_health_server().await;
+
+        let test_cases = vec![
+            (
+                vec![
+                    scheduler("scheduler-a", "127.0.0.1", serving_a.port(), 1),
+                    scheduler("scheduler-b", "127.0.0.1", serving_b.port(), 2),
+                    scheduler("scheduler-c", "127.0.0.1", serving_c.port(), 1),
+                ],
+                vec!["scheduler-a", "scheduler-c"],
+            ),
+            (
+                vec![
+                    scheduler("scheduler-dead", "127.0.0.1", 1, 1),
+                    scheduler("scheduler-b", "127.0.0.1", serving_b.port(), 2),
+                    scheduler("scheduler-a", "127.0.0.1", serving_a.port(), 1),
+                ],
+                vec!["scheduler-b"],
+            ),
+            (
+                vec![
+                    scheduler("scheduler-invalid", "invalid", serving_a.port(), 1),
+                    scheduler("scheduler-a", "127.0.0.1", serving_a.port(), 1),
+                ],
+                vec!["scheduler-a"],
+            ),
+            (vec![scheduler("scheduler-dead", "127.0.0.1", 1, 1)], vec![]),
+            (vec![], vec![]),
+        ];
+
+        for (schedulers, expected) in test_cases {
+            let available_schedulers = Remote::get_available_schedulers(&config, &schedulers).await;
+            let hostnames: Vec<&str> = available_schedulers
+                .iter()
+                .map(|scheduler| scheduler.hostname.as_str())
+                .collect();
+            assert_eq!(hostnames, expected);
+        }
     }
 }
