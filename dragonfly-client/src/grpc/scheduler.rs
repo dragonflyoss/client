@@ -35,7 +35,7 @@ use dragonfly_api::scheduler::v2::{
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error, Result};
-use hashring::HashRing;
+use dragonfly_hashring::VNodeHashRing;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
@@ -55,18 +55,39 @@ use super::interceptor::InjectTracingInterceptor;
 /// that a server or an intermediate proxy may advertise.
 const CONNECTION_POOL_SIZE: usize = 10;
 
-/// Virtual node of the hashring.
-#[derive(Debug, Copy, Clone, Hash, PartialEq)]
-struct VNode {
-    /// Address of the virtual node.
-    addr: SocketAddr,
+/// Available schedulers keyed by hostname. The fields are replaced together on
+/// every refresh, so a lookup never observes a hostname without an address.
+struct AvailableSchedulers {
+    /// Addresses of the schedulers keyed by hostname.
+    addrs: HashMap<String, SocketAddr>,
+
+    /// Hashring of the scheduler hostnames.
+    hashring: VNodeHashRing,
 }
 
-/// Implements the Display trait.
-impl std::fmt::Display for VNode {
-    /// Formats the virtual node.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.addr)
+/// Implements the available schedulers.
+impl AvailableSchedulers {
+    /// Creates the available schedulers from the addresses keyed by hostname.
+    ///
+    /// The hashring is keyed by hostname rather than address, so that a scheduler
+    /// keeps its position when its ip changes, refer to
+    /// https://github.com/grpc/proposal/blob/master/A76-ring-hash-improvements.md.
+    fn new(addrs: HashMap<String, SocketAddr>) -> Self {
+        let mut hashring = VNodeHashRing::new();
+        for hostname in addrs.keys() {
+            hashring.add(hostname.clone());
+        }
+
+        Self { addrs, hashring }
+    }
+
+    /// Returns the address of the scheduler responsible for the task, and `None`
+    /// when no scheduler is available.
+    fn addr(&self, task_id: &str) -> Option<SocketAddr> {
+        self.hashring
+            .get(task_id)
+            .and_then(|vnode| self.addrs.get(vnode.name()))
+            .copied()
     }
 }
 
@@ -80,13 +101,7 @@ pub struct SchedulerClient {
     dynconfig: Arc<Dynconfig>,
 
     /// Available schedulers.
-    available_schedulers: Arc<RwLock<Vec<Scheduler>>>,
-
-    /// Addresses of available schedulers.
-    available_scheduler_addrs: Arc<RwLock<Vec<SocketAddr>>>,
-
-    /// Hashring of the scheduler.
-    hashring: Arc<RwLock<HashRing<VNode>>>,
+    available_schedulers: Arc<RwLock<AvailableSchedulers>>,
 
     /// Channels of the available schedulers, keyed by the scheduler address.
     channels: Arc<RwLock<HashMap<SocketAddr, Channel>>>,
@@ -99,9 +114,7 @@ impl SchedulerClient {
         let client = Self {
             config,
             dynconfig,
-            available_schedulers: Arc::new(RwLock::new(Vec::new())),
-            available_scheduler_addrs: Arc::new(RwLock::new(Vec::new())),
-            hashring: Arc::new(RwLock::new(HashRing::new())),
+            available_schedulers: Arc::new(RwLock::new(AvailableSchedulers::new(HashMap::new()))),
             channels: Arc::new(RwLock::new(HashMap::new())),
         };
 
@@ -183,11 +196,7 @@ impl SchedulerClient {
 
         // Announce the host to the scheduler.
         let mut join_set = JoinSet::new();
-        let available_scheduler_addrs = self.available_scheduler_addrs.read().await;
-        let available_scheduler_addrs_clone = available_scheduler_addrs.clone();
-        drop(available_scheduler_addrs);
-
-        for available_scheduler_addr in available_scheduler_addrs_clone.iter() {
+        for available_scheduler_addr in self.available_scheduler_addrs().await {
             let request = Self::make_request(request.clone());
             async fn announce_host(
                 scheduler_client: SchedulerClient,
@@ -207,7 +216,7 @@ impl SchedulerClient {
             }
 
             join_set.spawn(
-                announce_host(self.clone(), *available_scheduler_addr, request).in_current_span(),
+                announce_host(self.clone(), available_scheduler_addr, request).in_current_span(),
             );
         }
 
@@ -229,11 +238,7 @@ impl SchedulerClient {
     #[instrument(level = "debug", skip(self))]
     pub async fn init_announce_host(&self, request: AnnounceHostRequest) -> Result<()> {
         let mut join_set = JoinSet::new();
-        let available_scheduler_addrs = self.available_scheduler_addrs.read().await;
-        let available_scheduler_addrs_clone = available_scheduler_addrs.clone();
-        drop(available_scheduler_addrs);
-
-        for available_scheduler_addr in available_scheduler_addrs_clone.iter() {
+        for available_scheduler_addr in self.available_scheduler_addrs().await {
             let request = Self::make_request(request.clone());
             async fn announce_host(
                 scheduler_client: SchedulerClient,
@@ -253,7 +258,7 @@ impl SchedulerClient {
             }
 
             join_set.spawn(
-                announce_host(self.clone(), *available_scheduler_addr, request).in_current_span(),
+                announce_host(self.clone(), available_scheduler_addr, request).in_current_span(),
             );
         }
 
@@ -280,11 +285,7 @@ impl SchedulerClient {
 
         // Delete the host from the scheduler.
         let mut join_set = JoinSet::new();
-        let available_scheduler_addrs = self.available_scheduler_addrs.read().await;
-        let available_scheduler_addrs_clone = available_scheduler_addrs.clone();
-        drop(available_scheduler_addrs);
-
-        for available_scheduler_addr in available_scheduler_addrs_clone.iter() {
+        for available_scheduler_addr in self.available_scheduler_addrs().await {
             let request = Self::make_request(request.clone());
             async fn delete_host(
                 scheduler_client: SchedulerClient,
@@ -304,7 +305,7 @@ impl SchedulerClient {
             }
 
             join_set.spawn(
-                delete_host(self.clone(), *available_scheduler_addr, request).in_current_span(),
+                delete_host(self.clone(), available_scheduler_addr, request).in_current_span(),
             );
         }
 
@@ -575,14 +576,15 @@ impl SchedulerClient {
         self.update_available_scheduler_addrs().await?;
 
         // Get the scheduler address from the hashring.
-        let addrs = self.hashring.read().await;
-        let addr = *addrs
-            .get(&task_id[0..5].to_string())
+        let addr = self
+            .available_schedulers
+            .read()
+            .await
+            .addr(task_id)
             .ok_or_else(|| Error::HashRing(task_id.to_string()))?;
-        drop(addrs);
-        info!("picked {:?}", addr);
+        info!("picked {}", addr);
 
-        let channel = self.channel(addr.addr).await?;
+        let channel = self.channel(addr).await?;
         Ok(
             SchedulerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
                 .max_decoding_message_size(usize::MAX)
@@ -648,48 +650,27 @@ impl SchedulerClient {
         Ok(channel)
     }
 
-    /// Updates the addresses of available schedulers.
-    #[instrument(level = "debug", skip(self))]
-    async fn update_available_scheduler_addrs(&self) -> Result<()> {
-        // Get the endpoints of available schedulers.
-        let data_available_schedulers_clone = {
-            let data = self.dynconfig.data.read().await;
-            data.available_schedulers.clone()
-        };
+    /// Returns the addresses of the available schedulers.
+    async fn available_scheduler_addrs(&self) -> Vec<SocketAddr> {
+        self.available_schedulers
+            .read()
+            .await
+            .addrs
+            .values()
+            .copied()
+            .collect()
+    }
 
-        // Check if the available schedulers is empty.
-        if data_available_schedulers_clone.is_empty() {
-            return Err(Error::AvailableSchedulersNotFound);
-        }
+    /// Returns the addresses of the schedulers keyed by hostname. A hostname
+    /// registered from several addresses keeps the most recently registered one,
+    /// and a static scheduler without a hostname is keyed by its address.
+    fn scheduler_addrs(schedulers: &[Scheduler]) -> HashMap<String, SocketAddr> {
+        let mut schedulers: Vec<&Scheduler> = schedulers.iter().collect();
+        schedulers.sort_by_key(|scheduler| scheduler.id);
 
-        // Get the available schedulers.
-        let available_schedulers_clone = {
-            let available_schedulers = self.available_schedulers.read().await;
-            available_schedulers.clone()
-        };
-
-        // Check if the available schedulers is not changed.
-        if data_available_schedulers_clone.len() == available_schedulers_clone.len()
-            && data_available_schedulers_clone
-                .iter()
-                .zip(available_schedulers_clone.iter())
-                .all(|(a, b)| a == b)
-        {
-            debug!(
-                "available schedulers is not changed: {:?}",
-                data_available_schedulers_clone
-                    .iter()
-                    .map(|s| s.ip.clone())
-                    .collect::<Vec<String>>()
-            );
-            return Ok(());
-        }
-
-        let mut new_available_schedulers = Vec::new();
-        let mut new_available_scheduler_addrs = Vec::new();
-        let mut new_hashring = HashRing::new();
-        for available_scheduler in data_available_schedulers_clone.iter() {
-            let ip = match IpAddr::from_str(&available_scheduler.ip) {
+        let mut addrs = HashMap::with_capacity(schedulers.len());
+        for scheduler in schedulers {
+            let ip = match IpAddr::from_str(&scheduler.ip) {
                 Ok(ip) => ip,
                 Err(err) => {
                     error!("failed to parse ip: {}", err);
@@ -697,45 +678,51 @@ impl SchedulerClient {
                 }
             };
 
-            // Add the scheduler to the available schedulers.
-            new_available_schedulers.push(available_scheduler.clone());
+            let addr = SocketAddr::new(ip, scheduler.port as u16);
+            let hostname = if scheduler.hostname.is_empty() {
+                addr.to_string()
+            } else {
+                scheduler.hostname.clone()
+            };
 
-            // Add the scheduler address to the addresses of available schedulers.
-            let socket_addr = SocketAddr::new(ip, available_scheduler.port as u16);
-            new_available_scheduler_addrs.push(socket_addr);
+            if let Some(stale_addr) = addrs.insert(hostname.clone(), addr) {
+                debug!(
+                    "scheduler {} registered from {} and {}, using {}",
+                    hostname, stale_addr, addr, addr
+                );
+            }
+        }
 
-            // Add the scheduler to the hashring.
-            new_hashring.add(VNode { addr: socket_addr });
+        addrs
+    }
+
+    /// Updates the addresses of available schedulers.
+    #[instrument(level = "debug", skip(self))]
+    async fn update_available_scheduler_addrs(&self) -> Result<()> {
+        // Get the addresses of available schedulers.
+        let addrs = {
+            let data = self.dynconfig.data.read().await;
+            if data.available_schedulers.is_empty() {
+                return Err(Error::AvailableSchedulersNotFound);
+            }
+
+            Self::scheduler_addrs(&data.available_schedulers)
+        };
+
+        // Check if the available schedulers is not changed.
+        if self.available_schedulers.read().await.addrs == addrs {
+            debug!("available schedulers is not changed: {:?}", addrs);
+            return Ok(());
         }
 
         // Remove the channels of the schedulers that are no longer available.
-        let mut channels = self.channels.write().await;
-        channels.retain(|addr, _| new_available_scheduler_addrs.contains(addr));
-        drop(channels);
+        self.channels
+            .write()
+            .await
+            .retain(|addr, _| addrs.values().any(|available_addr| available_addr == addr));
 
-        // Update the available schedulers.
-        let mut available_schedulers = self.available_schedulers.write().await;
-        *available_schedulers = new_available_schedulers;
-        drop(available_schedulers);
-
-        // Update the addresses of available schedulers.
-        let mut available_scheduler_addrs = self.available_scheduler_addrs.write().await;
-        *available_scheduler_addrs = new_available_scheduler_addrs;
-        drop(available_scheduler_addrs);
-
-        // Update the hashring.
-        let mut hashring = self.hashring.write().await;
-        *hashring = new_hashring;
-        drop(hashring);
-
-        let available_scheduler_addrs = self.available_scheduler_addrs.read().await;
-        info!(
-            "refresh available scheduler addresses: {:?}",
-            available_scheduler_addrs
-                .iter()
-                .map(|s| s.ip().to_string())
-                .collect::<Vec<String>>(),
-        );
+        info!("refresh available scheduler addresses: {:?}", addrs);
+        *self.available_schedulers.write().await = AvailableSchedulers::new(addrs);
         Ok(())
     }
 
@@ -754,5 +741,229 @@ impl SchedulerClient {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
         request
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dragonfly_hashring::DEFAULT_VNODES_PER_NODE;
+
+    #[test]
+    fn available_schedulers_keys_hashring_by_hostname() {
+        let test_cases = vec![
+            (
+                vec![
+                    Scheduler {
+                        id: 1,
+                        hostname: "scheduler-0".to_string(),
+                        ip: "10.0.0.1".to_string(),
+                        port: 8002,
+                        ..Default::default()
+                    },
+                    Scheduler {
+                        id: 2,
+                        hostname: "scheduler-1".to_string(),
+                        ip: "10.0.0.2".to_string(),
+                        port: 8002,
+                        ..Default::default()
+                    },
+                ],
+                vec![
+                    ("scheduler-0", "10.0.0.1:8002"),
+                    ("scheduler-1", "10.0.0.2:8002"),
+                ],
+            ),
+            (
+                vec![
+                    Scheduler {
+                        id: 1,
+                        hostname: "scheduler-0".to_string(),
+                        ip: "10.0.0.1".to_string(),
+                        port: 8002,
+                        ..Default::default()
+                    },
+                    Scheduler {
+                        id: 3,
+                        hostname: "scheduler-0".to_string(),
+                        ip: "10.0.0.3".to_string(),
+                        port: 8002,
+                        ..Default::default()
+                    },
+                ],
+                vec![("scheduler-0", "10.0.0.3:8002")],
+            ),
+            (
+                vec![
+                    Scheduler {
+                        id: 1,
+                        hostname: "scheduler-0".to_string(),
+                        ip: "10.0.0.1".to_string(),
+                        port: 8002,
+                        ..Default::default()
+                    },
+                    Scheduler {
+                        id: 2,
+                        hostname: "scheduler-1".to_string(),
+                        ip: "invalid".to_string(),
+                        port: 8002,
+                        ..Default::default()
+                    },
+                ],
+                vec![("scheduler-0", "10.0.0.1:8002")],
+            ),
+            (
+                vec![
+                    Scheduler {
+                        ip: "10.0.0.1".to_string(),
+                        port: 8002,
+                        ..Default::default()
+                    },
+                    Scheduler {
+                        ip: "10.0.0.2".to_string(),
+                        port: 8002,
+                        ..Default::default()
+                    },
+                ],
+                vec![
+                    ("10.0.0.1:8002", "10.0.0.1:8002"),
+                    ("10.0.0.2:8002", "10.0.0.2:8002"),
+                ],
+            ),
+        ];
+
+        for (schedulers, expected) in test_cases {
+            let available_schedulers =
+                AvailableSchedulers::new(SchedulerClient::scheduler_addrs(&schedulers));
+            let expected: HashMap<String, SocketAddr> = expected
+                .into_iter()
+                .map(|(name, addr)| (name.to_string(), addr.parse().unwrap()))
+                .collect();
+
+            assert_eq!(available_schedulers.addrs, expected);
+            assert_eq!(
+                available_schedulers.hashring.len(),
+                expected.len() * DEFAULT_VNODES_PER_NODE
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn available_schedulers_are_replaced_together() {
+        let scheduler = |id: u64, hostname: &str, ip: &str| Scheduler {
+            id,
+            hostname: hostname.to_string(),
+            ip: ip.to_string(),
+            port: 8002,
+            ..Default::default()
+        };
+        let addrs = [
+            SchedulerClient::scheduler_addrs(&[
+                scheduler(1, "scheduler-0", "10.0.0.1"),
+                scheduler(2, "scheduler-1", "10.0.0.2"),
+            ]),
+            SchedulerClient::scheduler_addrs(&[
+                scheduler(3, "scheduler-2", "10.0.0.3"),
+                scheduler(4, "scheduler-3", "10.0.0.4"),
+                scheduler(5, "scheduler-4", "10.0.0.5"),
+            ]),
+            HashMap::new(),
+        ];
+
+        let available_schedulers = Arc::new(RwLock::new(AvailableSchedulers::new(HashMap::new())));
+        let mut join_set = JoinSet::new();
+        for i in 0..4 {
+            let available_schedulers = available_schedulers.clone();
+            let addrs = addrs.clone();
+            join_set.spawn(async move {
+                for j in 0..200 {
+                    *available_schedulers.write().await =
+                        AvailableSchedulers::new(addrs[(i + j) % addrs.len()].clone());
+                    tokio::task::yield_now().await;
+                }
+            });
+        }
+
+        for i in 0..4 {
+            let available_schedulers = available_schedulers.clone();
+            let addrs = addrs.clone();
+            join_set.spawn(async move {
+                for j in 0..1000 {
+                    let available_schedulers = available_schedulers.read().await;
+                    let task_id = format!("task-{i}-{j}");
+                    match available_schedulers.addr(&task_id) {
+                        Some(addr) => {
+                            assert!(addrs.iter().any(|addrs| addrs.values().any(|a| *a == addr)))
+                        }
+                        None => assert!(available_schedulers.hashring.is_empty()),
+                    }
+                    drop(available_schedulers);
+                    tokio::task::yield_now().await;
+                }
+            });
+        }
+
+        while let Some(result) = join_set.join_next().await {
+            result.unwrap();
+        }
+    }
+
+    #[test]
+    fn available_schedulers_keep_hashring_positions_when_ip_changes() {
+        let before = AvailableSchedulers::new(SchedulerClient::scheduler_addrs(&[
+            Scheduler {
+                id: 1,
+                hostname: "scheduler-0".to_string(),
+                ip: "10.0.0.1".to_string(),
+                port: 8002,
+                ..Default::default()
+            },
+            Scheduler {
+                id: 2,
+                hostname: "scheduler-1".to_string(),
+                ip: "10.0.0.2".to_string(),
+                port: 8002,
+                ..Default::default()
+            },
+            Scheduler {
+                id: 3,
+                hostname: "scheduler-2".to_string(),
+                ip: "10.0.0.3".to_string(),
+                port: 8002,
+                ..Default::default()
+            },
+        ]));
+
+        let after = AvailableSchedulers::new(SchedulerClient::scheduler_addrs(&[
+            Scheduler {
+                id: 1,
+                hostname: "scheduler-0".to_string(),
+                ip: "10.0.0.1".to_string(),
+                port: 8002,
+                ..Default::default()
+            },
+            Scheduler {
+                id: 3,
+                hostname: "scheduler-2".to_string(),
+                ip: "10.0.0.3".to_string(),
+                port: 8002,
+                ..Default::default()
+            },
+            Scheduler {
+                id: 4,
+                hostname: "scheduler-1".to_string(),
+                ip: "10.0.0.4".to_string(),
+                port: 8002,
+                ..Default::default()
+            },
+        ]));
+
+        assert_ne!(before.addrs, after.addrs);
+        for task_id in (0..1000).map(|i| format!("task-{i}")) {
+            assert_eq!(
+                before.hashring.get(&task_id).unwrap().name(),
+                after.hashring.get(&task_id).unwrap().name()
+            );
+        }
     }
 }

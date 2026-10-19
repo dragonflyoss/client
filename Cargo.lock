@@ -38,7 +38,7 @@ dependencies = [
  "getrandom 0.2.12",
  "once_cell",
  "version_check",
- "zerocopy",
+ "zerocopy 0.7.32",
 ]
 
 [[package]]
@@ -1288,7 +1288,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "1.5.8"
+version = "1.5.9"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1307,10 +1307,10 @@ dependencies = [
  "dragonfly-client-request",
  "dragonfly-client-storage",
  "dragonfly-client-util",
+ "dragonfly-hashring",
  "fastrand",
  "futures",
  "glob",
- "hashring",
  "http",
  "http-body-util",
  "humantime",
@@ -1366,7 +1366,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-backend"
-version = "1.5.8"
+version = "1.5.9"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1404,7 +1404,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-config"
-version = "1.5.8"
+version = "1.5.9"
 dependencies = [
  "bytesize",
  "bytesize-serde",
@@ -1434,7 +1434,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-core"
-version = "1.5.8"
+version = "1.5.9"
 dependencies = [
  "cgroups-rs",
  "http",
@@ -1454,7 +1454,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-init"
-version = "1.5.8"
+version = "1.5.9"
 dependencies = [
  "anyhow",
  "clap",
@@ -1471,7 +1471,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-metric"
-version = "1.5.8"
+version = "1.5.9"
 dependencies = [
  "bytes",
  "dragonfly-api",
@@ -1525,7 +1525,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-storage"
-version = "1.5.8"
+version = "1.5.9"
 dependencies = [
  "bincode",
  "bytes",
@@ -1560,7 +1560,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-util"
-version = "1.5.8"
+version = "1.5.9"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -1571,8 +1571,8 @@ dependencies = [
  "dashmap",
  "dragonfly-api",
  "dragonfly-client-core",
+ "dragonfly-hashring",
  "fs2",
- "hashring",
  "hex",
  "http",
  "http-range-header",
@@ -1601,6 +1601,15 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "dragonfly-hashring"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50b412c4c2fd0a3d98a8af1a6bc6fcf9268a4c015144b368ae9d82fd0ad3b427"
+dependencies = [
+ "siphasher 1.0.1",
 ]
 
 [[package]]
@@ -2094,7 +2103,7 @@ dependencies = [
 
 [[package]]
 name = "hdfs"
-version = "1.5.8"
+version = "1.5.9"
 dependencies = [
  "async-trait",
  "dragonfly-client-backend",
@@ -2377,7 +2386,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.9",
+ "socket2 0.6.5",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -2727,7 +2736,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -4420,7 +4429,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.5.9",
+ "socket2 0.6.5",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -4461,7 +4470,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.9",
+ "socket2 0.6.5",
  "tracing",
  "windows-sys 0.59.0",
 ]
@@ -4976,7 +4985,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -5064,7 +5073,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -5643,7 +5652,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.3",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -6415,14 +6424,15 @@ checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
 
 [[package]]
 name = "vortex-protocol"
-version = "0.1.5"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77cc873f15ed596526527f21ad43d28fac5936a2259ae6c16e6709fec8c75771"
+checksum = "6d587a15d8a021849ecf96465ff0c6c6ed5203790aaebc21842912b2889dd877"
 dependencies = [
  "bytes",
  "chrono",
  "rand 0.8.5",
  "thiserror 2.0.20",
+ "zerocopy 0.8.63",
 ]
 
 [[package]]
@@ -7265,7 +7275,16 @@ version = "0.7.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "74d4d3961e53fa4c9a25a8637fc2bfaf2595b3d3ae34875568a5cf64787716be"
 dependencies = [
- "zerocopy-derive",
+ "zerocopy-derive 0.7.32",
+]
+
+[[package]]
+name = "zerocopy"
+version = "0.8.63"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5fe1f8f1b06191a00962174c61aa5005e0bb391a6d80d07e24d115c01a92ed8"
+dependencies = [
+ "zerocopy-derive 0.8.63",
 ]
 
 [[package]]
@@ -7273,6 +7292,17 @@ name = "zerocopy-derive"
 version = "0.7.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ce1b18ccd8e73a9321186f97e46f9f04b778851177567b1975109d26a08d2a6"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "zerocopy-derive"
+version = "0.8.63"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "863ad3ac83293fb4d740aedbfdc9240dd8d1a50c1099acd76ce80ce7c7230c7f"
 dependencies = [
  "proc-macro2",
  "quote",

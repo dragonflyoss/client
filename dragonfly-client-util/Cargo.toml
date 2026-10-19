@@ -12,6 +12,7 @@ edition.workspace = true
 [dependencies]
 dragonfly-client-core.workspace = true
 dragonfly-api.workspace = true
+dragonfly-hashring.workspace = true
 async-trait.workspace = true
 http-range-header.workspace = true
 http.workspace = true
@@ -36,7 +37,6 @@ leaky-bucket.workspace = true
 lru.workspace = true
 tokio.workspace = true
 bytes.workspace = true
-hashring.workspace = true
 local-ip-address.workspace = true
 dashmap.workspace = true
 humantime-serde.workspace = true
