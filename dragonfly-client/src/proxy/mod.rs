@@ -471,8 +471,9 @@ pub async fn http_handler(
     ) {
         if request.method() == Method::GET {
             info!(
-                "proxy HTTP request via dfdaemon by rule config: {:?}",
-                request
+                "proxy HTTP request via dfdaemon by rule config: {} {}",
+                request.method(),
+                request.uri()
             );
 
             return proxy_via_dfdaemon(config.clone(), task, dynconfig, rule, request, remote_ip)
@@ -480,8 +481,9 @@ pub async fn http_handler(
         }
 
         debug!(
-            "proxy HTTP request bypassing dfdaemon for non-GET method: {:?}",
-            request
+            "proxy HTTP request bypassing dfdaemon for non-GET method: {} {}",
+            request.method(),
+            request.uri()
         );
     }
 
@@ -489,8 +491,9 @@ pub async fn http_handler(
     // dfdaemon.
     if header::get_use_p2p(request.headers()) {
         info!(
-            "proxy HTTP request via dfdaemon by X-Dragonfly-Use-P2P header: {:?}",
-            request
+            "proxy HTTP request via dfdaemon by X-Dragonfly-Use-P2P header: {} {}",
+            request.method(),
+            request.uri()
         );
 
         if request.method() == Method::GET {
@@ -506,23 +509,26 @@ pub async fn http_handler(
         }
 
         debug!(
-            "proxy HTTP request bypassing dfdaemon for non-GET method: {:?}",
-            request
+            "proxy HTTP request bypassing dfdaemon for non-GET method: {} {}",
+            request.method(),
+            request.uri()
         );
     }
 
     if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
         info!(
-            "proxy HTTPS request directly to remote server: {:?}",
-            request
+            "proxy HTTPS request directly to remote server: {} {}",
+            request.method(),
+            request.uri()
         );
 
         return proxy_via_https(request, https_client).await;
     }
 
     info!(
-        "proxy HTTP request directly to remote server: {:?}",
-        request
+        "proxy HTTP request directly to remote server: {} {}",
+        request.method(),
+        request.uri()
     );
 
     return proxy_via_http(request, http_client).await;
@@ -542,7 +548,11 @@ pub async fn https_handler(
     request_rate_limiter: Arc<RateLimiter>,
     dynconfig: Arc<Dynconfig>,
 ) -> ClientResult<Response> {
-    debug!("handle HTTPS request: {:?}", request);
+    debug!(
+        "handle HTTPS request: {} {}",
+        request.method(),
+        request.uri()
+    );
 
     // Proxy the request directly  to the remote server.
     if let Some(host) = request.uri().host() {
@@ -746,8 +756,9 @@ pub async fn upgraded_handler(
     ) {
         if request.method() == Method::GET {
             info!(
-                "proxy HTTPS request via dfdaemon by rule config: {:?}",
-                request,
+                "proxy HTTPS request via dfdaemon by rule config: {} {}",
+                request.method(),
+                request.uri()
             );
 
             return proxy_via_dfdaemon(config.clone(), task, dynconfig, rule, request, remote_ip)
@@ -755,8 +766,9 @@ pub async fn upgraded_handler(
         }
 
         debug!(
-            "proxy HTTPS request bypassing dfdaemon for non-GET method: {:?}",
-            request,
+            "proxy HTTPS request bypassing dfdaemon for non-GET method: {} {}",
+            request.method(),
+            request.uri()
         );
     }
 
@@ -765,8 +777,9 @@ pub async fn upgraded_handler(
     if header::get_use_p2p(request.headers()) {
         if request.method() == Method::GET {
             info!(
-                "proxy HTTP request via dfdaemon by X-Dragonfly-Use-P2P header: {:?}",
-                request,
+                "proxy HTTP request via dfdaemon by X-Dragonfly-Use-P2P header: {} {}",
+                request.method(),
+                request.uri()
             );
 
             return proxy_via_dfdaemon(
@@ -781,23 +794,26 @@ pub async fn upgraded_handler(
         }
 
         debug!(
-            "proxy HTTPS request bypassing dfdaemon for non-GET method: {:?}",
-            request,
+            "proxy HTTPS request bypassing dfdaemon for non-GET method: {} {}",
+            request.method(),
+            request.uri()
         );
     }
 
     if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
         info!(
-            "proxy HTTPS request directly to remote server: {:?}",
-            request,
+            "proxy HTTPS request directly to remote server: {} {}",
+            request.method(),
+            request.uri()
         );
 
         return proxy_via_https(request, https_client).await;
     }
 
     info!(
-        "proxy HTTP request directly to remote server: {:?}",
-        request,
+        "proxy HTTP request directly to remote server: {} {}",
+        request.method(),
+        request.uri()
     );
 
     return proxy_via_http(request, http_client).await;
