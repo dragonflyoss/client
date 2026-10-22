@@ -148,6 +148,7 @@ impl Backend for Hdfs {
                         message: err.to_string(),
                         status_code: None,
                         header: None,
+                        body: None,
                     }))
                 })?
                 .into_iter()
@@ -177,6 +178,7 @@ impl Backend for Hdfs {
                 message: err.to_string(),
                 status_code: None,
                 header: None,
+                body: None,
             }))
         })?;
 
@@ -194,6 +196,7 @@ impl Backend for Hdfs {
             http_status_code: None,
             error_message: None,
             entries,
+            body: None,
         })
     }
 
@@ -227,6 +230,7 @@ impl Backend for Hdfs {
                     message: err.to_string(),
                     status_code: None,
                     header: None,
+                    body: None,
                 }))
             })?;
 
@@ -244,6 +248,7 @@ impl Backend for Hdfs {
                         message: err.to_string(),
                         status_code: None,
                         header: None,
+                        body: None,
                     }))
                 })?,
             None => operator_reader.into_bytes_stream(..).await.map_err(|err| {
@@ -256,6 +261,7 @@ impl Backend for Hdfs {
                     message: err.to_string(),
                     status_code: None,
                     header: None,
+                    body: None,
                 }))
             })?,
         };
