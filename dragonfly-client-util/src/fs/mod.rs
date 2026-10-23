@@ -15,6 +15,7 @@
  */
 
 use dragonfly_client_core::Result;
+use std::path::Path;
 use tokio::fs;
 
 pub mod fd;
@@ -203,10 +204,30 @@ pub async fn sync_file_range(f: &std::fs::File, offset: u64, length: u64) -> Res
     Ok(())
 }
 
+/// Writes the contents to the file only when they differ from the current contents, and
+/// returns whether the file was written. Callers use it to restart a service only when its
+/// configuration file actually changed.
+pub async fn write_if_changed<P: AsRef<Path>, C: AsRef<[u8]>>(
+    path: P,
+    contents: C,
+) -> Result<bool> {
+    let path = path.as_ref();
+    let contents = contents.as_ref();
+    match fs::read(path).await {
+        Ok(current) if current == contents => return Ok(false),
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
+    }
+
+    fs::write(path, contents).await?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use tempfile::tempdir;
 
     const CONTENT: &[u8] = b"hello, world!";
@@ -283,6 +304,25 @@ mod tests {
         for (offset, length) in test_cases {
             sync_file_range(&f, offset, length).await.unwrap();
             assert_eq!(std::fs::read(&path).unwrap(), CONTENT);
+        }
+    }
+
+    #[tokio::test]
+    async fn write_if_changed_writes_only_different_contents() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("config");
+
+        // (contents, expected written)
+        let test_cases = vec![
+            (b"a".as_slice(), true),
+            (b"a".as_slice(), false),
+            (b"b".as_slice(), true),
+            (b"b".as_slice(), false),
+        ];
+
+        for (contents, expected) in test_cases {
+            assert_eq!(write_if_changed(&path, contents).await.unwrap(), expected);
+            assert_eq!(std::fs::read(&path).unwrap(), contents);
         }
     }
 

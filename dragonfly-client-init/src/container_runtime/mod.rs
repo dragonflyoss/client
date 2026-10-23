@@ -16,6 +16,8 @@
 
 use dragonfly_client_config::dfinit::{Config, ContainerRuntimeConfig};
 use dragonfly_client_core::Result;
+use std::path::PathBuf;
+use tokio::fs;
 use tracing::{info, instrument};
 
 pub mod containerd;
@@ -34,29 +36,51 @@ enum Engine {
 
 /// Represents the container runtime manager.
 pub struct ContainerRuntime {
+    /// The container runtime engine to initialize, if configured.
     engine: Option<Engine>,
+
+    /// The path of the sentinel file created when the container runtime has to be
+    /// restarted for the configuration to take effect, like /run/reboot-required
+    /// on Debian. It is consumed by the restart-container-runtime init container.
+    restart_sentinel: PathBuf,
 }
 
 /// Implements the container runtime manager.
 impl ContainerRuntime {
     /// Creates a new container runtime manager.
     #[instrument(skip_all)]
-    pub fn new(config: &Config) -> Self {
+    pub fn new(config: &Config, restart_sentinel: PathBuf) -> Self {
         Self {
             engine: Self::get_engine(config),
+            restart_sentinel,
         }
     }
 
-    /// Runs the container runtime to initialize runtime environment for the dfdaemon.
+    /// Runs the container runtime to initialize runtime environment for the dfdaemon, and
+    /// creates the restart sentinel only when a configuration file the runtime does not
+    /// reload was rewritten, so an unchanged runtime is never restarted.
     #[instrument(skip_all)]
     pub async fn run(&self) -> Result<()> {
-        match &self.engine {
-            None => Ok(()),
-            Some(Engine::Containerd(containerd)) => containerd.run().await,
-            Some(Engine::Docker(docker)) => docker.run().await,
-            Some(Engine::Crio(crio)) => crio.run().await,
-            Some(Engine::Podman(podman)) => podman.run().await,
+        let restart_required = match &self.engine {
+            None => false,
+            Some(Engine::Containerd(containerd)) => containerd.run().await?,
+            Some(Engine::Docker(docker)) => docker.run().await?,
+            Some(Engine::Crio(crio)) => crio.run().await?,
+            Some(Engine::Podman(podman)) => podman.run().await?,
+        };
+
+        if restart_required {
+            if let Some(parent) = self.restart_sentinel.parent() {
+                fs::create_dir_all(parent).await?;
+            }
+            fs::write(&self.restart_sentinel, b"").await?;
+            info!(
+                "container runtime restart required, created sentinel {}",
+                self.restart_sentinel.display()
+            );
         }
+
+        Ok(())
     }
 
     /// Returns the runtime engine from the config.
@@ -117,19 +141,77 @@ mod tests {
         ];
 
         for (container_runtime_config, expect) in test_cases {
-            let runtime = ContainerRuntime::new(&Config {
-                container_runtime: dfinit::ContainerRuntime {
-                    config: container_runtime_config,
+            let runtime = ContainerRuntime::new(
+                &Config {
+                    container_runtime: dfinit::ContainerRuntime {
+                        config: container_runtime_config,
+                    },
+                    ..Default::default()
                 },
-                ..Default::default()
-            });
+                PathBuf::default(),
+            );
             expect(runtime.engine.as_ref());
         }
     }
 
     #[tokio::test]
     async fn run_returns_ok_without_engine() {
-        let runtime = ContainerRuntime::new(&Config::default());
+        let temp_dir = tempfile::tempdir().unwrap();
+        let restart_sentinel = temp_dir.path().join("restart-required");
+        let runtime = ContainerRuntime::new(&Config::default(), restart_sentinel.clone());
         assert!(runtime.run().await.is_ok());
+        assert!(!restart_sentinel.exists());
+    }
+
+    #[tokio::test]
+    async fn run_creates_restart_sentinel_only_when_config_rewritten() {
+        // (containerd config, expected sentinel)
+        let test_cases = vec![
+            // config_path is set, hosts.toml is reloaded by containerd without a restart.
+            (
+                r#"
+[plugins."io.containerd.grpc.v1.cri".registry]
+  config_path = "{certs_dir}"
+"#,
+                false,
+            ),
+            // config_path is not set, config.toml is rewritten and containerd must restart.
+            (
+                r#"
+[plugins."io.containerd.grpc.v1.cri"]
+"#,
+                true,
+            ),
+        ];
+
+        for (containerd_config, expected) in test_cases {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let config_path = temp_dir.path().join("config.toml");
+            let certs_dir = temp_dir.path().join("certs.d");
+            fs::write(
+                &config_path,
+                containerd_config.replace("{certs_dir}", certs_dir.to_str().unwrap()),
+            )
+            .await
+            .unwrap();
+            let restart_sentinel = temp_dir.path().join("dfinit").join("restart-required");
+
+            let runtime = ContainerRuntime::new(
+                &Config {
+                    container_runtime: dfinit::ContainerRuntime {
+                        config: Some(ContainerRuntimeConfig::Containerd(dfinit::Containerd {
+                            config_path,
+                            cri_plugin_id: None,
+                            registries: vec![],
+                            proxy_all_registries: false,
+                        })),
+                    },
+                    ..Default::default()
+                },
+                restart_sentinel.clone(),
+            );
+            runtime.run().await.unwrap();
+            assert_eq!(restart_sentinel.exists(), expected);
+        }
     }
 }
