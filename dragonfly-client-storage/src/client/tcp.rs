@@ -18,6 +18,7 @@ use bytes::{Bytes, BytesMut};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use futures::{Stream, StreamExt};
+use rustls_pki_types::ServerName;
 use socket2::{SockRef, TcpKeepalive};
 use std::collections::VecDeque;
 use std::mem::MaybeUninit;
@@ -25,9 +26,10 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Instant;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, Take};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf, Take};
 use tokio::net::TcpStream;
 use tokio::time;
+use tokio_rustls::{client::TlsStream, TlsConnector};
 use tokio_util::io::poll_read_buf;
 use tracing::{debug, error, instrument, Span};
 use vortex_protocol::{
@@ -41,7 +43,7 @@ use vortex_protocol::{
 };
 
 /// The idle connections to a server with the time they became idle.
-type IdleConnections = Arc<Mutex<VecDeque<(TcpStream, Instant)>>>;
+type IdleConnections = Arc<Mutex<VecDeque<(Connection, Instant)>>>;
 
 /// A TCP-based client for tcp storage service.
 #[derive(Clone)]
@@ -55,23 +57,28 @@ pub struct TCPClient {
     /// The idle connections reused by the following piece requests, skipping
     /// the handshake and the slow start of a new connection for every piece.
     idle_connections: IdleConnections,
+
+    /// The connector of the TLS connections, none if mutual TLS is disabled.
+    tls_connector: Option<TlsConnector>,
 }
 
 /// Implements the TCP-based client for tcp storage service.
 impl TCPClient {
-    /// Creates a new TCPClient instance.
-    pub fn new(config: Arc<Config>, addr: String) -> Self {
+    /// Creates a new TCPClient instance. The connections are established over
+    /// TLS with the client configuration if it is some.
+    pub fn new(config: Arc<Config>, addr: String, tls: Option<Arc<rustls::ClientConfig>>) -> Self {
         Self {
             config,
             addr,
             idle_connections: Arc::new(Mutex::new(VecDeque::new())),
+            tls_connector: tls.map(TlsConnector::from),
         }
     }
 
     /// Streams the piece content of the connection, so the storage writes the
     /// chunks without copying them again, and returns the connection to the
     /// idle connections once the content is read completely.
-    fn content_stream(&self, stream: TcpStream, length: u64) -> super::PieceContentStream {
+    fn content_stream(&self, stream: Connection, length: u64) -> super::PieceContentStream {
         ContentStream {
             reader: Some(stream.take(length)),
             buf: BytesMut::new(),
@@ -259,7 +266,7 @@ impl TCPClient {
     /// idle, and receives the response header. An idle connection closed by
     /// the server fails here, so the request is retried once on a new one.
     #[instrument(skip_all)]
-    async fn request(&self, request: Bytes) -> ClientResult<(TcpStream, Header)> {
+    async fn request(&self, request: Bytes) -> ClientResult<(Connection, Header)> {
         if let Some(mut stream) = self.idle_connection() {
             match self.round_trip(&mut stream, &request).await {
                 Ok(header) => return Ok((stream, header)),
@@ -273,14 +280,14 @@ impl TCPClient {
     }
 
     /// Sends the request and receives the response header on the connection.
-    async fn round_trip(&self, stream: &mut TcpStream, request: &Bytes) -> ClientResult<Header> {
+    async fn round_trip(&self, stream: &mut Connection, request: &Bytes) -> ClientResult<Header> {
         self.send_request(stream, request).await?;
         self.recv_header(stream).await
     }
 
     /// Takes the most recently idle connection, closing the ones idle for
     /// longer than the idle timeout and the ones closed by the server.
-    fn idle_connection(&self) -> Option<TcpStream> {
+    fn idle_connection(&self) -> Option<Connection> {
         let mut idle_connections = self.idle_connections.lock().ok()?;
         while idle_connections
             .front()
@@ -301,17 +308,18 @@ impl TCPClient {
     /// Returns whether the idle connection is still open. An idle connection
     /// has nothing to read, so a readable byte or EOF means the server closed
     /// it or the connection is out of sync.
-    fn is_open(stream: &TcpStream) -> bool {
+    fn is_open(stream: &Connection) -> bool {
         let mut buf = [MaybeUninit::<u8>::uninit()];
         matches!(
-            SockRef::from(stream).peek(&mut buf),
+            SockRef::from(stream.tcp()).peek(&mut buf),
             Err(err) if err.kind() == std::io::ErrorKind::WouldBlock
         )
     }
 
-    /// Establishes a TCP connection to the server.
+    /// Establishes a TCP connection to the server, over TLS if mutual TLS is
+    /// enabled.
     #[instrument(skip_all)]
-    async fn connect(&self) -> ClientResult<TcpStream> {
+    async fn connect(&self) -> ClientResult<Connection> {
         let stream = tokio::time::timeout(
             super::DEFAULT_CONNECT_TIMEOUT,
             TcpStream::connect(self.addr.clone()),
@@ -345,12 +353,29 @@ impl TCPClient {
             }
         }
 
-        Ok(stream)
+        let Some(tls_connector) = &self.tls_connector else {
+            return Ok(Connection::Plain(stream));
+        };
+
+        // The certificate of the server is verified against the CA without
+        // checking its name, so the server name is a placeholder.
+        let server_name = ServerName::try_from(crate::tls::SERVER_NAME)
+            .map_err(|err| ClientError::Unknown(err.to_string()))?;
+        let stream = tokio::time::timeout(
+            super::DEFAULT_CONNECT_TIMEOUT,
+            tls_connector.connect(server_name, stream),
+        )
+        .await?
+        .inspect_err(|err| {
+            error!("tls handshake with {} failed: {}", self.addr, err);
+        })?;
+
+        Ok(Connection::Tls(Box::new(stream)))
     }
 
     /// Sends a vortex protocol request on the connection.
     #[instrument(skip_all)]
-    async fn send_request(&self, stream: &mut TcpStream, request: &Bytes) -> ClientResult<()> {
+    async fn send_request(&self, stream: &mut Connection, request: &Bytes) -> ClientResult<()> {
         stream.write_all(request).await.inspect_err(|err| {
             error!("failed to send request: {}", err);
         })?;
@@ -368,7 +393,7 @@ impl TCPClient {
     /// the message type (tag) and payload length. This is critical for
     /// proper protocol message framing.
     #[instrument(skip_all)]
-    async fn recv_header(&self, stream: &mut TcpStream) -> ClientResult<Header> {
+    async fn recv_header(&self, stream: &mut Connection) -> ClientResult<Header> {
         let mut header_bytes = [0u8; HEADER_SIZE];
         stream
             .read_exact(&mut header_bytes)
@@ -386,7 +411,7 @@ impl TCPClient {
     /// piece content: first reading the metadata length, then reading
     /// the actual metadata, and finally constructing the complete message.
     #[instrument(skip_all)]
-    async fn recv_piece_content<T>(&self, stream: &mut TcpStream) -> ClientResult<T>
+    async fn recv_piece_content<T>(&self, stream: &mut Connection) -> ClientResult<T>
     where
         T: Message,
     {
@@ -417,7 +442,7 @@ impl TCPClient {
     /// the error payload and converts it into an appropriate client error.
     /// This provides structured error handling for protocol-level failures.
     #[instrument(skip_all)]
-    async fn recv_error(&self, stream: &mut TcpStream, header_length: usize) -> ClientError {
+    async fn recv_error(&self, stream: &mut Connection, header_length: usize) -> ClientError {
         let mut error_bytes = BytesMut::with_capacity(header_length);
         error_bytes.resize(header_length, 0);
         if let Err(err) = stream.read_exact(&mut error_bytes).await {
@@ -439,7 +464,7 @@ impl TCPClient {
 struct ContentStream {
     /// The connection limited to the content length, none once the content is
     /// read completely or the connection failed.
-    reader: Option<Take<TcpStream>>,
+    reader: Option<Take<Connection>>,
 
     /// The buffer the chunks are read into.
     buf: BytesMut,
@@ -489,6 +514,66 @@ impl Stream for ContentStream {
         }
 
         Poll::Ready(Some(Ok(this.buf.split().freeze())))
+    }
+}
+
+/// A connection to the server, plain or over TLS.
+enum Connection {
+    /// The plain connection.
+    Plain(TcpStream),
+
+    /// The TLS connection.
+    Tls(Box<TlsStream<TcpStream>>),
+}
+
+/// Implements the Connection.
+impl Connection {
+    /// Returns the underlying TCP stream.
+    fn tcp(&self) -> &TcpStream {
+        match self {
+            Connection::Plain(stream) => stream,
+            Connection::Tls(stream) => stream.get_ref().0,
+        }
+    }
+}
+
+impl AsyncRead for Connection {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Connection::Plain(stream) => Pin::new(stream).poll_read(cx, buf),
+            Connection::Tls(stream) => Pin::new(stream.as_mut()).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for Connection {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            Connection::Plain(stream) => Pin::new(stream).poll_write(cx, buf),
+            Connection::Tls(stream) => Pin::new(stream.as_mut()).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Connection::Plain(stream) => Pin::new(stream).poll_flush(cx),
+            Connection::Tls(stream) => Pin::new(stream.as_mut()).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Connection::Plain(stream) => Pin::new(stream).poll_shutdown(cx),
+            Connection::Tls(stream) => Pin::new(stream.as_mut()).poll_shutdown(cx),
+        }
     }
 }
 
@@ -577,7 +662,7 @@ mod tests {
             let accepted = Arc::new(AtomicUsize::new(0));
             let server = tokio::spawn(serve(listener, requests_per_connection, accepted.clone()));
 
-            let client = TCPClient::new(Arc::new(Config::default()), addr);
+            let client = TCPClient::new(Arc::new(Config::default()), addr, None);
             for number in 0..downloads {
                 assert_eq!(download(&client, number).await, CONTENT);
             }
@@ -598,14 +683,15 @@ mod tests {
         ];
 
         for (written, close_server, read_all, expected_idle, expected_reusable) in test_cases {
-            let client = TCPClient::new(Arc::new(Config::default()), String::new());
+            let client = TCPClient::new(Arc::new(Config::default()), String::new(), None);
             let (stream, mut server) = tcp_pair().await;
             server.write_all(&data[..written]).await.unwrap();
             if close_server {
                 drop(server);
             }
 
-            let mut content_stream = client.content_stream(stream, CONTENT.len() as u64);
+            let mut content_stream =
+                client.content_stream(Connection::Plain(stream), CONTENT.len() as u64);
             let mut received = Vec::new();
             while let Some(chunk) = content_stream.next().await {
                 received.extend_from_slice(&chunk.unwrap());
@@ -642,7 +728,7 @@ mod tests {
         ];
 
         for (connections, expected_some, expected_remaining) in test_cases {
-            let client = TCPClient::new(Arc::new(Config::default()), String::new());
+            let client = TCPClient::new(Arc::new(Config::default()), String::new(), None);
             let mut servers = Vec::new();
             for (idle_for, open) in connections {
                 let (stream, server) = tcp_pair().await;
@@ -657,7 +743,7 @@ mod tests {
                     .idle_connections
                     .lock()
                     .unwrap()
-                    .push_back((stream, Instant::now() - idle_for));
+                    .push_back((Connection::Plain(stream), Instant::now() - idle_for));
             }
 
             assert_eq!(client.idle_connection().is_some(), expected_some);
