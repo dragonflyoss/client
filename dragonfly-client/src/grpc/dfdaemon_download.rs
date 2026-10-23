@@ -207,6 +207,7 @@ impl DfdaemonDownloadServer {
                 service,
                 self.config.download.server.request_rate_limit,
                 self.config.download.server.request_buffer_size,
+                self.config.download.server.max_concurrent_requests,
                 self.bbr.clone(),
             ))
             .serve_with_incoming_shutdown(uds_stream, async move {
