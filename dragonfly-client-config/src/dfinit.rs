@@ -33,6 +33,15 @@ pub fn default_dfinit_config_path() -> PathBuf {
     crate::default_config_dir().join("dfinit.yaml")
 }
 
+/// Returns the default path of the restart sentinel for dfinit, the file created when the
+/// container runtime has to be restarted for the configuration to take effect.
+#[inline]
+pub fn default_dfinit_restart_sentinel_path() -> PathBuf {
+    crate::default_root_dir()
+        .join("dfinit")
+        .join("restart-required")
+}
+
 /// Returns the default containerd configuration path.
 #[inline]
 fn default_container_runtime_containerd_config_path() -> PathBuf {
@@ -385,6 +394,14 @@ mod tests {
     use super::*;
     use dragonfly_client_core::Error;
     use std::path::Path;
+
+    #[test]
+    fn default_dfinit_restart_sentinel_path_joins_root_dir() {
+        assert_eq!(
+            default_dfinit_restart_sentinel_path(),
+            crate::default_root_dir().join("dfinit/restart-required")
+        );
+    }
 
     #[test]
     fn default_dfinit_config_path_joins_config_dir() {
