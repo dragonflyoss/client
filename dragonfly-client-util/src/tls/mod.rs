@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::vec::Vec;
 use std::{fs, io};
-use tracing::instrument;
+use tracing::{instrument, warn};
 
 /// The default capacity of the certificates cache.
 const DEFAULT_CERTS_CACHE_CAPACITY: usize = 1000;
@@ -55,8 +55,55 @@ pub fn install_crypto_provider() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 }
 
+/// The trusted root certificates of the operating system, loaded once.
+static NATIVE_ROOT_CERTS: LazyLock<Vec<CertificateDer<'static>>> = LazyLock::new(|| {
+    let result = rustls_native_certs::load_native_certs();
+    for err in &result.errors {
+        warn!("load native root certificate failed: {}", err);
+    }
+
+    if result.certs.is_empty() {
+        warn!("no native root certificates found, TLS servers can only be verified with configured certificates");
+    }
+
+    result.certs
+});
+
+/// Returns the TLS client configuration for connecting to origin servers and
+/// registries. It verifies the server certificate against the native root
+/// certificates of the operating system, or skips the verification when
+/// `insecure_skip_verify` is set, which exposes the connection to
+/// man-in-the-middle attacks and must only be used with trusted networks.
+pub fn new_client_tls_config(insecure_skip_verify: bool) -> rustls::ClientConfig {
+    if insecure_skip_verify {
+        return rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(NoVerifier::new())
+            .with_no_client_auth();
+    }
+
+    let mut root_cert_store = rustls::RootCertStore::empty();
+    root_cert_store.add_parsable_certificates(NATIVE_ROOT_CERTS.iter().cloned());
+    rustls::ClientConfig::builder()
+        .with_root_certificates(root_cert_store)
+        .with_no_client_auth()
+}
+
+/// Returns the TLS client configuration trusting only the given root
+/// certificates, e.g. the certificate of a registry with a private CA.
+pub fn new_client_tls_config_with_roots(
+    roots: Vec<CertificateDer<'static>>,
+) -> rustls::ClientConfig {
+    let mut root_cert_store = rustls::RootCertStore::empty();
+    root_cert_store.add_parsable_certificates(roots);
+    rustls::ClientConfig::builder()
+        .with_root_certificates(root_cert_store)
+        .with_no_client_auth()
+}
+
 /// A verifier that does not verify the server certificate.
-/// It is used for testing and should not be used in production.
+/// It is used for testing and for the explicit `insecureSkipVerify` options,
+/// and must not be used by default.
 #[derive(Debug)]
 pub struct NoVerifier(Arc<rustls::crypto::CryptoProvider>);
 
