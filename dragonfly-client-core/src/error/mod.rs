@@ -158,6 +158,11 @@ pub enum DFError {
     #[error("unknown {0}")]
     Unknown(String),
 
+    /// The error for the encryption at rest of the storage, e.g. the key
+    /// encryption key is unavailable or the content fails to authenticate.
+    #[error("encryption: {0}")]
+    Encryption(String),
+
     /// The error when the feature is not implemented.
     #[error{"unimplemented"}]
     Unimplemented,

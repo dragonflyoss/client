@@ -1528,6 +1528,9 @@ dependencies = [
 name = "dragonfly-client-storage"
 version = "1.5.10"
 dependencies = [
+ "async-trait",
+ "aws-lc-rs",
+ "base64ct",
  "bincode",
  "bytes",
  "bytesize",
@@ -1542,6 +1545,7 @@ dependencies = [
  "dragonfly-client-util",
  "fs2",
  "futures",
+ "hex",
  "leaky-bucket",
  "prost-wkt-types",
  "quinn",
@@ -1557,6 +1561,7 @@ dependencies = [
  "tracing",
  "vortex-protocol",
  "walkdir",
+ "zeroize",
 ]
 
 [[package]]
