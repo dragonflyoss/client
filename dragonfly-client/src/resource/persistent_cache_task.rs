@@ -1171,6 +1171,7 @@ impl PersistentCacheTask {
         let semaphore = Arc::new(Semaphore::new(
             self.config.download.concurrent_piece_count as usize,
         ));
+        let content_category = task.content_category.clone().unwrap_or_default();
         while let Some(collect_piece) = piece_collector_rx.recv().await {
             if interrupt.load(Ordering::SeqCst) {
                 // If the interrupt is true, break the collector loop.
@@ -1195,6 +1196,7 @@ impl PersistentCacheTask {
                 finished_pieces: Arc<Mutex<Vec<metadata::Piece>>>,
                 protocol: String,
                 parent_selector: Arc<PersistentCacheParentSelector>,
+                content_category: String,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.persistent_cache_id(task_id.as_str(), number);
                 let mut collected_parents = parents;
@@ -1216,6 +1218,7 @@ impl PersistentCacheTask {
                             offset,
                             length,
                             parent.clone(),
+                            content_category.as_str(),
                         )
                         .await
                     {
@@ -1383,6 +1386,7 @@ impl PersistentCacheTask {
             let finished_pieces = finished_pieces.clone();
             let protocol = self.config.download.protocol.clone();
             let parent_selector = self.parent_selector.clone();
+            let content_category = content_category.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
@@ -1403,6 +1407,7 @@ impl PersistentCacheTask {
                         finished_pieces,
                         protocol,
                         parent_selector,
+                        content_category,
                     )
                     .await
                 }
@@ -1512,8 +1517,10 @@ impl PersistentCacheTask {
             };
 
             // Fake the download from the local.
-            self.piece
-                .download_persistent_cache_from_local(piece.length);
+            self.piece.download_persistent_cache_from_local(
+                task.content_category.as_deref().unwrap_or_default(),
+                piece.length,
+            );
             info!("finished persistent cache piece {} from local", piece_id);
 
             // Construct the piece.
