@@ -1592,6 +1592,7 @@ dependencies = [
  "ringbuf",
  "rustix 1.1.3",
  "rustls",
+ "rustls-native-certs",
  "rustls-pemfile",
  "rustls-pki-types",
  "serde",

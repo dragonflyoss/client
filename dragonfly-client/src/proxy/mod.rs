@@ -33,7 +33,10 @@ use dragonfly_client_metric::{
 use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
     shutdown,
-    tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
+    tls::{
+        generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs,
+        verified_client_config, NoVerifier,
+    },
 };
 use futures::TryStreamExt;
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, StreamBody};
@@ -135,7 +138,25 @@ impl Proxy {
                     .with_root_certificates(root_cert_store)
                     .with_no_client_auth()
             }
-            // Default TLS client config with native roots.
+            // TLS client config using the native roots and the backend CA certificates.
+            None if config.backend.tls.verify => {
+                match config
+                    .backend
+                    .tls
+                    .load_ca_cert_der()
+                    .and_then(verified_client_config)
+                {
+                    Ok(client_config) => client_config,
+                    Err(err) => {
+                        // Trust no certificate rather than skipping verification.
+                        error!("load backend tls config failed: {}", err);
+                        rustls::ClientConfig::builder()
+                            .with_root_certificates(RootCertStore::empty())
+                            .with_no_client_auth()
+                    }
+                }
+            }
+            // Default TLS client config with no validation.
             None => rustls::ClientConfig::builder()
                 .dangerous()
                 .with_custom_certificate_verifier(NoVerifier::new())

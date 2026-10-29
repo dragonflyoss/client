@@ -1699,6 +1699,31 @@ impl Default for Tracing {
     }
 }
 
+/// The TLS configuration for requests to the backend.
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct BackendTLS {
+    /// Indicates whether to verify the server certificate of the backend. If enabled, the server
+    /// certificate is verified against the native root certificates and `ca_cert`. It is disabled
+    /// by default, which accepts any server certificate.
+    pub verify: bool,
+
+    /// The CA certificates path with PEM format, which are trusted in addition to the native
+    /// root certificates. It is only used when `verify` is enabled.
+    pub ca_cert: Option<PathBuf>,
+}
+
+/// Implement BackendTLS.
+impl BackendTLS {
+    /// Load the CA certificates in DER format.
+    pub fn load_ca_cert_der(&self) -> Result<Option<Vec<CertificateDer<'static>>>> {
+        match &self.ca_cert {
+            Some(ca_cert_path) => Ok(Some(generate_cert_from_pem(ca_cert_path)?)),
+            None => Ok(None),
+        }
+    }
+}
+
 /// The backend configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -1760,6 +1785,10 @@ pub struct Backend {
         rename = "enableHickoryDNS"
     )]
     pub enable_hickory_dns: bool,
+
+    /// The TLS configuration for requests to the backend. It applies to the http and https
+    /// backends, and to requests that the proxy forwards directly to the origin.
+    pub tls: BackendTLS,
 }
 
 /// Implement Default for Backend.
@@ -1774,6 +1803,7 @@ impl Default for Backend {
             put_chunk_size: default_backend_put_chunk_size(),
             put_timeout: default_backend_put_timeout(),
             enable_hickory_dns: default_backend_enable_hickory_dns(),
+            tls: BackendTLS::default(),
         }
     }
 }
@@ -2914,7 +2944,11 @@ mod tests {
                     "putConcurrentChunkCount": 2,
                     "putChunkSize": "2mib",
                     "putTimeout": "1m",
-                    "enableHickoryDNS": false
+                    "enableHickoryDNS": false,
+                    "tls": {
+                        "verify": true,
+                        "caCert": "/etc/ssl/certs/ca.crt"
+                    }
                 }"#,
                 |backend| {
                     assert_eq!(
@@ -2935,6 +2969,11 @@ mod tests {
                     assert_eq!(backend.put_chunk_size, ByteSize::mib(2));
                     assert_eq!(backend.put_timeout, Duration::from_secs(60));
                     assert!(!backend.enable_hickory_dns);
+                    assert!(backend.tls.verify);
+                    assert_eq!(
+                        backend.tls.ca_cert,
+                        Some(PathBuf::from("/etc/ssl/certs/ca.crt"))
+                    );
                 },
             ),
             ("{}", |backend| {
@@ -2949,6 +2988,8 @@ mod tests {
                 assert_eq!(backend.put_chunk_size, ByteSize::mib(8));
                 assert_eq!(backend.put_timeout, Duration::from_secs(900));
                 assert!(backend.enable_hickory_dns);
+                assert!(!backend.tls.verify);
+                assert!(backend.tls.ca_cert.is_none());
             }),
         ];
 
