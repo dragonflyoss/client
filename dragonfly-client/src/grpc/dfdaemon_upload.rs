@@ -193,6 +193,7 @@ impl DfdaemonUploadServer {
                 service,
                 self.config.upload.server.request_rate_limit,
                 self.config.upload.server.request_buffer_size,
+                self.config.upload.server.max_concurrent_requests,
                 self.bbr.clone(),
             ))
             .serve_with_shutdown(self.addr, async move {

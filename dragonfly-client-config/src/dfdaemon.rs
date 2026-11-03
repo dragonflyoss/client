@@ -81,6 +81,13 @@ pub fn default_download_request_rate_limit() -> u64 {
     400
 }
 
+// Max number of concurrent inflight requests the servver will
+// execute at once. Preserves today's unbounded behaviour for
+// existing deployments that don't set this.
+pub fn default_download_max_concurrent_requests() -> u64 {
+    u64::MAX
+}
+
 /// Returns the default buffer size for download request channel,
 /// default is 50.
 pub fn default_download_request_buffer_size() -> usize {
@@ -126,6 +133,10 @@ fn default_upload_grpc_server_port() -> u16 {
 /// upload grpc server, default is 400 req/s.
 pub fn default_upload_request_rate_limit() -> u64 {
     400
+}
+
+pub fn default_upload_max_concurrent_requests() -> u64 {
+    u64::MAX
 }
 
 /// Returns the default buffer size for upload request channel,
@@ -528,6 +539,9 @@ pub struct DownloadServer {
     /// new requests will return a `RESOURCE_EXHAUSTED` error.
     #[serde(default = "default_download_request_buffer_size")]
     pub request_buffer_size: usize,
+
+    #[serde(default = "default_download_max_concurrent_requests")]
+    pub max_concurrent_requests: u64,
 }
 
 /// Implement Default for DownloadServer.
@@ -537,6 +551,7 @@ impl Default for DownloadServer {
             socket_path: default_download_unix_socket_path(),
             request_rate_limit: default_download_request_rate_limit(),
             request_buffer_size: default_download_request_buffer_size(),
+            max_concurrent_requests: default_download_max_concurrent_requests(),
         }
     }
 }
@@ -646,6 +661,9 @@ pub struct UploadServer {
     /// new requests will return a `RESOURCE_EXHAUSTED` error.
     #[serde(default = "default_upload_request_buffer_size")]
     pub request_buffer_size: usize,
+
+    #[serde(default = "default_upload_max_concurrent_requests")]
+    pub max_concurrent_requests: u64,
 }
 
 /// Implement Default for UploadServer.
@@ -659,6 +677,7 @@ impl Default for UploadServer {
             key: None,
             request_rate_limit: default_upload_request_rate_limit(),
             request_buffer_size: default_upload_request_buffer_size(),
+            max_concurrent_requests: default_upload_max_concurrent_requests(),
         }
     }
 }
@@ -2066,6 +2085,7 @@ mod tests {
                     );
                     assert_eq!(download.server.request_rate_limit, 4000);
                     assert_eq!(download.server.request_buffer_size, 100);
+                    assert_eq!(download.server.max_concurrent_requests, u64::MAX);
                     assert_eq!(download.protocol, "quic");
                     assert_eq!(download.bandwidth_limit, ByteSize::gb(50));
                     assert_eq!(download.back_to_source_bandwidth_limit, ByteSize::gb(20));
@@ -2082,6 +2102,7 @@ mod tests {
                 );
                 assert_eq!(download.server.request_rate_limit, 400);
                 assert_eq!(download.server.request_buffer_size, 50);
+                assert_eq!(download.server.max_concurrent_requests, u64::MAX);
                 assert_eq!(download.protocol, "tcp");
                 assert_eq!(download.bandwidth_limit, ByteSize::gb(50));
                 assert_eq!(download.back_to_source_bandwidth_limit, ByteSize::gb(50));
@@ -2137,6 +2158,7 @@ mod tests {
                     );
                     assert_eq!(upload.server.request_rate_limit, 1000);
                     assert_eq!(upload.server.request_buffer_size, 100);
+                    assert_eq!(upload.server.max_concurrent_requests, u64::MAX);
                     assert_eq!(
                         upload.client.ca_cert,
                         Some(PathBuf::from("/etc/ssl/certs/ca.crt"))
@@ -2161,6 +2183,7 @@ mod tests {
                 assert!(upload.server.key.is_none());
                 assert_eq!(upload.server.request_rate_limit, 400);
                 assert_eq!(upload.server.request_buffer_size, 50);
+                assert_eq!(upload.server.max_concurrent_requests, u64::MAX);
                 assert!(upload.client.ca_cert.is_none());
                 assert!(upload.client.cert.is_none());
                 assert!(upload.client.key.is_none());
