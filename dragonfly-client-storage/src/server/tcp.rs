@@ -27,14 +27,13 @@ use dragonfly_client_metric::{
 use dragonfly_client_util::{id_generator::IDGenerator, shutdown};
 use leaky_bucket::RateLimiter;
 use socket2::{Domain, Protocol, Socket, TcpKeepalive, Type};
+use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{
-    tcp::{OwnedReadHalf, OwnedWriteHalf},
-    TcpListener, TcpStream,
-};
+use tokio::io::{copy_buf, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, WriteHalf};
+use tokio::net::{tcp::OwnedWriteHalf, TcpListener, TcpStream};
 use tokio::sync::mpsc;
+use tokio_rustls::{server::TlsStream, TlsAcceptor};
 use tracing::{debug, error, info, instrument, Span};
 use vortex_protocol::{
     tlv::{
@@ -51,9 +50,6 @@ use vortex_protocol::{
     Header, Message, HEADER_SIZE,
 };
 
-#[cfg(not(target_os = "linux"))]
-use tokio::io::copy_buf;
-
 /// A TCP-based server for dfdaemon upload service.
 pub struct TCPServer {
     /// The configuration of the dfdaemon.
@@ -66,6 +62,9 @@ pub struct TCPServer {
     /// The request handler.
     handler: TCPServerHandler,
 
+    /// The acceptor of the TLS connections, none if mutual TLS is disabled.
+    tls_acceptor: Option<TlsAcceptor>,
+
     /// Used to shutdown the TCP server.
     shutdown: shutdown::Shutdown,
 
@@ -75,13 +74,16 @@ pub struct TCPServer {
 
 /// Implements the TCP server.
 impl TCPServer {
-    /// Creates a new TCPServer.
+    /// Creates a new TCPServer. The connections are served over TLS with the
+    /// server configuration if it is some.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Arc<Config>,
         addr: SocketAddr,
         id_generator: Arc<IDGenerator>,
         storage: Arc<Storage>,
         upload_bandwidth_limiter: Arc<RateLimiter>,
+        tls: Option<Arc<rustls::ServerConfig>>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
@@ -93,6 +95,7 @@ impl TCPServer {
                 storage,
                 upload_bandwidth_limiter,
             },
+            tls_acceptor: tls.map(TlsAcceptor::from),
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
@@ -151,8 +154,18 @@ impl TCPServer {
                     debug!("accepted connection from {}", remote_address);
 
                     let handler = self.handler.clone();
+                    let tls_acceptor = self.tls_acceptor.clone();
                     tokio::spawn(async move {
-                        if let Err(err) = handler.handle(tcp, remote_address.to_string()).await {
+                        let result = match tls_acceptor {
+                            Some(tls_acceptor) => {
+                                handler
+                                    .handle_tls(tls_acceptor, tcp, remote_address.to_string())
+                                    .await
+                            }
+                            None => handler.handle(tcp, remote_address.to_string()).await,
+                        };
+
+                        if let Err(err) = result {
                            error!("failed to serve connection from {}: {}", remote_address, err);
                         }
                     });
@@ -189,10 +202,48 @@ impl TCPServerHandler {
     #[instrument(skip_all)]
     async fn handle(&self, stream: TcpStream, remote_address: String) -> ClientResult<()> {
         let (mut reader, mut writer) = stream.into_split();
+        self.serve(&mut reader, &mut writer, &remote_address).await
+    }
+
+    /// Handles a TCP connection like `handle` after the TLS handshake, which
+    /// requires a client certificate issued by the CA of the server
+    /// configuration.
+    #[instrument(skip_all)]
+    async fn handle_tls(
+        &self,
+        tls_acceptor: TlsAcceptor,
+        stream: TcpStream,
+        remote_address: String,
+    ) -> ClientResult<()> {
+        let stream = tokio::time::timeout(
+            super::DEFAULT_TLS_HANDSHAKE_TIMEOUT,
+            tls_acceptor.accept(stream),
+        )
+        .await?
+        .inspect_err(|err| {
+            error!("tls handshake with {} failed: {}", remote_address, err);
+        })?;
+
+        let (mut reader, mut writer) = tokio::io::split(stream);
+        self.serve(&mut reader, &mut writer, &remote_address).await
+    }
+
+    /// Serves the requests on the connection one after another until the
+    /// client closes it or leaves it idle for too long.
+    async fn serve<R, W>(
+        &self,
+        reader: &mut R,
+        writer: &mut W,
+        remote_address: &str,
+    ) -> ClientResult<()>
+    where
+        R: AsyncRead + Unpin,
+        W: PieceWriter,
+    {
         loop {
             let header = match tokio::time::timeout(
                 super::DEFAULT_MAX_IDLE_TIMEOUT,
-                self.read_header(&mut reader),
+                self.read_header(reader),
             )
             .await
             {
@@ -206,7 +257,7 @@ impl TCPServerHandler {
                 Err(_) => return Ok(()),
             };
 
-            self.handle_request(header, &mut reader, &mut writer, &remote_address)
+            self.handle_request(header, reader, writer, remote_address)
                 .await?;
         }
     }
@@ -216,13 +267,17 @@ impl TCPServerHandler {
     /// piece downloads and persistent cache piece downloads with proper
     /// request/response framing.
     #[instrument(skip_all, fields(host_id, remote_address, task_id, piece_id))]
-    async fn handle_request(
+    async fn handle_request<R, W>(
         &self,
         header: Header,
-        reader: &mut OwnedReadHalf,
-        writer: &mut OwnedWriteHalf,
+        reader: &mut R,
+        writer: &mut W,
         remote_address: &str,
-    ) -> ClientResult<()> {
+    ) -> ClientResult<()>
+    where
+        R: AsyncRead + Unpin,
+        W: PieceWriter,
+    {
         match header.tag() {
             Tag::DownloadPiece => {
                 let download_piece: DownloadPiece = self
@@ -656,7 +711,7 @@ impl TCPServerHandler {
     /// The header contains metadata about the following message, including
     /// the message type (tag) and payload length. This is critical for
     /// proper protocol message framing.
-    async fn read_header(&self, reader: &mut OwnedReadHalf) -> ClientResult<Header> {
+    async fn read_header<R: AsyncRead + Unpin>(&self, reader: &mut R) -> ClientResult<Header> {
         let mut header_bytes = [0u8; HEADER_SIZE];
         reader.read_exact(&mut header_bytes).await?;
         Header::decode(&header_bytes).map_err(Into::into)
@@ -667,13 +722,14 @@ impl TCPServerHandler {
     /// This function reads a fixed-length payload based on the header length
     /// and attempts to parse it into the specified type T. The type T must
     /// implement Message for decoding from the raw bytes.
-    pub async fn read_download_piece<T>(
+    pub async fn read_download_piece<T, R>(
         &self,
-        reader: &mut OwnedReadHalf,
+        reader: &mut R,
         header_length: usize,
     ) -> ClientResult<T>
     where
         T: Message,
+        R: AsyncRead + Unpin,
     {
         let mut download_piece_bytes = BytesMut::with_capacity(header_length);
         download_piece_bytes.resize(header_length, 0);
@@ -694,10 +750,10 @@ impl TCPServerHandler {
     /// all data is flushed to the underlying transport. This is typically
     /// used for sending headers and small payloads in a single operation.
     #[instrument(skip_all)]
-    async fn write_response(
+    async fn write_response<W: AsyncWrite + Unpin>(
         &self,
         request: Bytes,
-        writer: &mut OwnedWriteHalf,
+        writer: &mut W,
     ) -> ClientResult<()> {
         writer.write_all(&request).await.inspect_err(|err| {
             error!("failed to send request: {}", err);
@@ -710,23 +766,19 @@ impl TCPServerHandler {
         Ok(())
     }
 
-    /// Streams the remaining range of the piece file directly to the TCP
-    /// socket with sendfile, so the piece bytes move from the page cache to
-    /// the socket inside the kernel without passing through user space.
-    #[cfg(target_os = "linux")]
+    /// Streams the remaining range of the piece file to the TCP writer, with
+    /// sendfile on a plain connection where it is available.
     #[instrument(skip_all)]
-    async fn write_stream(
+    async fn write_stream<W: PieceWriter>(
         &self,
         reader: RangeReader,
-        writer: &mut OwnedWriteHalf,
+        writer: &mut W,
     ) -> ClientResult<()> {
         debug!("start to write stream to tcp writer");
-        let (fd, offset, remaining) = reader.into_parts();
-        let sent = sendfile_range(writer.as_ref(), &fd, offset, remaining)
-            .await
-            .inspect_err(|err| {
-                error!("sendfile failed: {}", err);
-            })?;
+        let remaining = reader.remaining();
+        let sent = writer.send_range(reader).await.inspect_err(|err| {
+            error!("send range failed: {}", err);
+        })?;
 
         if sent != remaining {
             return Err(ClientError::Unknown(format!(
@@ -741,39 +793,43 @@ impl TCPServerHandler {
 
         Ok(())
     }
+}
 
-    /// Streams data from a reader directly to the TCP writer.
-    ///
-    /// This function efficiently copies all data from the provided stream
-    /// to the TCP connection using tokio's copy_buf utility, which writes the
-    /// reader's internal buffer directly without an intermediate copy buffer.
-    /// It's designed for streaming large piece content without loading
-    /// everything into memory. The operation is flushed to ensure data delivery.
+/// The write half of a connection of the TCP server, which sends the content
+/// of the pieces.
+trait PieceWriter: AsyncWrite + Unpin + Send {
+    /// Sends the remaining range of the reader and returns the sent length.
+    fn send_range(
+        &mut self,
+        reader: RangeReader,
+    ) -> impl Future<Output = std::io::Result<u64>> + Send;
+}
+
+/// Implements the PieceWriter for the plain connection.
+impl PieceWriter for OwnedWriteHalf {
+    /// Sends the range directly to the socket with sendfile, so the piece
+    /// bytes move from the page cache to the socket inside the kernel without
+    /// passing through user space.
+    #[cfg(target_os = "linux")]
+    async fn send_range(&mut self, reader: RangeReader) -> std::io::Result<u64> {
+        let (fd, offset, remaining) = reader.into_parts();
+        sendfile_range(self.as_ref(), &fd, offset, remaining).await
+    }
+
+    /// Copies the range with copy_buf, which writes the internal buffer of
+    /// the reader directly without an intermediate copy buffer.
     #[cfg(not(target_os = "linux"))]
-    #[instrument(skip_all)]
-    async fn write_stream(
-        &self,
-        mut reader: RangeReader,
-        writer: &mut OwnedWriteHalf,
-    ) -> ClientResult<()> {
-        debug!("start to write stream to tcp writer");
-        let remaining = reader.remaining();
-        let sent = copy_buf(&mut reader, writer).await.inspect_err(|err| {
-            error!("copy failed: {}", err);
-        })?;
+    async fn send_range(&mut self, mut reader: RangeReader) -> std::io::Result<u64> {
+        copy_buf(&mut reader, self).await
+    }
+}
 
-        if sent != remaining {
-            return Err(ClientError::Unknown(format!(
-                "expected length {remaining} but sent {sent}"
-            )));
-        }
-
-        writer.flush().await.inspect_err(|err| {
-            error!("flush failed: {}", err);
-        })?;
-        debug!("finished writing stream to tcp writer");
-
-        Ok(())
+/// Implements the PieceWriter for the TLS connection.
+impl PieceWriter for WriteHalf<TlsStream<TcpStream>> {
+    /// Copies the range with copy_buf, the content is encrypted in user space
+    /// so sendfile is not possible.
+    async fn send_range(&mut self, mut reader: RangeReader) -> std::io::Result<u64> {
+        copy_buf(&mut reader, self).await
     }
 }
 
@@ -911,10 +967,9 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[tokio::test]
-    async fn handle_serves_the_requests_on_the_connection_until_the_client_closes_it() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let handler = handler(temp_dir.path()).await;
+    /// Stores the piece 0 of the task with the content in the storage of the
+    /// handler.
+    async fn store_piece(handler: &TCPServerHandler) {
         handler
             .storage
             .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
@@ -939,6 +994,80 @@ mod tests {
             )
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn handle_tls_serves_only_the_clients_with_a_certificate_issued_by_the_ca() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let handler = handler(temp_dir.path()).await;
+        store_piece(&handler).await;
+
+        let tls_dir = tempfile::tempdir().unwrap();
+        let cluster = crate::tls::tests::cluster(tls_dir.path());
+        let tls_acceptor =
+            TlsAcceptor::from(crate::tls::server_config(&cluster.member).unwrap().unwrap());
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (stream, remote_address) = listener.accept().await.unwrap();
+                let handler = handler.clone();
+                let tls_acceptor = tls_acceptor.clone();
+                tokio::spawn(async move {
+                    let _ = handler
+                        .handle_tls(tls_acceptor, stream, remote_address.to_string())
+                        .await;
+                });
+            }
+        });
+
+        let test_cases = vec![
+            (Some(&cluster.member), true),
+            // A plain client.
+            (None, false),
+            // A client certificate issued by another CA.
+            (Some(&cluster.outsider), false),
+            // A server certificate issued by a CA the client does not trust.
+            (Some(&cluster.distrusting), false),
+        ];
+
+        for (client_config, expected_ok) in test_cases {
+            let mut config = Config::default();
+            config.download.piece_timeout = Duration::from_secs(5);
+            let tls =
+                client_config.map(|config| crate::tls::client_config(config).unwrap().unwrap());
+            let client = TCPClient::new(Arc::new(config), addr.to_string(), tls);
+
+            // The connection is reused by the second download.
+            for _ in 0..2 {
+                let result = client.download_piece(0, TASK_ID).await;
+                let Ok((mut content, offset, digest)) = result else {
+                    assert!(!expected_ok);
+                    break;
+                };
+
+                let mut received = Vec::new();
+                while let Some(chunk) = content.next().await {
+                    match chunk {
+                        Ok(chunk) => received.extend_from_slice(&chunk),
+                        Err(_) => break,
+                    }
+                }
+
+                assert!(expected_ok);
+                assert_eq!(offset, 0);
+                assert_eq!(digest, CONTENT_DIGEST);
+                assert_eq!(received, CONTENT);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_serves_the_requests_on_the_connection_until_the_client_closes_it() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let handler = handler(temp_dir.path()).await;
+        store_piece(&handler).await;
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -947,7 +1076,7 @@ mod tests {
             handler.handle(stream, remote_address.to_string()).await
         });
 
-        let client = TCPClient::new(Arc::new(Config::default()), addr.to_string());
+        let client = TCPClient::new(Arc::new(Config::default()), addr.to_string(), None);
         for _ in 0..2 {
             let (mut content, offset, digest) = client.download_piece(0, TASK_ID).await.unwrap();
             let mut received = Vec::new();

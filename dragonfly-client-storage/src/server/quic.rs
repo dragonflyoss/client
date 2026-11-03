@@ -30,6 +30,7 @@ use dragonfly_client_util::{
     id_generator::IDGenerator, shutdown, tls::generate_simple_self_signed_certs,
 };
 use leaky_bucket::RateLimiter;
+use quinn::crypto::rustls::QuicServerConfig;
 use quinn::{
     congestion::BbrConfig, AckFrequencyConfig, Endpoint, EndpointConfig, ServerConfig,
     TokioRuntime, TransportConfig,
@@ -62,6 +63,10 @@ pub struct QUICServer {
     /// The request handler.
     handler: QUICServerHandler,
 
+    /// The TLS configuration requiring client certificates, none if mutual
+    /// TLS is disabled.
+    tls: Option<Arc<rustls::ServerConfig>>,
+
     /// Used to shutdown the QUIC server.
     shutdown: shutdown::Shutdown,
 
@@ -71,12 +76,15 @@ pub struct QUICServer {
 
 /// Implements the QUIC server.
 impl QUICServer {
-    /// Creates a new QUICServer.
+    /// Creates a new QUICServer. The connections are authenticated with the
+    /// TLS configuration if it is some, otherwise with a self-signed
+    /// certificate that is not verified by the clients.
     pub fn new(
         addr: SocketAddr,
         id_generator: Arc<IDGenerator>,
         storage: Arc<Storage>,
         upload_bandwidth_limiter: Arc<RateLimiter>,
+        tls: Option<Arc<rustls::ServerConfig>>,
         shutdown: shutdown::Shutdown,
         shutdown_complete_tx: mpsc::UnboundedSender<()>,
     ) -> Self {
@@ -87,6 +95,7 @@ impl QUICServer {
                 storage,
                 upload_bandwidth_limiter,
             },
+            tls,
             shutdown,
             _shutdown_complete: shutdown_complete_tx,
         }
@@ -94,10 +103,19 @@ impl QUICServer {
 
     /// Starts the storage quic server.
     pub async fn run(&mut self) -> ClientResult<()> {
-        let (certs, key) = generate_simple_self_signed_certs("d7y", vec!["d7y".into()])?;
-        let mut server_config = ServerConfig::with_single_cert(certs, key).map_err(|err| {
-            ClientError::Unknown(format!("failed to create server config: {err}"))
-        })?;
+        let mut server_config = match &self.tls {
+            Some(tls) => ServerConfig::with_crypto(Arc::new(
+                QuicServerConfig::try_from(tls.clone()).map_err(|err| {
+                    ClientError::Unknown(format!("failed to create server config: {err}"))
+                })?,
+            )),
+            None => {
+                let (certs, key) = generate_simple_self_signed_certs("d7y", vec!["d7y".into()])?;
+                ServerConfig::with_single_cert(certs, key).map_err(|err| {
+                    ClientError::Unknown(format!("failed to create server config: {err}"))
+                })?
+            }
+        };
 
         let mut transport = TransportConfig::default();
         transport.congestion_controller_factory(Arc::new(BbrConfig::default()));
@@ -778,5 +796,134 @@ impl QUICServerHandler {
                 .inspect_err(|err| error!("failed to send chunk: {}", err))
                 .or_err(ErrorType::ConnectError)?;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::quic::QUICClient;
+    use bytesize::ByteSize;
+    use dragonfly_client_config::dfdaemon::Config;
+    use dragonfly_client_util::ratelimiter::new_bandwidth_limiter;
+    use futures::StreamExt;
+    use std::time::Duration;
+
+    const TASK_ID: &str = "d3add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14a";
+    const CONTENT: &[u8] = b"piece content";
+
+    /// Starts a QUIC server with the TLS configuration serving the piece 0 of
+    /// the task, and returns its address.
+    async fn serve(dir: &std::path::Path, tls: Option<Arc<rustls::ServerConfig>>) -> SocketAddr {
+        let config = Arc::new(Config::default());
+        let storage = Arc::new(Storage::new(config, dir, dir.to_path_buf()).await.unwrap());
+        storage
+            .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
+            .await
+            .unwrap();
+        let piece_id = storage.piece_id(TASK_ID, 0);
+        storage
+            .download_piece_started(&piece_id, 0, 0, CONTENT.len() as u64)
+            .await
+            .unwrap();
+        let mut stream = futures::stream::iter([Ok(Bytes::from_static(CONTENT))]);
+        storage
+            .download_piece_from_source_finished(
+                &piece_id,
+                TASK_ID,
+                0,
+                CONTENT.len() as u64,
+                &mut stream,
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+
+        // Reserve a free port for the server.
+        let addr = std::net::UdpSocket::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+
+        let (shutdown_complete_tx, _) = mpsc::unbounded_channel();
+        let mut server = QUICServer::new(
+            addr,
+            Arc::new(IDGenerator::new(
+                "127.0.0.1".to_string(),
+                "localhost".to_string(),
+                false,
+            )),
+            storage,
+            Arc::new(new_bandwidth_limiter(ByteSize::gb(1))),
+            tls,
+            shutdown::Shutdown::new(),
+            shutdown_complete_tx,
+        );
+        tokio::spawn(async move { server.run().await });
+
+        // Wait for the server to bind.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        addr
+    }
+
+    /// Downloads the piece 0 of the task with the client configuration, and
+    /// returns its content.
+    async fn download(
+        addr: SocketAddr,
+        config: &Config,
+        tls: Option<Arc<rustls::ClientConfig>>,
+    ) -> ClientResult<Vec<u8>> {
+        let mut config = config.clone();
+        config.download.piece_timeout = Duration::from_secs(5);
+        let client = QUICClient::new(Arc::new(config), addr.to_string(), tls).await?;
+        let (mut content, _, _) = client.download_piece(0, TASK_ID).await?;
+
+        let mut received = Vec::new();
+        while let Some(chunk) = content.next().await {
+            received.extend_from_slice(&chunk?);
+        }
+        Ok(received)
+    }
+
+    #[tokio::test]
+    async fn run_serves_only_the_clients_with_a_certificate_issued_by_the_ca() {
+        let dir = tempfile::tempdir().unwrap();
+        let tls_dir = tempfile::tempdir().unwrap();
+        let cluster = crate::tls::tests::cluster(tls_dir.path());
+        let addr = serve(
+            dir.path(),
+            crate::tls::server_config(&cluster.member).unwrap(),
+        )
+        .await;
+
+        let test_cases = vec![
+            (&cluster.member, true, true),
+            // A client without certificate, not verifying the server.
+            (&cluster.member, false, false),
+            // A client certificate issued by another CA.
+            (&cluster.outsider, true, false),
+            // A server certificate issued by a CA the client does not trust.
+            (&cluster.distrusting, true, false),
+        ];
+
+        for (config, use_tls, expected_ok) in test_cases {
+            let tls = use_tls.then(|| crate::tls::client_config(config).unwrap().unwrap());
+            let result = download(addr, config, tls).await;
+            assert_eq!(result.is_ok(), expected_ok, "{result:?}");
+            if let Ok(received) = result {
+                assert_eq!(received, CONTENT);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn run_serves_the_plain_clients_without_mtls() {
+        let dir = tempfile::tempdir().unwrap();
+        let tls_dir = tempfile::tempdir().unwrap();
+        let cluster = crate::tls::tests::cluster(tls_dir.path());
+        let addr = serve(dir.path(), None).await;
+
+        let received = download(addr, &cluster.member, None).await.unwrap();
+        assert_eq!(received, CONTENT);
     }
 }
