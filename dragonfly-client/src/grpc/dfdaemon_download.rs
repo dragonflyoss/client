@@ -471,6 +471,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
         // Initialize stream channel.
         let download_clone = download.clone();
+        let verify_blob_digest = self.config.download.verify_blob_digest;
         let task_manager_clone = self.task.clone();
         let task_clone = task.clone();
         let (out_stream_tx, out_stream_rx) = mpsc::channel(super::DOWNLOAD_STREAM_BUFFER_SIZE);
@@ -593,8 +594,17 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                     }
                                 }
 
-                                // Verify the file digest if it is provided.
-                                if let Some(raw_digest) = &download_clone.digest {
+                                // Verify the file digest if it is provided, or else
+                                // the digest in the URL of an OCI blob, the piece
+                                // digests are announced by the parents serving the
+                                // pieces and do not authenticate the content.
+                                let blob_digest = verify_blob_digest
+                                    .then(|| Digest::extract_from_blob_url(&download_clone.url))
+                                    .flatten()
+                                    .map(|digest| digest.to_string());
+                                if let Some(raw_digest) =
+                                    download_clone.digest.as_ref().or(blob_digest.as_ref())
+                                {
                                     let digest = match raw_digest.parse::<Digest>() {
                                         Ok(digest) => digest,
                                         Err(err) => {
@@ -614,6 +624,21 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                                         verify_file_digest(digest, Path::new(output_path.as_str()))
                                     {
                                         error!("verify file digest: {}", err);
+
+                                        // Delete the content mismatching the digest of the
+                                        // blob from the local storage, so it is not served
+                                        // to other peers or reused by the next download.
+                                        if download_clone.digest.is_none()
+                                            && matches!(err, ClientError::DigestMismatch(..))
+                                        {
+                                            task_manager_clone
+                                                .delete_local(task_clone.id.as_str())
+                                                .await
+                                                .unwrap_or_else(|err| {
+                                                    error!("delete task: {}", err)
+                                                });
+                                        }
+
                                         handle_error(&out_stream_tx, err).await;
                                         return;
                                     }

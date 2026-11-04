@@ -55,6 +55,7 @@ use dragonfly_client_util::{
 use futures::future::select_all;
 use leaky_bucket::RateLimiter;
 use reqwest::header::HeaderMap;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -1253,6 +1254,13 @@ impl Task {
         // Get the id of the task.
         let task_id = task.id.as_str();
 
+        // Collect the trusted piece digests distributed by the scheduler.
+        let trusted_digests = Arc::new(trusted_piece_digests(&parents));
+        debug!(
+            "scheduler distributed {} trusted piece digests",
+            trusted_digests.len()
+        );
+
         // Register the parents for syncing host info.
         self.parent_selector
             .register(&parents)
@@ -1326,6 +1334,7 @@ impl Task {
                 need_piece_content: bool,
                 protocol: String,
                 parent_selector: Arc<ParentSelector>,
+                trusted_digest: Option<String>,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 let mut collected_parents = parents;
@@ -1348,6 +1357,7 @@ impl Task {
                             length,
                             parent.clone(),
                             is_prefetch,
+                            trusted_digest.as_deref(),
                         )
                         .await
                     {
@@ -1510,6 +1520,7 @@ impl Task {
             let finished_pieces = finished_pieces.clone();
             let protocol = self.config.download.protocol.clone();
             let parent_selector = self.parent_selector.clone();
+            let trusted_digest = trusted_digests.get(&collect_piece.number).cloned();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
@@ -1531,6 +1542,7 @@ impl Task {
                         need_piece_content,
                         protocol,
                         parent_selector,
+                        trusted_digest,
                     )
                     .await
                 }
@@ -2529,10 +2541,123 @@ impl Task {
     }
 }
 
+/// Returns the trusted piece digests distributed by the scheduler in the task
+/// of the candidate parents, keyed by the piece number. The scheduler records
+/// them from the peers downloading the pieces from the source, so they do not
+/// depend on the parent serving the pieces. Malformed digests are skipped, and
+/// a piece the parents disagree on is left out, its pieces are verified
+/// against the digest announced by the parent as before.
+fn trusted_piece_digests(parents: &[Peer]) -> HashMap<u32, String> {
+    let mut digests: HashMap<u32, Option<String>> = HashMap::new();
+    for piece in parents
+        .iter()
+        .filter_map(|parent| parent.task.as_ref())
+        .flat_map(|task| task.pieces.iter())
+    {
+        if piece
+            .digest
+            .parse::<dragonfly_client_util::digest::Digest>()
+            .is_err()
+        {
+            continue;
+        }
+
+        digests
+            .entry(piece.number)
+            .and_modify(|digest| {
+                if digest.as_deref() != Some(piece.digest.as_str()) {
+                    *digest = None;
+                }
+            })
+            .or_insert_with(|| Some(piece.digest.clone()));
+    }
+
+    digests
+        .into_iter()
+        .filter_map(|(number, digest)| digest.map(|digest| (number, digest)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use tempfile::tempdir;
+
+    const SHA256_DIGEST_A: &str =
+        "sha256:0f2592159700536c81cd58094265e92089ebabb3e06f802c5f2d6e8e753cb233";
+    const SHA256_DIGEST_B: &str =
+        "sha256:a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e";
+
+    /// Returns a candidate parent whose task carries the pieces with the
+    /// numbers and digests.
+    fn parent_with_pieces(pieces: &[(u32, &str)]) -> Peer {
+        Peer {
+            task: Some(CommonTask {
+                pieces: pieces
+                    .iter()
+                    .map(|(number, digest)| Piece {
+                        number: *number,
+                        digest: digest.to_string(),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn trusted_piece_digests_collects_the_digests_of_the_parents() {
+        let test_cases: Vec<(Vec<Peer>, Vec<(u32, &str)>)> = vec![
+            (vec![], vec![]),
+            // A parent without task.
+            (vec![Peer::default()], vec![]),
+            (
+                vec![parent_with_pieces(&[
+                    (0, SHA256_DIGEST_A),
+                    (1, SHA256_DIGEST_B),
+                ])],
+                vec![(0, SHA256_DIGEST_A), (1, SHA256_DIGEST_B)],
+            ),
+            // The pieces are merged across the parents.
+            (
+                vec![
+                    parent_with_pieces(&[(0, SHA256_DIGEST_A)]),
+                    parent_with_pieces(&[(0, SHA256_DIGEST_A), (2, SHA256_DIGEST_B)]),
+                ],
+                vec![(0, SHA256_DIGEST_A), (2, SHA256_DIGEST_B)],
+            ),
+            // A piece the parents disagree on is left out.
+            (
+                vec![
+                    parent_with_pieces(&[(0, SHA256_DIGEST_A), (1, SHA256_DIGEST_A)]),
+                    parent_with_pieces(&[(0, SHA256_DIGEST_B)]),
+                    parent_with_pieces(&[(0, SHA256_DIGEST_A)]),
+                ],
+                vec![(1, SHA256_DIGEST_A)],
+            ),
+            // Empty and malformed digests are skipped.
+            (
+                vec![parent_with_pieces(&[
+                    (0, ""),
+                    (1, "sha256:short"),
+                    (2, "md5:1"),
+                ])],
+                vec![],
+            ),
+        ];
+
+        for (parents, expected) in test_cases {
+            let expected: HashMap<u32, String> = expected
+                .into_iter()
+                .map(|(number, digest)| (number, digest.to_string()))
+                .collect();
+            assert_eq!(trusted_piece_digests(&parents), expected);
+        }
+    }
 
     #[tokio::test]
     async fn delete_task_removes_the_task_from_storage() {

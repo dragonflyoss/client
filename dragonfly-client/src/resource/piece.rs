@@ -353,7 +353,11 @@ impl Piece {
         collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
     }
 
-    /// Downloads a single piece from a parent.
+    /// Downloads a single piece from a parent. The piece is verified against
+    /// the trusted digest distributed by the scheduler if it is some, which the
+    /// scheduler records from the peers downloading the piece from the source,
+    /// otherwise against the digest announced by the parent, which detects
+    /// corruption but not a malicious parent.
     #[allow(clippy::too_many_arguments)]
     #[instrument(skip_all, fields(piece_id))]
     pub async fn download_from_parent(
@@ -366,6 +370,7 @@ impl Piece {
         length: u64,
         parent: piece_collector::CollectedParent,
         is_prefetch: bool,
+        trusted_digest: Option<&str>,
     ) -> Result<metadata::Piece> {
         // Span record the piece_id.
         Span::current().record("piece_id", piece_id);
@@ -452,6 +457,22 @@ impl Piece {
             }
         };
 
+        // Verify the piece against the trusted digest if the scheduler
+        // distributed one, the digest announced by the parent is not trusted.
+        let expected_digest = match trusted_digest {
+            Some(trusted_digest) => {
+                if !digest.is_empty() && digest != trusted_digest {
+                    warn!(
+                        "parent {} announced digest {} for piece {}, but the trusted digest is {}",
+                        parent.id, digest, piece_id, trusted_digest
+                    );
+                }
+
+                trusted_digest
+            }
+            None => digest.as_str(),
+        };
+
         // Record the finish of downloading piece.
         match self
             .storage
@@ -460,7 +481,7 @@ impl Piece {
                 task_id,
                 offset,
                 length,
-                digest.as_str(),
+                expected_digest,
                 parent.id.as_str(),
                 &mut stream,
                 self.config.storage.write_piece_timeout,

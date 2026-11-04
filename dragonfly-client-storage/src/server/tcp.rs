@@ -835,7 +835,8 @@ mod tests {
     const DATA_LENGTH: u64 = 8 * 1024 * 1024;
     const TASK_ID: &str = "d3add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14a";
     const CONTENT: &[u8] = b"piece content";
-    const CONTENT_DIGEST: &str = "crc32:2533597436";
+    const CONTENT_DIGEST: &str =
+        "sha256:0f2592159700536c81cd58094265e92089ebabb3e06f802c5f2d6e8e753cb233";
 
     async fn handler(dir: &Path) -> TCPServerHandler {
         let config = Arc::new(Config::default());
