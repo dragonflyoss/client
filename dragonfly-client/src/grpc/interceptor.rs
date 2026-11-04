@@ -453,9 +453,12 @@ mod tests {
         addr: SocketAddr,
         token: Option<String>,
     ) -> std::result::Result<Response<HealthCheckResponse>, Status> {
-        let mut client = HealthClient::connect(format!("http://{addr}"))
+        let channel = Channel::from_shared(format!("http://{addr}"))
+            .unwrap()
+            .connect()
             .await
             .unwrap();
+        let mut client = HealthClient::new(channel);
         let mut request = Request::new(HealthCheckRequest {
             service: String::new(),
         });
