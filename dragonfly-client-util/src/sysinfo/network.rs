@@ -18,10 +18,10 @@ use bytesize::ByteSize;
 use pnet::datalink::{self, NetworkInterface};
 use std::cmp::min;
 use std::net::IpAddr;
-use std::time::Duration;
-use sysinfo::Networks;
+use std::time::{Duration, Instant};
 use tokio::sync::watch;
-use tracing::{debug, info, warn};
+use tokio::time::{interval, MissedTickBehavior};
+use tracing::{debug, error, info, warn};
 
 /// Represents the network statistics for a specific interface.
 #[derive(Debug, Clone, Default)]
@@ -42,7 +42,7 @@ pub struct NetworkStats {
 /// Represents a network interface with its latest statistics.
 #[derive(Debug, Clone)]
 pub struct Network {
-    // The latest statistics published by the collector, None until the first collection.
+    // The latest statistics published by the collector.
     stats: watch::Receiver<Option<NetworkStats>>,
 }
 
@@ -54,20 +54,57 @@ impl Network {
     /// Creates a new Network instance based on the provided IP address and rate limit,
     /// and spawns the statistics collector, so it must be called within a tokio runtime.
     ///
+    /// The rate limit is published right away as the first statistics, so callers of
+    /// get_stats do not wait for the interface lookup.
+    ///
     /// # Arguments
     /// * `ip` - The IP address to identify the network interface.
     /// * `rate_limit` - The rate limit as a ByteSize value.
     ///
     /// # Returns
-    /// A new Network instance with the identified interface and calculated bandwidth.
+    /// A new Network instance whose collector measures the identified interface.
     pub fn new(ip: IpAddr, rate_limit: ByteSize) -> Network {
         let rate_limit = Self::byte_size_to_bits(rate_limit); // convert to bps
+        let (tx, rx) = watch::channel(None);
+        tx.send_replace(Some(NetworkStats {
+            max_rx_bandwidth: rate_limit,
+            max_tx_bandwidth: rate_limit,
+            ..Default::default()
+        }));
+
+        tokio::spawn(async move {
+            // The interface lookup and the speed read take the kernel RTNL lock, which
+            // can be held for minutes on hosts that add and remove interfaces often, so
+            // they must not block the runtime workers.
+            let (interface_name, bandwidth) =
+                match tokio::task::spawn_blocking(move || Self::resolve(ip, rate_limit)).await {
+                    Ok(resolved) => resolved,
+                    Err(err) => {
+                        error!("resolve network interface failed: {}", err);
+                        (None, rate_limit)
+                    }
+                };
+
+            StatsCollector {
+                interface_name,
+                bandwidth,
+            }
+            .run(tx)
+            .await
+        });
+
+        Self { stats: rx }
+    }
+
+    /// Finds the name of the interface that has the IP address and its bandwidth,
+    /// capped by the rate limit. It blocks, so it must run on the blocking pool.
+    fn resolve(ip: IpAddr, rate_limit: u64) -> (Option<String>, u64) {
         let Some(interface) = Self::get_network_interface_by_ip(ip) else {
             warn!(
-            "can not find interface for IP address {}, network interface unknown with bandwidth {} bps",
-            ip, rate_limit
-        );
-            return Self::spawn("unknown".to_string(), rate_limit);
+                "can not find interface for IP address {}, network interface unknown with bandwidth {} bps",
+                ip, rate_limit
+            );
+            return (None, rate_limit);
         };
 
         match Self::get_speed(&interface.name) {
@@ -78,7 +115,7 @@ impl Network {
                     interface.name, bandwidth
                 );
 
-                Self::spawn(interface.name, bandwidth)
+                (Some(interface.name), bandwidth)
             }
             None => {
                 warn!(
@@ -86,23 +123,9 @@ impl Network {
                     interface.name, rate_limit
                 );
 
-                Self::spawn(interface.name, rate_limit)
+                (Some(interface.name), rate_limit)
             }
         }
-    }
-
-    /// Spawns the statistics collector for the interface and returns the Network instance.
-    fn spawn(interface_name: String, bandwidth: u64) -> Network {
-        let (tx, rx) = watch::channel(None);
-        tokio::spawn(
-            StatsCollector {
-                interface_name,
-                bandwidth,
-            }
-            .run(tx),
-        );
-
-        Self { stats: rx }
     }
 
     /// Retrieves the next network statistics not yet seen by this instance, so a fresh
@@ -187,11 +210,24 @@ impl Network {
     }
 }
 
+/// Cumulative traffic counters of a network interface at a point in time.
+#[derive(Debug, Clone, Copy)]
+struct Counters {
+    /// The time the counters were read.
+    read_at: Instant,
+
+    /// The total number of bytes received.
+    rx_bytes: u64,
+
+    /// The total number of bytes transmitted.
+    tx_bytes: u64,
+}
+
 /// Collects the traffic statistics of a network interface.
 #[derive(Debug)]
 struct StatsCollector {
-    /// The name of the network interface.
-    interface_name: String,
+    /// The name of the network interface, None if it is unknown.
+    interface_name: Option<String>,
 
     /// The bandwidth of the network interface in bits per second (bps).
     bandwidth: u64,
@@ -201,60 +237,84 @@ impl StatsCollector {
     /// Default interval for refreshing network statistics.
     const DEFAULT_NETWORK_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
-    /// Collects the statistics continuously and publishes them until every receiver is dropped.
+    /// Reads the counters every DEFAULT_NETWORK_REFRESH_INTERVAL and publishes the bandwidth
+    /// over the last interval, until every receiver is dropped.
     async fn run(self, tx: watch::Sender<Option<NetworkStats>>) {
+        let mut ticker = interval(Self::DEFAULT_NETWORK_REFRESH_INTERVAL);
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+        // The first tick completes immediately.
+        ticker.tick().await;
+        let mut previous = self.read_counters();
         loop {
-            let stats = self.collect().await;
-            if tx.send(Some(stats)).is_err() {
+            ticker.tick().await;
+            let current = self.read_counters();
+            if tx.send(Some(self.calculate(previous, current))).is_err() {
                 return;
             }
+
+            previous = current;
         }
     }
 
-    /// Measures network traffic over DEFAULT_NETWORK_REFRESH_INTERVAL to calculate
-    /// current receive and transmit bandwidth.
-    async fn collect(&self) -> NetworkStats {
-        // Initialize sysinfo network.
-        let mut networks = Networks::new_with_refreshed_list();
-
-        // Sleep to calculate the network traffic difference over
-        // the DEFAULT_NETWORK_REFRESH_INTERVAL.
-        tokio::time::sleep(Self::DEFAULT_NETWORK_REFRESH_INTERVAL).await;
-
-        // Refresh network information to get updated statistics.
-        networks.refresh(true);
-        let Some(network_stats) = networks.get(self.interface_name.as_str()) else {
-            warn!(
-                "can not find network data for interface {}",
-                self.interface_name
-            );
-            return NetworkStats {
-                max_rx_bandwidth: self.bandwidth,
-                max_tx_bandwidth: self.bandwidth,
-                ..Default::default()
-            };
+    /// Calculates the receive and transmit bandwidth between two readings of the counters.
+    fn calculate(&self, previous: Option<Counters>, current: Option<Counters>) -> NetworkStats {
+        let mut stats = NetworkStats {
+            max_rx_bandwidth: self.bandwidth,
+            max_tx_bandwidth: self.bandwidth,
+            ..Default::default()
         };
 
-        // Calculate the receive bandwidth in bits per second.
-        let rx_bandwidth = (Network::bytes_to_bits(network_stats.received()) as f64
-            / Self::DEFAULT_NETWORK_REFRESH_INTERVAL.as_secs_f64())
-        .round() as u64;
+        let (Some(previous), Some(current)) = (previous, current) else {
+            return stats;
+        };
 
-        // Calculate the transmit bandwidth in bits per second.
-        let tx_bandwidth = (Network::bytes_to_bits(network_stats.transmitted()) as f64
-            / Self::DEFAULT_NETWORK_REFRESH_INTERVAL.as_secs_f64())
-        .round() as u64;
+        let elapsed = current
+            .read_at
+            .duration_since(previous.read_at)
+            .as_secs_f64();
+        let bandwidth = |previous_bytes: u64, current_bytes: u64| {
+            // The counters start over when the interface is recreated.
+            let bytes = current_bytes.saturating_sub(previous_bytes);
+            (Network::bytes_to_bits(bytes) as f64 / elapsed).round() as u64
+        };
 
+        stats.rx_bandwidth = Some(bandwidth(previous.rx_bytes, current.rx_bytes));
+        stats.tx_bandwidth = Some(bandwidth(previous.tx_bytes, current.tx_bytes));
         debug!(
-            "network interface {} max receive bandwidth: {} bps, receive bandwidth: {} bps, max transmit bandwidth: {} bps, transmit bandwidth: {} bps",
-            self.interface_name, self.bandwidth, rx_bandwidth, self.bandwidth, tx_bandwidth
+            "network interface {:?} max bandwidth: {} bps, receive bandwidth: {:?} bps, transmit bandwidth: {:?} bps",
+            self.interface_name, self.bandwidth, stats.rx_bandwidth, stats.tx_bandwidth
         );
 
-        NetworkStats {
-            max_rx_bandwidth: self.bandwidth,
-            rx_bandwidth: Some(rx_bandwidth),
-            max_tx_bandwidth: self.bandwidth,
-            tx_bandwidth: Some(tx_bandwidth),
+        stats
+    }
+
+    /// Reads the counters of the interface from sysfs. Unlike getifaddrs, which sysinfo
+    /// uses, this does not take the kernel RTNL lock.
+    fn read_counters(&self) -> Option<Counters> {
+        #[cfg(target_os = "linux")]
+        {
+            let interface_name = self.interface_name.as_deref()?;
+            let read = |counter: &str| {
+                let path = format!("/sys/class/net/{interface_name}/statistics/{counter}");
+                std::fs::read_to_string(&path)
+                    .inspect_err(|err| warn!("can not read {}: {}", path, err))
+                    .ok()?
+                    .trim()
+                    .parse::<u64>()
+                    .ok()
+            };
+
+            Some(Counters {
+                read_at: Instant::now(),
+                rx_bytes: read("rx_bytes")?,
+                tx_bytes: read("tx_bytes")?,
+            })
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
         }
     }
 }
@@ -266,7 +326,6 @@ mod tests {
     use super::*;
     use bytesize::ByteSize;
     use std::net::Ipv4Addr;
-    use std::time::Instant;
     use tokio::task::JoinSet;
 
     #[tokio::test]
@@ -306,6 +365,77 @@ mod tests {
         assert_eq!(stats.max_tx_bandwidth, 800_000_000);
         assert_eq!(stats.rx_bandwidth, None);
         assert_eq!(stats.tx_bandwidth, None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn collector_measures_loopback_traffic() {
+        use std::net::UdpSocket;
+
+        let mut network = Network::new(IpAddr::V4(Ipv4Addr::LOCALHOST), ByteSize::gb(10));
+
+        let first = network.get_stats().await.unwrap();
+        assert_eq!(first.rx_bandwidth, None);
+        assert_eq!(first.tx_bandwidth, None);
+
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let payload = vec![0u8; 1024];
+        let deadline = Instant::now() + StatsCollector::DEFAULT_NETWORK_REFRESH_INTERVAL * 5;
+        while Instant::now() < deadline {
+            for _ in 0..100 {
+                sender
+                    .send_to(&payload, receiver.local_addr().unwrap())
+                    .unwrap();
+            }
+
+            let stats = network.get_stats().await.unwrap();
+            if stats.rx_bandwidth.is_some_and(|rx| rx > 0) {
+                assert!(stats.tx_bandwidth.unwrap() > 0);
+                return;
+            }
+        }
+
+        panic!("loopback traffic was not measured");
+    }
+
+    #[test]
+    fn calculate_returns_the_bandwidth_between_two_readings() {
+        let collector = StatsCollector {
+            interface_name: Some("eth0".to_string()),
+            bandwidth: 1_000,
+        };
+        let start = Instant::now();
+        let counters = |seconds: u64, rx_bytes: u64, tx_bytes: u64| Counters {
+            read_at: start + Duration::from_secs(seconds),
+            rx_bytes,
+            tx_bytes,
+        };
+
+        let test_cases = vec![
+            (
+                Some(counters(0, 1_000, 2_000)),
+                Some(counters(2, 3_000, 2_500)),
+                Some(8_000),
+                Some(2_000),
+            ),
+            (
+                Some(counters(0, 5_000, 5_000)),
+                Some(counters(1, 1_000, 6_000)),
+                Some(0),
+                Some(8_000),
+            ),
+            (None, Some(counters(1, 1_000, 1_000)), None, None),
+            (Some(counters(0, 1_000, 1_000)), None, None, None),
+        ];
+
+        for (previous, current, rx_bandwidth, tx_bandwidth) in test_cases {
+            let stats = collector.calculate(previous, current);
+            assert_eq!(stats.max_rx_bandwidth, 1_000);
+            assert_eq!(stats.max_tx_bandwidth, 1_000);
+            assert_eq!(stats.rx_bandwidth, rx_bandwidth);
+            assert_eq!(stats.tx_bandwidth, tx_bandwidth);
+        }
     }
 
     #[test]
