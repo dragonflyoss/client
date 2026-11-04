@@ -436,9 +436,8 @@ pub(crate) async fn write_encrypted_range<R: AsyncRead + Unpin + ?Sized>(
         let path = path.to_path_buf();
         let encryption = encryption.clone();
         let write_offset = offset;
-        let pending = fd.spawn_blocking(move |fd| {
-            encryption.write_at(fd, &path, write_offset, &buffer)
-        })?;
+        let pending =
+            fd.spawn_blocking(move |fd| encryption.write_at(fd, &path, write_offset, &buffer))?;
         pending.await.map_err(io::Error::other)??;
 
         offset += filled as u64;

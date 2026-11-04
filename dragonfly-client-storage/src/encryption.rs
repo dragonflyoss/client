@@ -588,7 +588,7 @@ mod tests {
                     &content[offset as usize..(offset + length) as usize],
                 )
                 .unwrap();
-            offset += length as u64;
+            offset += length;
         }
         assert_eq!(offset as usize, content.len());
         assert_eq!(
