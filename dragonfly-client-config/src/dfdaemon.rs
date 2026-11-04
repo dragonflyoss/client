@@ -1066,6 +1066,20 @@ pub enum WritebackMode {
     Off,
 }
 
+/// The encrypted content storage configuration for dfdaemon.
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct StorageEncryption {
+    /// Indicates whether content is encrypted before it is written to disk.
+    pub enable: bool,
+
+    /// The path to a file containing a raw 32-byte or 64-character hexadecimal key.
+    pub key_file: Option<PathBuf>,
+
+    /// The name of an environment variable containing a 64-character hexadecimal key.
+    pub key_env: Option<String>,
+}
+
 /// The storage configuration for dfdaemon.
 #[derive(Debug, Clone, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -1076,6 +1090,10 @@ pub struct Storage {
     /// The writeback mode for written piece ranges, default is async.
     #[serde(default)]
     pub writeback_mode: WritebackMode,
+
+    /// The encrypted content storage configuration, disabled by default.
+    #[validate]
+    pub encryption: StorageEncryption,
 
     /// The directory to store task's metadata and content.
     #[serde(default = "crate::default_storage_dir")]
@@ -1149,6 +1167,7 @@ impl Default for Storage {
         Storage {
             server: StorageServer::default(),
             writeback_mode: WritebackMode::default(),
+            encryption: StorageEncryption::default(),
             dir: crate::default_storage_dir(),
             keep: default_storage_keep(),
             write_piece_timeout: default_storage_write_piece_timeout(),
@@ -2472,6 +2491,11 @@ mod tests {
                         "quicPort": 4006
                     },
                     "writebackMode": "sync",
+                    "encryption": {
+                        "enable": true,
+                        "keyFile": "/run/secrets/dragonfly-storage-key",
+                        "keyEnv": "DRAGONFLY_STORAGE_KEY"
+                    },
                     "dir": "/tmp/storage",
                     "keep": true,
                     "writePieceTimeout": "20s",
@@ -2485,6 +2509,15 @@ mod tests {
                     assert!(storage.server.tcp_fastopen);
                     assert_eq!(storage.server.quic_port, 4006);
                     assert_eq!(storage.writeback_mode, WritebackMode::Sync);
+                    assert!(storage.encryption.enable);
+                    assert_eq!(
+                        storage.encryption.key_file,
+                        Some(PathBuf::from("/run/secrets/dragonfly-storage-key"))
+                    );
+                    assert_eq!(
+                        storage.encryption.key_env.as_deref(),
+                        Some("DRAGONFLY_STORAGE_KEY")
+                    );
                     assert_eq!(storage.dir, PathBuf::from("/tmp/storage"));
                     assert!(storage.keep);
                     assert_eq!(storage.write_piece_timeout, Duration::from_secs(20));
@@ -2499,6 +2532,9 @@ mod tests {
                 assert!(!storage.server.tcp_fastopen);
                 assert_eq!(storage.server.quic_port, 4006);
                 assert_eq!(storage.writeback_mode, WritebackMode::Async);
+                assert!(!storage.encryption.enable);
+                assert!(storage.encryption.key_file.is_none());
+                assert!(storage.encryption.key_env.is_none());
                 assert_eq!(storage.dir, crate::default_storage_dir());
                 assert!(!storage.keep);
                 assert_eq!(storage.write_piece_timeout, Duration::from_secs(360));

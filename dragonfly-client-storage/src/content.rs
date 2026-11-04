@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use super::encryption::Encryption;
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_config::dfdaemon::{Config, WritebackMode};
 use dragonfly_client_core::Result;
@@ -109,6 +110,14 @@ impl Writeback {
 /// Creates a new Content instance to support linux and macos.
 pub async fn new_content(config: Arc<Config>, dir: &Path) -> Result<Content> {
     Content::new(config, dir).await
+}
+
+pub(crate) async fn new_content_with_encryption(
+    config: Arc<Config>,
+    dir: &Path,
+    encryption: Option<Arc<Encryption>>,
+) -> Result<Content> {
+    Content::new_with_encryption(config, dir, encryption).await
 }
 
 /// Calculates the target offset and length based on the piece range and

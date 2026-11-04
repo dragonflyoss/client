@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::encryption::Encryption;
 use bytes::{Bytes, BytesMut};
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::buffer_pool::BufferPool;
@@ -24,12 +25,20 @@ use std::fs::File;
 use std::future::Future;
 use std::io;
 use std::os::unix::fs::FileExt;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, ReadBuf};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+use tokio_util::io::StreamReader;
+
+#[derive(Clone)]
+struct EncryptedRangeReader {
+    encryption: Arc<Encryption>,
+    path: PathBuf,
+}
 
 /// The response of writing a range.
 pub struct WriteRangeResponse {
@@ -57,6 +66,8 @@ enum RangeReaderState {
 pub struct RangeReader {
     /// The shared file descriptor to read from.
     fd: Arc<File>,
+
+    encryption: Option<EncryptedRangeReader>,
 
     /// The offset of the next positional read.
     offset: u64,
@@ -97,6 +108,7 @@ impl RangeReader {
         let capacity = min(max(buffer_size, 1) as u64, length) as usize;
         Self {
             fd,
+            encryption: None,
             offset,
             remaining: length,
             capacity,
@@ -108,17 +120,54 @@ impl RangeReader {
         }
     }
 
+    pub(crate) fn new_encrypted(
+        fd: Arc<File>,
+        path: PathBuf,
+        encryption: Arc<Encryption>,
+        offset: u64,
+        length: u64,
+        buffer_size: usize,
+        buffer_pool: BufferPool,
+    ) -> Self {
+        let capacity = min(max(buffer_size, encryption.chunk_size()) as u64, length) as usize;
+        Self {
+            fd,
+            encryption: Some(EncryptedRangeReader { encryption, path }),
+            offset,
+            remaining: length,
+            capacity,
+            buffer: BytesMut::new(),
+            pos: 0,
+            filled: 0,
+            state: RangeReaderState::Idle,
+            buffer_pool,
+        }
+    }
+
+    pub fn is_encrypted(&self) -> bool {
+        self.encryption.is_some()
+    }
+
     /// Consumes the reader and returns the shared file descriptor, the offset
     /// of the next unconsumed byte, and the number of bytes left in the range,
     /// so zero-copy senders like sendfile can transmit the rest of the range
     /// directly from the file descriptor.
     pub fn into_parts(self) -> (Arc<File>, u64, u64) {
+        self.try_into_parts()
+            .expect("encrypted content cannot be read directly from its file descriptor")
+    }
+
+    pub fn try_into_parts(self) -> Option<(Arc<File>, u64, u64)> {
+        if self.encryption.is_some() {
+            return None;
+        }
+
         let buffered = (self.filled - self.pos) as u64;
-        (
+        Some((
             self.fd.clone(),
             self.offset - buffered,
             self.remaining + buffered,
-        )
+        ))
     }
 
     /// Returns the number of bytes left in the range.
@@ -143,12 +192,12 @@ impl RangeReader {
         }
 
         let len = min(self.capacity as u64, self.remaining) as usize;
-        let mut buffer = self.buffer_pool.checkout_for_read(len);
+        let buffer = self.buffer_pool.checkout_for_read(len);
         let fd = self.fd.clone();
         let offset = self.offset;
+        let encryption = self.encryption.clone();
         let (mut buffer, n) = tokio::task::spawn_blocking(move || {
-            let n = fd.read_at(&mut buffer, offset)?;
-            Ok::<_, io::Error>((buffer, n))
+            read_into_buffer(&fd, encryption, offset, buffer, len)
         })
         .await
         .map_err(io::Error::other)??;
@@ -159,6 +208,27 @@ impl RangeReader {
         buffer.truncate(n);
         Ok(self.buffer_pool.freeze(buffer))
     }
+}
+
+fn read_into_buffer(
+    fd: &File,
+    encryption: Option<EncryptedRangeReader>,
+    offset: u64,
+    mut buffer: BytesMut,
+    length: usize,
+) -> io::Result<(BytesMut, usize)> {
+    if let Some(encrypted) = encryption {
+        let plaintext = encrypted
+            .encryption
+            .read_at(fd, &encrypted.path, offset, length as u64)?;
+        let n = plaintext.len();
+        buffer.clear();
+        buffer.extend_from_slice(&plaintext);
+        return Ok((buffer, n));
+    }
+
+    let n = fd.read_at(&mut buffer, offset)?;
+    Ok((buffer, n))
 }
 
 /// Implements the drop of the range reader.
@@ -198,10 +268,10 @@ impl AsyncBufRead for RangeReader {
 
                     let fd = this.fd.clone();
                     let offset = this.offset;
+                    let encryption = this.encryption.clone();
                     this.state =
                         RangeReaderState::Reading(tokio::task::spawn_blocking(move || {
-                            let n = fd.read_at(&mut buffer, offset)?;
-                            Ok((buffer, n))
+                            read_into_buffer(&fd, encryption, offset, buffer, len)
                         }));
                 }
                 RangeReaderState::Reading(handle) => {
@@ -328,6 +398,78 @@ pub async fn write_range<R: AsyncRead + Unpin + ?Sized>(
         length,
         hash: hasher.finalize().to_string(),
     })
+}
+
+pub(crate) async fn write_encrypted_range<R: AsyncRead + Unpin + ?Sized>(
+    fd: &WriteFD,
+    path: &Path,
+    encryption: Arc<Encryption>,
+    offset: u64,
+    expected_length: u64,
+    reader: &mut R,
+) -> Result<WriteRangeResponse> {
+    let mut reader = reader.take(expected_length);
+    let mut hasher = crc32fast::Hasher::new();
+    let mut length = 0u64;
+    let mut offset = offset;
+    while length < expected_length {
+        let chunk_offset = offset % encryption.chunk_size() as u64;
+        let target = min(
+            encryption.chunk_size() as u64 - chunk_offset,
+            expected_length - length,
+        ) as usize;
+        let mut buffer = vec![0u8; target];
+        let mut filled = 0;
+        while filled < target {
+            let n = reader.read(&mut buffer[filled..]).await?;
+            if n == 0 {
+                break;
+            }
+            filled += n;
+        }
+        if filled == 0 {
+            break;
+        }
+
+        buffer.truncate(filled);
+        hasher.update(&buffer);
+        let path = path.to_path_buf();
+        let encryption = encryption.clone();
+        let write_offset = offset;
+        let pending = fd.spawn_blocking(move |fd| {
+            encryption.write_at(fd, &path, write_offset, &buffer)
+        })?;
+        pending.await.map_err(io::Error::other)??;
+
+        offset += filled as u64;
+        length += filled as u64;
+    }
+
+    if length != expected_length {
+        return Err(Error::Unknown(format!(
+            "expected length {expected_length} but got {length}"
+        )));
+    }
+
+    Ok(WriteRangeResponse {
+        length,
+        hash: hasher.finalize().to_string(),
+    })
+}
+
+pub(crate) async fn write_encrypted_range_from_stream<S>(
+    fd: &WriteFD,
+    path: &Path,
+    encryption: Arc<Encryption>,
+    offset: u64,
+    expected_length: u64,
+    stream: &mut S,
+) -> Result<WriteRangeResponse>
+where
+    S: Stream<Item = io::Result<Bytes>> + Unpin + ?Sized,
+{
+    let mut reader = StreamReader::new(stream);
+    write_encrypted_range(fd, path, encryption, offset, expected_length, &mut reader).await
 }
 
 /// Writes all the chunks to the file with vectored positional writes
