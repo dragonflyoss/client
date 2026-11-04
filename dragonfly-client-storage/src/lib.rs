@@ -17,7 +17,7 @@
 use bytes::{Bytes, BytesMut};
 use chrono::NaiveDateTime;
 use dragonfly_api::common::v2::Range;
-use dragonfly_client_config::dfdaemon::Config;
+use dragonfly_client_config::dfdaemon::{Config, StorageType};
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::digest::{Algorithm, Digest};
 use futures::Stream;
@@ -44,6 +44,8 @@ mod content_linux;
 
 #[cfg(target_os = "macos")]
 mod content_macos;
+
+mod content_memory;
 
 pub mod cache;
 pub mod client;
@@ -79,6 +81,8 @@ pub struct Storage {
     /// Implements the content storage.
     content: content::Content,
 
+    memory_content: Option<content_memory::MemoryContent>,
+
     /// Implements the cache storage.
     cache: cache::Cache,
 
@@ -96,6 +100,8 @@ impl Storage {
     pub async fn new(config: Arc<Config>, dir: &Path, log_dir: PathBuf) -> Result<Self> {
         let metadata = metadata::Metadata::new(config.clone(), dir, &log_dir)?;
         let content = content::new_content(config.clone(), dir).await?;
+        let memory_content = (config.storage.kind == StorageType::Memory)
+            .then(|| content_memory::MemoryContent::new(config.clone()));
         let cache = cache::Cache::new(config.clone());
 
         // Create temporary directory for output operations.
@@ -104,54 +110,85 @@ impl Storage {
             config,
             metadata,
             content,
+            memory_content,
             cache,
             piece_notifier: PieceNotifier::default(),
             page_cache: PageCache::new(),
         })
     }
 
-    /// Returns the total space of the disk.
+    /// Returns the total space of the storage.
     pub fn total_space(&self) -> Result<u64> {
-        self.content.total_space()
+        match &self.memory_content {
+            Some(content) => content.total_space(),
+            None => self.content.total_space(),
+        }
     }
 
-    /// Returns the available space of the disk.
+    /// Returns the available space of the storage.
     pub fn available_space(&self) -> Result<u64> {
-        self.content.available_space()
+        match &self.memory_content {
+            Some(content) => content.available_space(),
+            None => self.content.available_space(),
+        }
     }
 
     /// Checks if the storage has enough space to store the content.
     pub fn has_enough_space(&self, content_length: u64) -> Result<bool> {
-        self.content.has_enough_space(content_length)
+        match &self.memory_content {
+            Some(content) => content.has_enough_space(content_length),
+            None => self.content.has_enough_space(content_length),
+        }
     }
 
     /// Hard links the task content to the destination.
     #[instrument(level = "debug", skip_all)]
     pub async fn hard_link_task(&self, task_id: &str, to: &Path) -> Result<()> {
-        self.content.hard_link_task(task_id, to).await
+        match &self.memory_content {
+            Some(content) => content.hard_link_task(task_id, to).await,
+            None => self.content.hard_link_task(task_id, to).await,
+        }
     }
 
     /// Copies the task content to the destination.
     #[instrument(skip_all)]
     pub async fn copy_task(&self, id: &str, to: &Path) -> Result<()> {
-        self.content.copy_task(id, to).await
+        match &self.memory_content {
+            Some(content) => content.copy_task(id, to).await,
+            None => self.content.copy_task(id, to).await,
+        }
     }
 
     /// Drops the cached pages of the task content.
     #[instrument(level = "debug", skip_all)]
     pub async fn fadvise_dontneed_task(&self, id: &str) -> Result<()> {
-        self.content.fadvise_dontneed_task(id).await
+        match &self.memory_content {
+            Some(content) => content.fadvise_dontneed_task(id).await,
+            None => self.content.fadvise_dontneed_task(id).await,
+        }
     }
 
     /// Checks if the task content is on the same device inode as the
     /// destination.
     pub async fn is_same_dev_inode_as_task(&self, id: &str, to: &Path) -> Result<bool> {
-        self.content.is_same_dev_inode_as_task(id, to).await
+        match &self.memory_content {
+            Some(content) => content.is_same_dev_inode_as_task(id, to).await,
+            None => self.content.is_same_dev_inode_as_task(id, to).await,
+        }
     }
 
     /// Prepares the metadata of the task when the task downloads
     /// started.
     pub fn prepare_download_task(&self, id: &str) -> Result<(metadata::Task, bool)> {
+        if self
+            .memory_content
+            .as_ref()
+            .is_some_and(|content| !content.contains_task(id))
+            && self.metadata.is_task_exists(id)?
+        {
+            self.delete_memory_task_metadata(id);
+        }
+
         self.metadata.prepare_download_task(id)
     }
 
@@ -165,7 +202,17 @@ impl Storage {
         content_length: u64,
         response_header: Option<HeaderMap>,
     ) -> Result<metadata::Task> {
-        self.content.create_task(id, content_length).await?;
+        match &self.memory_content {
+            Some(content) => {
+                let evicted = content.create_task(id, content_length).await?;
+                for task_id in evicted {
+                    self.delete_memory_task_metadata(&task_id);
+                }
+            }
+            None => {
+                self.content.create_task(id, content_length).await?;
+            }
+        }
 
         self.metadata
             .download_task_started(id, piece_length, content_length, response_header)
@@ -198,19 +245,43 @@ impl Storage {
     /// Returns the task metadata.
     #[instrument(level = "debug", skip_all)]
     pub fn get_task(&self, id: &str) -> Result<Option<metadata::Task>> {
+        if self
+            .memory_content
+            .as_ref()
+            .is_some_and(|content| !content.contains_task(id))
+        {
+            return Ok(None);
+        }
+
         self.metadata.get_task(id)
     }
 
     /// Returns whether the task exists.
     #[instrument(level = "debug", skip_all)]
     pub fn is_task_exists(&self, id: &str) -> Result<bool> {
+        if self
+            .memory_content
+            .as_ref()
+            .is_some_and(|content| !content.contains_task(id))
+        {
+            return Ok(false);
+        }
+
         self.metadata.is_task_exists(id)
     }
 
     /// Returns the task metadatas.
     #[instrument(level = "debug", skip_all)]
     pub fn get_tasks(&self) -> Result<Vec<metadata::Task>> {
-        self.metadata.get_tasks()
+        let tasks = self.metadata.get_tasks()?;
+        if let Some(content) = &self.memory_content {
+            return Ok(tasks
+                .into_iter()
+                .filter(|task| content.contains_task(&task.id))
+                .collect());
+        }
+
+        Ok(tasks)
     }
 
     /// Deletes the task metadatas, task content and piece metadatas.
@@ -224,13 +295,46 @@ impl Storage {
             error!("delete piece metadatas failed: {}", err);
         });
 
-        self.content.delete_task(id).await.unwrap_or_else(|err| {
-            error!("delete task content failed: {}", err);
-        });
+        match &self.memory_content {
+            Some(content) => content.delete_task(id).await.unwrap_or_else(|err| {
+                info!("delete task from memory failed: {}", err);
+            }),
+            None => self.content.delete_task(id).await.unwrap_or_else(|err| {
+                error!("delete task content failed: {}", err);
+            }),
+        }
 
         let mut cache = self.cache.clone();
         cache.delete_task(id).await.unwrap_or_else(|err| {
             info!("delete task from cache failed: {}", err);
+        });
+    }
+
+    pub fn is_memory(&self) -> bool {
+        self.memory_content.is_some()
+    }
+
+    pub fn collect_memory_garbage(&self) -> Result<Vec<metadata::Task>> {
+        let Some(content) = &self.memory_content else {
+            return Ok(Vec::new());
+        };
+
+        let mut tasks = Vec::new();
+        for id in content.gc() {
+            if let Some(task) = self.metadata.get_task(&id)? {
+                tasks.push(task);
+            }
+            self.delete_memory_task_metadata(&id);
+        }
+        Ok(tasks)
+    }
+
+    fn delete_memory_task_metadata(&self, id: &str) {
+        self.metadata
+            .delete_task(id)
+            .unwrap_or_else(|err| error!("delete memory task metadata failed: {}", err));
+        self.metadata.delete_pieces(id).unwrap_or_else(|err| {
+            error!("delete memory piece metadatas failed: {}", err);
         });
     }
 
@@ -825,12 +929,14 @@ impl Storage {
             }
         }?;
 
-        self.page_cache.download_piece_finished(
-            piece_id,
-            self.content.get_task_path(task_id),
-            piece.offset,
-            piece.length,
-        );
+        if self.memory_content.is_none() {
+            self.page_cache.download_piece_finished(
+                piece_id,
+                self.content.get_task_path(task_id),
+                piece.offset,
+                piece.length,
+            );
+        }
         self.piece_notifier.remove_and_notify(piece_id);
         Ok(piece)
     }
@@ -848,10 +954,18 @@ impl Storage {
     where
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
-        let response = self
-            .content
-            .write_piece_from_stream(task_id, offset, length, stream)
-            .await?;
+        let response = match &self.memory_content {
+            Some(content) => {
+                content
+                    .write_piece_from_stream(task_id, offset, length, stream)
+                    .await?
+            }
+            None => {
+                self.content
+                    .write_piece_from_stream(task_id, offset, length, stream)
+                    .await?
+            }
+        };
 
         let digest = Digest::new(Algorithm::Crc32, response.hash);
         self.metadata.download_piece_finished(
@@ -889,12 +1003,14 @@ impl Storage {
             }
         }?;
 
-        self.page_cache.download_piece_finished(
-            piece_id,
-            self.content.get_task_path(task_id),
-            piece.offset,
-            piece.length,
-        );
+        if self.memory_content.is_none() {
+            self.page_cache.download_piece_finished(
+                piece_id,
+                self.content.get_task_path(task_id),
+                piece.offset,
+                piece.length,
+            );
+        }
         self.piece_notifier.remove_and_notify(piece_id);
         Ok(piece)
     }
@@ -915,10 +1031,18 @@ impl Storage {
     where
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
-        let response = self
-            .content
-            .write_piece_from_stream(task_id, offset, length, stream)
-            .await?;
+        let response = match &self.memory_content {
+            Some(content) => {
+                content
+                    .write_piece_from_stream(task_id, offset, length, stream)
+                    .await?
+            }
+            None => {
+                self.content
+                    .write_piece_from_stream(task_id, offset, length, stream)
+                    .await?
+            }
+        };
 
         let length = response.length;
         let digest = Digest::new(Algorithm::Crc32, response.hash);
@@ -979,11 +1103,20 @@ impl Storage {
         self.metadata.upload_task_started(task_id);
 
         // Return the piece metadata and the content of the piece.
-        match self
-            .content
-            .read_piece(task_id, piece.offset, piece.length, range)
-            .await
-        {
+        let reader = match &self.memory_content {
+            Some(content) => {
+                content
+                    .read_piece(task_id, piece.offset, piece.length, range)
+                    .await
+            }
+            None => {
+                self.content
+                    .read_piece(task_id, piece.offset, piece.length, range)
+                    .await
+            }
+        };
+
+        match reader {
             Ok(reader) => {
                 // Finish uploading the task.
                 self.metadata.upload_task_finished(task_id);
@@ -2031,6 +2164,113 @@ mod tests {
                 .await
                 .unwrap(),
         )
+    }
+
+    async fn memory_storage(dir: &Path, capacity: u64, ttl: Duration) -> Arc<Storage> {
+        let mut config = Config::default();
+        config.storage.kind = StorageType::Memory;
+        config.storage.capacity = bytesize::ByteSize::b(capacity);
+        config.gc.policy.task_ttl = ttl;
+        Arc::new(
+            Storage::new(Arc::new(config), dir, dir.to_path_buf())
+                .await
+                .unwrap(),
+        )
+    }
+
+    async fn download_bytes(storage: &Storage, task_id: &str, content: &'static [u8]) {
+        storage
+            .download_task_started(task_id, content.len() as u64, content.len() as u64, None)
+            .await
+            .unwrap();
+        let piece_id = storage.piece_id(task_id, 0);
+        storage
+            .download_piece_started(&piece_id, 0, 0, content.len() as u64)
+            .await
+            .unwrap();
+        let mut stream = futures::stream::iter([Ok(Bytes::from_static(content))]);
+        storage
+            .download_piece_from_source_finished(
+                &piece_id,
+                task_id,
+                0,
+                content.len() as u64,
+                &mut stream,
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+        storage.download_task_finished(task_id).unwrap();
+    }
+
+    #[tokio::test]
+    async fn memory_storage_routes_normal_task_reads_and_writes_through_memory() {
+        let dir = tempdir().unwrap();
+        let storage = memory_storage(dir.path(), 1024, Duration::from_secs(60)).await;
+        download_bytes(&storage, TASK_ID, CONTENT).await;
+        assert!(!storage.content.get_task_path(TASK_ID).exists());
+
+        let piece_id = storage.piece_id(TASK_ID, 0);
+        let (_, mut reader) = storage
+            .upload_piece(&piece_id, TASK_ID, None)
+            .await
+            .unwrap();
+        let mut content = Vec::new();
+        reader.read_to_end(&mut content).await.unwrap();
+        assert_eq!(content, CONTENT);
+
+        let output = dir.path().join("output");
+        storage.copy_task(TASK_ID, &output).await.unwrap();
+        assert_eq!(fs::read(output).await.unwrap(), CONTENT);
+        assert!(storage
+            .hard_link_task(TASK_ID, &dir.path().join("link"))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn memory_capacity_eviction_removes_task_and_piece_metadata() {
+        const TASK_1: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+        const TASK_2: &str = "0000000000000000000000000000000000000000000000000000000000000002";
+        const TASK_3: &str = "0000000000000000000000000000000000000000000000000000000000000003";
+
+        let dir = tempdir().unwrap();
+        let storage = memory_storage(dir.path(), 4, Duration::from_secs(60)).await;
+        download_bytes(&storage, TASK_1, b"aa").await;
+        download_bytes(&storage, TASK_2, b"bb").await;
+        let piece_1 = storage.piece_id(TASK_1, 0);
+        let (_, mut reader) = storage.upload_piece(&piece_1, TASK_1, None).await.unwrap();
+        let mut content = Vec::new();
+        reader.read_to_end(&mut content).await.unwrap();
+        assert_eq!(content, b"aa");
+
+        download_bytes(&storage, TASK_3, b"cc").await;
+        assert!(storage.get_task(TASK_1).unwrap().is_some());
+        assert!(storage.get_task(TASK_2).unwrap().is_none());
+        assert!(storage
+            .get_piece(&storage.piece_id(TASK_2, 0))
+            .unwrap()
+            .is_none());
+        assert_eq!(storage.total_space().unwrap(), 4);
+        assert_eq!(storage.available_space().unwrap(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn memory_gc_removes_expired_task_metadata() {
+        let dir = tempdir().unwrap();
+        let storage = memory_storage(dir.path(), 1024, Duration::from_secs(5)).await;
+        download_bytes(&storage, TASK_ID, CONTENT).await;
+        tokio::time::advance(Duration::from_secs(6)).await;
+
+        assert!(storage.get_task(TASK_ID).unwrap().is_none());
+        let tasks = storage.collect_memory_garbage().unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].id, TASK_ID);
+        assert_eq!(storage.available_space().unwrap(), 1024);
+        assert!(storage
+            .get_piece(&storage.piece_id(TASK_ID, 0))
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
