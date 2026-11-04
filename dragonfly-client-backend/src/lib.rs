@@ -423,6 +423,7 @@ impl BackendFactory {
                 enable_cache_temporary_redirect,
                 cache_temporary_redirect_ttl,
                 self.config.backend.enable_hickory_dns,
+                self.config.backend.insecure_skip_verify,
             )?),
         );
         info!("load [http] builtin backend");
@@ -436,6 +437,7 @@ impl BackendFactory {
                 enable_cache_temporary_redirect,
                 cache_temporary_redirect_ttl,
                 self.config.backend.enable_hickory_dns,
+                self.config.backend.insecure_skip_verify,
             )?),
         );
         info!("load [https] builtin backend");

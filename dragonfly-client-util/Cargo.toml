@@ -26,6 +26,7 @@ rcgen.workspace = true
 rustls.workspace = true
 rustls-pki-types.workspace = true
 rustls-pemfile.workspace = true
+rustls-native-certs = "0.8.1"
 fs2.workspace = true
 sha2.workspace = true
 uuid.workspace = true

@@ -44,7 +44,7 @@ use dragonfly_client_core::{
     error::{BackendError, ErrorType, OrErr},
     Error, Result,
 };
-use dragonfly_client_util::{http::validate_ranged_response, tls::NoVerifier};
+use dragonfly_client_util::{http::validate_ranged_response, tls::new_client_tls_config};
 use futures::{StreamExt, TryStreamExt};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_LENGTH, RANGE, USER_AGENT};
 use reqwest::Client;
@@ -208,11 +208,9 @@ pub struct HuggingFace {
 impl HuggingFace {
     /// Create a new HuggingFace backend.
     pub fn new(config: Arc<Config>) -> Result<Self> {
-        // Default TLS client config with no validation.
-        let client_config_builder = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(NoVerifier::new())
-            .with_no_client_auth();
+        // Default TLS client config verifying against the native roots, unless the
+        // verification is explicitly skipped.
+        let client_config_builder = new_client_tls_config(config.backend.insecure_skip_verify);
 
         let client = reqwest::Client::builder()
             .no_gzip()

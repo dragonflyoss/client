@@ -1474,6 +1474,13 @@ pub struct RegistryMirror {
         rename = "enableTaskIDBasedBlobDigest"
     )]
     pub enable_task_id_based_blob_digest: bool,
+
+    /// Skips the verification of the TLS certificate of the registry when no
+    /// `cert` is configured. By default the certificate is verified against the
+    /// root certificates of the operating system. Skipping the verification
+    /// exposes the pulled images to man-in-the-middle attacks and must only be
+    /// used with trusted networks.
+    pub insecure_skip_verify: bool,
 }
 
 /// Implement Default for RegistryMirror.
@@ -1483,6 +1490,7 @@ impl Default for RegistryMirror {
             addr: default_proxy_registry_mirror_addr(),
             cert: None,
             enable_task_id_based_blob_digest: default_enable_task_id_based_blob_digest(),
+            insecure_skip_verify: false,
         }
     }
 }
@@ -1760,6 +1768,14 @@ pub struct Backend {
         rename = "enableHickoryDNS"
     )]
     pub enable_hickory_dns: bool,
+
+    /// Skips the verification of the TLS certificates of the origin servers, e.g.
+    /// HTTPS, Hugging Face, ModelScope, OpenCSG and object storage endpoints. By
+    /// default the certificates are verified against the root certificates of the
+    /// operating system, or against the certificate given with the download
+    /// request. Skipping the verification exposes the downloaded content to
+    /// man-in-the-middle attacks and must only be used with trusted networks.
+    pub insecure_skip_verify: bool,
 }
 
 /// Implement Default for Backend.
@@ -1774,6 +1790,7 @@ impl Default for Backend {
             put_chunk_size: default_backend_put_chunk_size(),
             put_timeout: default_backend_put_timeout(),
             enable_hickory_dns: default_backend_enable_hickory_dns(),
+            insecure_skip_verify: false,
         }
     }
 }
@@ -1976,6 +1993,19 @@ mod tests {
         (ca_cert, cert, key)
     }
 
+    #[test]
+    fn tls_verification_is_on_by_default_and_can_be_skipped() {
+        let config = Config::default();
+        assert!(!config.backend.insecure_skip_verify);
+        assert!(!config.proxy.registry_mirror.insecure_skip_verify);
+
+        let backend: Backend = serde_json::from_str(r#"{"insecureSkipVerify": true}"#).unwrap();
+        assert!(backend.insecure_skip_verify);
+
+        let registry_mirror: RegistryMirror =
+            serde_json::from_str(r#"{"insecureSkipVerify": true}"#).unwrap();
+        assert!(registry_mirror.insecure_skip_verify);
+    }
     #[test]
     fn host_deserializes_fields() {
         let json = r#"{
