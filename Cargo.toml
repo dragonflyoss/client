@@ -88,6 +88,7 @@ opendal = { version = "0.55.0", default-features = false, features = [
   "services-webhdfs",
 ] }
 percent-encoding = "2.3.2"
+prost = "0.14.4"
 prost-wkt-types = "0.7"
 rcgen = { version = "0.12.1", features = ["x509-parser"] }
 regex = "1.12.3"
@@ -130,6 +131,7 @@ tokio-util = { version = "0.7.18", features = ["full"] }
 toml = "0.8.23"
 toml_edit = "0.25.12"
 tonic = { version = "=0.14.9", features = ["tls-aws-lc"] }
+tonic-prost = "=0.14.9"
 axum = { version = "=0.8.9", default-features = false }
 tonic-health = "=0.14.9"
 tonic-reflection = "=0.14.9"
