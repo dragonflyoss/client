@@ -19,7 +19,7 @@ use dragonfly_api::manager::v2::{
     manager_client::ManagerClient as ManagerGRPCClient, DeleteSeedPeerRequest,
     ListSchedulersRequest, ListSchedulersResponse, SeedPeer, UpdateSeedPeerRequest,
 };
-use dragonfly_client_config::dfdaemon::Manager;
+use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
@@ -30,19 +30,19 @@ use tonic_health::pb::health_check_response::ServingStatus;
 use tracing::{error, instrument};
 use url::Url;
 
-use super::interceptor::InjectTracingInterceptor;
+use super::interceptor::ClientInterceptor;
 
 /// Wrapper around the gRPC manager client.
 #[derive(Clone)]
 pub struct ManagerClient {
     /// gRPC client for the manager.
-    pub client: ManagerGRPCClient<InterceptedService<Channel, InjectTracingInterceptor>>,
+    pub client: ManagerGRPCClient<InterceptedService<Channel, ClientInterceptor>>,
 }
 
 /// Implements the grpc client of the manager.
 impl ManagerClient {
     /// Creates a new manager client.
-    pub async fn new(config: &Manager, addr: String) -> Result<Self> {
+    pub async fn new(config: &Config, addr: String) -> Result<Self> {
         let domain_name = Url::parse(addr.as_str())?
             .host_str()
             .ok_or(Error::InvalidParameter)
@@ -51,8 +51,16 @@ impl ManagerClient {
             })?
             .to_string();
 
-        let client_tls_config = config.load_client_tls_config(domain_name.as_str()).await?;
-        let health_client = HealthClient::new(addr.as_str(), client_tls_config.clone()).await?;
+        let client_tls_config = config
+            .manager
+            .load_client_tls_config(domain_name.as_str())
+            .await?;
+        let health_client = HealthClient::new(
+            addr.as_str(),
+            client_tls_config.clone(),
+            &config.security.jwt,
+        )
+        .await?;
         match health_client.check().await {
             Ok(resp) => {
                 if resp.status != ServingStatus::Serving as i32 {
@@ -94,9 +102,12 @@ impl ManagerClient {
                 .or_err(ErrorType::ConnectError)?,
         };
 
-        let client = ManagerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
-            .max_decoding_message_size(usize::MAX)
-            .max_encoding_message_size(usize::MAX);
+        let client = ManagerGRPCClient::with_interceptor(
+            channel,
+            ClientInterceptor::new(&config.security.jwt),
+        )
+        .max_decoding_message_size(usize::MAX)
+        .max_encoding_message_size(usize::MAX);
         Ok(Self { client })
     }
 
@@ -153,7 +164,7 @@ mod tests {
         ];
 
         for (addr, expect) in test_cases {
-            let err = ManagerClient::new(&Manager::default(), addr.to_string())
+            let err = ManagerClient::new(&Config::default(), addr.to_string())
                 .await
                 .err();
             expect(err);
