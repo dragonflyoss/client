@@ -169,6 +169,9 @@ pub struct BackendError {
 
     /// The headers of the response.
     pub header: Option<reqwest::header::HeaderMap>,
+
+    /// The body of the non-success backend response.
+    pub body: Option<Vec<u8>>,
 }
 
 /// The error when the download from parent is failed.
