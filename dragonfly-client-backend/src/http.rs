@@ -128,6 +128,10 @@ pub struct HTTP {
     /// Enable hickory DNS resolver for reqwest client. It can be enabled to improve DNS resolution
     /// performance
     enable_hickory_dns: bool,
+
+    /// The maximum duration allowed to establish a TCP/TLS connection to the backend. This
+    /// bounds connection establishment only, not the overall request duration.
+    connect_timeout: Duration,
 }
 
 /// Implements the http interface.
@@ -146,6 +150,7 @@ impl HTTP {
         enable_cache_temporary_redirect: bool,
         cache_temporary_redirect_ttl: Duration,
         enable_hickory_dns: bool,
+        connect_timeout: Duration,
     ) -> Result<HTTP> {
         // Disable automatic compression to prevent double-decompression issues.
         //
@@ -177,6 +182,7 @@ impl HTTP {
                 .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
                 .tcp_keepalive(KEEP_ALIVE_INTERVAL)
                 .tcp_nodelay(true)
+                .connect_timeout(connect_timeout)
                 .redirect(reqwest::redirect::Policy::custom(move |attempt| {
                     if enable_cache_temporary_redirect
                         && attempt.status() == reqwest::StatusCode::TEMPORARY_REDIRECT
@@ -213,6 +219,7 @@ impl HTTP {
             enable_cache_temporary_redirect,
             cache_temporary_redirect_ttl,
             enable_hickory_dns,
+            connect_timeout,
         })
     }
 
@@ -254,6 +261,7 @@ impl HTTP {
                     .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
                     .tcp_keepalive(KEEP_ALIVE_INTERVAL)
                     .tcp_nodelay(true)
+                    .connect_timeout(self.connect_timeout)
                     .redirect(reqwest::redirect::Policy::custom({
                         let enable_cache_temporary_redirect = self.enable_cache_temporary_redirect;
                         move |attempt| {
@@ -1212,7 +1220,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             ),
         ];
 
-        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            Duration::from_secs(10),
+        )
+        .unwrap();
         for (mocks, expect) in test_cases {
             let server = MockServer::start().await;
             for mock in mocks {
@@ -1372,7 +1389,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             ),
         ];
 
-        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            Duration::from_secs(10),
+        )
+        .unwrap();
         for (mocks, range, expect) in test_cases {
             let server = MockServer::start().await;
             for mock in mocks {
@@ -1410,7 +1436,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             (vec![(Some("bytes=0-"), 416), (None, 200)], true),
         ];
 
-        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            Duration::from_secs(10),
+        )
+        .unwrap();
         for (responses, expected) in test_cases {
             let server = MockServer::start().await;
             for &(range, status) in &responses {
@@ -1443,9 +1478,68 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     }
 
     #[tokio::test]
+    async fn get_fails_promptly_when_connect_times_out() {
+        install_crypto_provider();
+
+        // 203.0.113.0/24 is reserved for documentation (RFC 5737) and must never be routed,
+        // so connection attempts to it will hang (rather than fail immediately) on networks
+        // that silently drop the traffic, exercising the connect timeout.
+        let unroutable_url = "http://203.0.113.1/whatever";
+        let short_connect_timeout = Duration::from_millis(200);
+
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            0,
+            true,
+            Duration::from_secs(600),
+            true,
+            short_connect_timeout,
+        )
+        .unwrap();
+
+        let started_at = Instant::now();
+        // The connect timeout (not the overall request timeout, set generously high here) is
+        // what must bound this call, so a hang would mean the connect timeout was not applied.
+        let response = tokio::time::timeout(
+            Duration::from_secs(5),
+            http.stat(StatRequest {
+                task_id: "test".to_string(),
+                url: unroutable_url.to_string(),
+                http_header: Some(HeaderMap::new()),
+                timeout: Duration::from_secs(30),
+                client_cert: None,
+                object_storage: None,
+                hdfs: None,
+                hugging_face: None,
+                model_scope: None,
+                open_csg: None,
+            }),
+        )
+        .await
+        .expect("connect timeout did not fail promptly, request hung instead")
+        .unwrap();
+
+        assert!(!response.success);
+        assert!(
+            started_at.elapsed() < Duration::from_secs(5),
+            "request took longer than expected for a {short_connect_timeout:?} connect timeout"
+        );
+    }
+
+    #[tokio::test]
     async fn requests_without_header_are_rejected() {
         install_crypto_provider();
-        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            Duration::from_secs(10),
+        )
+        .unwrap();
         let url = "http://127.0.0.1/missing";
 
         let stat = http
@@ -1503,7 +1597,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     async fn connection_failures_are_reported_per_operation() {
         install_crypto_provider();
         let url = format!("{}/file", start_closing_server().await);
-        let http = HTTP::new(HTTP_SCHEME, None, 0, true, Duration::from_secs(600), true).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            0,
+            true,
+            Duration::from_secs(600),
+            true,
+            Duration::from_secs(10),
+        )
+        .unwrap();
 
         let stat = http
             .stat(StatRequest {
@@ -1591,7 +1694,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
         ];
 
         let server_url = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let http = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+        let http = HTTP::new(
+            HTTPS_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            Duration::from_secs(10),
+        )
+        .unwrap();
         for (ca_pem, expect_stat, expect_get) in test_cases {
             let client_cert = ca_pem.map(|pem| load_certs_from_pem(pem).unwrap());
             let response = http
@@ -1759,6 +1871,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 true,
                 Duration::from_secs(600),
                 true,
+                Duration::from_secs(10),
             )
             .unwrap();
 
@@ -1823,7 +1936,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 .mount(&server)
                 .await;
 
-            let http = HTTP::new(HTTP_SCHEME, None, 1, enable_cache, ttl, true).unwrap();
+            let http = HTTP::new(
+                HTTP_SCHEME,
+                None,
+                1,
+                enable_cache,
+                ttl,
+                true,
+                Duration::from_secs(10),
+            )
+            .unwrap();
             let url = format!("{}/redirect", server.uri());
             for _ in 0..2 {
                 let mut response = http
