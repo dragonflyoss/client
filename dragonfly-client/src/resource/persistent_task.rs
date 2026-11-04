@@ -456,7 +456,7 @@ impl PersistentTask {
 
         // Create and fallocate the persistent task in storage.
         self.storage
-            .create_persistent_task(task_id, content_length)
+            .create_persistent_task(task_id, piece_length, content_length)
             .await?;
 
         // Initialize the join set.

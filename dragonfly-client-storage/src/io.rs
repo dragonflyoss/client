@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use crate::encryption::EncryptedRangeReader;
 use bytes::{Bytes, BytesMut};
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::buffer_pool::BufferPool;
@@ -38,7 +39,7 @@ pub struct WriteRangeResponse {
     pub hash: String,
 }
 
-/// The state of the in-flight read of the RangeReader.
+/// The state of the in-flight read of the FileRangeReader.
 enum RangeReaderState {
     /// No read is in flight, the buffer may hold unread data.
     Idle,
@@ -48,11 +49,108 @@ enum RangeReaderState {
     Reading(JoinHandle<io::Result<(BytesMut, usize)>>),
 }
 
-/// RangeReader reads a fixed range of a file with positional reads on a shared
+/// RangeReader reads a fixed plaintext range of a piece of a task, either
+/// directly from the plaintext file or by decrypting the chunks of an
+/// encrypted file.
+pub enum RangeReader {
+    /// The reader of a plaintext file.
+    File(FileRangeReader),
+
+    /// The reader of an encrypted file, boxed to keep the reader small when
+    /// it is handed back by `into_parts`.
+    Encrypted(Box<EncryptedRangeReader>),
+}
+
+/// Implements the range reader.
+impl RangeReader {
+    /// Creates a new RangeReader reading `length` bytes starting at `offset`
+    /// of the plaintext file.
+    pub fn new(
+        fd: Arc<File>,
+        offset: u64,
+        length: u64,
+        buffer_size: usize,
+        buffer_pool: BufferPool,
+    ) -> Self {
+        RangeReader::File(FileRangeReader::new(
+            fd,
+            offset,
+            length,
+            buffer_size,
+            buffer_pool,
+        ))
+    }
+
+    /// Consumes the reader and returns the shared file descriptor, the offset
+    /// of the next unconsumed byte, and the number of bytes left in the range,
+    /// so zero-copy senders like sendfile can transmit the rest of the range
+    /// directly from the file descriptor. The reader is handed back when its
+    /// bytes cannot be sent from the file descriptor, e.g. they are encrypted
+    /// on disk.
+    pub fn into_parts(self) -> std::result::Result<(Arc<File>, u64, u64), Self> {
+        match self {
+            RangeReader::File(reader) => Ok(reader.into_parts()),
+            reader => Err(reader),
+        }
+    }
+
+    /// Returns the number of bytes left in the range.
+    pub fn remaining(&self) -> u64 {
+        match self {
+            RangeReader::File(reader) => reader.remaining(),
+            RangeReader::Encrypted(reader) => reader.remaining(),
+        }
+    }
+
+    /// Reads the next chunk of the range directly into the owned buffer it
+    /// returns.
+    pub async fn read_chunk(&mut self) -> Result<Bytes> {
+        match self {
+            RangeReader::File(reader) => reader.read_chunk().await,
+            RangeReader::Encrypted(reader) => reader.read_chunk().await,
+        }
+    }
+}
+
+/// Implements the buffered read for the range reader.
+impl AsyncBufRead for RangeReader {
+    /// Polls the inner reader to fill its buffer.
+    fn poll_fill_buf(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
+        match self.get_mut() {
+            RangeReader::File(reader) => Pin::new(reader).poll_fill_buf(cx),
+            RangeReader::Encrypted(reader) => Pin::new(reader).poll_fill_buf(cx),
+        }
+    }
+
+    /// Consumes `amt` bytes from the buffer of the inner reader.
+    fn consume(self: Pin<&mut Self>, amt: usize) {
+        match self.get_mut() {
+            RangeReader::File(reader) => Pin::new(reader).consume(amt),
+            RangeReader::Encrypted(reader) => Pin::new(reader).consume(amt),
+        }
+    }
+}
+
+/// Implements the read for the range reader.
+impl AsyncRead for RangeReader {
+    /// Polls the inner reader to fill the provided buffer.
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            RangeReader::File(reader) => Pin::new(reader).poll_read(cx, buffer),
+            RangeReader::Encrypted(reader) => Pin::new(reader).poll_read(cx, buffer),
+        }
+    }
+}
+
+/// FileRangeReader reads a fixed range of a file with positional reads on a shared
 /// file descriptor. It never seeks the descriptor and fills a single reusable
 /// buffer sized to the range, instead of allocating a full read buffer and
 /// seeking for every piece.
-pub struct RangeReader {
+pub struct FileRangeReader {
     /// The shared file descriptor to read from.
     fd: Arc<File>,
 
@@ -82,9 +180,9 @@ pub struct RangeReader {
     buffer_pool: BufferPool,
 }
 
-/// Implements the range reader.
-impl RangeReader {
-    /// Creates a new RangeReader reading `length` bytes starting at `offset`.
+/// Implements the file range reader.
+impl FileRangeReader {
+    /// Creates a new FileRangeReader reading `length` bytes starting at `offset`.
     pub fn new(
         fd: Arc<File>,
         offset: u64,
@@ -159,8 +257,8 @@ impl RangeReader {
     }
 }
 
-/// Implements the drop of the range reader.
-impl Drop for RangeReader {
+/// Implements the drop of the file range reader.
+impl Drop for FileRangeReader {
     /// Returns the read buffer to the buffer pool. The buffer is empty
     /// when no buffered read happened or a read is still in flight, and is
     /// skipped in that case.
@@ -172,8 +270,8 @@ impl Drop for RangeReader {
     }
 }
 
-/// Implements the buffered read for the RangeReader.
-impl AsyncBufRead for RangeReader {
+/// Implements the buffered read for the FileRangeReader.
+impl AsyncBufRead for FileRangeReader {
     /// Polls the buffer to fill it with more data, returning a slice of the filled
     /// buffer. The buffer is filled with a positional read on the blocking thread pool, and the
     /// buffer is reused for subsequent reads.
@@ -227,8 +325,8 @@ impl AsyncBufRead for RangeReader {
     }
 }
 
-/// Implements the read for the RangeReader.
-impl AsyncRead for RangeReader {
+/// Implements the read for the FileRangeReader.
+impl AsyncRead for FileRangeReader {
     /// Polls the read to fill the provided buffer with data from the range. It uses
     /// the buffered read to fill the buffer, and consumes the filled bytes.
     fn poll_read(
@@ -637,7 +735,9 @@ mod tests {
 
             assert_eq!(reader.remaining(), expected_remaining);
 
-            let (parts_fd, offset, remaining) = reader.into_parts();
+            let Ok((parts_fd, offset, remaining)) = reader.into_parts() else {
+                panic!("file reader must expose its parts");
+            };
             assert!(Arc::ptr_eq(&parts_fd, &fd));
             assert_eq!(offset, expected_offset);
             assert_eq!(remaining, expected_remaining);
