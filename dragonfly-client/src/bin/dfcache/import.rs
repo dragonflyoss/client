@@ -17,6 +17,10 @@
 use bytesize::ByteSize;
 use clap::Parser;
 use dragonfly_api::dfdaemon::v2::UploadPersistentCacheTaskRequest;
+use dragonfly_client::grpc::dfdaemon_download::{
+    UploadPersistentCacheTaskContentMetadata, UploadPersistentCacheTaskContentRequest,
+    UPLOAD_PERSISTENT_CACHE_TASK_CONTENT_CHUNK_SIZE,
+};
 use dragonfly_client::resource::piece::MIN_PIECE_LENGTH;
 use dragonfly_client::terminal;
 use dragonfly_client_config::dfcache::default_dfcache_persistent_replica_count;
@@ -25,11 +29,16 @@ use dragonfly_client_core::{
     Error, Result,
 };
 use dragonfly_client_util::net::preferred_local_ip;
+use futures::Stream;
 use indicatif::{ProgressBar, ProgressStyle};
 use path_absolutize::*;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tracing::info;
+use tokio::fs::File;
+use tokio_stream::StreamExt;
+use tokio_util::io::ReaderStream;
+use tracing::{error, info};
 
 use super::*;
 
@@ -109,6 +118,14 @@ pub struct ImportCommand {
     endpoint: PathBuf,
 
     #[arg(
+        long = "transfer-to-dfdaemon",
+        default_value_t = false,
+        env = "DFCACHE_IMPORT_TRANSFER_TO_DFDAEMON",
+        help = "Stream file content to dfdaemon over the unix domain socket. Enable this when the source path is not visible in dfdaemon's mount namespace, such as when dfcache runs in a Kubernetes Pod with only the socket mounted. By default, dfcache preserves the legacy behavior and sends only the absolute path."
+    )]
+    transfer_to_dfdaemon: bool,
+
+    #[arg(
         long,
         default_value_t = false,
         env = "DFCACHE_IMPORT_NO_PROGRESS",
@@ -132,6 +149,39 @@ pub struct ImportCommand {
         help = "Specify whether to print log"
     )]
     console: bool,
+}
+
+#[derive(Clone, Default)]
+struct ContentReadError(Arc<Mutex<Option<std::io::Error>>>);
+
+impl ContentReadError {
+    fn set(&self, error: std::io::Error) {
+        *self.0.lock().unwrap() = Some(error);
+    }
+
+    fn take(&self) -> Option<std::io::Error> {
+        self.0.lock().unwrap().take()
+    }
+}
+
+fn content_chunk_stream(
+    file: File,
+) -> (
+    impl Stream<Item = UploadPersistentCacheTaskContentRequest>,
+    ContentReadError,
+) {
+    let read_error = ContentReadError::default();
+    let stream_read_error = read_error.clone();
+    let stream = ReaderStream::with_capacity(file, UPLOAD_PERSISTENT_CACHE_TASK_CONTENT_CHUNK_SIZE)
+        .map_while(move |result| match result {
+            Ok(chunk) => Some(UploadPersistentCacheTaskContentRequest::chunk(chunk)),
+            Err(err) => {
+                error!("read import file content failed: {}", err);
+                stream_read_error.set(err);
+                None
+            }
+        });
+    (stream, read_error)
 }
 
 /// Implement the execute for ImportCommand.
@@ -237,24 +287,47 @@ impl ImportCommand {
         );
         progress_bar.set_message("Importing...");
 
-        let persistent_cache_task = dfdaemon_download_client
-            .upload_persistent_cache_task(UploadPersistentCacheTaskRequest {
-                content_for_calculating_task_id: self.content_for_calculating_task_id.clone(),
-                path: absolute_path.to_string_lossy().to_string(),
-                persistent_replica_count: self.persistent_replica_count,
-                tag: self.tag.clone(),
-                application: self.application.clone(),
-                piece_length: self.piece_length.map(|piece_length| piece_length.as_u64()),
-                ttl: Some(
-                    prost_wkt_types::Duration::try_from(self.ttl).or_err(ErrorType::ParseError)?,
-                ),
-                timeout: Some(
-                    prost_wkt_types::Duration::try_from(self.timeout)
-                        .or_err(ErrorType::ParseError)?,
-                ),
-                remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
-            })
-            .await?;
+        let request = UploadPersistentCacheTaskRequest {
+            content_for_calculating_task_id: self.content_for_calculating_task_id.clone(),
+            path: absolute_path.to_string_lossy().to_string(),
+            persistent_replica_count: self.persistent_replica_count,
+            tag: self.tag.clone(),
+            application: self.application.clone(),
+            piece_length: self.piece_length.map(|piece_length| piece_length.as_u64()),
+            ttl: Some(prost_wkt_types::Duration::try_from(self.ttl).or_err(ErrorType::ParseError)?),
+            timeout: Some(
+                prost_wkt_types::Duration::try_from(self.timeout).or_err(ErrorType::ParseError)?,
+            ),
+            remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
+        };
+
+        let persistent_cache_task = if self.transfer_to_dfdaemon {
+            let file = File::open(absolute_path.as_ref()).await?;
+            let content_length = file.metadata().await?.len();
+            let metadata = UploadPersistentCacheTaskContentMetadata {
+                content_for_calculating_task_id: request.content_for_calculating_task_id,
+                content_length,
+                persistent_replica_count: request.persistent_replica_count,
+                tag: request.tag,
+                application: request.application,
+                piece_length: request.piece_length,
+                ttl: request.ttl,
+                timeout: request.timeout,
+                remote_ip: request.remote_ip,
+            };
+            let (content, read_error) = content_chunk_stream(file);
+            let result = dfdaemon_download_client
+                .upload_persistent_cache_task_content(metadata, content)
+                .await;
+            if let Some(err) = read_error.take() {
+                return Err(err.into());
+            }
+            result?
+        } else {
+            dfdaemon_download_client
+                .upload_persistent_cache_task(request)
+                .await?
+        };
 
         progress_bar.finish_with_message(format!("Done: {}", persistent_cache_task.id));
         Ok(())
@@ -307,7 +380,21 @@ impl ImportCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
+    use dragonfly_client::grpc::dfdaemon_download::upload_persistent_cache_task_content_request;
     use tempfile::tempdir;
+
+    async fn read_content_chunks(path: &Path) -> Vec<Bytes> {
+        let file = File::open(path).await.unwrap();
+        let (stream, _) = content_chunk_stream(file);
+        stream
+            .map(|request| match request.request {
+                Some(upload_persistent_cache_task_content_request::Request::Chunk(chunk)) => chunk,
+                _ => panic!("file stream produced a non-chunk message"),
+            })
+            .collect()
+            .await
+    }
 
     #[test]
     fn validate_args_checks_ttl_path_and_piece_length() {
@@ -354,5 +441,70 @@ mod tests {
                 expected.map_err(|err| err.to_string())
             );
         }
+    }
+
+    #[tokio::test]
+    async fn content_chunk_stream_covers_empty_and_large_file_boundaries() {
+        let tempdir = tempdir().unwrap();
+        let path = tempdir.path().join("content.bin");
+        let lengths = [
+            0,
+            UPLOAD_PERSISTENT_CACHE_TASK_CONTENT_CHUNK_SIZE - 1,
+            UPLOAD_PERSISTENT_CACHE_TASK_CONTENT_CHUNK_SIZE,
+            UPLOAD_PERSISTENT_CACHE_TASK_CONTENT_CHUNK_SIZE + 1,
+            2 * UPLOAD_PERSISTENT_CACHE_TASK_CONTENT_CHUNK_SIZE + 17,
+        ];
+
+        for length in lengths {
+            let content: Vec<u8> = (0..length).map(|index| (index % 251) as u8).collect();
+            tokio::fs::write(&path, &content).await.unwrap();
+            let chunks = read_content_chunks(&path).await;
+            let expected_chunks = length.div_ceil(UPLOAD_PERSISTENT_CACHE_TASK_CONTENT_CHUNK_SIZE);
+            assert_eq!(chunks.len(), expected_chunks);
+            assert!(chunks.iter().all(|chunk| {
+                !chunk.is_empty() && chunk.len() <= UPLOAD_PERSISTENT_CACHE_TASK_CONTENT_CHUNK_SIZE
+            }));
+            assert_eq!(chunks.concat(), content);
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn content_chunk_stream_supports_non_utf8_filename() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let tempdir = tempdir().unwrap();
+        let path = tempdir
+            .path()
+            .join(OsString::from_vec(vec![b'f', 0x80, 0xff, b'e']));
+        let content = [0x00, 0xff, 0x80, 0x41];
+        tokio::fs::write(&path, content).await.unwrap();
+        let chunks = read_content_chunks(&path).await;
+        assert_eq!(chunks.concat(), content);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn content_chunk_stream_retains_source_read_error() {
+        let tempdir = tempdir().unwrap();
+        let file = File::open(tempdir.path()).await.unwrap();
+        let (stream, read_error) = content_chunk_stream(file);
+        let chunks: Vec<_> = stream.collect().await;
+        assert!(chunks.is_empty());
+        assert!(read_error.take().is_some());
+    }
+
+    #[test]
+    fn transfer_to_dfdaemon_is_opt_in() {
+        let tempdir = tempdir().unwrap();
+        let path = tempdir.path().join("content.bin");
+        std::fs::write(&path, b"content").unwrap();
+        let path = path.to_str().unwrap();
+
+        let command = ImportCommand::parse_from(["dfcache", path]);
+        assert!(!command.transfer_to_dfdaemon);
+        let command = ImportCommand::parse_from(["dfcache", path, "--transfer-to-dfdaemon"]);
+        assert!(command.transfer_to_dfdaemon);
     }
 }

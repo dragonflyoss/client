@@ -14,9 +14,14 @@
  * limitations under the License.
  */
 
+use self::dfdaemon_download_content_client::DfdaemonDownloadContentClient as DfdaemonDownloadContentGRPCClient;
+use self::dfdaemon_download_content_server::{
+    DfdaemonDownloadContent, DfdaemonDownloadContentServer as DfdaemonDownloadContentGRPCServer,
+};
 use crate::dynconfig::block_list::{DownloadBlockListCheckParams, UploadBlockListCheckParams};
 use crate::dynconfig::Dynconfig;
 use crate::resource::{persistent_cache_task, persistent_task, task};
+use bytes::Bytes;
 use dragonfly_api::common::v2::{
     CacheTask, PersistentCacheTask, PersistentTask, Priority, Task, TaskType,
 };
@@ -60,6 +65,7 @@ use dragonfly_client_metric::{
     collect_upload_task_blocked_metrics, collect_upload_task_failure_metrics,
     collect_upload_task_finished_metrics, collect_upload_task_started_metrics,
 };
+use dragonfly_client_storage::DEFAULT_TMP_DIR;
 use dragonfly_client_util::{
     digest::{is_blob_url, is_manifest_digest_url, verify_file_digest, Digest},
     http::{hashmap_to_headermap, headermap_to_hashmap, parse_range_header},
@@ -71,13 +77,15 @@ use dragonfly_client_util::{
     shutdown,
     types::redacted::{RedactedDownload, RedactedDownloadPersistentTaskRequest},
 };
+use futures::{Stream, StreamExt};
 use hyper_util::rt::TokioIo;
 use opentelemetry::Context;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::fs;
+use tokio::fs::{self, File, OpenOptions};
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
@@ -92,9 +100,90 @@ use tower::service_fn;
 use tracing::{debug, error, info, instrument, warn, Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
+use uuid::Uuid;
 
 use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
 use super::middleware::rate_limit;
+
+/// Maximum size of a single streamed persistent cache import chunk.
+pub const UPLOAD_PERSISTENT_CACHE_TASK_CONTENT_CHUNK_SIZE: usize = 1024 * 1024;
+
+/// Request for streaming persistent cache content to dfdaemon. The first message must contain
+/// metadata; subsequent messages must contain non-empty chunks up to the declared content length.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UploadPersistentCacheTaskContentRequest {
+    #[prost(
+        oneof = "upload_persistent_cache_task_content_request::Request",
+        tags = "1, 2"
+    )]
+    pub request: Option<upload_persistent_cache_task_content_request::Request>,
+}
+
+pub mod upload_persistent_cache_task_content_request {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Request {
+        #[prost(message, tag = "1")]
+        Metadata(super::UploadPersistentCacheTaskContentMetadata),
+        #[prost(bytes = "bytes", tag = "2")]
+        Chunk(::bytes::Bytes),
+    }
+}
+
+/// Metadata for a streamed persistent cache import. No client path is transmitted, so paths that
+/// are not valid UTF-8 or are invisible in dfdaemon's mount namespace are supported.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UploadPersistentCacheTaskContentMetadata {
+    #[prost(string, optional, tag = "1")]
+    pub content_for_calculating_task_id: Option<String>,
+    #[prost(uint64, tag = "2")]
+    pub content_length: u64,
+    #[prost(uint64, tag = "3")]
+    pub persistent_replica_count: u64,
+    #[prost(string, optional, tag = "4")]
+    pub tag: Option<String>,
+    #[prost(string, optional, tag = "5")]
+    pub application: Option<String>,
+    #[prost(uint64, optional, tag = "6")]
+    pub piece_length: Option<u64>,
+    #[prost(message, optional, tag = "7")]
+    pub ttl: Option<prost_wkt_types::Duration>,
+    #[prost(message, optional, tag = "8")]
+    pub timeout: Option<prost_wkt_types::Duration>,
+    #[prost(string, optional, tag = "9")]
+    pub remote_ip: Option<String>,
+}
+
+impl UploadPersistentCacheTaskContentRequest {
+    pub fn metadata(metadata: UploadPersistentCacheTaskContentMetadata) -> Self {
+        Self {
+            request: Some(
+                upload_persistent_cache_task_content_request::Request::Metadata(metadata),
+            ),
+        }
+    }
+
+    pub fn chunk(chunk: Bytes) -> Self {
+        Self {
+            request: Some(upload_persistent_cache_task_content_request::Request::Chunk(chunk)),
+        }
+    }
+}
+
+impl UploadPersistentCacheTaskContentMetadata {
+    fn into_upload_request(self, path: PathBuf) -> UploadPersistentCacheTaskRequest {
+        UploadPersistentCacheTaskRequest {
+            content_for_calculating_task_id: self.content_for_calculating_task_id,
+            path: path.to_string_lossy().to_string(),
+            persistent_replica_count: self.persistent_replica_count,
+            tag: self.tag,
+            application: self.application,
+            piece_length: self.piece_length,
+            ttl: self.ttl,
+            timeout: self.timeout,
+            remote_ip: self.remote_ip,
+        }
+    }
+}
 
 /// gRPC Unix server for download operations.
 pub struct DfdaemonDownloadServer {
@@ -169,6 +258,18 @@ impl DfdaemonDownloadServer {
             ExtractTracingInterceptor,
         );
 
+        let content_service = DfdaemonDownloadContentGRPCServer::with_interceptor(
+            DfdaemonDownloadServerHandler {
+                config: self.config.clone(),
+                dynconfig: self.dynconfig.clone(),
+                socket_path: self.socket_path.clone(),
+                task: self.task.clone(),
+                persistent_task: self.persistent_task.clone(),
+                persistent_cache_task: self.persistent_cache_task.clone(),
+            },
+            ExtractTracingInterceptor,
+        );
+
         // Register the reflection service.
         let reflection = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(dragonfly_api::FILE_DESCRIPTOR_SET)
@@ -204,6 +305,12 @@ impl DfdaemonDownloadServer {
             .add_service(reflection)
             .add_service(health_service)
             .add_service(rate_limit(
+                content_service,
+                self.config.download.server.request_rate_limit,
+                self.config.download.server.request_buffer_size,
+                self.bbr.clone(),
+            ))
+            .add_service(rate_limit(
                 service,
                 self.config.download.server.request_rate_limit,
                 self.config.download.server.request_buffer_size,
@@ -219,6 +326,9 @@ impl DfdaemonDownloadServer {
 
                         health_reporter
                             .set_serving::<DfdaemonDownloadGRPCServer<DfdaemonDownloadServerHandler>>()
+                            .await;
+                        health_reporter
+                            .set_serving::<DfdaemonDownloadContentGRPCServer<DfdaemonDownloadServerHandler>>()
                             .await;
 
                         info!("download server's health status set to serving");
@@ -2277,11 +2387,154 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
     }
 }
 
+#[async_trait::async_trait]
+impl DfdaemonDownloadContent for DfdaemonDownloadServerHandler {
+    #[instrument(skip_all)]
+    async fn upload_persistent_cache_task_content(
+        &self,
+        request: Request<tonic::Streaming<UploadPersistentCacheTaskContentRequest>>,
+    ) -> Result<Response<PersistentCacheTask>, Status> {
+        let parent_ctx = request.extensions().get::<Context>().cloned();
+        let staged_file = StagedFile::create(self.config.storage.dir.join(DEFAULT_TMP_DIR)).await?;
+        let (staged_file, metadata) = staged_file.receive(request.into_inner()).await?;
+        let path = staged_file.path.clone();
+        let mut upload_request = Request::new(metadata.into_upload_request(path));
+        if let Some(parent_ctx) = parent_ctx {
+            upload_request.extensions_mut().insert(parent_ctx);
+        }
+
+        let response = DfdaemonDownload::upload_persistent_cache_task(self, upload_request).await;
+        drop(staged_file);
+        response
+    }
+}
+
+struct StagedFile {
+    path: PathBuf,
+    file: File,
+}
+
+impl StagedFile {
+    async fn create(directory: PathBuf) -> Result<Self, Status> {
+        fs::create_dir_all(&directory)
+            .await
+            .map_err(|err| Status::internal(format!("create import staging directory: {err}")))?;
+        let path = directory.join(format!("dfcache-import-{}", Uuid::new_v4()));
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .await
+            .map_err(|err| Status::internal(format!("create staged import file: {err}")))?;
+        Ok(Self { path, file })
+    }
+
+    async fn receive<S>(
+        mut self,
+        stream: S,
+    ) -> Result<(Self, UploadPersistentCacheTaskContentMetadata), Status>
+    where
+        S: Stream<Item = Result<UploadPersistentCacheTaskContentRequest, Status>> + Unpin,
+    {
+        let metadata = receive_persistent_cache_task_content(stream, &mut self.file).await?;
+        Ok((self, metadata))
+    }
+}
+
+impl Drop for StagedFile {
+    fn drop(&mut self) {
+        if let Err(err) = std::fs::remove_file(&self.path) {
+            if err.kind() != std::io::ErrorKind::NotFound {
+                warn!(
+                    "remove staged import file {} failed: {}",
+                    self.path.display(),
+                    err
+                );
+            }
+        }
+    }
+}
+
+async fn receive_persistent_cache_task_content<S, W>(
+    mut stream: S,
+    writer: &mut W,
+) -> Result<UploadPersistentCacheTaskContentMetadata, Status>
+where
+    S: Stream<Item = Result<UploadPersistentCacheTaskContentRequest, Status>> + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    use upload_persistent_cache_task_content_request::Request as ContentRequest;
+
+    let metadata = match stream.next().await {
+        Some(Ok(UploadPersistentCacheTaskContentRequest {
+            request: Some(ContentRequest::Metadata(metadata)),
+        })) => metadata,
+        Some(Ok(_)) => {
+            return Err(Status::invalid_argument(
+                "first streamed import message must contain metadata",
+            ));
+        }
+        Some(Err(err)) => return Err(err),
+        None => return Err(Status::invalid_argument("missing streamed import metadata")),
+    };
+
+    let mut received_length = 0u64;
+    while let Some(message) = stream.next().await {
+        let chunk = match message? {
+            UploadPersistentCacheTaskContentRequest {
+                request: Some(ContentRequest::Chunk(chunk)),
+            } => chunk,
+            UploadPersistentCacheTaskContentRequest {
+                request: Some(ContentRequest::Metadata(_)),
+            } => {
+                return Err(Status::invalid_argument(
+                    "streamed import metadata must only appear once",
+                ));
+            }
+            _ => return Err(Status::invalid_argument("missing streamed import content")),
+        };
+
+        if chunk.is_empty() {
+            return Err(Status::invalid_argument("streamed import chunk is empty"));
+        }
+        if chunk.len() > UPLOAD_PERSISTENT_CACHE_TASK_CONTENT_CHUNK_SIZE {
+            return Err(Status::invalid_argument(format!(
+                "streamed import chunk exceeds {UPLOAD_PERSISTENT_CACHE_TASK_CONTENT_CHUNK_SIZE} bytes"
+            )));
+        }
+        if chunk.len() as u64 > metadata.content_length.saturating_sub(received_length) {
+            return Err(Status::invalid_argument(
+                "streamed import content exceeds declared content length",
+            ));
+        }
+
+        writer.write_all(&chunk).await.map_err(|err| {
+            Status::internal(format!("write staged persistent cache content: {err}"))
+        })?;
+        received_length += chunk.len() as u64;
+    }
+
+    if received_length != metadata.content_length {
+        return Err(Status::invalid_argument(format!(
+            "streamed import ended at {received_length} bytes, expected {}",
+            metadata.content_length
+        )));
+    }
+    writer
+        .flush()
+        .await
+        .map_err(|err| Status::internal(format!("flush staged persistent cache content: {err}")))?;
+    Ok(metadata)
+}
+
 /// A wrapper of DfdaemonDownloadGRPCClient.
 #[derive(Clone)]
 pub struct DfdaemonDownloadClient {
     /// The grpc client of the dfdaemon.
     pub client: DfdaemonDownloadGRPCClient<InterceptedService<Channel, InjectTracingInterceptor>>,
+
+    content_client:
+        DfdaemonDownloadContentGRPCClient<InterceptedService<Channel, InjectTracingInterceptor>>,
 }
 
 /// Dfdaemon download client implements the grpc client of the dfdaemon download.
@@ -2339,11 +2592,20 @@ impl DfdaemonDownloadClient {
                 .or_err(ErrorType::ConnectError)?,
         };
 
+        let content_client = DfdaemonDownloadContentGRPCClient::with_interceptor(
+            channel.clone(),
+            InjectTracingInterceptor,
+        )
+        .max_decoding_message_size(usize::MAX)
+        .max_encoding_message_size(usize::MAX);
         let client =
             DfdaemonDownloadGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
                 .max_decoding_message_size(usize::MAX)
                 .max_encoding_message_size(usize::MAX);
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            content_client,
+        })
     }
 
     /// Creates a new DfdaemonDownloadClient with unix domain socket.
@@ -2373,11 +2635,20 @@ impl DfdaemonDownloadClient {
             })
             .or_err(ErrorType::ConnectError)?;
 
+        let content_client = DfdaemonDownloadContentGRPCClient::with_interceptor(
+            channel.clone(),
+            InjectTracingInterceptor,
+        )
+        .max_decoding_message_size(usize::MAX)
+        .max_encoding_message_size(usize::MAX);
         let client =
             DfdaemonDownloadGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
                 .max_decoding_message_size(usize::MAX)
                 .max_encoding_message_size(usize::MAX);
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            content_client,
+        })
     }
 
     /// Download the task.
@@ -2606,6 +2877,36 @@ impl DfdaemonDownloadClient {
         Ok(response.into_inner())
     }
 
+    /// Uploads persistent cache content when the source path is only visible to dfcache.
+    #[instrument(skip_all)]
+    pub async fn upload_persistent_cache_task_content<S>(
+        &self,
+        metadata: UploadPersistentCacheTaskContentMetadata,
+        content: S,
+    ) -> ClientResult<PersistentCacheTask>
+    where
+        S: Stream<Item = UploadPersistentCacheTaskContentRequest> + Send + 'static,
+    {
+        let timeout = metadata.timeout;
+        let stream =
+            tokio_stream::once(UploadPersistentCacheTaskContentRequest::metadata(metadata))
+                .chain(content);
+        let mut request = Request::new(stream);
+        if let Some(timeout) = timeout {
+            request.set_timeout(
+                Duration::try_from(timeout)
+                    .map_err(|_| Status::invalid_argument("invalid timeout"))?,
+            );
+        }
+
+        let response = self
+            .content_client
+            .clone()
+            .upload_persistent_cache_task_content(request)
+            .await?;
+        Ok(response.into_inner())
+    }
+
     /// Stats the persistent cache task.
     #[instrument(skip_all)]
     pub async fn stat_persistent_cache_task(
@@ -2656,5 +2957,476 @@ impl DfdaemonDownloadClient {
         let mut request = tonic::Request::new(request);
         request.set_timeout(super::REQUEST_TIMEOUT);
         request
+    }
+}
+
+pub mod dfdaemon_download_content_client {
+    #![allow(missing_docs, clippy::wildcard_imports)]
+
+    use tonic::codegen::http::Uri;
+    use tonic::codegen::*;
+
+    #[derive(Debug, Clone)]
+    pub struct DfdaemonDownloadContentClient<T> {
+        inner: tonic::client::Grpc<T>,
+    }
+
+    impl<T> DfdaemonDownloadContentClient<T>
+    where
+        T: tonic::client::GrpcService<tonic::body::Body>,
+        T::Error: Into<StdError>,
+        T::ResponseBody: Body<Data = Bytes> + Send + 'static,
+        <T::ResponseBody as Body>::Error: Into<StdError> + Send,
+    {
+        pub fn new(inner: T) -> Self {
+            Self {
+                inner: tonic::client::Grpc::new(inner),
+            }
+        }
+
+        pub fn with_origin(inner: T, origin: Uri) -> Self {
+            Self {
+                inner: tonic::client::Grpc::with_origin(inner, origin),
+            }
+        }
+
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> DfdaemonDownloadContentClient<InterceptedService<T, F>>
+        where
+            F: tonic::service::Interceptor,
+            T::ResponseBody: Default,
+            T: Service<
+                http::Request<tonic::body::Body>,
+                Response = http::Response<
+                    <T as tonic::client::GrpcService<tonic::body::Body>>::ResponseBody,
+                >,
+            >,
+            <T as Service<http::Request<tonic::body::Body>>>::Error: Into<StdError> + Send + Sync,
+        {
+            DfdaemonDownloadContentClient::new(InterceptedService::new(inner, interceptor))
+        }
+
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_decoding_message_size(limit);
+            self
+        }
+
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_encoding_message_size(limit);
+            self
+        }
+
+        pub async fn upload_persistent_cache_task_content(
+            &mut self,
+            request: impl tonic::IntoStreamingRequest<
+                Message = super::UploadPersistentCacheTaskContentRequest,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<dragonfly_api::common::v2::PersistentCacheTask>,
+            tonic::Status,
+        > {
+            self.inner.ready().await.map_err(|err| {
+                tonic::Status::unknown(format!("Service was not ready: {}", err.into()))
+            })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/dfdaemon.v2.DfdaemonDownloadContent/UploadPersistentCacheTaskContent",
+            );
+            let mut req = request.into_streaming_request();
+            req.extensions_mut().insert(GrpcMethod::new(
+                "dfdaemon.v2.DfdaemonDownloadContent",
+                "UploadPersistentCacheTaskContent",
+            ));
+            self.inner.client_streaming(req, path, codec).await
+        }
+    }
+}
+
+pub mod dfdaemon_download_content_server {
+    #![allow(missing_docs, clippy::wildcard_imports)]
+
+    use tonic::codegen::*;
+
+    #[async_trait]
+    pub trait DfdaemonDownloadContent: Send + Sync + 'static {
+        async fn upload_persistent_cache_task_content(
+            &self,
+            request: tonic::Request<
+                tonic::Streaming<super::UploadPersistentCacheTaskContentRequest>,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<dragonfly_api::common::v2::PersistentCacheTask>,
+            tonic::Status,
+        >;
+    }
+
+    #[derive(Debug)]
+    pub struct DfdaemonDownloadContentServer<T> {
+        inner: Arc<T>,
+    }
+
+    impl<T> DfdaemonDownloadContentServer<T> {
+        pub fn new(inner: T) -> Self {
+            Self {
+                inner: Arc::new(inner),
+            }
+        }
+
+        pub fn with_interceptor<F>(inner: T, interceptor: F) -> InterceptedService<Self, F>
+        where
+            F: tonic::service::Interceptor,
+        {
+            InterceptedService::new(Self::new(inner), interceptor)
+        }
+    }
+
+    impl<T, B> Service<http::Request<B>> for DfdaemonDownloadContentServer<T>
+    where
+        T: DfdaemonDownloadContent,
+        B: Body + Send + 'static,
+        B::Error: Into<StdError> + Send + 'static,
+    {
+        type Response = http::Response<tonic::body::Body>;
+        type Error = std::convert::Infallible;
+        type Future = BoxFuture<Self::Response, Self::Error>;
+
+        fn poll_ready(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn call(&mut self, req: http::Request<B>) -> Self::Future {
+            match req.uri().path() {
+                "/dfdaemon.v2.DfdaemonDownloadContent/UploadPersistentCacheTaskContent" => {
+                    #[allow(non_camel_case_types)]
+                    struct UploadPersistentCacheTaskContentSvc<T: DfdaemonDownloadContent>(
+                        pub Arc<T>,
+                    );
+
+                    impl<T: DfdaemonDownloadContent>
+                        tonic::server::ClientStreamingService<
+                            super::UploadPersistentCacheTaskContentRequest,
+                        > for UploadPersistentCacheTaskContentSvc<T>
+                    {
+                        type Response = dragonfly_api::common::v2::PersistentCacheTask;
+                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                tonic::Streaming<super::UploadPersistentCacheTaskContentRequest>,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as DfdaemonDownloadContent>::upload_persistent_cache_task_content(
+                                    &inner, request,
+                                )
+                                .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = UploadPersistentCacheTaskContentSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec);
+                        let res = grpc.client_streaming(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                _ => Box::pin(async move {
+                    let mut response = http::Response::new(tonic::body::Body::default());
+                    let headers = response.headers_mut();
+                    headers.insert(
+                        tonic::Status::GRPC_STATUS,
+                        (tonic::Code::Unimplemented as i32).into(),
+                    );
+                    headers.insert(
+                        http::header::CONTENT_TYPE,
+                        tonic::metadata::GRPC_CONTENT_TYPE,
+                    );
+                    Ok(response)
+                }),
+            }
+        }
+    }
+
+    impl<T> Clone for DfdaemonDownloadContentServer<T> {
+        fn clone(&self) -> Self {
+            Self {
+                inner: self.inner.clone(),
+            }
+        }
+    }
+
+    pub const SERVICE_NAME: &str = "dfdaemon.v2.DfdaemonDownloadContent";
+
+    impl<T> tonic::server::NamedService for DfdaemonDownloadContentServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prost::Message;
+    use std::io;
+    use std::pin::Pin;
+    use std::task::{Context as TaskContext, Poll};
+    use tempfile::tempdir;
+
+    fn metadata(content_length: u64) -> UploadPersistentCacheTaskContentMetadata {
+        UploadPersistentCacheTaskContentMetadata {
+            content_for_calculating_task_id: Some("test-content".to_string()),
+            content_length,
+            persistent_replica_count: 1,
+            tag: Some("test-tag".to_string()),
+            application: Some("test-application".to_string()),
+            piece_length: Some(4 * 1024 * 1024),
+            ttl: Some(prost_wkt_types::Duration {
+                seconds: 300,
+                nanos: 0,
+            }),
+            timeout: Some(prost_wkt_types::Duration {
+                seconds: 30,
+                nanos: 0,
+            }),
+            remote_ip: Some("127.0.0.1".to_string()),
+        }
+    }
+
+    fn requests(
+        metadata: UploadPersistentCacheTaskContentMetadata,
+        chunks: &[&[u8]],
+    ) -> Vec<Result<UploadPersistentCacheTaskContentRequest, Status>> {
+        let mut requests = vec![Ok(UploadPersistentCacheTaskContentRequest::metadata(
+            metadata,
+        ))];
+        requests.extend(chunks.iter().map(|chunk| {
+            Ok(UploadPersistentCacheTaskContentRequest::chunk(
+                Bytes::copy_from_slice(chunk),
+            ))
+        }));
+        requests
+    }
+
+    #[test]
+    fn content_protocol_round_trip() {
+        let metadata_request = UploadPersistentCacheTaskContentRequest::metadata(metadata(42));
+        let encoded = metadata_request.encode_to_vec();
+        assert_eq!(
+            UploadPersistentCacheTaskContentRequest::decode(encoded.as_slice()).unwrap(),
+            metadata_request
+        );
+
+        let chunk_request = UploadPersistentCacheTaskContentRequest::chunk(Bytes::from_static(&[
+            0x00, 0xff, 0x80, 0x41,
+        ]));
+        let encoded = chunk_request.encode_to_vec();
+        assert_eq!(
+            UploadPersistentCacheTaskContentRequest::decode(encoded.as_slice()).unwrap(),
+            chunk_request
+        );
+    }
+
+    #[tokio::test]
+    async fn receive_content_handles_empty_and_chunked_files() {
+        let test_cases: Vec<(Vec<u8>, Vec<Vec<u8>>)> = vec![
+            (Vec::new(), Vec::new()),
+            (b"single chunk".to_vec(), vec![b"single chunk".to_vec()]),
+            (
+                (0u8..=255).collect(),
+                vec![vec![0, 1, 2], (3u8..=255).collect()],
+            ),
+        ];
+
+        for (expected, chunks) in test_cases {
+            let chunk_refs: Vec<&[u8]> = chunks.iter().map(Vec::as_slice).collect();
+            let mut output = Vec::new();
+            let received_metadata = receive_persistent_cache_task_content(
+                tokio_stream::iter(requests(
+                    metadata(expected.len() as u64),
+                    chunk_refs.as_slice(),
+                )),
+                &mut output,
+            )
+            .await
+            .unwrap();
+            assert_eq!(received_metadata.content_length, expected.len() as u64);
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn receive_content_rejects_invalid_protocol_and_lengths() {
+        let oversized_chunk = vec![0; UPLOAD_PERSISTENT_CACHE_TASK_CONTENT_CHUNK_SIZE + 1];
+        let test_cases = vec![
+            Vec::new(),
+            vec![Ok(UploadPersistentCacheTaskContentRequest::chunk(
+                Bytes::from_static(b"chunk before metadata"),
+            ))],
+            vec![Ok(UploadPersistentCacheTaskContentRequest {
+                request: None,
+            })],
+            requests(metadata(4), &[b"ab", b"cdef"]),
+            requests(metadata(1), &[b""]),
+            vec![
+                Ok(UploadPersistentCacheTaskContentRequest::metadata(metadata(
+                    0,
+                ))),
+                Ok(UploadPersistentCacheTaskContentRequest::metadata(metadata(
+                    0,
+                ))),
+            ],
+            requests(metadata(2), &[b"a"]),
+            requests(
+                metadata(UPLOAD_PERSISTENT_CACHE_TASK_CONTENT_CHUNK_SIZE as u64 + 1),
+                &[oversized_chunk.as_slice()],
+            ),
+        ];
+
+        for stream in test_cases {
+            let mut output = Vec::new();
+            let err =
+                receive_persistent_cache_task_content(tokio_stream::iter(stream), &mut output)
+                    .await
+                    .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+        }
+    }
+
+    #[tokio::test]
+    async fn receive_content_preserves_peer_interruption() {
+        let mut stream = requests(metadata(4), &[b"ab"]);
+        stream.push(Err(Status::cancelled("peer interrupted")));
+        let mut output = Vec::new();
+        let err = receive_persistent_cache_task_content(tokio_stream::iter(stream), &mut output)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Code::Cancelled);
+        assert_eq!(output, b"ab");
+    }
+
+    #[tokio::test]
+    async fn staged_file_is_removed_after_short_stream() {
+        let tempdir = tempdir().unwrap();
+        let staged_file = StagedFile::create(tempdir.path().to_path_buf())
+            .await
+            .unwrap();
+        let path = staged_file.path.clone();
+        let err = staged_file
+            .receive(tokio_stream::iter(requests(metadata(2), &[b"a"])))
+            .await
+            .err()
+            .expect("short stream must fail");
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(!path.exists());
+    }
+
+    struct FailingWriter {
+        remaining: usize,
+    }
+
+    impl AsyncWrite for FailingWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut TaskContext<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            let this = self.get_mut();
+            if this.remaining == 0 {
+                return Poll::Ready(Err(io::Error::other("injected storage write failure")));
+            }
+
+            let written = this.remaining.min(buf.len());
+            this.remaining -= written;
+            Poll::Ready(Ok(written))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn receive_content_reports_storage_write_failure() {
+        let mut writer = FailingWriter { remaining: 2 };
+        let err = receive_persistent_cache_task_content(
+            tokio_stream::iter(requests(metadata(8), &[b"abcd", b"efgh"])),
+            &mut writer,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code(), Code::Internal);
+        assert!(err.message().contains("injected storage write failure"));
+    }
+
+    #[tokio::test]
+    async fn unix_client_reports_missing_socket() {
+        let tempdir = tempdir().unwrap();
+        let result = DfdaemonDownloadClient::new_unix(tempdir.path().join("missing.sock")).await;
+        assert!(result.is_err());
+    }
+
+    struct TestContentService;
+
+    #[async_trait::async_trait]
+    impl DfdaemonDownloadContent for TestContentService {
+        async fn upload_persistent_cache_task_content(
+            &self,
+            request: Request<tonic::Streaming<UploadPersistentCacheTaskContentRequest>>,
+        ) -> Result<Response<PersistentCacheTask>, Status> {
+            let mut output = Vec::new();
+            let metadata =
+                receive_persistent_cache_task_content(request.into_inner(), &mut output).await?;
+            assert_eq!(output, b"content over UDS");
+            Ok(Response::new(PersistentCacheTask {
+                id: "streamed-task".to_string(),
+                content_length: metadata.content_length,
+                ..Default::default()
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn content_client_streams_over_unix_socket() {
+        let tempdir = tempdir().unwrap();
+        let socket_path = tempdir.path().join("dfdaemon.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let server = tokio::spawn(
+            Server::builder()
+                .add_service(DfdaemonDownloadContentGRPCServer::new(TestContentService))
+                .serve_with_incoming(UnixListenerStream::new(listener)),
+        );
+
+        let client = DfdaemonDownloadClient::new_unix(socket_path).await.unwrap();
+        let content = b"content over UDS";
+        let task = client
+            .upload_persistent_cache_task_content(
+                metadata(content.len() as u64),
+                tokio_stream::iter(vec![
+                    UploadPersistentCacheTaskContentRequest::chunk(Bytes::from_static(b"content ")),
+                    UploadPersistentCacheTaskContentRequest::chunk(Bytes::from_static(b"over UDS")),
+                ]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(task.id, "streamed-task");
+        assert_eq!(task.content_length, content.len() as u64);
+        server.abort();
     }
 }
