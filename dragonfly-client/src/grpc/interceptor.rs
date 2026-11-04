@@ -325,7 +325,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tempfile::NamedTempFile;
     use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
-    use tonic::transport::{Channel, Server};
+    use tonic::transport::{Channel, Endpoint, Server};
     use tonic::{Code, Response};
     use tonic_health::pb::health_check_response::ServingStatus;
     use tonic_health::pb::health_client::HealthClient;
@@ -453,9 +453,12 @@ mod tests {
         addr: SocketAddr,
         token: Option<String>,
     ) -> std::result::Result<Response<HealthCheckResponse>, Status> {
-        let mut client = HealthClient::connect(format!("http://{addr}"))
+        let channel = Endpoint::from_shared(format!("http://{addr}"))
+            .unwrap()
+            .connect()
             .await
             .unwrap();
+        let mut client = HealthClient::new(channel);
         let mut request = Request::new(HealthCheckRequest {
             service: String::new(),
         });
