@@ -1555,12 +1555,32 @@ impl Default for Proxy {
     }
 }
 
+/// The JWT authentication configuration for gRPC clients and servers.
+#[derive(Debug, Clone, Default, Validate, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Jwt {
+    /// The JWT used by gRPC clients. It is mutually exclusive with `token_path`.
+    pub token: Option<String>,
+
+    /// The path to a file containing the JWT used by gRPC clients. The file is
+    /// read when a gRPC client is created and surrounding whitespace is ignored.
+    pub token_path: Option<PathBuf>,
+
+    /// The HS256 secret used by gRPC servers to verify JWT signatures and claims.
+    /// Server authentication is disabled when this is not configured.
+    pub secret: Option<String>,
+}
+
 /// The security configuration for dfdaemon.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Security {
     /// Indicates whether enable security.
     pub enable: bool,
+
+    /// The JWT authentication configuration for gRPC clients and servers.
+    #[validate]
+    pub jwt: Jwt,
 }
 
 /// The network configuration for dfdaemon.
@@ -1974,6 +1994,28 @@ mod tests {
         .await
         .unwrap();
         (ca_cert, cert, key)
+    }
+
+    #[test]
+    fn jwt_deserializes_direct_and_file_token_sources() {
+        let direct: Jwt =
+            serde_yaml::from_str("token: direct-token\nsecret: shared-secret\n").unwrap();
+        assert_eq!(direct.token.as_deref(), Some("direct-token"));
+        assert_eq!(direct.token_path, None);
+        assert_eq!(direct.secret.as_deref(), Some("shared-secret"));
+
+        let file: Jwt = serde_yaml::from_str("tokenPath: /run/secrets/grpc.jwt\n").unwrap();
+        assert_eq!(file.token, None);
+        assert_eq!(
+            file.token_path,
+            Some(PathBuf::from("/run/secrets/grpc.jwt"))
+        );
+        assert_eq!(file.secret, None);
+
+        let disabled = Jwt::default();
+        assert_eq!(disabled.token, None);
+        assert_eq!(disabled.token_path, None);
+        assert_eq!(disabled.secret, None);
     }
 
     #[test]
