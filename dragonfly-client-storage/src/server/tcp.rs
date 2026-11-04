@@ -51,7 +51,6 @@ use vortex_protocol::{
     Header, Message, HEADER_SIZE,
 };
 
-#[cfg(not(target_os = "linux"))]
 use tokio::io::copy_buf;
 
 /// A TCP-based server for dfdaemon upload service.
@@ -717,16 +716,25 @@ impl TCPServerHandler {
     #[instrument(skip_all)]
     async fn write_stream(
         &self,
-        reader: RangeReader,
+        mut reader: RangeReader,
         writer: &mut OwnedWriteHalf,
     ) -> ClientResult<()> {
         debug!("start to write stream to tcp writer");
-        let (fd, offset, remaining) = reader.into_parts();
-        let sent = sendfile_range(writer.as_ref(), &fd, offset, remaining)
-            .await
-            .inspect_err(|err| {
-                error!("sendfile failed: {}", err);
+        let remaining = reader.remaining();
+        let sent = if reader.is_encrypted() {
+            copy_buf(&mut reader, writer).await.inspect_err(|err| {
+                error!("copy failed: {}", err);
+            })?
+        } else {
+            let (fd, offset, remaining) = reader.try_into_parts().ok_or_else(|| {
+                ClientError::Unknown("encrypted content cannot use sendfile".to_string())
             })?;
+            sendfile_range(writer.as_ref(), &fd, offset, remaining)
+                .await
+                .inspect_err(|err| {
+                    error!("sendfile failed: {}", err);
+                })?
+        };
 
         if sent != remaining {
             return Err(ClientError::Unknown(format!(
@@ -840,7 +848,10 @@ mod tests {
     const CONTENT_DIGEST: &str = "crc32:2533597436";
 
     async fn handler(dir: &Path) -> TCPServerHandler {
-        let config = Arc::new(Config::default());
+        handler_with_config(dir, Arc::new(Config::default())).await
+    }
+
+    async fn handler_with_config(dir: &Path, config: Arc<Config>) -> TCPServerHandler {
         TCPServerHandler {
             id_generator: Arc::new(IDGenerator::new(
                 "127.0.0.1".to_string(),
@@ -965,6 +976,55 @@ mod tests {
 
         drop(client);
         assert!(server.await.unwrap().is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn encrypted_content_is_decrypted_before_sending() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let key_path = temp_dir.path().join("key");
+        std::fs::write(&key_path, [7u8; 32]).unwrap();
+        let mut config = Config::default();
+        config.storage.encryption.enable = true;
+        config.storage.encryption.key_file = Some(key_path);
+        let handler = handler_with_config(temp_dir.path(), Arc::new(config)).await;
+        handler
+            .storage
+            .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
+            .await
+            .unwrap();
+        let piece_id = handler.storage.piece_id(TASK_ID, 0);
+        handler
+            .storage
+            .download_piece_started(&piece_id, 0, 0, CONTENT.len() as u64)
+            .await
+            .unwrap();
+        let mut stream = futures::stream::iter([Ok(Bytes::from_static(CONTENT))]);
+        handler
+            .storage
+            .download_piece_from_source_finished(
+                &piece_id,
+                TASK_ID,
+                0,
+                CONTENT.len() as u64,
+                &mut stream,
+                Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+        let (_, reader) = handler
+            .storage
+            .upload_piece(&piece_id, TASK_ID, None)
+            .await
+            .unwrap();
+        let (sender, mut receiver) = tcp_pair().await;
+        let (_, mut writer) = sender.into_split();
+        let sender_handle =
+            tokio::spawn(async move { handler.write_stream(reader, &mut writer).await });
+
+        let mut received = Vec::new();
+        receiver.read_to_end(&mut received).await.unwrap();
+        sender_handle.await.unwrap().unwrap();
+        assert_eq!(received, CONTENT);
     }
 
     #[tokio::test(flavor = "multi_thread")]
