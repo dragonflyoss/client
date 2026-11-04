@@ -1,1 +1,0 @@
-dfc-4027: normal-task memory backend implemented; 154 unit tests passed (35 config + 119 storage), required build/fmt/clippy passed; persistent/CacheTask/per-request paths not integrated (see REPORT.md)
