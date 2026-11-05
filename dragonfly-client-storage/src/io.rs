@@ -48,13 +48,17 @@ enum RangeReaderState {
     Reading(JoinHandle<io::Result<(BytesMut, usize)>>),
 }
 
-/// RangeReader reads a fixed range of a file with positional reads on a shared
-/// file descriptor. It never seeks the descriptor and fills a single reusable
-/// buffer sized to the range, instead of allocating a full read buffer and
-/// seeking for every piece.
+enum RangeReaderSource {
+    File(Arc<File>),
+    Memory { content: Bytes, position: usize },
+}
+
+/// RangeReader reads a fixed range from a file or memory. File reads use
+/// positional reads on a shared descriptor and never seek it. The reader fills
+/// a reusable buffer sized to the range instead of allocating a full read
+/// buffer for every piece.
 pub struct RangeReader {
-    /// The shared file descriptor to read from.
-    fd: Arc<File>,
+    source: RangeReaderSource,
 
     /// The offset of the next positional read.
     offset: u64,
@@ -94,7 +98,7 @@ impl RangeReader {
     ) -> Self {
         let capacity = min(max(buffer_size, 1) as u64, length) as usize;
         Self {
-            fd,
+            source: RangeReaderSource::File(fd),
             offset,
             remaining: length,
             capacity,
@@ -106,17 +110,35 @@ impl RangeReader {
         }
     }
 
-    /// Consumes the reader and returns the shared file descriptor, the offset
-    /// of the next unconsumed byte, and the number of bytes left in the range,
-    /// so zero-copy senders like sendfile can transmit the rest of the range
-    /// directly from the file descriptor.
-    pub fn into_parts(self) -> (Arc<File>, u64, u64) {
+    pub fn new_memory(content: Bytes, buffer_size: usize, buffer_pool: BufferPool) -> Self {
+        let length = content.len() as u64;
+        let capacity = min(max(buffer_size, 1) as u64, length) as usize;
+        Self {
+            source: RangeReaderSource::Memory {
+                content,
+                position: 0,
+            },
+            offset: 0,
+            remaining: length,
+            capacity,
+            buffer: BytesMut::new(),
+            pos: 0,
+            filled: 0,
+            state: RangeReaderState::Idle,
+            buffer_pool,
+        }
+    }
+
+    pub fn file_parts(&self) -> Option<(Arc<File>, u64, u64)> {
+        let RangeReaderSource::File(fd) = &self.source else {
+            return None;
+        };
         let buffered = (self.filled - self.pos) as u64;
-        (
-            self.fd.clone(),
+        Some((
+            fd.clone(),
             self.offset - buffered,
             self.remaining + buffered,
-        )
+        ))
     }
 
     /// Returns the number of bytes left in the range.
@@ -141,21 +163,32 @@ impl RangeReader {
         }
 
         let len = min(self.capacity as u64, self.remaining) as usize;
-        let mut buffer = self.buffer_pool.checkout_for_read(len);
-        let fd = self.fd.clone();
-        let offset = self.offset;
-        let (mut buffer, n) = tokio::task::spawn_blocking(move || {
-            let n = fd.read_at(&mut buffer, offset)?;
-            Ok::<_, io::Error>((buffer, n))
-        })
-        .await
-        .map_err(io::Error::other)??;
+        match &mut self.source {
+            RangeReaderSource::Memory { content, position } => {
+                let chunk = content.slice(*position..*position + len);
+                *position += len;
+                self.offset += len as u64;
+                self.remaining -= len as u64;
+                Ok(chunk)
+            }
+            RangeReaderSource::File(fd) => {
+                let mut buffer = self.buffer_pool.checkout_for_read(len);
+                let fd = fd.clone();
+                let offset = self.offset;
+                let (mut buffer, n) = tokio::task::spawn_blocking(move || {
+                    let n = fd.read_at(&mut buffer, offset)?;
+                    Ok::<_, io::Error>((buffer, n))
+                })
+                .await
+                .map_err(io::Error::other)??;
 
-        self.offset += n as u64;
-        self.remaining = if n == 0 { 0 } else { self.remaining - n as u64 };
+                self.offset += n as u64;
+                self.remaining = if n == 0 { 0 } else { self.remaining - n as u64 };
 
-        buffer.truncate(n);
-        Ok(self.buffer_pool.freeze(buffer))
+                buffer.truncate(n);
+                Ok(self.buffer_pool.freeze(buffer))
+            }
+        }
     }
 }
 
@@ -194,13 +227,27 @@ impl AsyncBufRead for RangeReader {
                         buffer.truncate(len);
                     }
 
-                    let fd = this.fd.clone();
-                    let offset = this.offset;
-                    this.state =
-                        RangeReaderState::Reading(tokio::task::spawn_blocking(move || {
-                            let n = fd.read_at(&mut buffer, offset)?;
-                            Ok((buffer, n))
-                        }));
+                    match &mut this.source {
+                        RangeReaderSource::Memory { content, position } => {
+                            buffer.copy_from_slice(&content[*position..*position + len]);
+                            *position += len;
+                            this.buffer = buffer;
+                            this.pos = 0;
+                            this.filled = len;
+                            this.offset += len as u64;
+                            this.remaining -= len as u64;
+                            break;
+                        }
+                        RangeReaderSource::File(fd) => {
+                            let fd = fd.clone();
+                            let offset = this.offset;
+                            this.state =
+                                RangeReaderState::Reading(tokio::task::spawn_blocking(move || {
+                                    let n = fd.read_at(&mut buffer, offset)?;
+                                    Ok((buffer, n))
+                                }));
+                        }
+                    }
                 }
                 RangeReaderState::Reading(handle) => {
                     let result = ready!(Pin::new(handle).poll(cx));
@@ -637,11 +684,27 @@ mod tests {
 
             assert_eq!(reader.remaining(), expected_remaining);
 
-            let (parts_fd, offset, remaining) = reader.into_parts();
+            let (parts_fd, offset, remaining) = reader.file_parts().unwrap();
             assert!(Arc::ptr_eq(&parts_fd, &fd));
             assert_eq!(offset, expected_offset);
             assert_eq!(remaining, expected_remaining);
         }
+    }
+
+    #[tokio::test]
+    async fn memory_range_reader_supports_buffered_and_chunked_reads() {
+        let content = Bytes::from_static(b"hello, world!");
+        let mut reader = RangeReader::new_memory(content, 5, BufferPool::new(0));
+        assert!(reader.file_parts().is_none());
+        assert_eq!(reader.remaining(), 13);
+        assert_eq!(reader.fill_buf().await.unwrap(), b"hello");
+        reader.consume(2);
+        assert_eq!(&reader.read_chunk().await.unwrap()[..], b"llo");
+        assert_eq!(&reader.read_chunk().await.unwrap()[..], b", wor");
+        let mut rest = Vec::new();
+        reader.read_to_end(&mut rest).await.unwrap();
+        assert_eq!(rest, b"ld!");
+        assert_eq!(reader.remaining(), 0);
     }
 
     #[tokio::test]
