@@ -138,7 +138,8 @@ impl HTTP {
     /// The default capacity for temporary redirect cache.
     const DEFAULT_CACHE_TEMPORARY_REDIRECT_CAPACITY: usize = 1000;
 
-    /// Create a new HTTP backend.
+    /// Create a new HTTP backend. If `tls_client_config` is None, the server
+    /// certificate is not verified.
     pub fn new(
         scheme: &str,
         request_header: Option<HashMap<String, String>>,
@@ -146,6 +147,7 @@ impl HTTP {
         enable_cache_temporary_redirect: bool,
         cache_temporary_redirect_ttl: Duration,
         enable_hickory_dns: bool,
+        tls_client_config: Option<rustls::ClientConfig>,
     ) -> Result<HTTP> {
         // Disable automatic compression to prevent double-decompression issues.
         //
@@ -159,11 +161,13 @@ impl HTTP {
         // Solution: Disable all compression formats (gzip, brotli, zstd, deflate) to ensure
         // we receive and store uncompressed content, eliminating the double-decompression issue.
         let make_reqwest_client = || -> Result<ClientWithMiddleware> {
-            // Default TLS client config with no validation.
-            let client_config_builder = rustls::ClientConfig::builder()
-                .dangerous()
-                .with_custom_certificate_verifier(NoVerifier::new())
-                .with_no_client_auth();
+            // Use the given TLS client config, otherwise skip validation.
+            let client_config_builder = tls_client_config.clone().unwrap_or_else(|| {
+                rustls::ClientConfig::builder()
+                    .dangerous()
+                    .with_custom_certificate_verifier(NoVerifier::new())
+                    .with_no_client_auth()
+            });
 
             let client = reqwest::Client::builder()
                 // Disable automatic compression to prevent double-decompression issues.
@@ -930,7 +934,7 @@ mod tests {
 
     use super::*;
     use dragonfly_client_util::tls::{
-        install_crypto_provider, load_certs_from_pem, load_key_from_pem,
+        install_crypto_provider, load_certs_from_pem, load_key_from_pem, verified_client_config,
     };
     use hyper_util::rt::{TokioExecutor, TokioIo};
     use reqwest::StatusCode;
@@ -1212,7 +1216,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             ),
         ];
 
-        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            None,
+        )
+        .unwrap();
         for (mocks, expect) in test_cases {
             let server = MockServer::start().await;
             for mock in mocks {
@@ -1372,7 +1385,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             ),
         ];
 
-        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            None,
+        )
+        .unwrap();
         for (mocks, range, expect) in test_cases {
             let server = MockServer::start().await;
             for mock in mocks {
@@ -1410,7 +1432,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             (vec![(Some("bytes=0-"), 416), (None, 200)], true),
         ];
 
-        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            None,
+        )
+        .unwrap();
         for (responses, expected) in test_cases {
             let server = MockServer::start().await;
             for &(range, status) in &responses {
@@ -1445,7 +1476,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[tokio::test]
     async fn requests_without_header_are_rejected() {
         install_crypto_provider();
-        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            None,
+        )
+        .unwrap();
         let url = "http://127.0.0.1/missing";
 
         let stat = http
@@ -1503,7 +1543,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     async fn connection_failures_are_reported_per_operation() {
         install_crypto_provider();
         let url = format!("{}/file", start_closing_server().await);
-        let http = HTTP::new(HTTP_SCHEME, None, 0, true, Duration::from_secs(600), true).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            0,
+            true,
+            Duration::from_secs(600),
+            true,
+            None,
+        )
+        .unwrap();
 
         let stat = http
             .stat(StatRequest {
@@ -1591,7 +1640,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
         ];
 
         let server_url = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let http = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+        let http = HTTP::new(
+            HTTPS_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            None,
+        )
+        .unwrap();
         for (ca_pem, expect_stat, expect_get) in test_cases {
             let client_cert = ca_pem.map(|pem| load_certs_from_pem(pem).unwrap());
             let response = http
@@ -1630,6 +1688,65 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 .unwrap();
             let body = response.text().await.unwrap();
             expect_get(response, &body);
+        }
+    }
+
+    #[tokio::test]
+    async fn https_requests_verify_the_server_cert_with_tls_client_config() {
+        install_crypto_provider();
+
+        let test_cases: Vec<(&str, bool)> = vec![(CA_CERT, true), (WRONG_CA_CERT, false)];
+
+        let server_url = start_https_server(SERVER_CERT, SERVER_KEY).await;
+        for (ca_pem, success) in test_cases {
+            let tls_client_config =
+                verified_client_config(Some(load_certs_from_pem(ca_pem).unwrap())).unwrap();
+            let http = HTTP::new(
+                HTTPS_SCHEME,
+                None,
+                1,
+                true,
+                Duration::from_secs(600),
+                true,
+                Some(tls_client_config),
+            )
+            .unwrap();
+
+            let response = http
+                .stat(StatRequest {
+                    task_id: "test".to_string(),
+                    url: server_url.clone(),
+                    http_header: Some(HeaderMap::new()),
+                    timeout: Duration::from_secs(5),
+                    client_cert: None,
+                    object_storage: None,
+                    hdfs: None,
+                    hugging_face: None,
+                    model_scope: None,
+                    open_csg: None,
+                })
+                .await
+                .unwrap();
+            assert_eq!(response.success, success);
+
+            let response = http
+                .get(GetRequest {
+                    task_id: "test".to_string(),
+                    piece_id: "test".to_string(),
+                    url: server_url.clone(),
+                    range: None,
+                    http_header: Some(HeaderMap::new()),
+                    timeout: Duration::from_secs(5),
+                    client_cert: None,
+                    object_storage: None,
+                    hdfs: None,
+                    hugging_face: None,
+                    model_scope: None,
+                    open_csg: None,
+                })
+                .await
+                .unwrap();
+            assert_eq!(response.success, success);
         }
     }
 
@@ -1759,6 +1876,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 true,
                 Duration::from_secs(600),
                 true,
+                None,
             )
             .unwrap();
 
@@ -1823,7 +1941,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 .mount(&server)
                 .await;
 
-            let http = HTTP::new(HTTP_SCHEME, None, 1, enable_cache, ttl, true).unwrap();
+            let http = HTTP::new(HTTP_SCHEME, None, 1, enable_cache, ttl, true, None).unwrap();
             let url = format!("{}/redirect", server.uri());
             for _ in 0..2 {
                 let mut response = http

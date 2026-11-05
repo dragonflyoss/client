@@ -22,6 +22,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
+use dragonfly_client_util::tls::verified_client_config;
 use futures::stream::BoxStream;
 use libloading::Library;
 use reqwest::header::HeaderMap;
@@ -414,6 +415,15 @@ impl BackendFactory {
         enable_cache_temporary_redirect: bool,
         cache_temporary_redirect_ttl: Duration,
     ) -> Result<()> {
+        // TLS client config that verifies the server certificate, if enabled.
+        let tls_client_config = if self.config.backend.tls.verify {
+            Some(verified_client_config(
+                self.config.backend.tls.load_ca_cert_der()?,
+            )?)
+        } else {
+            None
+        };
+
         self.backends.insert(
             "http".to_string(),
             Box::new(http::HTTP::new(
@@ -423,6 +433,7 @@ impl BackendFactory {
                 enable_cache_temporary_redirect,
                 cache_temporary_redirect_ttl,
                 self.config.backend.enable_hickory_dns,
+                tls_client_config.clone(),
             )?),
         );
         info!("load [http] builtin backend");
@@ -436,6 +447,7 @@ impl BackendFactory {
                 enable_cache_temporary_redirect,
                 cache_temporary_redirect_ttl,
                 self.config.backend.enable_hickory_dns,
+                tls_client_config,
             )?),
         );
         info!("load [https] builtin backend");
