@@ -2096,7 +2096,8 @@ dependencies = [
 [[package]]
 name = "hashring"
 version = "0.3.6"
-source = "git+https://github.com/dragonflyoss/hashring-rs?rev=85d85ce9dbf7c5fe99f396b5ef4b180e82026e86#85d85ce9dbf7c5fe99f396b5ef4b180e82026e86"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43bfd649ac5e0f82ae98d547450f1d31af49742be255b5380c61fc8513b9df11"
 dependencies = [
  "siphasher 0.3.11",
 ]
