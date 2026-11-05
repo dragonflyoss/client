@@ -79,10 +79,6 @@ use super::*;
 /// downloading with the scheduler.
 const DEFAULT_WAIT_FOR_IN_FLIGHT_PIECE_TIMEOUT: Duration = Duration::from_millis(1000);
 
-/// The maximum length of the task or range that bypasses the scheduler and
-/// downloads from the source directly.
-const MAX_BYPASS_SCHEDULER_LENGTH: u64 = 16 * 1024 * 1024;
-
 /// Represents a task manager.
 pub struct Task {
     /// The configuration of the dfdaemon.
@@ -352,14 +348,18 @@ impl Task {
     ///    downloads from the source directly.
     /// 3. The task is small enough that the scheduling overhead outweighs the
     ///    transfer: the requested range length or the content length is less than
-    ///    or equal to [MAX_BYPASS_SCHEDULER_LENGTH].
+    ///    or equal to 16MiB.
     fn should_bypass_scheduler(&self, request: &Download, content_length: u64) -> bool {
+        // The maximum content length or range length of the download that bypasses
+        // the scheduler and downloads from the source directly.
+        const MAX_BYPASS_LENGTH: u64 = 16 * 1024 * 1024;
+
         request.scheduling_policy() == SchedulingPolicy::Auto
             && !request.disable_back_to_source
             && (request
                 .range
-                .is_some_and(|range| range.length <= MAX_BYPASS_SCHEDULER_LENGTH)
-                || content_length <= MAX_BYPASS_SCHEDULER_LENGTH)
+                .is_some_and(|range| range.length <= MAX_BYPASS_LENGTH)
+                || content_length <= MAX_BYPASS_LENGTH)
     }
 
     /// Downloads a task.
