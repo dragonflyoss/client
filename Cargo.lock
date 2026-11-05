@@ -1606,9 +1606,9 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-hashring"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50b412c4c2fd0a3d98a8af1a6bc6fcf9268a4c015144b368ae9d82fd0ad3b427"
+checksum = "89092b70bed83cd2216c26f7cdfbf990a195a37b2ec59562cdb812d35fcd61a0"
 dependencies = [
  "siphasher 1.0.1",
 ]
