@@ -36,6 +36,7 @@ use tokio::{
 use tokio_util::io::InspectReader;
 use tracing::{debug, error, info, instrument, warn};
 
+mod encryption;
 mod page_cache;
 mod piece_notifier;
 
@@ -94,8 +95,9 @@ pub struct Storage {
 impl Storage {
     /// Returns a new storage.
     pub async fn new(config: Arc<Config>, dir: &Path, log_dir: PathBuf) -> Result<Self> {
+        let encryption = encryption::Encryption::from_config(&config.storage.encryption)?;
         let metadata = metadata::Metadata::new(config.clone(), dir, &log_dir)?;
-        let content = content::new_content(config.clone(), dir).await?;
+        let content = content::new_content_with_encryption(config.clone(), dir, encryption).await?;
         let cache = cache::Cache::new(config.clone());
 
         // Create temporary directory for output operations.
@@ -108,6 +110,15 @@ impl Storage {
             piece_notifier: PieceNotifier::default(),
             page_cache: PageCache::new(),
         })
+    }
+
+    fn track_downloaded_piece(&self, id: &str, path: PathBuf, offset: u64, length: u64) {
+        match self.content.physical_range(offset, length) {
+            Ok((offset, length)) => self
+                .page_cache
+                .download_piece_finished(id, path, offset, length),
+            Err(err) => error!("failed to calculate page cache range: {}", err),
+        }
     }
 
     /// Returns the total space of the disk.
@@ -825,7 +836,7 @@ impl Storage {
             }
         }?;
 
-        self.page_cache.download_piece_finished(
+        self.track_downloaded_piece(
             piece_id,
             self.content.get_task_path(task_id),
             piece.offset,
@@ -889,7 +900,7 @@ impl Storage {
             }
         }?;
 
-        self.page_cache.download_piece_finished(
+        self.track_downloaded_piece(
             piece_id,
             self.content.get_task_path(task_id),
             piece.offset,
@@ -1122,7 +1133,7 @@ impl Storage {
             Some(parent_id.to_string()),
         )?;
 
-        self.page_cache.download_piece_finished(
+        self.track_downloaded_piece(
             piece_id,
             self.content.get_persistent_task_path(task_id),
             piece.offset,
@@ -1156,7 +1167,7 @@ impl Storage {
             }
         }?;
 
-        self.page_cache.download_piece_finished(
+        self.track_downloaded_piece(
             piece_id,
             self.content.get_persistent_task_path(task_id),
             piece.offset,
@@ -1362,7 +1373,7 @@ impl Storage {
             Some(parent_id.to_string()),
         )?;
 
-        self.page_cache.download_piece_finished(
+        self.track_downloaded_piece(
             piece_id,
             self.content.get_persistent_cache_task_path(task_id),
             piece.offset,
@@ -2031,6 +2042,20 @@ mod tests {
                 .await
                 .unwrap(),
         )
+    }
+
+    #[tokio::test]
+    async fn missing_encryption_key_fails_before_storage_is_modified() {
+        let dir = tempdir().unwrap();
+        let marker = dir.path().join("existing-data");
+        std::fs::write(&marker, [1, 2, 3, 4]).unwrap();
+        let mut config = Config::default();
+        config.storage.keep = false;
+        config.storage.encryption.enable = true;
+
+        let result = Storage::new(Arc::new(config), dir.path(), dir.path().join("logs")).await;
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(marker).unwrap(), [1, 2, 3, 4]);
     }
 
     #[tokio::test]
