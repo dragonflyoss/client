@@ -348,14 +348,18 @@ impl Task {
     ///    downloads from the source directly.
     /// 3. The task is small enough that the scheduling overhead outweighs the
     ///    transfer: the requested range length or the content length is less than
-    ///    or equal to the min piece length, i.e. a single-piece task.
+    ///    or equal to 16MiB.
     fn should_bypass_scheduler(&self, request: &Download, content_length: u64) -> bool {
+        // The maximum content length or range length of the download that bypasses
+        // the scheduler and downloads from the source directly.
+        const MAX_BYPASS_LENGTH: u64 = 16 * 1024 * 1024;
+
         request.scheduling_policy() == SchedulingPolicy::Auto
             && !request.disable_back_to_source
             && (request
                 .range
-                .is_some_and(|range| range.length <= piece::MIN_PIECE_LENGTH)
-                || content_length <= piece::MIN_PIECE_LENGTH)
+                .is_some_and(|range| range.length <= MAX_BYPASS_LENGTH)
+                || content_length <= MAX_BYPASS_LENGTH)
     }
 
     /// Downloads a task.
