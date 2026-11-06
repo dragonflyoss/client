@@ -1370,12 +1370,10 @@ version = "1.5.11"
 dependencies = [
  "async-trait",
  "bytes",
- "dashmap",
  "dragonfly-api",
  "dragonfly-client-config",
  "dragonfly-client-core",
  "dragonfly-client-util",
- "fastrand",
  "futures",
  "http",
  "hyper",
