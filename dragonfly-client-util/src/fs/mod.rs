@@ -128,10 +128,22 @@ pub async fn fadvise_willneed(f: &std::fs::File, offset: u64, length: u64) -> Re
         use std::os::unix::io::AsFd;
         use tokio::io;
 
+        // The maximum length of a single advice. The kernel truncates a longer advice to the
+        // larger of max_sectors_kb and the readahead window, commonly 1.25 MiB.
+        const MAX_WILLNEED_LENGTH: u64 = 1024 * 1024;
+
         let f = f.try_clone()?;
         tokio::task::spawn_blocking(move || {
-            fadvise(f.as_fd(), offset, NonZeroU64::new(length), Advice::WillNeed)
-                .map_err(|err| Error::IO(io::Error::from_raw_os_error(err.raw_os_error())))
+            let end = offset.saturating_add(length);
+            let mut offset = offset;
+            while offset < end {
+                let length = (end - offset).min(MAX_WILLNEED_LENGTH);
+                fadvise(f.as_fd(), offset, NonZeroU64::new(length), Advice::WillNeed)
+                    .map_err(|err| Error::IO(io::Error::from_raw_os_error(err.raw_os_error())))?;
+                offset += length;
+            }
+
+            Ok::<(), Error>(())
         })
         .await
         .map_err(io::Error::other)??;
@@ -281,7 +293,7 @@ mod tests {
         let path = file(temp_dir.path());
         let f = std::fs::File::open(&path).unwrap();
 
-        let test_cases = vec![(0, 13), (7, 5), (0, 0), (13, 100)];
+        let test_cases = vec![(0, 13), (7, 5), (0, 0), (13, 100), (0, 3 * 1024 * 1024 + 1)];
 
         for (offset, length) in test_cases {
             fadvise_willneed(&f, offset, length).await.unwrap();
