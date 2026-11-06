@@ -1367,6 +1367,34 @@ impl Task {
                             collected_parents
                                 .retain(|collected_parent| collected_parent.id != parent.id);
                             if collected_parents.is_empty() {
+                                // Report the failed piece right away, so the scheduler learns it while
+                                // the other pieces are still downloading.
+                                in_stream_tx
+                                    .send_timeout(
+                                        AnnouncePeerRequest {
+                                            host_id: host_id.to_string(),
+                                            task_id: task_id.to_string(),
+                                            peer_id: peer_id.to_string(),
+                                            request: Some(
+                                                announce_peer_request::Request::DownloadPieceFailedRequest(
+                                                    DownloadPieceFailedRequest {
+                                                        piece_number: Some(number),
+                                                        parent_id: parent.id.clone(),
+                                                        temporary: true,
+                                                    },
+                                                ),
+                                            ),
+                                        },
+                                        REQUEST_TIMEOUT,
+                                    )
+                                    .await
+                                    .unwrap_or_else(|err| {
+                                        error!(
+                                            "send DownloadPieceFailedRequest for piece {} failed: {:?}",
+                                            piece_id, err
+                                        )
+                                    });
+
                                 return Err(Error::DownloadFromParentFailed(
                                     DownloadFromParentFailed {
                                         piece_number: number,
@@ -1551,39 +1579,9 @@ impl Task {
         {
             match message {
                 Ok(_) => {}
-                Err(Error::DownloadFromParentFailed(err)) => {
-                    let (piece_number, parent_id) = (err.piece_number, err.parent_id);
-
-                    // Send the download piece failed request.
-                    in_stream_tx
-                        .send_timeout(
-                            AnnouncePeerRequest {
-                                host_id: host_id.to_string(),
-                                task_id: task_id.to_string(),
-                                peer_id: peer_id.to_string(),
-                                request: Some(
-                                    announce_peer_request::Request::DownloadPieceFailedRequest(
-                                        DownloadPieceFailedRequest {
-                                            piece_number: Some(err.piece_number),
-                                            parent_id,
-                                            temporary: true,
-                                        },
-                                    ),
-                                ),
-                            },
-                            REQUEST_TIMEOUT,
-                        )
-                        .await
-                        .unwrap_or_else(|err| {
-                            error!(
-                                "send DownloadPieceFailedRequest for piece {} failed: {:?}",
-                                self.piece.id(task_id, piece_number),
-                                err
-                            )
-                        });
-
-                    // If the download failed from the parent, continue to download the next
-                    // piece and ignore the error.
+                Err(Error::DownloadFromParentFailed(_)) => {
+                    // The failed piece is reported to the scheduler when it fails, continue to
+                    // download the next piece.
                     continue;
                 }
                 Err(Error::SendTimeout) => {
@@ -1638,6 +1636,9 @@ impl Task {
         let semaphore = Arc::new(Semaphore::new(
             self.config.download.back_to_source_concurrent_piece_count as usize,
         ));
+
+        // Initialize the interrupt. If a piece fails, stop dispatching the remaining pieces.
+        let interrupt = Arc::new(AtomicBool::new(false));
         for interested_piece in interested_pieces {
             async fn download_from_source(
                 task_id: String,
@@ -1804,6 +1805,12 @@ impl Task {
             let model_scope = request.model_scope.clone();
             let open_csg = request.open_csg.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
+            if interrupt.load(Ordering::SeqCst) {
+                debug!("interrupt dispatching the pieces");
+                break;
+            }
+
+            let interrupt = interrupt.clone();
             join_set.spawn(
                 async move {
                     let _permit = permit;
@@ -1828,6 +1835,7 @@ impl Task {
                         open_csg,
                     )
                     .await
+                    .inspect_err(|_| interrupt.store(true, Ordering::SeqCst))
                 }
                 .in_current_span(),
             );
@@ -2211,6 +2219,9 @@ impl Task {
         let semaphore = Arc::new(Semaphore::new(
             self.config.download.back_to_source_concurrent_piece_count as usize,
         ));
+
+        // Initialize the interrupt. If a piece fails, stop dispatching the remaining pieces.
+        let interrupt = Arc::new(AtomicBool::new(false));
         for interested_piece in interested_pieces.clone() {
             async fn download_from_source(
                 task_id: String,
@@ -2354,6 +2365,12 @@ impl Task {
             let model_scope = request.model_scope.clone();
             let open_csg = request.open_csg.clone();
             let permit = semaphore.clone().acquire_owned().await.unwrap();
+            if interrupt.load(Ordering::SeqCst) {
+                debug!("interrupt dispatching the pieces");
+                break;
+            }
+
+            let interrupt = interrupt.clone();
             join_set.spawn(
                 async move {
                     let _permit = permit;
@@ -2377,6 +2394,7 @@ impl Task {
                         open_csg,
                     )
                     .await
+                    .inspect_err(|_| interrupt.store(true, Ordering::SeqCst))
                 }
                 .in_current_span(),
             );
