@@ -2255,7 +2255,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         &self,
         _request: Request<DownloadCacheTaskRequest>,
     ) -> Result<Response<Self::DownloadCacheTaskStream>, Status> {
-        todo!();
+        Err(Status::unimplemented("download_cache_task"))
     }
 
     /// Stats the cache task metadata.
@@ -2264,7 +2264,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         &self,
         _request: Request<DfdaemonStatCacheTaskRequest>,
     ) -> Result<Response<CacheTask>, Status> {
-        todo!();
+        Err(Status::unimplemented("stat_cache_task"))
     }
 
     /// Deletes the cache task.
@@ -2273,7 +2273,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
         &self,
         _request: Request<DeleteCacheTaskRequest>,
     ) -> Result<Response<()>, Status> {
-        todo!();
+        Err(Status::unimplemented("delete_cache_task"))
     }
 }
 
