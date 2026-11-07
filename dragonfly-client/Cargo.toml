@@ -92,6 +92,7 @@ pprof = { version = "0.15", features = ["flamegraph", "protobuf-codec"] }
 tower = { version = "=0.5.3", features = ["limit", "load-shed", "buffer"] }
 indicatif = "0.18.4"
 http-body-util.workspace = true
+jsonwebtoken.workspace = true
 termion = "4.0.6"
 tabled = "0.21.0"
 path-absolutize = "3.1.1"
