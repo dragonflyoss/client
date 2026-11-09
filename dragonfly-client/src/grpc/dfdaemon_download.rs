@@ -1010,7 +1010,12 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 collect_delete_task_failure_metrics(TaskType::Standard as i32);
 
                 error!("delete task: {}", err);
-                Status::internal(err.to_string())
+                match err {
+                    ClientError::TaskNotFound(id) => {
+                        Status::not_found(format!("task not found: {id}"))
+                    }
+                    _ => Status::internal(err.to_string()),
+                }
             })?;
 
         Ok(Response::new(()))
@@ -1057,7 +1062,12 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                 collect_delete_local_task_failure_metrics(TaskType::Standard as i32);
 
                 error!("delete local task: {}", err);
-                Status::internal(err.to_string())
+                match err {
+                    ClientError::TaskNotFound(id) => {
+                        Status::not_found(format!("local task not found: {id}"))
+                    }
+                    _ => Status::internal(err.to_string()),
+                }
             })?;
 
         Ok(Response::new(()))
