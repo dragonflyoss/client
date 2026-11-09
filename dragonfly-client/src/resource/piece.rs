@@ -371,6 +371,13 @@ impl Piece {
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
 
+        // Acquire the prefetch rate limiter before claiming the piece.
+        if is_prefetch {
+            self.prefetch_bandwidth_limiter
+                .acquire(length as usize)
+                .await;
+        }
+
         // Record the start of downloading piece.
         let piece = self
             .storage
@@ -390,13 +397,6 @@ impl Piece {
                 error!("set piece metadata failed: {}", err)
             };
         });
-
-        if is_prefetch {
-            // Acquire the prefetch rate limiter.
-            self.prefetch_bandwidth_limiter
-                .acquire(length as usize)
-                .await;
-        }
 
         // Acquire the download rate limiter.
         self.download_bandwidth_limiter
@@ -507,6 +507,13 @@ impl Piece {
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
 
+        // Acquire the prefetch rate limiter before claiming the piece.
+        if is_prefetch {
+            self.prefetch_bandwidth_limiter
+                .acquire(length as usize)
+                .await;
+        }
+
         // Record the start of downloading piece.
         let piece = self
             .storage
@@ -526,13 +533,6 @@ impl Piece {
                 error!("set piece metadata failed: {}", err)
             };
         });
-
-        if is_prefetch {
-            // Acquire the prefetch rate limiter.
-            self.prefetch_bandwidth_limiter
-                .acquire(length as usize)
-                .await;
-        }
 
         // Acquire the back to source rate limiter.
         self.back_to_source_bandwidth_limiter

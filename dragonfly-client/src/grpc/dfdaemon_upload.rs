@@ -2519,7 +2519,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         _request: Request<DownloadCacheTaskRequest>,
     ) -> Result<Response<Self::DownloadCacheTaskStream>, Status> {
-        todo!();
+        Err(Status::unimplemented("download_cache_task"))
     }
 
     /// Stats the cache task metadata.
@@ -2528,7 +2528,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         _request: Request<StatCacheTaskRequest>,
     ) -> Result<Response<CacheTask>, Status> {
-        todo!();
+        Err(Status::unimplemented("stat_cache_task"))
     }
 
     /// Deletes the cache task.
@@ -2537,7 +2537,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         _request: Request<DeleteCacheTaskRequest>,
     ) -> Result<Response<()>, Status> {
-        todo!();
+        Err(Status::unimplemented("delete_cache_task"))
     }
 
     /// The stream of the sync cache pieces response.
@@ -2549,7 +2549,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         _request: Request<SyncCachePiecesRequest>,
     ) -> Result<Response<Self::SyncCachePiecesStream>, Status> {
-        todo!();
+        Err(Status::unimplemented("sync_cache_pieces"))
     }
 
     /// Downloads the cache piece content for parent.
@@ -2561,7 +2561,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         _request: Request<DownloadCachePieceRequest>,
     ) -> Result<Response<DownloadCachePieceResponse>, Status> {
-        todo!();
+        Err(Status::unimplemented("download_cache_piece"))
     }
 }
 
