@@ -64,7 +64,7 @@ use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
 use tokio::sync::{
     mpsc::{self, Sender},
-    Mutex, Notify, Semaphore,
+    Mutex, Notify, OwnedSemaphorePermit, Semaphore,
 };
 use tokio::task::JoinSet;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
@@ -1330,6 +1330,7 @@ impl Task {
                 need_piece_content: bool,
                 protocol: String,
                 parent_selector: Arc<ParentSelector>,
+                permit: OwnedSemaphorePermit,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 let mut collected_parents = parents;
@@ -1405,6 +1406,12 @@ impl Task {
                         }
                     }
                 };
+
+                // Release the permit once the piece is written, so a slow scheduler does not stall
+                // the other pieces. Keep it while the piece content is held in memory.
+                if !need_piece_content {
+                    drop(permit);
+                }
 
                 // Construct the piece.
                 let piece = Piece {
@@ -1545,7 +1552,6 @@ impl Task {
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             join_set.spawn(
                 async move {
-                    let _permit = permit;
                     download_from_parent(
                         task_id,
                         host_id,
@@ -1563,6 +1569,7 @@ impl Task {
                         need_piece_content,
                         protocol,
                         parent_selector,
+                        permit,
                     )
                     .await
                 }
@@ -1659,6 +1666,7 @@ impl Task {
                 hugging_face: Option<HuggingFace>,
                 model_scope: Option<ModelScope>,
                 open_csg: Option<OpenCsg>,
+                permit: OwnedSemaphorePermit,
             ) -> ClientResult<metadata::Piece> {
                 let piece_id = piece_manager.id(task_id.as_str(), number);
                 debug!("start to download piece {} from source", piece_id);
@@ -1680,6 +1688,12 @@ impl Task {
                         open_csg,
                     )
                     .await?;
+
+                // Release the permit once the piece is written, so a slow scheduler does not stall
+                // the other pieces. Keep it while the piece content is held in memory.
+                if !need_piece_content {
+                    drop(permit);
+                }
 
                 // Construct the piece.
                 let piece = Piece {
@@ -1813,7 +1827,6 @@ impl Task {
             let interrupt = interrupt.clone();
             join_set.spawn(
                 async move {
-                    let _permit = permit;
                     download_from_source(
                         task_id,
                         host_id,
@@ -1833,6 +1846,7 @@ impl Task {
                         hugging_face,
                         model_scope,
                         open_csg,
+                        permit,
                     )
                     .await
                     .inspect_err(|_| interrupt.store(true, Ordering::SeqCst))
