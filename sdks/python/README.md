@@ -50,6 +50,23 @@ with DfcacheClient() as client:
     client.delete(task.id)
 ```
 
+### asyncio
+
+Training loops and services already running an event loop can use the
+matching async client:
+
+```python
+from dragonfly_cache import AsyncDfcacheClient
+
+async with AsyncDfcacheClient() as client:
+    task = await client.import_file(
+        "/data/model.safetensors",
+        content_for_calculating_task_id="deepseek-ai/deepseek-ocr/weights",
+    )
+    await client.export_file(task.id, output="/tmp/model.safetensors")
+    await client.delete(task.id)
+```
+
 ## API
 
 ### `DfcacheClient(endpoint=..., upload_endpoint=..., timeout=...)`

@@ -31,6 +31,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
+    "pytest-asyncio>=0.21",
     "pytest-cov>=4.0",
 ]
 
@@ -43,6 +44,8 @@ packages = ["dragonfly_cache"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.coverage.run]
 source = ["dragonfly_cache"]

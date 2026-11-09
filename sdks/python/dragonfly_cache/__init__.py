@@ -19,6 +19,7 @@ dfdaemon download gRPC service. Designed for AI workloads sharing models,
 datasets and checkpoints across nodes.
 """
 
+from dragonfly_cache.aclient import AsyncDfcacheClient
 from dragonfly_cache.client import DEFAULT_ENDPOINT, DfcacheClient
 from dragonfly_cache.exceptions import (
     DfcacheConnectionError,
@@ -37,6 +38,7 @@ __version__ = "0.1.0"
 __all__ = [
     "DEFAULT_ENDPOINT",
     "DfcacheClient",
+    "AsyncDfcacheClient",
     "DfcacheError",
     "DfcacheValidationError",
     "DfcacheConnectionError",
