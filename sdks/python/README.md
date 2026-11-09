@@ -52,14 +52,15 @@ with DfcacheClient() as client:
 
 ## API
 
-### `DfcacheClient(endpoint=..., timeout=...)`
+### `DfcacheClient(endpoint=..., upload_endpoint=..., timeout=...)`
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
 | `endpoint` | `str \| PathLike` | `/var/run/dragonfly/dfdaemon.sock` | dfdaemon download service unix socket. A `unix:` prefix is accepted. |
+| `upload_endpoint` | `str` | `127.0.0.1:4000` | dfdaemon upload service address; `delete` is served by the upload gRPC server which listens on TCP, not on the download socket. |
 | `timeout` | `timedelta \| None` | `None` | Default per-RPC timeout; `None` waits indefinitely. |
 
-Usable as a context manager; the client is thread-safe (shares one gRPC channel).
+Usable as a context manager; the client is thread-safe (shares the gRPC channels).
 
 ### `client.import_file(path, ...) -> PersistentCacheTask`
 

@@ -65,6 +65,10 @@ def main() -> int:
     export_parser = sub.add_parser("export", help="export a checkpoint from the P2P cache")
     export_parser.add_argument("task_id", help="persistent cache task id")
     export_parser.add_argument("output", help="destination file path")
+    export_parser.add_argument(
+        "--reference",
+        help="local file whose sha256 the export must match (integrity check)",
+    )
 
     args = parser.parse_args()
 
@@ -87,7 +91,8 @@ def main() -> int:
                 print("share this id with the other nodes:")
                 print(f"  python {sys.argv[0]} export {task.id} /checkpoints/...")
             else:
-                client.export_file(args.task_id, output=args.output, overwrite=True)
+                digest = f"sha256:{sha256sum(args.reference)}" if args.reference else None
+                client.export_file(args.task_id, output=args.output, digest=digest, overwrite=True)
                 print(f"exported task {args.task_id} to {args.output}")
     except DfcacheTaskNotFoundError as err:
         print(f"task not found: {err}", file=sys.stderr)

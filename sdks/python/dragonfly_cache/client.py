@@ -53,6 +53,11 @@ logger = logging.getLogger(__name__)
 # dragonfly-client-config::dfdaemon::default_download_unix_socket_path.
 DEFAULT_ENDPOINT = "/var/run/dragonfly/dfdaemon.sock"
 
+# Default dfdaemon upload service address. The upload gRPC server listens on
+# TCP (mirrors dragonfly-client-config::dfdaemon::default_upload_grpc_server_port);
+# only the download service is reachable through the unix domain socket.
+DEFAULT_UPLOAD_ENDPOINT = "127.0.0.1:4000"
+
 # Default timeout for individual dfdaemon RPCs when the caller does not
 # specify one. Import/export accept an explicit timeout because transfer
 # duration depends on file size.
@@ -92,12 +97,16 @@ class DfcacheClient:
         self,
         endpoint: Union[str, os.PathLike] = DEFAULT_ENDPOINT,
         *,
+        upload_endpoint: str = DEFAULT_UPLOAD_ENDPOINT,
         timeout: Optional[timedelta] = None,
     ):
         """Create a dfcache client.
 
         Args:
             endpoint: dfdaemon download service unix domain socket path.
+            upload_endpoint: dfdaemon upload service host:port serving
+                DeletePersistentCacheTask; the download socket does not
+                expose the upload service.
             timeout: Default timeout applied to every RPC, None disables it.
 
         Raises:
@@ -105,6 +114,7 @@ class DfcacheClient:
                 dfdaemon grpc server rejects the connection.
         """
         self._endpoint = str(endpoint)
+        self._upload_endpoint = upload_endpoint
         self._timeout = timeout
 
         if self._endpoint.startswith("unix:"):
@@ -119,12 +129,15 @@ class DfcacheClient:
                 f"dfdaemon socket {socket_path} does not exist, please check the dfdaemon deployment"
             )
 
-        self._channel = grpc.insecure_channel(target)
+        # gRPC over a unix domain socket needs a valid http/2 :authority
+        # header. grpc-python would otherwise default to the percent-encoded
+        # socket path (e.g. "tmp%2Fdragonfly%2Fdfdaemon.sock") which recent
+        # server stacks (h2 >= 0.4) reject as a malformed authority with
+        # RST_STREAM. Pin a plain hostname instead.
+        self._channel = grpc.insecure_channel(
+            target, options=[("grpc.default_authority", "localhost")]
+        )
         self._download_stub = dfdaemon_pb2_grpc.DfdaemonDownloadStub(self._channel)
-        # The dfdaemon download service handles import/export/stat, but
-        # DeletePersistentCacheTask is only exposed by the upload service
-        # (mirrors dfdaemon v2 proto service definitions).
-        self._upload_stub = dfdaemon_pb2_grpc.DfdaemonUploadStub(self._channel)
 
         try:
             grpc.channel_ready_future(self._channel).result(timeout=_ENDPOINT_TIMEOUT_SECONDS)
@@ -133,6 +146,29 @@ class DfcacheClient:
             raise DfcacheConnectionError(
                 f"can not connect {self._endpoint}, please check the unix socket"
             ) from err
+
+        # The dfdaemon download service handles import/export/stat, but
+        # DeletePersistentCacheTask is only exposed by the upload service
+        # which listens on TCP, not on the download unix domain socket
+        # (mirrors dfdaemon v2 proto service definitions and the daemon
+        # deployment topology).
+        self._upload_channel = grpc.insecure_channel(upload_endpoint)
+        self._upload_stub = dfdaemon_pb2_grpc.DfdaemonUploadStub(self._upload_channel)
+
+    # Context manager plumbing.
+    def __enter__(self) -> "DfcacheClient":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Close the underlying gRPC channels."""
+        self._channel.close()
+        self._upload_channel.close()
+
+    def __repr__(self) -> str:
+        return f"DfcacheClient(endpoint={self._endpoint!r}, upload_endpoint={self._upload_endpoint!r})"
 
     # Context manager plumbing.
     def __enter__(self) -> "DfcacheClient":
@@ -307,19 +343,15 @@ class DfcacheClient:
                             "protocol violation: piece finished before download started"
                         )
                 # Unknown/None oneof kinds from newer daemons are tolerated.
-        except grpc.RpcError as err:
+        except (grpc.RpcError, DfcacheSplitError) as err:
             # Clean up a possibly partially written output file, mirroring
             # the CLI's remove_file on error behavior.
             try:
                 os.remove(output_path)
             except OSError:
                 pass
-            raise _from_grpc_status(task_id, err) from err
-        except DfcacheSplitError:
-            try:
-                os.remove(output_path)
-            except OSError:
-                pass
+            if isinstance(err, grpc.RpcError):
+                raise _from_grpc_status(task_id, err) from err
             raise
 
         return Path(output_path).resolve()

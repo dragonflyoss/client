@@ -171,24 +171,48 @@ def daemon_socket_dir():
 
 @pytest.fixture
 def fake_dfdaemon(daemon_socket_dir):
-    """Run a FakeDfdaemon server on a temporary unix domain socket.
+    """Run the download service on a unix socket and the upload service on TCP.
+
+    Mirrors the real daemon topology: the download gRPC service listens on a
+    unix domain socket while the upload service (DeletePersistentCacheTask)
+    listens on TCP.
 
     Yields:
-        A (FakeDfdaemon, socket_path) tuple.
+        A (FakeDfdaemon, socket_path, upload_addr) tuple.
     """
+
+    class _PortAllocator:
+        """Sequential port allocator, mirrors the daemon's upload port."""
+
+        def __init__(self):
+            self._next = 41000 + (os.getpid() % 1000) * 10
+
+        def take(self):
+            self._next += 1
+            return self._next
+
     socket_path = os.path.join(daemon_socket_dir, f"dfdaemon-{threading.get_ident()}.sock")
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
+
+    download_server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
     fake = FakeDfdaemon()
-    dfdaemon_pb2_grpc.add_DfdaemonDownloadServicer_to_server(fake, server)
-    # DeletePersistentCacheTask lives on the upload service.
-    dfdaemon_pb2_grpc.add_DfdaemonUploadServicer_to_server(fake, server)
-    server.add_insecure_port(f"unix:{socket_path}")
-    server.start()
+    dfdaemon_pb2_grpc.add_DfdaemonDownloadServicer_to_server(fake, download_server)
+    download_server.add_insecure_port(f"unix:{socket_path}")
+    download_server.start()
+
+    # DeletePersistentCacheTask lives on the upload service, which the real
+    # daemon serves over TCP.
+    upload_port = _PortAllocator().take()
+    upload_addr = f"127.0.0.1:{upload_port}"
+    upload_server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
+    dfdaemon_pb2_grpc.add_DfdaemonUploadServicer_to_server(fake, upload_server)
+    upload_server.add_insecure_port(upload_addr)
+    upload_server.start()
 
     try:
-        yield fake, socket_path
+        yield fake, socket_path, upload_addr
     finally:
-        server.stop(grace=None)
+        download_server.stop(grace=None)
+        upload_server.stop(grace=None)
         try:
             os.unlink(socket_path)
         except OSError:
@@ -200,8 +224,8 @@ def client(fake_dfdaemon):
     """A DfcacheClient connected to the fake dfdaemon."""
     from dragonfly_cache.client import DfcacheClient
 
-    _, socket_path = fake_dfdaemon
-    with DfcacheClient(socket_path) as c:
+    _, socket_path, upload_addr = fake_dfdaemon
+    with DfcacheClient(socket_path, upload_endpoint=upload_addr) as c:
         yield c
 
 

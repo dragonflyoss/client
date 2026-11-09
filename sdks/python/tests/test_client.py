@@ -44,14 +44,14 @@ class TestImport:
         assert task.state == "Succeeded"
         assert task.ttl == timedelta(hours=1)
 
-        fake, _ = fake_dfdaemon
+        fake, _, _ = fake_dfdaemon
         req = fake.upload_requests[0]
         assert req.tag == "llm"
         assert req.application == "training"
         assert req.persistent_replica_count == 2
 
     def test_import_maps_request_fields(self, client, fake_dfdaemon, sample_file):
-        fake, _ = fake_dfdaemon
+        fake, _, _ = fake_dfdaemon
         client.import_file(
             sample_file,
             content_for_calculating_task_id="deepseek-ocr/weights",
@@ -77,7 +77,7 @@ class TestExport:
         result = client.export_file(task.id, output=output)
 
         assert result == output
-        fake, _ = fake_dfdaemon
+        fake, _, _ = fake_dfdaemon
         req = fake.download_requests[0]
         assert req.task_id == task.id
         assert req.need_piece_content is False
@@ -96,7 +96,7 @@ class TestExport:
 
         # Simulate dfdaemon failing after the transfer started: the started
         # response is delivered, then the stream breaks with UNAVAILABLE.
-        fake, _ = fake_dfdaemon
+        fake, _, _ = fake_dfdaemon
         fake.fail_stream_after_start = True
 
         with pytest.raises(DfcacheConnectionError, match="peer lost"):
