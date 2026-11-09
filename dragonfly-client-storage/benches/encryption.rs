@@ -55,7 +55,6 @@ fn bench_dir() -> PathBuf {
     dir
 }
 
-
 /// Writes the benchmark piece into the encrypted file once, so the read
 /// benchmarks never depend on the write benchmarks having run.
 fn populate(
@@ -79,6 +78,16 @@ fn populate(
         .await
         .unwrap();
     });
+}
+
+/// Simulates the transport work of a consumer sending `bytes` at `gib_per_sec`
+/// by spinning, like a TLS sender encrypting and writing to the socket would.
+fn pace(bytes: usize, gib_per_sec: f64) {
+    let nanos = (bytes as f64 / (gib_per_sec * 1_073_741_824.0) * 1e9) as u128;
+    let start = std::time::Instant::now();
+    while start.elapsed().as_nanos() < nanos {
+        std::hint::spin_loop();
+    }
 }
 
 /// The raw cipher: seal and open one chunk in place, for several chunk sizes.
@@ -210,31 +219,28 @@ fn bench_write_piece(c: &mut Criterion) {
             .unwrap(),
     );
     populate(&rt, &enc_fd, &cipher, &pool, &content);
-    group.bench_function(
-        BenchmarkId::new("encrypted", DEFAULT_CHUNK_SIZE),
-        |b| {
-            b.iter(|| {
-                let fd = enc_fd.clone();
-                let cipher = cipher.clone();
-                let content = content.clone();
-                let pool = pool.clone();
-                rt.block_on(async move {
-                    let mut reader = Cursor::new(content.as_slice());
-                    write_encrypted_range(
-                        fd,
-                        cipher,
-                        0,
-                        PIECE_LENGTH as u64,
-                        BUFFER_SIZE,
-                        &mut reader,
-                        &pool,
-                    )
-                    .await
-                    .unwrap()
-                })
+    group.bench_function(BenchmarkId::new("encrypted", DEFAULT_CHUNK_SIZE), |b| {
+        b.iter(|| {
+            let fd = enc_fd.clone();
+            let cipher = cipher.clone();
+            let content = content.clone();
+            let pool = pool.clone();
+            rt.block_on(async move {
+                let mut reader = Cursor::new(content.as_slice());
+                write_encrypted_range(
+                    fd,
+                    cipher,
+                    0,
+                    PIECE_LENGTH as u64,
+                    BUFFER_SIZE,
+                    &mut reader,
+                    &pool,
+                )
+                .await
+                .unwrap()
             })
-        },
-    );
+        })
+    });
     for &chunk_size in &[256 * 1024u64, 1024 * 1024] {
         let layout = Layout::new(chunk_size, PIECE_LENGTH as u64, PIECE_LENGTH as u64).unwrap();
         let cipher = Arc::new(TaskCipher::new(&data_key(1), layout).unwrap());
@@ -285,38 +291,34 @@ fn bench_write_piece(c: &mut Criterion) {
             let fd = plain_fd.clone();
             let pool = pool.clone();
             rt.block_on(async move {
-                let mut reader =
-                    RangeReader::new(fd, 0, PIECE_LENGTH as u64, BUFFER_SIZE, pool);
+                let mut reader = RangeReader::new(fd, 0, PIECE_LENGTH as u64, BUFFER_SIZE, pool);
                 let mut sink = Vec::with_capacity(PIECE_LENGTH);
                 reader.read_to_end(&mut sink).await.unwrap()
             })
         })
     });
-    group.bench_function(
-        BenchmarkId::new("encrypted", DEFAULT_CHUNK_SIZE),
-        |b| {
-            b.iter(|| {
-                let fd = enc_fd.clone();
-                let cipher = cipher.clone();
-                let pool = pool.clone();
-                rt.block_on(async move {
-                    let mut reader = EncryptedRangeReader::new(
-                        fd,
-                        cipher,
-                        0,
-                        PIECE_LENGTH as u64,
-                        0,
-                        PIECE_LENGTH as u64,
-                        BUFFER_SIZE,
-                        pool,
-                    )
-                    .unwrap();
-                    let mut sink = Vec::with_capacity(PIECE_LENGTH);
-                    reader.read_to_end(&mut sink).await.unwrap()
-                })
+    group.bench_function(BenchmarkId::new("encrypted", DEFAULT_CHUNK_SIZE), |b| {
+        b.iter(|| {
+            let fd = enc_fd.clone();
+            let cipher = cipher.clone();
+            let pool = pool.clone();
+            rt.block_on(async move {
+                let mut reader = EncryptedRangeReader::new(
+                    fd,
+                    cipher,
+                    0,
+                    PIECE_LENGTH as u64,
+                    0,
+                    PIECE_LENGTH as u64,
+                    BUFFER_SIZE,
+                    pool,
+                )
+                .unwrap();
+                let mut sink = Vec::with_capacity(PIECE_LENGTH);
+                reader.read_to_end(&mut sink).await.unwrap()
             })
-        },
-    );
+        })
+    });
     for &chunk_size in &[256 * 1024u64, 1024 * 1024] {
         let layout = Layout::new(chunk_size, PIECE_LENGTH as u64, PIECE_LENGTH as u64).unwrap();
         let cipher = Arc::new(TaskCipher::new(&data_key(1), layout).unwrap());
@@ -353,8 +355,167 @@ fn bench_write_piece(c: &mut Criterion) {
     }
     group.finish();
 
+    // Reading the piece back to a consumer that spends time per chunk, like a
+    // network sender: the overlap of the decryption with the consumer matters
+    // here, not the speed of a memcpy consumer.
+    for &rate in &[3.0f64, 1.0] {
+        let mut group = c.benchmark_group(format!("read_piece_paced_{rate}gib"));
+        group.throughput(Throughput::Bytes(PIECE_LENGTH as u64));
+        group.sample_size(20);
+        group.bench_function("plaintext", |b| {
+            b.iter(|| {
+                let fd = plain_fd.clone();
+                let pool = pool.clone();
+                rt.block_on(async move {
+                    let mut reader =
+                        RangeReader::new(fd, 0, PIECE_LENGTH as u64, BUFFER_SIZE, pool);
+                    let mut total = 0;
+                    loop {
+                        let chunk = reader.read_chunk().await.unwrap();
+                        if chunk.is_empty() {
+                            break;
+                        }
+                        pace(chunk.len(), rate);
+                        total += chunk.len();
+                    }
+                    total
+                })
+            })
+        });
+        group.bench_function(BenchmarkId::new("encrypted", DEFAULT_CHUNK_SIZE), |b| {
+            b.iter(|| {
+                let fd = enc_fd.clone();
+                let cipher = cipher.clone();
+                let pool = pool.clone();
+                rt.block_on(async move {
+                    let mut reader = EncryptedRangeReader::new(
+                        fd,
+                        cipher,
+                        0,
+                        PIECE_LENGTH as u64,
+                        0,
+                        PIECE_LENGTH as u64,
+                        BUFFER_SIZE,
+                        pool,
+                    )
+                    .unwrap();
+                    let mut total = 0;
+                    loop {
+                        let chunk = reader.read_chunk().await.unwrap();
+                        if chunk.is_empty() {
+                            break;
+                        }
+                        pace(chunk.len(), rate);
+                        total += chunk.len();
+                    }
+                    total
+                })
+            })
+        });
+        group.finish();
+    }
+
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-criterion_group!(benches, bench_chunk_kernel, bench_nonce_cost, bench_write_piece);
+/// The lookup of the cipher of a task, done once per piece read and write: the
+/// bounded sharded LRU of the encryptor against a plain concurrent map, from one
+/// thread and from four, 1000 lookups per iteration.
+fn bench_cipher_lookup(c: &mut Criterion) {
+    use dashmap::DashMap;
+    use std::hint::black_box;
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = bench_dir();
+    let tasks = dir.join("tasks").join("abc");
+    std::fs::create_dir_all(&tasks).unwrap();
+
+    let encryptor = Arc::new(Encryptor::new(Arc::new(
+        FileKeyProvider::from_keys(&[data_key(1)]).unwrap(),
+    )));
+    let paths: Arc<Vec<PathBuf>> =
+        Arc::new((0..256).map(|i| tasks.join(format!("id{i:04}"))).collect());
+    let reference: Arc<DashMap<PathBuf, Arc<TaskCipher>>> = Arc::new(DashMap::new());
+    for path in paths.iter() {
+        rt.block_on(encryptor.create_file(path, PIECE_LENGTH as u64, PIECE_LENGTH as u64))
+            .unwrap();
+        reference.insert(path.clone(), rt.block_on(encryptor.cipher(path)).unwrap());
+    }
+
+    let mut group = c.benchmark_group("cipher_lookup_x1000");
+    group.bench_function("lru_sharded/1thread", |b| {
+        b.iter(|| {
+            let encryptor = encryptor.clone();
+            let paths = paths.clone();
+            rt.block_on(async move {
+                for i in 0..1000 {
+                    black_box(encryptor.cipher(&paths[i % 256]).await.unwrap());
+                }
+            })
+        })
+    });
+    group.bench_function("dashmap/1thread", |b| {
+        b.iter(|| {
+            for i in 0..1000 {
+                black_box(reference.get(&paths[i % 256]).unwrap().clone());
+            }
+        })
+    });
+    group.bench_function("lru_sharded/4threads", |b| {
+        b.iter(|| {
+            let encryptor = encryptor.clone();
+            let paths = paths.clone();
+            rt.block_on(async move {
+                let mut handles = Vec::new();
+                for t in 0..4 {
+                    let encryptor = encryptor.clone();
+                    let paths = paths.clone();
+                    handles.push(tokio::spawn(async move {
+                        for i in 0..1000 {
+                            black_box(encryptor.cipher(&paths[(i * 7 + t) % 256]).await.unwrap());
+                        }
+                    }));
+                }
+                for handle in handles {
+                    handle.await.unwrap();
+                }
+            })
+        })
+    });
+    group.bench_function("dashmap/4threads", |b| {
+        b.iter(|| {
+            let reference = reference.clone();
+            let paths = paths.clone();
+            rt.block_on(async move {
+                let mut handles = Vec::new();
+                for t in 0..4 {
+                    let reference = reference.clone();
+                    let paths = paths.clone();
+                    handles.push(tokio::spawn(async move {
+                        for i in 0..1000 {
+                            black_box(reference.get(&paths[(i * 7 + t) % 256]).unwrap().clone());
+                        }
+                    }));
+                }
+                for handle in handles {
+                    handle.await.unwrap();
+                }
+            })
+        })
+    });
+    group.finish();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+criterion_group!(
+    benches,
+    bench_chunk_kernel,
+    bench_nonce_cost,
+    bench_cipher_lookup,
+    bench_write_piece
+);
 criterion_main!(benches);

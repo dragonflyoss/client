@@ -89,6 +89,12 @@ pub struct EncryptedRangeReader {
     /// The state of the in-flight read.
     state: EncryptedRangeReaderState,
 
+    /// The read and the decryption of the batch after the one in the buffer,
+    /// started as soon as that batch is delivered, so they overlap the
+    /// consumption of it. It owns its own buffer until it completes, which
+    /// bounds the memory of a reader to two buffers.
+    prefetch: Option<JoinHandle<io::Result<(BytesMut, usize)>>>,
+
     /// The buffer pool the buffers are checked out from.
     buffer_pool: BufferPool,
 }
@@ -139,6 +145,7 @@ impl EncryptedRangeReader {
             pos: 0,
             filled: 0,
             state: EncryptedRangeReaderState::Idle,
+            prefetch: None,
             buffer_pool,
         })
     }
@@ -179,19 +186,14 @@ impl EncryptedRangeReader {
     }
 
     /// Starts reading and decrypting the next batch of chunks on the blocking
-    /// thread pool, reusing `buffer` when it has a capacity.
-    fn start_fill(&self, buffer: BytesMut) -> JoinHandle<io::Result<(BytesMut, usize)>> {
+    /// thread pool into a buffer checked out of the pool.
+    fn start_fill(&self) -> JoinHandle<io::Result<(BytesMut, usize)>> {
         let count = min(self.chunks_per_fill, self.end_chunk - self.next_chunk);
         let layout = *self.cipher.layout();
         let (offset, length) = layout.chunks_span(&self.piece, self.next_chunk, count);
 
         // Check out a buffer with `length` readable bytes without zeroing them,
-        // the positional read overwrites all of them. The previous buffer goes
-        // back to the pool first, so the same buffer is normally handed out
-        // again.
-        if buffer.capacity() > 0 {
-            self.buffer_pool.give_back(buffer);
-        }
+        // the positional read overwrites all of them.
         let mut buffer = self.buffer_pool.checkout_for_read(length as usize);
 
         let fd = self.fd.clone();
@@ -236,10 +238,33 @@ impl EncryptedRangeReader {
         let start = layout.chunk_plaintext_offset(&self.piece, self.next_chunk);
         self.next_chunk += count;
 
-        self.buffer = buffer;
+        // The replaced buffer is fully consumed, return it to the pool for the
+        // next prefetch.
+        let consumed = std::mem::replace(&mut self.buffer, buffer);
+        if consumed.capacity() > 0 {
+            self.buffer_pool.give_back(consumed);
+        }
+
         self.pos = min(self.skip, plaintext_length);
         self.filled = min(plaintext_length, self.end.saturating_sub(start) as usize);
         self.skip = 0;
+    }
+
+    /// Takes the prefetched batch, or starts reading the next one when there is
+    /// none.
+    fn take_fill(&mut self) -> JoinHandle<io::Result<(BytesMut, usize)>> {
+        match self.prefetch.take() {
+            Some(handle) => handle,
+            None => self.start_fill(),
+        }
+    }
+
+    /// Starts reading and decrypting the batch after the one in the buffer, so
+    /// it overlaps the consumption of that one.
+    fn start_prefetch(&mut self) {
+        if self.prefetch.is_none() && !self.is_exhausted() {
+            self.prefetch = Some(self.start_fill());
+        }
     }
 
     /// Reads the next chunk of plaintext of the range with a positional read
@@ -257,10 +282,10 @@ impl EncryptedRangeReader {
             return Ok(Bytes::new());
         }
 
-        let buffer = std::mem::take(&mut self.buffer);
-        let (buffer, plaintext_length) =
-            self.start_fill(buffer).await.map_err(io::Error::other)??;
+        let handle = self.take_fill();
+        let (buffer, plaintext_length) = handle.await.map_err(io::Error::other)??;
         self.finish_fill(buffer, plaintext_length);
+        self.start_prefetch();
 
         let mut buffer = std::mem::take(&mut self.buffer);
         buffer.truncate(self.filled);
@@ -275,6 +300,15 @@ impl Drop for EncryptedRangeReader {
     /// Returns the buffer to the buffer pool. The buffer is empty when no
     /// fill happened or a fill is still in flight, and is skipped in that case.
     fn drop(&mut self) {
+        // Abort the fills that have not started, a running one finishes in the
+        // background and drops its buffer.
+        if let Some(handle) = self.prefetch.take() {
+            handle.abort();
+        }
+        if let EncryptedRangeReaderState::Reading(handle) = &self.state {
+            handle.abort();
+        }
+
         let buffer = std::mem::take(&mut self.buffer);
         if buffer.capacity() > 0 {
             self.buffer_pool.give_back(buffer);
@@ -295,14 +329,15 @@ impl AsyncBufRead for EncryptedRangeReader {
                         break;
                     }
 
-                    let buffer = std::mem::take(&mut this.buffer);
-                    this.state = EncryptedRangeReaderState::Reading(this.start_fill(buffer));
+                    let handle = this.take_fill();
+                    this.state = EncryptedRangeReaderState::Reading(handle);
                 }
                 EncryptedRangeReaderState::Reading(handle) => {
                     let result = ready!(Pin::new(handle).poll(cx));
                     this.state = EncryptedRangeReaderState::Idle;
                     let (buffer, plaintext_length) = result.map_err(io::Error::other)??;
                     this.finish_fill(buffer, plaintext_length);
+                    this.start_prefetch();
                 }
             }
         }
@@ -399,7 +434,8 @@ pub async fn write_encrypted_range<R: AsyncRead + Unpin + ?Sized>(
 
             // Fill the plaintext of every slot and hash it while it is hot.
             for index in 0..count {
-                let plaintext_length = layout.chunk_length(piece.length, next_chunk + index) as usize;
+                let plaintext_length =
+                    layout.chunk_length(piece.length, next_chunk + index) as usize;
                 let start = index as usize * slot_size + nonce_len;
                 let plaintext = &mut buffer[start..start + plaintext_length];
                 let read = read_full(&mut reader, plaintext).await?;
