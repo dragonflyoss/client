@@ -20,6 +20,12 @@ use reqwest::header::HeaderMap;
 use std::{fmt, str::FromStr};
 use tracing::error;
 
+/// The header key of content category in http request.
+/// A low-cardinality label identifying what kind of content the download is for
+/// (e.g. "registry_mirror", "s3_model_artifact"), sourced from the matching
+/// proxy rule. Surfaced on download metrics as the `content_category` label.
+pub const DRAGONFLY_CONTENT_CATEGORY_HEADER: &str = "X-Dragonfly-Content-Category";
+
 /// The header key of tag in http request.
 pub const DRAGONFLY_TAG_HEADER: &str = "X-Dragonfly-Tag";
 
