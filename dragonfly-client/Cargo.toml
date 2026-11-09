@@ -93,7 +93,7 @@ tower = { version = "=0.5.3", features = ["limit", "load-shed", "buffer"] }
 indicatif = "0.18.4"
 http-body-util.workspace = true
 termion = "4.0.6"
-tabled = "0.21.0"
+tabled = "0.22.0"
 path-absolutize = "3.1.1"
 rand = "0.9.4"
 glob = "0.3.3"
