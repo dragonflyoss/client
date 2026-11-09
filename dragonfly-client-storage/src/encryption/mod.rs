@@ -35,18 +35,23 @@
 //! and the output paths are refused in favor of decrypting copies.
 
 use aws_lc_rs::aead::{Aad, Nonce, RandomizedNonceKey, Tag, AES_256_GCM};
-use dashmap::DashMap;
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::buffer_pool::BufferPool;
 use dragonfly_client_util::fs::fallocate;
+use lru::LruCache;
 use serde::{Deserialize, Serialize};
 use std::cmp::min;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::io::ErrorKind;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 use zeroize::Zeroizing;
 
 pub mod io;
@@ -65,6 +70,32 @@ const FORMAT_VERSION: u16 = 1;
 
 /// The length of the magic and the length prefix of the header.
 const HEADER_PREFIX_LEN: usize = MAGIC.len() + std::mem::size_of::<u32>();
+
+/// The maximum length of the key identifier in the header, in bytes. The
+/// identifier is read from the disk before anything authenticates it, so it is
+/// bounded and restricted to printable characters, which keeps it safe to log.
+const MAX_KEY_ID_LEN: usize = 1024;
+
+/// The maximum length of the wrapped data key in the header, in bytes.
+const MAX_WRAPPED_KEY_LEN: usize = 2048;
+
+/// The default number of unwrapped task ciphers kept in memory. A cipher holds
+/// the expanded data key of a task, so the cache is bounded instead of growing
+/// with every task ever opened. A cipher evicted while a reader or a writer
+/// still holds it stays alive until they are done, and an evicted cipher that
+/// is needed again is unwrapped again from the header of its file.
+pub const DEFAULT_CIPHER_CACHE_CAPACITY: usize = 16 * 1024;
+
+/// The number of shards of the cipher cache, which bounds the contention of the
+/// lookups on the hot path of every piece read and write.
+const CIPHER_CACHE_SHARDS: usize = 16;
+
+/// The number of chunks sealed by the start-up self test, 4 MiB in total.
+const SELF_TEST_CHUNKS: u64 = 64;
+
+/// The sealing throughput in GiB/s under which the start-up self test warns,
+/// since it means the CPU features of the hardware AES-GCM are not available.
+const SELF_TEST_MIN_GIB_PER_SEC: f64 = 1.0;
 
 /// Header is the header of an encrypted task content file, holding the layout
 /// parameters and the wrapped data encryption key. It is serialized with
@@ -97,6 +128,23 @@ impl Header {
         Layout::new(self.chunk_size, self.piece_length, self.content_length)
     }
 
+    /// Validates the fields read from the disk, which nothing has authenticated
+    /// yet when the header is decoded: the key identifier and the wrapped key
+    /// are bounded, and the key identifier is printable.
+    fn validate(&self) -> Result<()> {
+        if self.key_id.len() > MAX_KEY_ID_LEN || self.key_id.chars().any(char::is_control) {
+            return Err(Error::Encryption("header key id is invalid".to_string()));
+        }
+
+        if self.wrapped_key.is_empty() || self.wrapped_key.len() > MAX_WRAPPED_KEY_LEN {
+            return Err(Error::Encryption(
+                "header wrapped key length is invalid".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Returns the context binding the wrapped data key to the identity of the
     /// content file and to the layout parameters of the header, used as the
     /// associated data of the wrapping. A file moved to another task or
@@ -114,6 +162,7 @@ impl Header {
 
     /// Encodes the header into `HEADER_LEN` bytes.
     fn encode(&self) -> Result<Vec<u8>> {
+        self.validate()?;
         let body = bincode::serialize(self)
             .map_err(|err| Error::Encryption(format!("serialize header failed: {err}")))?;
         if HEADER_PREFIX_LEN + body.len() > HEADER_LEN as usize {
@@ -154,6 +203,7 @@ impl Header {
             )));
         }
 
+        header.validate()?;
         Ok(Some(header))
     }
 }
@@ -229,8 +279,81 @@ pub struct Encryptor {
     /// The key provider wrapping and unwrapping the data keys.
     provider: Arc<dyn KeyProvider>,
 
-    /// The ciphers of the tasks by content path.
-    ciphers: DashMap<PathBuf, Arc<TaskCipher>>,
+    /// The ciphers of the open tasks by content path, bounded.
+    ciphers: CipherCache,
+}
+
+/// CipherCache is a bounded, sharded LRU cache of the unwrapped task ciphers by
+/// content path.
+struct CipherCache {
+    /// The shards, each guarded by its own lock.
+    shards: Vec<Mutex<LruCache<PathBuf, Arc<TaskCipher>>>>,
+}
+
+/// Implements the cipher cache.
+impl CipherCache {
+    /// Creates a cache holding about `capacity` ciphers, rounded up to a
+    /// multiple of the number of shards.
+    fn new(capacity: usize) -> Self {
+        let per_shard = NonZeroUsize::new(capacity.div_ceil(CIPHER_CACHE_SHARDS).max(1))
+            .unwrap_or(NonZeroUsize::MIN);
+        Self {
+            shards: (0..CIPHER_CACHE_SHARDS)
+                .map(|_| Mutex::new(LruCache::new(per_shard)))
+                .collect(),
+        }
+    }
+
+    /// Returns the shard of the path.
+    fn shard(&self, path: &Path) -> &Mutex<LruCache<PathBuf, Arc<TaskCipher>>> {
+        let mut hasher = DefaultHasher::new();
+        path.hash(&mut hasher);
+        &self.shards[hasher.finish() as usize % self.shards.len()]
+    }
+
+    /// Returns the cipher of the path, marking it as recently used.
+    fn get(&self, path: &Path) -> Option<Arc<TaskCipher>> {
+        self.shard(path).lock().unwrap().get(path).cloned()
+    }
+
+    /// Returns whether the path has a cached cipher.
+    fn contains(&self, path: &Path) -> bool {
+        self.shard(path).lock().unwrap().contains(path)
+    }
+
+    /// Caches the cipher of the path, replacing the previous one.
+    fn insert(&self, path: &Path, cipher: Arc<TaskCipher>) {
+        self.shard(path)
+            .lock()
+            .unwrap()
+            .put(path.to_path_buf(), cipher);
+    }
+
+    /// Caches the cipher of the path unless there is one, and returns the cached
+    /// cipher.
+    fn get_or_insert(&self, path: &Path, cipher: Arc<TaskCipher>) -> Arc<TaskCipher> {
+        let mut shard = self.shard(path).lock().unwrap();
+        if let Some(cached) = shard.get(path) {
+            return cached.clone();
+        }
+
+        shard.put(path.to_path_buf(), cipher.clone());
+        cipher
+    }
+
+    /// Forgets the cipher of the path.
+    fn remove(&self, path: &Path) {
+        self.shard(path).lock().unwrap().pop(path);
+    }
+
+    /// Returns the number of cached ciphers.
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.shards
+            .iter()
+            .map(|shard| shard.lock().unwrap().len())
+            .sum()
+    }
 }
 
 /// Implements the encryptor.
@@ -243,15 +366,41 @@ impl Encryptor {
         }
 
         let provider = kms::new_key_provider(config).await?;
+
+        // Verify that the cipher works on this machine before it protects any
+        // data, and make a slow software fallback visible, since it would
+        // silently bottleneck the whole cache.
+        let rate = self_test()?;
+        info!("AES-256-GCM self test passed, sealing {:.2} GiB/s", rate);
+        if rate < SELF_TEST_MIN_GIB_PER_SEC {
+            warn!(
+                "AES-256-GCM seals at only {:.2} GiB/s, the CPU features of the hardware implementation (AES-NI and PCLMULQDQ on x86-64, the crypto extensions on aarch64) \
+                 may be missing or hidden by the hypervisor, and the encryption at rest will be the bottleneck of the cache",
+                rate
+            );
+        }
+
         Ok(Some(Self::new(provider)))
     }
 
     /// Creates a new encryptor with the key provider.
     pub fn new(provider: Arc<dyn KeyProvider>) -> Self {
+        Self::with_cipher_cache_capacity(provider, DEFAULT_CIPHER_CACHE_CAPACITY)
+    }
+
+    /// Creates a new encryptor with the key provider, keeping about `capacity`
+    /// unwrapped task ciphers in memory.
+    pub fn with_cipher_cache_capacity(provider: Arc<dyn KeyProvider>, capacity: usize) -> Self {
         Self {
             provider,
-            ciphers: DashMap::new(),
+            ciphers: CipherCache::new(capacity),
         }
+    }
+
+    /// Returns the number of cached task ciphers.
+    #[cfg(test)]
+    fn cached_ciphers(&self) -> usize {
+        self.ciphers.len()
     }
 
     /// Returns the key provider.
@@ -271,9 +420,15 @@ impl Encryptor {
     }
 
     /// Creates the encrypted content file of a task at `path` with a fresh data
-    /// key, preallocated to hold the whole encrypted content. The header is
-    /// written to a temporary file renamed into place, so the file never
-    /// exists without a valid header.
+    /// key, preallocated to hold the whole encrypted content.
+    ///
+    /// The header is written to a private temporary file, which is then
+    /// published with a hard link: the file never exists without a valid header,
+    /// and exactly one of several concurrent creators of the same file wins, so
+    /// the data key cached by the winner is the one in the header on disk. The
+    /// losers discard their data key and leave the winner's file in place. An
+    /// existing file that is not readable, e.g. a plaintext leftover or a file
+    /// of a key encryption key that is gone, is replaced.
     pub async fn create_file(
         &self,
         path: &Path,
@@ -303,31 +458,56 @@ impl Encryptor {
         let bytes = header.encode()?;
 
         let tmp_path = temporary_path(path)?;
-        let mut f = fs::File::create(&tmp_path).await.inspect_err(|err| {
+        if let Err(err) = write_private_file(&tmp_path, &bytes).await {
             error!("create {:?} failed: {}", tmp_path, err);
-        })?;
+            remove_file_quietly(&tmp_path).await;
+            return Err(err.into());
+        }
 
-        let result = async {
-            f.write_all(&bytes).await?;
-            fallocate(&f, layout.file_length()).await?;
-            f.sync_all().await?;
-            fs::rename(&tmp_path, path).await?;
-            Ok::<(), Error>(())
+        // Publish the header exclusively. A filesystem without hard links falls
+        // back to renaming it over the destination.
+        match fs::hard_link(&tmp_path, path).await {
+            Ok(()) => remove_file_quietly(&tmp_path).await,
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => {
+                // Another creator won, or a leftover exists: keep a readable
+                // file, replace one that is not.
+                self.ciphers.remove(path);
+                if self.is_readable(path).await.unwrap_or(false) {
+                    debug!("encrypted {:?} already exists", path);
+                    remove_file_quietly(&tmp_path).await;
+                    return Ok(());
+                }
+
+                warn!("replace the unreadable existing {:?}", path);
+                if let Err(err) = fs::rename(&tmp_path, path).await {
+                    remove_file_quietly(&tmp_path).await;
+                    return Err(err.into());
+                }
+            }
+            Err(err) => {
+                warn!("hard link {:?} failed, renaming it: {}", tmp_path, err);
+                if let Err(err) = fs::rename(&tmp_path, path).await {
+                    remove_file_quietly(&tmp_path).await;
+                    return Err(err.into());
+                }
+            }
+        }
+
+        // Preallocate the content. The file is already published, so a failure
+        // removes it instead of leaving a file the next creation would keep.
+        let preallocated = async {
+            let f = fs::OpenOptions::new().write(true).open(path).await?;
+            fallocate(&f, layout.file_length()).await
         }
         .await;
-
-        if let Err(err) = result {
-            error!("create encrypted {:?} failed: {}", path, err);
-            fs::remove_file(&tmp_path).await.unwrap_or_else(|err| {
-                warn!("remove {:?} failed: {}", tmp_path, err);
-            });
+        if let Err(err) = preallocated {
+            error!("preallocate encrypted {:?} failed: {}", path, err);
+            remove_file_quietly(path).await;
             return Err(err);
         }
 
-        self.ciphers.insert(
-            path.to_path_buf(),
-            Arc::new(TaskCipher::new(&data_key, layout)?),
-        );
+        self.ciphers
+            .insert(path, Arc::new(TaskCipher::new(&data_key, layout)?));
         debug!(
             "created encrypted {:?} with key encryption key {}",
             path, header.key_id
@@ -339,15 +519,11 @@ impl Encryptor {
     /// header and unwrapping its data key on the first use.
     pub async fn cipher(&self, path: &Path) -> Result<Arc<TaskCipher>> {
         if let Some(cipher) = self.ciphers.get(path) {
-            return Ok(cipher.clone());
+            return Ok(cipher);
         }
 
         let cipher = Arc::new(self.load_cipher(path).await?);
-        Ok(self
-            .ciphers
-            .entry(path.to_path_buf())
-            .or_insert(cipher)
-            .clone())
+        Ok(self.ciphers.get_or_insert(path, cipher))
     }
 
     /// Loads the cipher of the task content file at `path` from its header,
@@ -377,7 +553,7 @@ impl Encryptor {
     /// data key is unwrappable with the key provider, i.e. it is readable. The
     /// cipher is not cached, so checking many tasks at startup stays cheap.
     pub async fn is_readable(&self, path: &Path) -> Result<bool> {
-        if self.ciphers.contains_key(path) {
+        if self.ciphers.contains(path) {
             return Ok(true);
         }
 
@@ -467,14 +643,95 @@ fn file_identity(path: &Path) -> Result<String> {
     Ok(format!("{kind}/{task_id}"))
 }
 
-/// Returns the path of the temporary file the content file is created as.
+/// Returns the path of the temporary file the content file is created as, with
+/// a random suffix so concurrent creators never share one.
 fn temporary_path(path: &Path) -> Result<PathBuf> {
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| Error::Encryption(format!("invalid content path {path:?}")))?;
-    Ok(path.with_file_name(format!("{name}.tmp")))
+
+    let mut suffix = [0u8; 8];
+    aws_lc_rs::rand::fill(&mut suffix)
+        .map_err(|_| Error::Encryption("generate temporary file name failed".to_string()))?;
+    Ok(path.with_file_name(format!("{name}.{}.tmp", hex::encode(suffix))))
 }
+
+/// Writes `bytes` to a new file at `path` readable by the owner only, failing
+/// when it exists, and syncs it.
+async fn write_private_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .await?;
+    f.write_all(bytes).await?;
+    f.sync_all().await
+}
+
+/// Removes a file, only logging a failure.
+async fn remove_file_quietly(path: &Path) {
+    if let Err(err) = fs::remove_file(path).await {
+        if err.kind() != ErrorKind::NotFound {
+            warn!("remove {:?} failed: {}", path, err);
+        }
+    }
+}
+
+/// Verifies that the cipher works on this machine and returns its sealing
+/// throughput in GiB/s. A sealed chunk must open to its plaintext, and must not
+/// open after a flipped bit or under another offset. The throughput of a few
+/// chunks is measured after a warm-up, so a CPU without the hardware
+/// implementation of AES-GCM, which is more than an order of magnitude slower,
+/// shows up at start-up instead of as an unexplained slow cache.
+pub fn self_test() -> Result<f64> {
+    let layout = Layout::new(DEFAULT_CHUNK_SIZE, DEFAULT_CHUNK_SIZE, DEFAULT_CHUNK_SIZE)?;
+    let mut key = DataKey::new([0u8; kms::KEY_LEN]);
+    aws_lc_rs::rand::fill(key.as_mut())
+        .map_err(|_| Error::Encryption("generate self test key failed".to_string()))?;
+    let cipher = TaskCipher::new(&key, layout)?;
+
+    let plaintext: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
+    let mut sealed = plaintext.clone();
+    let (nonce, tag) = cipher.seal_chunk(7, &mut sealed)?;
+    sealed.extend_from_slice(tag.as_ref());
+    let nonce: [u8; layout::NONCE_LEN as usize] = *nonce.as_ref();
+
+    let mut opened = sealed.clone();
+    if cipher.open_chunk(7, &nonce, &mut opened)? != plaintext.as_slice() {
+        return Err(Error::Encryption(
+            "self test failed: a sealed chunk does not open to its plaintext".to_string(),
+        ));
+    }
+
+    let mut flipped = sealed.clone();
+    flipped[0] ^= 1;
+    if cipher.open_chunk(7, &nonce, &mut flipped).is_ok() {
+        return Err(Error::Encryption(
+            "self test failed: a tampered chunk was accepted".to_string(),
+        ));
+    }
+
+    if cipher.open_chunk(8, &nonce, &mut sealed).is_ok() {
+        return Err(Error::Encryption(
+            "self test failed: a chunk was accepted under another offset".to_string(),
+        ));
+    }
+
+    let mut buffer = vec![0u8; DEFAULT_CHUNK_SIZE as usize];
+    let _warm_up = cipher.seal_chunk(0, &mut buffer)?;
+    let start = Instant::now();
+    for index in 0..SELF_TEST_CHUNKS {
+        let _sealed = cipher.seal_chunk(index * DEFAULT_CHUNK_SIZE, &mut buffer)?;
+    }
+
+    let seconds = start.elapsed().as_secs_f64().max(f64::EPSILON);
+    Ok((SELF_TEST_CHUNKS * DEFAULT_CHUNK_SIZE) as f64 / seconds / (1u64 << 30) as f64)
+}
+
+#[cfg(test)]
+mod hardening_tests;
 
 #[cfg(test)]
 mod tests {

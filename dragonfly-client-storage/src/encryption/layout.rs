@@ -35,6 +35,10 @@ pub const TAG_LEN: u64 = 16;
 /// The number of bytes a chunk grows by when encrypted: the nonce and the tag.
 pub const CHUNK_OVERHEAD: u64 = NONCE_LEN + TAG_LEN;
 
+/// The maximum length of the plaintext of a chunk, in bytes. A reader and a
+/// writer stage whole chunks in memory, so the length is bounded.
+pub const MAX_CHUNK_SIZE: u64 = 64 * 1024 * 1024;
+
 /// Layout maps the plaintext of a task to its ciphertext on disk.
 ///
 /// The content is split into pieces of `piece_length` (the last piece may be
@@ -82,14 +86,37 @@ pub struct PieceLayout {
 impl Layout {
     /// Creates a new layout, validating its parameters.
     pub fn new(chunk_size: u64, piece_length: u64, content_length: u64) -> Result<Self> {
-        if chunk_size == 0 {
-            return Err(Error::Encryption("chunk size must not be zero".to_string()));
+        if chunk_size == 0 || chunk_size > MAX_CHUNK_SIZE {
+            return Err(Error::Encryption(format!(
+                "chunk size {chunk_size} must be between 1 and {MAX_CHUNK_SIZE}"
+            )));
         }
 
         if content_length > 0 && piece_length == 0 {
             return Err(Error::Encryption(
                 "piece length must not be zero for a non-empty content".to_string(),
             ));
+        }
+
+        // The length of the file on disk must fit a file offset, which also
+        // guarantees that no offset computed from the layout overflows. The
+        // content length comes from the origin, so it is not trusted.
+        let pieces = if content_length == 0 {
+            0
+        } else {
+            content_length.div_ceil(piece_length) as u128
+        };
+        let chunks_per_piece = if piece_length == 0 {
+            0
+        } else {
+            piece_length.div_ceil(chunk_size) as u128
+        };
+        let file_length = HEADER_LEN as u128
+            + pieces * (piece_length as u128 + chunks_per_piece * CHUNK_OVERHEAD as u128);
+        if file_length > i64::MAX as u128 {
+            return Err(Error::Encryption(format!(
+                "content length {content_length} with piece length {piece_length} is too large"
+            )));
         }
 
         Ok(Self {
@@ -207,6 +234,14 @@ mod tests {
     #[test]
     fn test_layout_new() {
         assert!(Layout::new(0, 8, 16).is_err());
+        assert!(Layout::new(MAX_CHUNK_SIZE + 1, 8, 16).is_err());
+        assert!(Layout::new(MAX_CHUNK_SIZE, 8, 16).is_ok());
+
+        // A content length that overflows a file offset is rejected instead of
+        // wrapping around in the arithmetic of the layout.
+        assert!(Layout::new(64 * 1024, 4 * 1024 * 1024, u64::MAX).is_err());
+        assert!(Layout::new(64 * 1024, u64::MAX, 1).is_err());
+        assert!(Layout::new(64 * 1024, 4 * 1024 * 1024, 1 << 50).is_ok());
         assert!(Layout::new(4, 0, 16).is_err());
         assert!(Layout::new(4, 0, 0).is_ok());
         assert!(Layout::new(4, 8, 16).is_ok());

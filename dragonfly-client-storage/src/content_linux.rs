@@ -1808,7 +1808,14 @@ mod tests {
     /// encryption key written to the directory.
     async fn encrypted_config(dir: &Path) -> Arc<Config> {
         let key_file = dir.join("kek.key");
-        fs::write(&key_file, [1u8; 32]).await.unwrap();
+        fs::write(
+            &key_file,
+            (0..32u8)
+                .map(|i| i.wrapping_mul(7).wrapping_add(130))
+                .collect::<Vec<u8>>(),
+        )
+        .await
+        .unwrap();
 
         let mut config = Config::default();
         config.storage.encryption.enable = true;
@@ -1977,7 +1984,9 @@ mod tests {
         other.storage.keep = true;
         fs::write(
             other.storage.encryption.kms.file.key_file.as_ref().unwrap(),
-            [2u8; 32],
+            (0..32u8)
+                .map(|i| i.wrapping_mul(11).wrapping_add(200))
+                .collect::<Vec<u8>>(),
         )
         .await
         .unwrap();

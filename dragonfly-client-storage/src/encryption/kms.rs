@@ -37,6 +37,11 @@ const TAG_LEN: usize = 16;
 /// its identifier.
 const KEY_ID_LEN: usize = 8;
 
+/// The minimum number of distinct byte values of a key encryption key. A random
+/// 32 byte key has about 28, so a key under this is a mistake, e.g. a key file
+/// padded with zeros, or a short passphrase repeated, and not a random key.
+const MIN_DISTINCT_KEY_BYTES: usize = 8;
+
 /// A plaintext symmetric key, zeroed when dropped.
 pub type DataKey = Zeroizing<[u8; KEY_LEN]>;
 
@@ -247,11 +252,59 @@ async fn load_key_file(path: &Path) -> Result<DataKey> {
         Error::Encryption(format!("read key encryption key {path:?} failed: {err}"))
     })?);
 
-    parse_key(&content).ok_or_else(|| {
+    if content.len() == KEY_LEN && is_printable_ascii(&content) {
+        return Err(Error::Encryption(format!(
+            "key encryption key {path:?} is {KEY_LEN} printable characters, which is a text passphrase and not a random key, use 32 random bytes, 64 hex characters or base64"
+        )));
+    }
+
+    let key = parse_key(&content).ok_or_else(|| {
         Error::Encryption(format!(
             "key encryption key {path:?} must be 32 raw bytes, 64 hex characters or base64"
         ))
-    })
+    })?;
+
+    if !has_enough_distinct_bytes(key.as_ref()) {
+        return Err(Error::Encryption(format!(
+            "key encryption key {path:?} is not random, it has fewer than {MIN_DISTINCT_KEY_BYTES} distinct byte values"
+        )));
+    }
+
+    Ok(key)
+}
+
+/// Returns whether every byte is printable ASCII (0x20 to 0x7e), without
+/// branching on the bytes. A random 32 byte key is entirely printable with a
+/// probability of about 1e-14, so a 32 byte key file that is, is text.
+fn is_printable_ascii(bytes: &[u8]) -> bool {
+    let mut outside = 0u8;
+    for byte in bytes {
+        // Set when byte - 0x20 is above 0x5e, i.e. byte is outside 0x20..=0x7e.
+        let offset = byte.wrapping_sub(0x20) as u16;
+        outside |= (0x5eu16.wrapping_sub(offset) >> 15) as u8;
+    }
+
+    outside == 0
+}
+
+/// Returns whether the key has at least `MIN_DISTINCT_KEY_BYTES` distinct byte
+/// values. Every pair of bytes is compared with branchless arithmetic and no
+/// byte is used as an index, so neither the control flow nor the memory accesses
+/// depend on the key material.
+fn has_enough_distinct_bytes(key: &[u8]) -> bool {
+    let mut distinct = 0usize;
+    for (i, byte) in key.iter().enumerate() {
+        let mut duplicate = 0u8;
+        for earlier in &key[..i] {
+            // 1 when the bytes are equal: (x ^ y) - 1 borrows only when it is 0.
+            let diff = (byte ^ earlier) as u16;
+            duplicate |= (diff.wrapping_sub(1) >> 15) as u8;
+        }
+
+        distinct += (1 ^ duplicate) as usize;
+    }
+
+    distinct >= MIN_DISTINCT_KEY_BYTES
 }
 
 /// Parses a key encryption key from the content of a key file: the 32 raw key
@@ -358,6 +411,76 @@ mod tests {
     }
 
     #[test]
+    fn test_has_enough_distinct_bytes() {
+        assert!(!has_enough_distinct_bytes(&[0u8; KEY_LEN]));
+        assert!(!has_enough_distinct_bytes(&[0xffu8; KEY_LEN]));
+
+        // A short passphrase repeated to the key length.
+        let repeated: Vec<u8> = b"hunter2".iter().copied().cycle().take(KEY_LEN).collect();
+        assert!(!has_enough_distinct_bytes(&repeated));
+
+        // Seven distinct values are too few, eight are enough.
+        let seven: Vec<u8> = (0..KEY_LEN).map(|i| (i % 7) as u8).collect();
+        assert!(!has_enough_distinct_bytes(&seven));
+        let eight: Vec<u8> = (0..KEY_LEN).map(|i| (i % 8) as u8).collect();
+        assert!(has_enough_distinct_bytes(&eight));
+
+        let sequential: Vec<u8> = (0..KEY_LEN as u8).collect();
+        assert!(has_enough_distinct_bytes(&sequential));
+    }
+
+    #[test]
+    fn test_is_printable_ascii() {
+        assert!(is_printable_ascii(b"correct horse battery staple!!"));
+        assert!(is_printable_ascii(b" ~"));
+        assert!(!is_printable_ascii(&[0x1f]));
+        assert!(!is_printable_ascii(&[0x7f]));
+        assert!(!is_printable_ascii(&[0x80]));
+        assert!(!is_printable_ascii(b"printable then a newline\n"));
+        assert!(is_printable_ascii(b""));
+
+        for byte in 0u8..=255 {
+            assert_eq!(is_printable_ascii(&[byte]), (0x20..=0x7e).contains(&byte));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_file_key_provider_rejects_a_text_passphrase() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("passphrase");
+        // 32 printable characters with plenty of distinct values.
+        fs::write(&path, b"Tr0ub4dor&3-correct-horse-battery")
+            .await
+            .unwrap();
+        assert_eq!(
+            fs::read(&path).await.unwrap().len(),
+            KEY_LEN + 1,
+            "the test passphrase must be adjusted to 32 characters"
+        );
+        let path = dir.path().join("passphrase32");
+        fs::write(&path, b"Tr0ub4dor&3-correct-horse-batter")
+            .await
+            .unwrap();
+        let err = FileKeyProvider::new(&path, &[]).await.err().unwrap();
+        assert!(err.to_string().contains("text passphrase"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn test_file_key_provider_rejects_weak_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, content) in [
+            ("zeros", vec![0u8; KEY_LEN]),
+            ("hex-zeros", hex::encode([0u8; KEY_LEN]).into_bytes()),
+            ("repeated", vec![0x90u8; KEY_LEN]),
+        ] {
+            let path = dir.path().join(name);
+            fs::write(&path, content).await.unwrap();
+            let err = FileKeyProvider::new(&path, &[]).await.err().unwrap();
+            assert!(err.to_string().contains("not random"), "{name}: {err}");
+        }
+    }
+
+    #[test]
     fn test_decode_hex_ct() {
         for c in 0u8..=255 {
             let (value, invalid) = decode_hex_digit_ct(c);
@@ -430,16 +553,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let active = dir.path().join("kek.key");
         let previous = dir.path().join("kek-old.key");
-        fs::write(&active, hex::encode([1u8; KEY_LEN]))
-            .await
-            .unwrap();
-        fs::write(&previous, [2u8; KEY_LEN]).await.unwrap();
+        let active_key: Vec<u8> = (0..KEY_LEN as u8).collect();
+        let previous_key: Vec<u8> = (100..100 + KEY_LEN as u8).collect();
+        fs::write(&active, hex::encode(&active_key)).await.unwrap();
+        fs::write(&previous, &previous_key).await.unwrap();
 
         let provider = FileKeyProvider::new(&active, &[previous.clone(), active.clone()])
             .await
             .unwrap();
         assert_eq!(provider.keys.len(), 2);
-        assert_eq!(provider.active_key_id(), key_id(&[1u8; KEY_LEN]));
+        assert_eq!(provider.active_key_id(), key_id(&active_key));
 
         assert!(FileKeyProvider::new(&dir.path().join("missing"), &[])
             .await

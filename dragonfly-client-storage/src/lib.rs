@@ -2491,7 +2491,11 @@ mod tests {
     /// enabled by a key encryption key written to the directory.
     async fn encrypted_config(dir: &Path, key: u8) -> Arc<Config> {
         let key_file = dir.join("kek.key");
-        fs::write(&key_file, [key; 32]).await.unwrap();
+        // A different, non-constant key per `key`, as constant keys are rejected.
+        let bytes: Vec<u8> = (0..32u8)
+            .map(|i| i.wrapping_mul(7).wrapping_add(key))
+            .collect();
+        fs::write(&key_file, bytes).await.unwrap();
 
         let mut config = Config::default();
         config.storage.keep = true;
