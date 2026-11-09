@@ -60,3 +60,7 @@ harness = false
 [[bench]]
 name = "lru_cache"
 harness = false
+
+[[bench]]
+name = "encryption"
+harness = false

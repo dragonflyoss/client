@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use super::layout::{PieceLayout, CHUNK_OVERHEAD, NONCE_LEN};
+use super::layout::{PieceLayout, CHUNK_OVERHEAD, NONCE_LEN, TAG_LEN};
 use super::TaskCipher;
 use crate::io::WriteRangeResponse;
 use bytes::{Buf, Bytes, BytesMut};
@@ -185,12 +185,14 @@ impl EncryptedRangeReader {
         let layout = *self.cipher.layout();
         let (offset, length) = layout.chunks_span(&self.piece, self.next_chunk, count);
 
-        let mut buffer = if buffer.capacity() >= length as usize {
-            buffer
-        } else {
-            self.buffer_pool.checkout(length as usize)
-        };
-        buffer.resize(length as usize, 0);
+        // Check out a buffer with `length` readable bytes without zeroing them,
+        // the positional read overwrites all of them. The previous buffer goes
+        // back to the pool first, so the same buffer is normally handed out
+        // again.
+        if buffer.capacity() > 0 {
+            self.buffer_pool.give_back(buffer);
+        }
+        let mut buffer = self.buffer_pool.checkout_for_read(length as usize);
 
         let fd = self.fd.clone();
         let cipher = self.cipher.clone();
@@ -332,14 +334,37 @@ impl AsyncRead for EncryptedRangeReader {
     }
 }
 
+/// Reads into `dst` until it is full or the reader reaches EOF, returning the
+/// number of bytes read.
+async fn read_full<R: AsyncRead + Unpin + ?Sized>(
+    reader: &mut R,
+    dst: &mut [u8],
+) -> io::Result<usize> {
+    let mut filled = 0;
+    while filled < dst.len() {
+        let n = reader.read(&mut dst[filled..]).await?;
+        if n == 0 {
+            break;
+        }
+
+        filled += n;
+    }
+
+    Ok(filled)
+}
+
 /// Writes exactly `expected_length` bytes of plaintext from the reader as the
 /// piece at `offset` of the encrypted task, and calculates the CRC32 hash of
-/// the plaintext. The reader fills a batch of chunks on the runtime and hashes
-/// it while the data is still hot in the cache of the filling core, then hands
-/// it to the blocking thread pool, which encrypts the chunks and writes their
-/// ciphertext with one positional write, swapping the recycled buffer of the
-/// completed batch back for the next fill, so the read and the hash overlap the
-/// encryption and the write.
+/// the plaintext.
+///
+/// The staging buffer of a batch of chunks has the layout of the ciphertext on
+/// disk, a slot of `nonce || plaintext || tag` per chunk. The reader fills the
+/// plaintext of each slot on the runtime and hashes it while the data is still
+/// hot in the cache of the filling core, then the batch is handed to the
+/// blocking thread pool, which seals every chunk in place and writes the whole
+/// batch with one positional write. The plaintext is never copied and no
+/// second ciphertext buffer is needed, and the fill and the hash of the next
+/// batch overlap the encryption and the write of the previous one.
 pub async fn write_encrypted_range<R: AsyncRead + Unpin + ?Sized>(
     fd: Arc<File>,
     cipher: Arc<TaskCipher>,
@@ -351,90 +376,85 @@ pub async fn write_encrypted_range<R: AsyncRead + Unpin + ?Sized>(
 ) -> Result<WriteRangeResponse> {
     let layout = *cipher.layout();
     let piece = layout.piece(offset, expected_length)?;
-    let chunk_size = layout.chunk_size as usize;
-    let batch_size = max(buffer_size / chunk_size, 1) * chunk_size;
+    let slot_size = (layout.chunk_size + CHUNK_OVERHEAD) as usize;
+    let nonce_len = NONCE_LEN as usize;
+    let batch_chunks = max(buffer_size as u64 / layout.chunk_size, 1);
+    let total_chunks = layout.chunk_count(expected_length);
     let mut reader = reader.take(expected_length);
 
-    // The buffer being filled from the reader, swapped with the recycled
-    // buffer of the completed batch.
-    let mut buffer = buffer_pool.checkout(batch_size);
-
-    // The in-flight encryption and write on the blocking thread pool, owning
-    // the other buffer until it completes.
-    let mut in_flight: Option<JoinHandle<io::Result<BytesMut>>> = None;
+    // The in-flight encryption and write on the blocking thread pool, which
+    // owns its staging buffer until it completes and returns it to the pool.
+    // At most one batch is in flight, which bounds the memory of a writer to
+    // two staging buffers.
+    let mut in_flight: Option<JoinHandle<io::Result<()>>> = None;
 
     let mut hasher = crc32fast::Hasher::new();
     let mut length: u64 = 0;
     let mut next_chunk: u64 = 0;
-    loop {
-        // Fill the buffer until it is full or the reader reaches EOF.
-        while buffer.len() < batch_size {
-            if reader.read_buf(&mut buffer).await? == 0 {
-                break;
-            }
-        }
+    let result: Result<()> = async {
+        while next_chunk < total_chunks {
+            let count = min(batch_chunks, total_chunks - next_chunk);
+            let (disk_offset, disk_length) = layout.chunks_span(&piece, next_chunk, count);
+            let mut buffer = buffer_pool.checkout_for_read(disk_length as usize);
 
-        if buffer.is_empty() {
-            break;
-        }
-
-        // Hash the plaintext while its data is still hot in the cache of the
-        // core that filled it.
-        hasher.update(&buffer);
-
-        // Wait for the previous batch to take back its buffer.
-        let recycled = match in_flight.take() {
-            Some(handle) => handle.await.map_err(io::Error::other)??,
-            None => buffer_pool.checkout(batch_size),
-        };
-
-        let filled = std::mem::replace(&mut buffer, recycled);
-        length += filled.len() as u64;
-
-        let first_chunk = next_chunk;
-        let count = filled.len().div_ceil(chunk_size) as u64;
-        next_chunk += count;
-
-        let fd = fd.clone();
-        let cipher = cipher.clone();
-        let pool = buffer_pool.clone();
-        in_flight = Some(tokio::task::spawn_blocking(move || {
-            let (ciphertext_offset, ciphertext_length) =
-                layout.chunks_span(&piece, first_chunk, count);
-
-            // Encrypt the chunks into the ciphertext buffer, each one as
-            // `nonce || ciphertext || tag`.
-            let mut ciphertext = pool.checkout(ciphertext_length as usize);
-            for (index, chunk) in filled.chunks(chunk_size).enumerate() {
-                let plaintext_offset =
-                    layout.chunk_plaintext_offset(&piece, first_chunk + index as u64);
-                let nonce_start = ciphertext.len();
-                let chunk_start = nonce_start + NONCE_LEN as usize;
-                ciphertext.resize(chunk_start, 0);
-                ciphertext.extend_from_slice(chunk);
-
-                let (nonce, tag) = cipher
-                    .seal_chunk(plaintext_offset, &mut ciphertext[chunk_start..])
-                    .map_err(io::Error::other)?;
-                ciphertext[nonce_start..chunk_start].copy_from_slice(nonce.as_ref());
-                ciphertext.extend_from_slice(tag.as_ref());
+            // Fill the plaintext of every slot and hash it while it is hot.
+            for index in 0..count {
+                let plaintext_length = layout.chunk_length(piece.length, next_chunk + index) as usize;
+                let start = index as usize * slot_size + nonce_len;
+                let plaintext = &mut buffer[start..start + plaintext_length];
+                let read = read_full(&mut reader, plaintext).await?;
+                hasher.update(&plaintext[..read]);
+                length += read as u64;
+                if read < plaintext_length {
+                    buffer_pool.give_back(buffer);
+                    return Ok(());
+                }
             }
 
-            fd.write_all_at(&ciphertext, ciphertext_offset)?;
-            pool.give_back(ciphertext);
+            // Wait for the previous batch before starting the next one.
+            if let Some(handle) = in_flight.take() {
+                handle.await.map_err(io::Error::other)??;
+            }
 
-            let mut recycled = filled;
-            recycled.clear();
-            Ok(recycled)
-        }));
+            let fd = fd.clone();
+            let cipher = cipher.clone();
+            let pool = buffer_pool.clone();
+            let first_chunk = next_chunk;
+            in_flight = Some(tokio::task::spawn_blocking(move || {
+                // Seal every chunk in place, storing its random nonce in front
+                // of it and its tag after it.
+                for index in 0..count {
+                    let plaintext_length =
+                        layout.chunk_length(piece.length, first_chunk + index) as usize;
+                    let plaintext_offset =
+                        layout.chunk_plaintext_offset(&piece, first_chunk + index);
+                    let slot = index as usize * slot_size;
+                    let tag_start = slot + nonce_len + plaintext_length;
+
+                    let (nonce, tag) = cipher
+                        .seal_chunk(plaintext_offset, &mut buffer[slot + nonce_len..tag_start])
+                        .map_err(io::Error::other)?;
+                    buffer[slot..slot + nonce_len].copy_from_slice(nonce.as_ref());
+                    buffer[tag_start..tag_start + TAG_LEN as usize].copy_from_slice(tag.as_ref());
+                }
+
+                fd.write_all_at(&buffer, disk_offset)?;
+                pool.give_back(buffer);
+                Ok(())
+            }));
+            next_chunk += count;
+        }
+
+        Ok(())
     }
+    .await;
 
-    // Wait for the last batch to complete and return the staging buffers to
-    // the pool.
+    // Always wait for the last batch, so no write of this call is still in
+    // flight when it returns, e.g. racing the retry of the same piece.
     if let Some(handle) = in_flight.take() {
-        buffer_pool.give_back(handle.await.map_err(io::Error::other)??);
+        handle.await.map_err(io::Error::other)??;
     }
-    buffer_pool.give_back(buffer);
+    result?;
 
     if length != expected_length {
         return Err(Error::Unknown(format!(
