@@ -151,22 +151,24 @@ impl RocksdbStorageEngine {
         // If the storage is kept, open the db and drop the unused column families,
         // such as the ones created by a newer version before the rollback. Otherwise,
         // destroy the db.
-        let unused_cf_names = if keep {
-            // The db does not exist at the first start, so it has no column families.
+        let unused_cf_names = if !keep {
+            rocksdb::DB::destroy(&options, &dir).unwrap_or_else(|err| {
+                warn!("destroy {:?} failed: {}", dir, err);
+            });
+
+            Vec::new()
+        } else if !dir.join("CURRENT").is_file() {
+            // The db has no CURRENT file before its first open, so it has no column families.
+            Vec::new()
+        } else {
             rocksdb::DB::list_cf(&options, &dir)
-                .unwrap_or_default()
+                .or_err(ErrorType::StorageError)?
                 .into_iter()
                 .filter(|name| {
                     name != rocksdb::DEFAULT_COLUMN_FAMILY_NAME
                         && cfs.iter().all(|(cf_name, _)| cf_name != name)
                 })
                 .collect::<Vec<_>>()
-        } else {
-            rocksdb::DB::destroy(&options, &dir).unwrap_or_else(|err| {
-                warn!("destroy {:?} failed: {}", dir, err);
-            });
-
-            Vec::new()
         };
 
         // Open rocksdb with the unused column families, because rocksdb requires
@@ -184,10 +186,8 @@ impl RocksdbStorageEngine {
 
         // Drop the unused column families.
         for name in unused_cf_names {
-            match db.drop_cf(&name) {
-                Ok(_) => info!("drop unused column family {}", name),
-                Err(err) => warn!("drop unused column family {} failed: {}", name, err),
-            }
+            db.drop_cf(&name).or_err(ErrorType::StorageError)?;
+            info!("drop unused column family {}", name);
         }
 
         Ok(Self { inner: db })
@@ -701,7 +701,6 @@ mod tests {
             .unwrap()
         };
 
-        // A newer version creates a column family.
         let engine = open_with_unregistered();
         let object = UnregisteredObject {
             data: "data".to_string(),
@@ -709,7 +708,6 @@ mod tests {
         engine.put(b"1", &object).unwrap();
         drop(engine);
 
-        // An older version without the column family opens the db and drops it.
         let engine = open(dir.path(), true);
         assert!(matches!(
             engine.get::<UnregisteredObject>(b"1"),
@@ -717,7 +715,6 @@ mod tests {
         ));
         drop(engine);
 
-        // The newer version recreates the dropped column family empty.
         let engine = open_with_unregistered();
         assert_eq!(engine.get::<UnregisteredObject>(b"1").unwrap(), None);
     }
