@@ -857,10 +857,7 @@ impl PreheatCommand {
             .parse()
             .or_err(ErrorType::ParseError)?;
 
-        let registry = reference.resolve_registry();
-        let repository = reference.repository();
-        let tag = reference.tag().unwrap_or("latest");
-        let manifest_url = format!("https://{registry}/v2/{repository}/manifests/{tag}");
+        let manifest_url = manifest_url(&reference);
 
         let channel = Channel::from_shared(self.scheduler_endpoint.clone())
             .or_err(ErrorType::ParseError)?
@@ -1067,5 +1064,51 @@ impl PreheatCommand {
         terminal::success("Preheat Succeeded!");
 
         Ok(())
+    }
+}
+
+/// Returns the manifest url of the image reference. The digest takes precedence
+/// over the tag, so `nginx:1.25@sha256:...` resolves the manifest by its digest
+/// like the container runtimes do.
+fn manifest_url(reference: &Reference) -> String {
+    let registry = reference.resolve_registry();
+    let repository = reference.repository();
+    let reference = reference
+        .digest()
+        .or_else(|| reference.tag())
+        .unwrap_or("latest");
+    format!("https://{registry}/v2/{repository}/manifests/{reference}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manifest_url_prefers_digest_over_tag() {
+        let digest = "sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e";
+        let test_cases = vec![
+            (
+                "nginx".to_string(),
+                "https://index.docker.io/v2/library/nginx/manifests/latest".to_string(),
+            ),
+            (
+                "ghcr.io/foo/bar:1.0".to_string(),
+                "https://ghcr.io/v2/foo/bar/manifests/1.0".to_string(),
+            ),
+            (
+                format!("ghcr.io/foo/bar@{digest}"),
+                format!("https://ghcr.io/v2/foo/bar/manifests/{digest}"),
+            ),
+            (
+                format!("ghcr.io/foo/bar:1.0@{digest}"),
+                format!("https://ghcr.io/v2/foo/bar/manifests/{digest}"),
+            ),
+        ];
+
+        for (image, expected) in test_cases {
+            let reference: Reference = image.parse().unwrap();
+            assert_eq!(manifest_url(&reference), expected, "image: {image}");
+        }
     }
 }
