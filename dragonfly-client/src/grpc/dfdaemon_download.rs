@@ -25,13 +25,14 @@ use dragonfly_api::dfdaemon::v2::{
     dfdaemon_download_server::{
         DfdaemonDownload, DfdaemonDownloadServer as DfdaemonDownloadGRPCServer,
     },
-    DeleteCacheTaskRequest, DeleteLocalTaskRequest, DeleteTaskRequest, DownloadCacheTaskRequest,
-    DownloadCacheTaskResponse, DownloadPersistentCacheTaskRequest,
-    DownloadPersistentCacheTaskResponse, DownloadPersistentTaskRequest,
-    DownloadPersistentTaskResponse, DownloadTaskRequest, DownloadTaskResponse, Entry,
-    ListLocalPersistentCacheTasksRequest, ListLocalPersistentCacheTasksResponse,
-    ListLocalPersistentTasksRequest, ListLocalPersistentTasksResponse, ListLocalTasksRequest,
-    ListLocalTasksResponse, ListTaskEntriesRequest, ListTaskEntriesResponse,
+    DeleteCacheTaskRequest, DeleteImageRequest, DeleteImageResponse, DeleteLocalTaskRequest,
+    DeleteTaskRequest, DownloadCacheTaskRequest, DownloadCacheTaskResponse,
+    DownloadPersistentCacheTaskRequest, DownloadPersistentCacheTaskResponse,
+    DownloadPersistentTaskRequest, DownloadPersistentTaskResponse, DownloadTaskRequest,
+    DownloadTaskResponse, Entry, ListLocalPersistentCacheTasksRequest,
+    ListLocalPersistentCacheTasksResponse, ListLocalPersistentTasksRequest,
+    ListLocalPersistentTasksResponse, ListLocalTasksRequest, ListLocalTasksResponse,
+    ListTaskEntriesRequest, ListTaskEntriesResponse,
     StatCacheTaskRequest as DfdaemonStatCacheTaskRequest, StatLocalPersistentCacheTaskRequest,
     StatLocalPersistentCacheTaskResponse, StatLocalPersistentTaskRequest,
     StatLocalPersistentTaskResponse, StatLocalTaskRequest, StatLocalTaskResponse,
@@ -64,8 +65,8 @@ use dragonfly_client_util::{
     digest::{is_blob_url, is_manifest_digest_url, verify_file_digest, Digest},
     http::{hashmap_to_headermap, headermap_to_hashmap, parse_range_header},
     id_generator::{
-        repository_revision, PersistentCacheTaskIDParameter, PersistentTaskIDParameter,
-        TaskIDParameter,
+        repository_revision, ImageIDParameter, PersistentCacheTaskIDParameter,
+        PersistentTaskIDParameter, TaskIDParameter,
     },
     ratelimiter::bbr::BBR,
     shutdown,
@@ -401,6 +402,10 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                         return Err(Status::internal(err.to_string()));
                     }
                 }
+            }
+            Err(err @ ClientError::InvalidURI(_)) => {
+                error!("download started failed by invalid uri: {}", err);
+                return Err(Status::invalid_argument(err.to_string()));
             }
             Err(err) => {
                 error!("download started failed: {}", err);
@@ -1071,6 +1076,65 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
             })?;
 
         Ok(Response::new(()))
+    }
+
+    /// Deletes the tasks of the image which are not referenced by other images in
+    /// the peer, and returns the deleted and retained task ids.
+    #[instrument(skip_all, fields(host_id, image_id, remote_ip))]
+    async fn delete_image(
+        &self,
+        request: Request<DeleteImageRequest>,
+    ) -> Result<Response<DeleteImageResponse>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            let _ = Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Generate the image id by the manifest url.
+        let image_id = self
+            .task
+            .id_generator
+            .image_id(ImageIDParameter::ManifestURLBased(request.url.clone()))
+            .map_err(|e| {
+                error!("generate image id: {}", e);
+                Status::invalid_argument(e.to_string())
+            })?;
+
+        // Span record the host id, image id and remote ip.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("image_id", image_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+
+        // Delete all the platforms of the image if the platform is not specified or empty.
+        let platform = request
+            .platform
+            .as_deref()
+            .filter(|platform| !platform.is_empty());
+        info!(
+            "delete image {} {:?} in download server",
+            request.url, platform
+        );
+
+        // Delete the image from the local storage.
+        let response = self
+            .task
+            .delete_image(&image_id, platform, host_id.as_str())
+            .await
+            .map_err(|err| {
+                error!("delete image: {}", err);
+                Status::internal(err.to_string())
+            })?;
+
+        Ok(Response::new(response))
     }
 
     /// Deletes the host from the scheduler, and the scheduler will delete all peers associated
@@ -2461,6 +2525,18 @@ impl DfdaemonDownloadClient {
         let request = Self::make_request(request);
         self.client.clone().delete_local_task(request).await?;
         Ok(())
+    }
+
+    /// Deletes the tasks of the image which are not referenced by other images in
+    /// the local storage.
+    #[instrument(skip_all)]
+    pub async fn delete_image(
+        &self,
+        request: DeleteImageRequest,
+    ) -> ClientResult<DeleteImageResponse> {
+        let request = Self::make_request(request);
+        let response = self.client.clone().delete_image(request).await?;
+        Ok(response.into_inner())
     }
 
     /// Downloads the persistent task for downloading by user.

@@ -95,6 +95,11 @@ impl GC {
                         info!("failed to evict task by disk usage: {}", err);
                     }
 
+                    // Evict the task by image.
+                    if let Err(err) = self.evict_task_by_image().await {
+                        info!("failed to evict task by image: {}", err);
+                    }
+
                     // Snapshot the persistent cache tasks once and share it between the passes.
                     if let Ok(persistent_cache_tasks) = self.storage.get_persistent_cache_tasks().inspect_err(|err| {
                         info!("failed to get persistent cache tasks: {}", err);
@@ -264,6 +269,30 @@ impl GC {
         }
 
         info!("evict total size {}", evicted_space);
+        Ok(())
+    }
+
+    /// Evicts tasks by image whose tasks do not exist and have exceeded the download
+    /// timeout.
+    #[instrument(skip_all)]
+    async fn evict_task_by_image(&self) -> Result<()> {
+        info!("start to evict task by image");
+        let tasks = self.storage.get_all_tasks_by_image()?;
+        for task in tasks {
+            if task.is_expired(metadata::DEFAULT_DOWNLOAD_TASK_TIMEOUT)
+                && !self.storage.is_task_exists(&task.task_id)?
+            {
+                self.storage
+                    .delete_task_by_image(&task.image_id, &task.platform, &task.task_id)
+                    .await?;
+                info!(
+                    "evict task by image {} {} {}",
+                    task.image_id, task.platform, task.task_id
+                );
+            }
+        }
+
+        info!("evict task by image done");
         Ok(())
     }
 

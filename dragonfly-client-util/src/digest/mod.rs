@@ -40,14 +40,21 @@ pub fn is_blob_url(url: &str) -> bool {
 }
 
 /// Regex pattern for OCI manifest URLs, e.g. http(s)://<registry>/v2/<repository>/manifests/<reference>.
-static MANIFEST_URL_REGEX: LazyLock<Regex> =
+pub static MANIFEST_URL_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(.*)://(.*)/v2/(.*)/manifests/([^?]+)(?:\?.*)?$").unwrap());
 
-/// Checks if the URL is an OCI manifest URL whose reference is a digest with a
-/// supported algorithm. A manifest URL referenced by a tag returns false, so it
-/// falls back to the url based task id.
+/// Regex pattern for OCI manifest URLs referenced by a digest, e.g.
+/// http(s)://<registry>/v2/<repository>/manifests/<digest>.
+static MANIFEST_DIGEST_URL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^(.*)://(.*)/v2/(.*)/manifests/(crc32:[^?]+|sha256:[^?]{64}|sha512:[^?]{128})(?:\?.*)?$",
+    )
+    .unwrap()
+});
+
+/// Checks if the URL is an OCI manifest digest URL.
 pub fn is_manifest_digest_url(url: &str) -> bool {
-    Digest::extract_from_manifest_url(url).is_some()
+    MANIFEST_DIGEST_URL_REGEX.is_match(url)
 }
 
 /// Algorithm for generating digests.

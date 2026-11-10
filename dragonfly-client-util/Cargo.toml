@@ -19,6 +19,7 @@ http.workspace = true
 tracing.workspace = true
 serde.workspace = true
 url.workspace = true
+oci-spec.workspace = true
 percent-encoding.workspace = true
 regex.workspace = true
 reqwest.workspace = true
