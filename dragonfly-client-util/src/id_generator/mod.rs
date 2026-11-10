@@ -194,7 +194,7 @@ impl IDGenerator {
                     .to_string())
             }
             TaskIDParameter::ManifestDigestBased(url) => {
-                Ok(digest::Digest::extract_from_manifest_url(&url)
+                Ok(digest::Digest::extract_from_manifest_digest_url(&url)
                     .ok_or_else(|| Error::InvalidURI(url))?
                     .encoded()
                     .to_string())
@@ -288,10 +288,9 @@ impl IDGenerator {
                 // Convert the manifest url to the reference, e.g.
                 // https://index.docker.io/v2/library/nginx/manifests/latest to
                 // index.docker.io/library/nginx:latest.
-                let captures = digest::MANIFEST_URL_REGEX
-                    .captures(&url)
-                    .ok_or_else(|| Error::InvalidURI(url.clone()))?;
-                let (registry, repository, reference) = (&captures[2], &captures[3], &captures[4]);
+                let (registry, repository, reference) =
+                    digest::Digest::extract_from_manifest_url(&url)
+                        .ok_or_else(|| Error::InvalidURI(url.clone()))?;
 
                 // The digest contains the colon, and the tag never does.
                 if reference.contains(':') {
