@@ -857,10 +857,14 @@ impl PreheatCommand {
             .parse()
             .or_err(ErrorType::ParseError)?;
 
+        // Resolve the manifest by digest first, then by tag, like the container runtimes do.
         let registry = reference.resolve_registry();
         let repository = reference.repository();
-        let tag = reference.tag().unwrap_or("latest");
-        let manifest_url = format!("https://{registry}/v2/{repository}/manifests/{tag}");
+        let digest_or_tag = reference
+            .digest()
+            .or_else(|| reference.tag())
+            .unwrap_or("latest");
+        let manifest_url = format!("https://{registry}/v2/{repository}/manifests/{digest_or_tag}");
 
         let channel = Channel::from_shared(self.scheduler_endpoint.clone())
             .or_err(ErrorType::ParseError)?
