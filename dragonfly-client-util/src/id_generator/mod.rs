@@ -307,7 +307,7 @@ impl IDGenerator {
         // and index.docker.io to docker.io.
         let reference: Reference = reference
             .parse()
-            .map_err(|_| Error::InvalidURI(reference.clone()))?;
+            .map_err(|_| Error::ValidationError(format!("invalid image reference {reference}")))?;
 
         // The registry-1.docker.io is the registry api host of docker.io.
         let registry = match reference.registry() {
@@ -488,20 +488,32 @@ mod tests {
 
     #[test]
     fn image_id_fails_on_an_invalid_manifest_url_or_reference() {
-        let test_cases = vec![
-            ImageIDParameter::ManifestURLBased("not a url".to_string()),
-            ImageIDParameter::ManifestURLBased(
-                "https://ghcr.io/v2/dragonflyoss/client/blobs/sha256:abc".to_string(),
+        let test_cases: Vec<(ImageIDParameter, fn(Result<String>))> = vec![
+            (
+                ImageIDParameter::ManifestURLBased("not a url".to_string()),
+                |result| assert!(matches!(result, Err(Error::InvalidURI(_)))),
             ),
-            ImageIDParameter::ReferenceBased("Invalid Reference".to_string()),
+            (
+                ImageIDParameter::ManifestURLBased(
+                    "https://ghcr.io/v2/dragonflyoss/client/blobs/sha256:abc".to_string(),
+                ),
+                |result| assert!(matches!(result, Err(Error::InvalidURI(_)))),
+            ),
+            (
+                ImageIDParameter::ManifestURLBased(
+                    "https://ghcr.io/v2/Dragonflyoss/Client/manifests/latest".to_string(),
+                ),
+                |result| assert!(matches!(result, Err(Error::ValidationError(_)))),
+            ),
+            (
+                ImageIDParameter::ReferenceBased("Invalid Reference".to_string()),
+                |result| assert!(matches!(result, Err(Error::ValidationError(_)))),
+            ),
         ];
 
         let generator = IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false);
-        for parameter in test_cases {
-            assert!(matches!(
-                generator.image_id(parameter),
-                Err(Error::InvalidURI(_))
-            ));
+        for (parameter, expect) in test_cases {
+            expect(generator.image_id(parameter));
         }
     }
 

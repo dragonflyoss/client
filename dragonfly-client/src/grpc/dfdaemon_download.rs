@@ -403,8 +403,8 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
                     }
                 }
             }
-            Err(err @ ClientError::InvalidURI(_)) => {
-                error!("download started failed by invalid uri: {}", err);
+            Err(err @ ClientError::ValidationError(_)) => {
+                error!("download started failed by validation: {}", err);
                 return Err(Status::invalid_argument(err.to_string()));
             }
             Err(err) => {
