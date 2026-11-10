@@ -148,17 +148,47 @@ impl RocksdbStorageEngine {
         // Initialize rocksdb directory.
         let dir = dir.join(Self::DEFAULT_DIR_NAME);
 
-        // If the storage is kept, open the db and drop the unused column families.
-        // Otherwise, destroy the db.
-        if !keep {
+        // If the storage is kept, open the db and drop the unused column families,
+        // such as the ones created by a newer version before the rollback. Otherwise,
+        // destroy the db.
+        let unused_cf_names = if !keep {
             rocksdb::DB::destroy(&options, &dir).unwrap_or_else(|err| {
                 warn!("destroy {:?} failed: {}", dir, err);
             });
-        }
 
-        // Open rocksdb.
-        let db =
-            rocksdb::DB::open_cf_with_opts(&options, &dir, cfs).or_err(ErrorType::StorageError)?;
+            Vec::new()
+        } else if !dir.join("CURRENT").is_file() {
+            // The db has no CURRENT file before its first open, so it has no column families.
+            Vec::new()
+        } else {
+            rocksdb::DB::list_cf(&options, &dir)
+                .or_err(ErrorType::StorageError)?
+                .into_iter()
+                .filter(|name| {
+                    name != rocksdb::DEFAULT_COLUMN_FAMILY_NAME
+                        && cfs.iter().all(|(cf_name, _)| cf_name != name)
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // Open rocksdb with the unused column families, because rocksdb requires
+        // all the existing column families to be opened.
+        let mut db = rocksdb::DB::open_cf_with_opts(
+            &options,
+            &dir,
+            cfs.into_iter().chain(
+                unused_cf_names
+                    .iter()
+                    .map(|name| (name.clone(), rocksdb::Options::default())),
+            ),
+        )
+        .or_err(ErrorType::StorageError)?;
+
+        // Drop the unused column families.
+        for name in unused_cf_names {
+            db.drop_cf(&name).or_err(ErrorType::StorageError)?;
+            info!("drop unused column family {}", name);
+        }
 
         Ok(Self { inner: db })
     }
@@ -655,5 +685,37 @@ mod tests {
             let engine = open(dir.path(), keep);
             assert_eq!(engine.get::<Object>(b"1").unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn open_drops_the_unused_column_families_when_kept() {
+        let dir = tempdir().unwrap();
+        let open_with_unregistered = || {
+            RocksdbStorageEngine::open(
+                dir.path(),
+                &dir.path().to_path_buf(),
+                &[UnregisteredObject::NAMESPACE],
+                &[Object::NAMESPACE],
+                true,
+            )
+            .unwrap()
+        };
+
+        let engine = open_with_unregistered();
+        let object = UnregisteredObject {
+            data: "data".to_string(),
+        };
+        engine.put(b"1", &object).unwrap();
+        drop(engine);
+
+        let engine = open(dir.path(), true);
+        assert!(matches!(
+            engine.get::<UnregisteredObject>(b"1"),
+            Err(Error::ColumnFamilyNotFound(ref name)) if name == UnregisteredObject::NAMESPACE
+        ));
+        drop(engine);
+
+        let engine = open_with_unregistered();
+        assert_eq!(engine.get::<UnregisteredObject>(b"1").unwrap(), None);
     }
 }
