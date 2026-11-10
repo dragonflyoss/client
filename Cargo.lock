@@ -1272,9 +1272,9 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-api"
-version = "2.3.8"
+version = "2.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c47160f1c750f3db7a489229294542f284ea61a3894cf5a1ac9972e43b256988"
+checksum = "d135bdd4d856946953e4c2bd007d69a8f8841e53401bec8b4f48daf39b0515de"
 dependencies = [
  "prost 0.14.4",
  "prost-types",
@@ -1288,7 +1288,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "1.5.11"
+version = "1.5.12"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1366,7 +1366,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-backend"
-version = "1.5.11"
+version = "1.5.12"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1402,7 +1402,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-config"
-version = "1.5.11"
+version = "1.5.12"
 dependencies = [
  "bytesize",
  "bytesize-serde",
@@ -1432,7 +1432,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-core"
-version = "1.5.11"
+version = "1.5.12"
 dependencies = [
  "cgroups-rs",
  "http",
@@ -1452,7 +1452,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-init"
-version = "1.5.11"
+version = "1.5.12"
 dependencies = [
  "anyhow",
  "clap",
@@ -1470,7 +1470,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-metric"
-version = "1.5.11"
+version = "1.5.12"
 dependencies = [
  "bytes",
  "dragonfly-api",
@@ -1524,7 +1524,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-storage"
-version = "1.5.11"
+version = "1.5.12"
 dependencies = [
  "bincode",
  "bytes",
@@ -1559,7 +1559,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-util"
-version = "1.5.11"
+version = "1.5.12"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -1581,6 +1581,7 @@ dependencies = [
  "local-ip-address",
  "lru",
  "mocktail",
+ "oci-spec 0.9.0",
  "parking_lot",
  "percent-encoding",
  "pnet",
@@ -2102,7 +2103,7 @@ dependencies = [
 
 [[package]]
 name = "hdfs"
-version = "1.5.11"
+version = "1.5.12"
 dependencies = [
  "async-trait",
  "dragonfly-client-backend",

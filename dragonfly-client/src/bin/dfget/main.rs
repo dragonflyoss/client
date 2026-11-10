@@ -994,6 +994,7 @@ async fn download(
                 actual_piece_count: None,
                 enable_task_id_based_blob_digest: false,
                 metadata_only: false,
+                image: None,
             }),
         })
         .await

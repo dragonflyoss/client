@@ -76,6 +76,7 @@ impl fmt::Debug for RedactedDownload<'_> {
             hugging_face,
             model_scope,
             open_csg,
+            image,
             digest: _,
             r#type: _,
             priority: _,
@@ -116,6 +117,7 @@ impl fmt::Debug for RedactedDownload<'_> {
             .field("hugging_face", &scrubbed(hugging_face, scrub_hugging_face))
             .field("model_scope", &scrubbed(model_scope, scrub_model_scope))
             .field("open_csg", &scrubbed(open_csg, scrub_open_csg))
+            .field("image", image)
             .finish_non_exhaustive()
     }
 }

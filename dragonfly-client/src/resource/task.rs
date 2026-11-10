@@ -23,7 +23,8 @@ use dragonfly_api::common::v2::{
 use dragonfly_api::dfdaemon::{
     self,
     v2::{
-        download_task_response, DownloadTaskResponse, ListLocalTasksResponse, StatLocalTaskResponse,
+        download_task_response, DeleteImageResponse, DownloadTaskResponse, ListLocalTasksResponse,
+        StatLocalTaskResponse,
     },
 };
 use dragonfly_api::errordetails::v2::{Backend, Unknown};
@@ -49,7 +50,7 @@ use dragonfly_client_metric::{
 use dragonfly_client_storage::{metadata, Storage};
 use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
-    id_generator::IDGenerator,
+    id_generator::{IDGenerator, ImageIDParameter},
     shutdown,
 };
 use futures::future::select_all;
@@ -155,6 +156,17 @@ impl Task {
         id: &str,
         request: Download,
     ) -> ClientResult<metadata::Task> {
+        // Create the task by image before preparing the task, so deleting other images
+        // retains the task.
+        if let Some(image) = &request.image {
+            let image_id = self
+                .id_generator
+                .image_id(ImageIDParameter::ReferenceBased(image.reference.clone()))?;
+            self.storage
+                .create_task_by_image(&image_id, id, image)
+                .await?;
+        }
+
         let (task, reused) = self.storage.prepare_download_task(id)?;
         if reused {
             // Attempt to create a hard link from the task file to the output path.
@@ -2542,6 +2554,53 @@ impl Task {
                 Err(Error::TaskNotFound(task_id.to_owned()))
             }
         }
+    }
+
+    /// Deletes the tasks of the image which are not referenced by other images, and
+    /// deletes the peers of the deleted tasks from the scheduler in the background. All
+    /// the platforms of the image are deleted if the platform is none.
+    #[instrument(skip_all)]
+    pub async fn delete_image(
+        &self,
+        image_id: &str,
+        platform: Option<&str>,
+        host_id: &str,
+    ) -> ClientResult<DeleteImageResponse> {
+        let (deleted_task_ids, retained_task_ids) =
+            self.storage.delete_image(image_id, platform).await?;
+
+        // Spawn to delete the peers from the scheduler, so the unavailable scheduler does
+        // not block the deletion, and the failure does not fail the deletion like the
+        // garbage collector.
+        let scheduler_client = self.scheduler_client.clone();
+        let host_id = host_id.to_string();
+        let task_ids = deleted_task_ids.clone();
+        tokio::spawn(
+            async move {
+                for task_id in task_ids {
+                    scheduler_client
+                        .delete_task(DeleteTaskRequest {
+                            host_id: host_id.clone(),
+                            task_id: task_id.clone(),
+                        })
+                        .await
+                        .unwrap_or_else(|err| {
+                            error!("delete task {} from scheduler failed: {}", task_id, err);
+                        });
+                }
+            }
+            .in_current_span(),
+        );
+
+        info!(
+            "delete image {} {:?}, deleted tasks: {:?}, retained tasks: {:?}",
+            image_id, platform, deleted_task_ids, retained_task_ids
+        );
+
+        Ok(DeleteImageResponse {
+            deleted_task_ids,
+            retained_task_ids,
+        })
     }
 
     /// Delete a local task and reclaim local storage.
