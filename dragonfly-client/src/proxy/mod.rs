@@ -31,7 +31,7 @@ use dragonfly_client_metric::{
     collect_proxy_request_started_metrics, collect_proxy_request_via_dfdaemon_metrics,
 };
 use dragonfly_client_util::{
-    http::{hashmap_to_headermap, headermap_to_hashmap},
+    http::{hashmap_to_headermap, headermap_to_hashmap, remove_hop_by_hop_headers},
     shutdown,
     tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
 };
@@ -1437,6 +1437,10 @@ fn make_response_headers(
     // directly, instead of staging them in the hashmap and parsing them again.
     let mut headers = hashmap_to_headermap(&download_task_started_response.response_header)?;
 
+    // Drop the connection options stored by older versions, so a cached task does not
+    // close the connections of later clients.
+    remove_hop_by_hop_headers(&mut headers);
+
     // Insert the content range header to the response header.
     if let Some(range) = download_task_started_response.range.as_ref() {
         headers.insert(
@@ -1726,6 +1730,27 @@ mod tests {
 
             expect(&headers);
         }
+    }
+
+    #[test]
+    fn make_response_headers_drops_hop_by_hop_headers() {
+        let response = DownloadTaskStartedResponse {
+            response_header: HashMap::from([
+                ("connection".to_string(), "close".to_string()),
+                ("keep-alive".to_string(), "timeout=5".to_string()),
+                ("content-type".to_string(), "text/plain".to_string()),
+            ]),
+            ..Default::default()
+        };
+
+        let headers =
+            make_response_headers("task-id", "127.0.0.1".parse().unwrap(), &response).unwrap();
+        assert!(!headers.contains_key(reqwest::header::CONNECTION));
+        assert!(!headers.contains_key("keep-alive"));
+        assert_eq!(
+            headers.get(reqwest::header::CONTENT_TYPE).unwrap(),
+            "text/plain"
+        );
     }
 
     #[test]

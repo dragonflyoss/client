@@ -55,7 +55,10 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
-use dragonfly_client_util::{http::validate_ranged_response, tls::NoVerifier};
+use dragonfly_client_util::{
+    http::{remove_hop_by_hop_headers, validate_ranged_response},
+    tls::NoVerifier,
+};
 use futures::{StreamExt, TryStreamExt};
 use http::header::{
     HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_RANGE, LOCATION, RANGE, TRANSFER_ENCODING,
@@ -274,6 +277,9 @@ impl HTTP {
         request_header: &mut HeaderMap,
         range: Option<Range>,
     ) -> Result<()> {
+        // Drop the connection options of the caller, which must not reach the origin.
+        remove_hop_by_hop_headers(request_header);
+
         // Add Range header if present in the request.
         if let Some(range) = &range {
             request_header.insert(
@@ -575,6 +581,10 @@ impl Backend for HTTP {
 
         let response_status_code = response.status();
         let mut response_header = response.headers().clone();
+
+        // Drop the connection options of the origin, since the response header is persisted
+        // as the task response header and echoed to the clients over other connections.
+        remove_hop_by_hop_headers(&mut response_header);
         let content_length = if response_status_code == reqwest::StatusCode::PARTIAL_CONTENT {
             // The total length of a ranged response is in the Content-Range header,
             // e.g. "bytes 0-0/1048576".
@@ -1162,6 +1172,26 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                     assert_eq!(response.http_status_code, Some(StatusCode::PARTIAL_CONTENT));
                     assert_eq!(response.content_length, None);
                     assert!(response.http_header.unwrap().get("content-range").is_none());
+                },
+            ),
+            (
+                vec![Mock::given(method("GET"))
+                    .and(path("/stat"))
+                    .and(header("range", "bytes=0-0"))
+                    .respond_with(
+                        ResponseTemplate::new(206)
+                            .insert_header("Content-Range", "bytes 0-0/1048576")
+                            .insert_header("Connection", "close")
+                            .insert_header("Keep-Alive", "timeout=5")
+                            .set_body_bytes(vec![0u8]),
+                    )],
+                |response| {
+                    assert!(response.success);
+                    assert_eq!(response.content_length, Some(1048576));
+                    let response_header = response.http_header.unwrap();
+                    assert!(response_header.get("connection").is_none());
+                    assert!(response_header.get("keep-alive").is_none());
+                    assert_eq!(response_header.get("content-length").unwrap(), "1048576");
                 },
             ),
             (
@@ -1794,6 +1824,42 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                     assert_eq!(
                         headers.get("Authorization").unwrap(),
                         HeaderValue::from_static("Bearer original")
+                    );
+                },
+            ),
+            (
+                None,
+                HeaderMap::from_iter([
+                    (
+                        HeaderName::from_static("connection"),
+                        HeaderValue::from_static("close, x-trace"),
+                    ),
+                    (
+                        HeaderName::from_static("x-trace"),
+                        HeaderValue::from_static("abc"),
+                    ),
+                    (
+                        HeaderName::from_static("keep-alive"),
+                        HeaderValue::from_static("timeout=5"),
+                    ),
+                    (
+                        HeaderName::from_static("x-request-id"),
+                        HeaderValue::from_static("1"),
+                    ),
+                ]),
+                None,
+                |result, headers| {
+                    assert!(result.is_ok());
+                    assert!(!headers.contains_key("connection"));
+                    assert!(!headers.contains_key("keep-alive"));
+                    assert!(!headers.contains_key("x-trace"));
+                    assert_eq!(
+                        headers.get("x-request-id").unwrap(),
+                        HeaderValue::from_static("1")
+                    );
+                    assert_eq!(
+                        headers.get(USER_AGENT).unwrap(),
+                        HeaderValue::from_static(DEFAULT_USER_AGENT)
                     );
                 },
             ),

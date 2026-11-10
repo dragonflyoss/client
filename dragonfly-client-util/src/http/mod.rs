@@ -19,7 +19,10 @@ use dragonfly_client_core::{
     error::{BackendError, ErrorType, OrErr},
     Error, Result,
 };
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_RANGE};
+use reqwest::header::{
+    HeaderMap, HeaderName, HeaderValue, CONNECTION, CONTENT_RANGE, TE, TRAILER, TRANSFER_ENCODING,
+    UPGRADE,
+};
 use reqwest::StatusCode;
 use std::collections::HashMap;
 
@@ -48,6 +51,30 @@ pub fn hashmap_to_headermap(header: &HashMap<String, String>) -> Result<HeaderMa
     }
 
     Ok(headermap)
+}
+
+/// Removes the hop-by-hop headers, which apply to a single connection and must not be
+/// forwarded to the origin or echoed to later clients, refer to RFC 9110 Section 7.6.1.
+pub fn remove_hop_by_hop_headers(header: &mut HeaderMap) {
+    let connection_options: Vec<HeaderName> = header
+        .get_all(CONNECTION)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .filter_map(|option| HeaderName::from_bytes(option.trim().as_bytes()).ok())
+        .collect();
+
+    for name in connection_options.into_iter().chain([
+        CONNECTION,
+        HeaderName::from_static("keep-alive"),
+        HeaderName::from_static("proxy-connection"),
+        TE,
+        TRAILER,
+        TRANSFER_ENCODING,
+        UPGRADE,
+    ]) {
+        header.remove(name);
+    }
 }
 
 /// Converts a vector of header string to a hashmap.
@@ -210,6 +237,62 @@ mod tests {
                 .map(|(name, value)| (name.to_string(), value.to_string()))
                 .collect();
             expect(hashmap_to_headermap(&hashmap));
+        }
+    }
+
+    #[test]
+    fn remove_hop_by_hop_headers_drops_connection_scoped_fields() {
+        let test_cases: Vec<(Vec<(&str, &str)>, Vec<&str>)> = vec![
+            (vec![], vec![]),
+            (
+                vec![("Connection", "close"), ("Content-Type", "text/plain")],
+                vec!["content-type"],
+            ),
+            (
+                vec![
+                    ("Connection", "keep-alive, X-Trace"),
+                    ("Keep-Alive", "timeout=5"),
+                    ("X-Trace", "abc"),
+                    ("X-Request-Id", "1"),
+                ],
+                vec!["x-request-id"],
+            ),
+            (
+                vec![
+                    ("Connection", "X-First"),
+                    ("Connection", "X-Second"),
+                    ("X-First", "1"),
+                    ("X-Second", "2"),
+                    ("X-Third", "3"),
+                ],
+                vec!["x-third"],
+            ),
+            (
+                vec![
+                    ("Proxy-Connection", "keep-alive"),
+                    ("TE", "trailers"),
+                    ("Trailer", "Expires"),
+                    ("Transfer-Encoding", "chunked"),
+                    ("Upgrade", "h2c"),
+                    ("Content-Length", "42"),
+                ],
+                vec!["content-length"],
+            ),
+        ];
+
+        for (header_pairs, expected) in test_cases {
+            let mut header = HeaderMap::new();
+            for (name, value) in header_pairs {
+                header.append(
+                    HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                    HeaderValue::from_str(value).unwrap(),
+                );
+            }
+
+            remove_hop_by_hop_headers(&mut header);
+            let mut remaining: Vec<&str> = header.keys().map(|name| name.as_str()).collect();
+            remaining.sort_unstable();
+            assert_eq!(remaining, expected);
         }
     }
 
