@@ -30,7 +30,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
-use dragonfly_client_request::{PreheatRequest, Proxy, Request};
+use dragonfly_client_request::{PreheatRequest, Proxy, Request, Scope};
 use dragonfly_client_util::{
     http::{
         header_vec_to_hashmap, header_vec_to_headermap,
@@ -647,7 +647,7 @@ pub struct PreheatCommand {
     #[arg(
         long,
         env = "DFCTL_TASK_PREHEAT_PLATFORM",
-        help = "Specify the platform for image preheat, e.g., linux/amd64 or linux/arm64"
+        help = "Specify the platform for image preheat, e.g., linux/amd64 or linux/arm64, default is all the platforms of the image"
     )]
     platform: Option<String>,
 
@@ -1063,6 +1063,7 @@ impl PreheatCommand {
             enable_task_id_based_blob_digest: self.enable_task_id_based_blob_digest,
             priority: Some(self.priority),
             replicas: self.replicas as usize,
+            scope: Scope::Default,
             timeout: self.timeout,
             concurrent_task_count: self.concurrent_task_count as usize,
 
@@ -1106,6 +1107,7 @@ impl PreheatCommand {
             enable_task_id_based_blob_digest: self.enable_task_id_based_blob_digest,
             priority: Some(self.priority),
             replicas: self.replicas as usize,
+            scope: Scope::Default,
             timeout: self.timeout,
 
             // TODO: Support certificate chain.

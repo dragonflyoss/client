@@ -1288,7 +1288,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "1.5.12"
+version = "1.5.13"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1366,7 +1366,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-backend"
-version = "1.5.12"
+version = "1.5.13"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1402,7 +1402,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-config"
-version = "1.5.12"
+version = "1.5.13"
 dependencies = [
  "bytesize",
  "bytesize-serde",
@@ -1432,7 +1432,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-core"
-version = "1.5.12"
+version = "1.5.13"
 dependencies = [
  "cgroups-rs",
  "http",
@@ -1452,7 +1452,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-init"
-version = "1.5.12"
+version = "1.5.13"
 dependencies = [
  "anyhow",
  "clap",
@@ -1470,7 +1470,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-metric"
-version = "1.5.12"
+version = "1.5.13"
 dependencies = [
  "bytes",
  "dragonfly-api",
@@ -1487,22 +1487,22 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-request"
-version = "1.7.4"
+version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0c5239d9bb7cce25998722fa50fe6d6165ef9ad0f10754714bc654482a70402c"
+checksum = "d4e05f742142afc1900d383c0c7c89a69595513fbcfe18d2494183bae8bdfb50"
 dependencies = [
  "async-trait",
  "backon",
  "bytes",
  "dashmap",
  "dragonfly-api",
+ "dragonfly-hashring",
  "futures",
- "hashring",
  "hex",
  "hostname",
+ "http",
  "local-ip-address",
  "oci-client 0.17.0",
- "oci-spec 0.9.0",
  "percent-encoding",
  "prost-wkt-types",
  "rand 0.9.4",
@@ -1524,7 +1524,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-storage"
-version = "1.5.12"
+version = "1.5.13"
 dependencies = [
  "bincode",
  "bytes",
@@ -1559,7 +1559,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-util"
-version = "1.5.12"
+version = "1.5.13"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -1609,7 +1609,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "89092b70bed83cd2216c26f7cdfbf990a195a37b2ec59562cdb812d35fcd61a0"
 dependencies = [
- "siphasher 1.0.1",
+ "siphasher",
 ]
 
 [[package]]
@@ -1753,7 +1753,7 @@ dependencies = [
  "foldhash 0.2.0",
  "libm",
  "portable-atomic",
- "siphasher 1.0.1",
+ "siphasher",
 ]
 
 [[package]]
@@ -2093,17 +2093,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "hashring"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43bfd649ac5e0f82ae98d547450f1d31af49742be255b5380c61fc8513b9df11"
-dependencies = [
- "siphasher 0.3.11",
-]
-
-[[package]]
 name = "hdfs"
-version = "1.5.12"
+version = "1.5.13"
 dependencies = [
  "async-trait",
  "dragonfly-client-backend",
@@ -5371,12 +5362,6 @@ dependencies = [
 
 [[package]]
 name = "siphasher"
-version = "0.3.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38b58827f4464d87d377d175e90bf58eb00fd8716ff0a62f80356b5e61555d0d"
-
-[[package]]
-name = "siphasher"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56199f7ddabf13fe5074ce809e7d3f42b42ae711800501b5b16ea82ad029c39d"
@@ -5958,9 +5943,9 @@ checksum = "06bdbd8cfc056b8d2e2e85f29b56a3bdbecb527cef81eb39e3e7b98af4652770"
 
 [[package]]
 name = "tonic"
-version = "0.14.6"
+version = "0.14.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac2a5518c70fa84342385732db33fb3f44bc4cc748936eb5833d2df34d6445ef"
+checksum = "e2cdfc673aabd30fe8fee92e65837b644c37c5d47f0f97ae6d5e0f1237d15e1b"
 dependencies = [
  "async-trait",
  "axum",
@@ -5980,6 +5965,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-stream",
+ "tokio-util",
  "tower",
  "tower-layer",
  "tower-service",
@@ -6000,9 +5986,9 @@ dependencies = [
 
 [[package]]
 name = "tonic-health"
-version = "0.14.6"
+version = "0.14.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcfab99db777fba2802f0dfa861d1628d1ae916fb199d29819941f139ae85082"
+checksum = "bc97d645691d64d96db1afe386d0d2918ac84ab56e2c91e153f22f6349a378cd"
 dependencies = [
  "prost 0.14.4",
  "tokio",
@@ -6013,9 +5999,9 @@ dependencies = [
 
 [[package]]
 name = "tonic-prost"
-version = "0.14.6"
+version = "0.14.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50849f68853be452acf590cde0b146665b8d507b3b8af17261df47e02c209ea0"
+checksum = "eba464054e2226f182a34489b8b079bf4c6e3e7ab5fd7fc30e024f24aa92a484"
 dependencies = [
  "bytes",
  "prost 0.14.4",
@@ -6040,9 +6026,9 @@ dependencies = [
 
 [[package]]
 name = "tonic-reflection"
-version = "0.14.6"
+version = "0.14.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "acccd136a4bf19810a1fde9c74edc6129b42a66b44d0c1c8aaa67aeb49a146a7"
+checksum = "7eb4700e220803efd45baf3babaa1958c79adc9e0fe6fbd4422f9188d1e57d26"
 dependencies = [
  "prost 0.14.4",
  "prost-types",
