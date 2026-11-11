@@ -16,7 +16,10 @@
 
 use dragonfly_api::common::v2::{Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, OpenCsg};
 use dragonfly_api::dfdaemon::v2::DownloadPersistentTaskRequest;
-use http::header::{HOST, RANGE, USER_AGENT};
+use http::header::{
+    AUTHORIZATION, COOKIE, HOST, PROXY_AUTHORIZATION, RANGE, USER_AGENT, WWW_AUTHENTICATE,
+};
+use http::{HeaderMap, Request};
 use std::collections::HashMap;
 use std::fmt;
 
@@ -215,6 +218,74 @@ impl fmt::Debug for RedactedDownloadPersistentTaskRequest<'_> {
             )
             .finish_non_exhaustive()
     }
+}
+
+/// Debug-safe wrapper around [`http::Request`].
+///
+/// Use at log sites that would otherwise Debug-print the full request
+/// (e.g. `info!("proxy HTTP request: {:?}", request)`):
+///
+/// ```ignore
+/// use dragonfly_client_util::types::redacted::RedactedRequest;
+/// info!("proxy HTTP request: {:?}", RedactedRequest(&request));
+/// ```
+///
+/// The `method`, `uri`, and `version` are printed as-is, and the values of
+/// the sensitive headers are replaced with [`REDACTED`]:
+///
+/// - `authorization`
+/// - `cookie`
+/// - `proxy-authorization`
+/// - `www-authenticate`
+///
+/// Other headers are left intact for request correlation. The body is
+/// never printed because it is not inspectable without consuming it and
+/// may be arbitrarily large on the per-request log path.
+pub struct RedactedRequest<'a, B>(pub &'a Request<B>);
+
+/// Debug implementation that prints the request line and headers without
+/// the body, since it runs on the per-request log path.
+impl<B> fmt::Debug for RedactedRequest<'_, B> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Request")
+            .field("method", self.0.method())
+            .field("uri", self.0.uri())
+            .field("version", &self.0.version())
+            .field("headers", &RedactedHeaderMap(self.0.headers()))
+            .finish_non_exhaustive()
+    }
+}
+
+/// Debug wrapper over the request headers that replaces the values of the
+/// sensitive headers with [`REDACTED`].
+struct RedactedHeaderMap<'a>(&'a HeaderMap);
+
+/// Debug implementation that redacts the sensitive header values.
+impl fmt::Debug for RedactedHeaderMap<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map()
+            .entries(self.0.iter().map(|(name, value)| {
+                if is_sensitive_header(name.as_str()) {
+                    (name, &REDACTED as &dyn fmt::Debug)
+                } else {
+                    (name, value as &dyn fmt::Debug)
+                }
+            }))
+            .finish()
+    }
+}
+
+/// Returns whether the header value is secret material that must not reach
+/// the logs, matched case-insensitively without allocating.
+fn is_sensitive_header(name: &str) -> bool {
+    [
+        AUTHORIZATION.as_str(),
+        COOKIE.as_str(),
+        PROXY_AUTHORIZATION.as_str(),
+        WWW_AUTHENTICATE.as_str(),
+    ]
+    .iter()
+    .any(|sensitive_header| name.eq_ignore_ascii_case(sensitive_header))
 }
 
 /// Mutates the given `ObjectStorage` by replacing any present secrets with [`REDACTED`].
@@ -582,6 +653,80 @@ mod tests {
                 .access_key_secret
                 .as_deref(),
             Some(ACCESS_KEY_SECRET)
+        );
+    }
+
+    #[test]
+    fn is_sensitive_header_matches_case_insensitively() {
+        let test_cases = vec![
+            ("authorization", true),
+            ("Authorization", true),
+            ("AUTHORIZATION", true),
+            ("cookie", true),
+            ("Cookie", true),
+            ("proxy-authorization", true),
+            ("Proxy-Authorization", true),
+            ("www-authenticate", true),
+            ("WWW-Authenticate", true),
+            ("host", false),
+            ("range", false),
+            ("user-agent", false),
+            ("x-request-id", false),
+            ("", false),
+        ];
+
+        for (name, expected) in test_cases {
+            assert_eq!(is_sensitive_header(name), expected);
+        }
+    }
+
+    #[test]
+    fn redacted_request_debug_redacts_sensitive_headers() {
+        let bearer_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.SECRET.SIGNATURE";
+        let request = Request::builder()
+            .method("GET")
+            .uri("http://example.com/path?range=0-1023")
+            .header("Authorization", format!("Bearer {bearer_token}"))
+            .header("Cookie", "session=SECRET_SESSION")
+            // Header values with the same name are appended, so both must be
+            // redacted.
+            .header("cookie", "other=SECRET_OTHER")
+            .header("Proxy-Authorization", "Basic c2VjcmV0LXNlY3JldA==")
+            .header("WWW-Authenticate", "Bearer realm=\"example\"")
+            .header("X-Request-Id", "req-42")
+            .body(())
+            .unwrap();
+
+        let output = format!("{:?}", RedactedRequest(&request));
+        for secret in [
+            bearer_token,
+            "SECRET_SESSION",
+            "SECRET_OTHER",
+            "c2VjcmV0LXNlY3JldA==",
+            "realm=\"example\"",
+        ] {
+            assert!(!output.contains(secret), "leaked secret: {secret}");
+        }
+
+        assert!(output.contains(REDACTED));
+        assert!(output.contains("GET"));
+        assert!(output.contains("http://example.com/path?range=0-1023"));
+        assert!(output.contains("req-42"));
+    }
+
+    #[test]
+    fn redacted_request_debug_does_not_mutate_the_original() {
+        let request = Request::builder()
+            .method("GET")
+            .uri("http://example.com/path")
+            .header("Authorization", "Bearer SECRET_BEARER")
+            .body(())
+            .unwrap();
+        let _ = format!("{:?}", RedactedRequest(&request));
+
+        assert_eq!(
+            request.headers().get(AUTHORIZATION).unwrap(),
+            "Bearer SECRET_BEARER"
         );
     }
 }
