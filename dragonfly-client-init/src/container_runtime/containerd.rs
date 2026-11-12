@@ -22,6 +22,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
+use dragonfly_client_util::fs::write_if_changed;
 use std::path::PathBuf;
 use tokio::{self, fs};
 use toml_edit::{value, Array, DocumentMut, Item, Table, Value};
@@ -49,10 +50,12 @@ impl Containerd {
         }
     }
 
-    /// Runs the containerd runtime to initialize
-    /// runtime environment for the dfdaemon.
+    /// Runs the containerd runtime to initialize runtime environment for the dfdaemon.
+    /// Returns whether config.toml was rewritten, in which case containerd has to be
+    /// restarted. hosts.toml under config_path is reloaded by containerd and never
+    /// requires a restart.
     #[instrument(skip_all)]
-    pub async fn run(&self) -> Result<()> {
+    pub async fn run(&self) -> Result<bool> {
         let content = fs::read_to_string(&self.config.config_path).await?;
         let mut containerd_config = content
             .parse::<DocumentMut>()
@@ -103,7 +106,7 @@ impl Containerd {
                     .await?;
             }
 
-            return Ok(());
+            return Ok(false);
         }
 
         // If containerd does not support mirror mode and config_path not set, create a new
@@ -122,11 +125,8 @@ impl Containerd {
 
         // Override containerd configuration.
         info!("override containerd configuration");
-        fs::write(
-            &self.config.config_path,
-            containerd_config.to_string().as_bytes(),
-        )
-        .await?;
+        let changed =
+            write_if_changed(&self.config.config_path, containerd_config.to_string()).await?;
 
         self.add_registries(
             config_path,
@@ -140,7 +140,7 @@ impl Containerd {
                 .await?;
         }
 
-        Ok(())
+        Ok(changed)
     }
 
     /// Gets the CRI plugin id owning the registry configuration: the first plugin table
@@ -432,8 +432,8 @@ version = 3
                     addr: "http://127.0.0.1:65001".into(),
                 },
             );
-            let result = containerd.run().await;
-            assert!(result.is_ok());
+            // hosts.toml is reloaded by containerd, no restart is required.
+            assert!(!containerd.run().await.unwrap());
 
             let hosts = fs::read_to_string(certs_dir.join("docker.io").join("hosts.toml"))
                 .await
@@ -480,8 +480,8 @@ capabilities = ["pull", "resolve"]
                     addr: "http://127.0.0.1:65001".into(),
                 },
             );
-            let result = containerd.run().await;
-            assert!(result.is_ok());
+            // hosts.toml is reloaded by containerd, no restart is required.
+            assert!(!containerd.run().await.unwrap());
 
             let hosts = fs::read_to_string(certs_dir.join("docker.io").join("hosts.toml"))
                 .await
@@ -532,8 +532,8 @@ version = 3
                     addr: "http://127.0.0.1:65001".into(),
                 },
             );
-            let result = containerd.run().await;
-            assert!(result.is_ok());
+            // config.toml was rewritten, containerd has to be restarted.
+            assert!(containerd.run().await.unwrap());
 
             let rewritten_config = fs::read_to_string(&config_path)
                 .await
@@ -554,7 +554,7 @@ version = 3
 
     #[tokio::test]
     async fn run_fails_on_invalid_config_or_missing_cri_plugin() {
-        let test_cases: Vec<(&str, fn(Result<()>))> = vec![
+        let test_cases: Vec<(&str, fn(Result<bool>))> = vec![
             ("version = [", |result| {
                 assert!(
                     matches!(result, Err(Error::ExternalError(ref err)) if err.etype == ErrorType::ParseError)

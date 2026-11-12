@@ -54,6 +54,13 @@ struct Args {
     console: bool,
 
     #[arg(
+        long,
+        default_value_os_t = dfinit::default_dfinit_restart_sentinel_path(),
+        help = "Specify the sentinel file to create when the container runtime has to be restarted for the configuration to take effect"
+    )]
+    restart_sentinel: PathBuf,
+
+    #[arg(
         short = 'V',
         long = "version",
         help = "Print version information",
@@ -78,7 +85,8 @@ async fn main() -> Result<(), anyhow::Error> {
     })?;
 
     // Handle features of the container runtime.
-    let container_runtime = container_runtime::ContainerRuntime::new(&config);
+    let container_runtime =
+        container_runtime::ContainerRuntime::new(&config, args.restart_sentinel);
     container_runtime.run().await.inspect_err(|err| {
         error!("failed to run container runtime: {}", err);
     })?;

@@ -45,3 +45,7 @@ const DEFAULT_KEEPALIVE_RETRIES: u32 = 3;
 
 /// The default maximum idle timeout for connections.
 const DEFAULT_MAX_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The default timeout of each read of the piece content, reset after a successful read. A parent
+/// that stops sending fails the piece within it, so the piece is downloaded from another parent.
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(30);

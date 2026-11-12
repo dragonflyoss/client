@@ -91,9 +91,8 @@ pub const DRAGONFLY_ENABLE_TASK_ID_BASED_BLOB_DIGEST: &str =
 /// The header key of scheduling policy. It represents how the download interacts
 /// with the scheduler. The value is case-insensitive, e.g. "auto" or "always".
 /// "auto" downloads small files from the source directly, skipping the scheduler.
-/// "always" downloads through the scheduler even if the content length is smaller
-/// than the minimum piece length, so that the peer announces the task to the
-/// scheduler and other peers can discover it as a parent.
+/// "always" downloads through the scheduler even for small files, so that the peer
+/// announces the task to the scheduler and other peers can discover it as a parent.
 pub const DRAGONFLY_SCHEDULING_POLICY_HEADER: &str = "X-Dragonfly-Scheduling-Policy";
 
 /// The response header key to indicate whether the task download finished.

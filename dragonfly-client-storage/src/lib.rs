@@ -16,7 +16,7 @@
 
 use bytes::{Bytes, BytesMut};
 use chrono::NaiveDateTime;
-use dragonfly_api::common::v2::Range;
+use dragonfly_api::common::v2::{Image, Range};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::digest::{Algorithm, Digest};
@@ -30,7 +30,7 @@ use std::time::Duration;
 use tokio::{
     fs,
     io::{AsyncBufRead, AsyncRead, AsyncReadExt},
-    sync::Notify,
+    sync::{Mutex, Notify},
     time::sleep,
 };
 use tokio_util::io::InspectReader;
@@ -88,6 +88,10 @@ pub struct Storage {
 
     /// Drops the written pieces from the page cache under memory pressure.
     page_cache: Arc<PageCache>,
+
+    /// Mutex guarding the concurrent creation of the tasks by image and deletion of
+    /// the images.
+    mutex: Mutex<()>,
 }
 
 /// Implements the storage.
@@ -107,6 +111,7 @@ impl Storage {
             cache,
             piece_notifier: PieceNotifier::default(),
             page_cache: PageCache::new(),
+            mutex: Mutex::new(()),
         })
     }
 
@@ -220,6 +225,10 @@ impl Storage {
             .delete_task(id)
             .unwrap_or_else(|err| error!("delete task metadata failed: {}", err));
 
+        self.metadata
+            .delete_images_by_task(id)
+            .unwrap_or_else(|err| error!("delete images by task metadatas failed: {}", err));
+
         self.metadata.delete_pieces(id).unwrap_or_else(|err| {
             error!("delete piece metadatas failed: {}", err);
         });
@@ -232,6 +241,104 @@ impl Storage {
         cache.delete_task(id).await.unwrap_or_else(|err| {
             info!("delete task from cache failed: {}", err);
         });
+    }
+
+    /// Creates the metadata of the task referenced by the platform of the image.
+    #[instrument(level = "debug", skip_all)]
+    pub async fn create_task_by_image(
+        &self,
+        image_id: &str,
+        task_id: &str,
+        image: &Image,
+    ) -> Result<metadata::TaskByImage> {
+        let _guard = self.mutex.lock().await;
+        self.metadata.create_task_by_image(
+            image_id,
+            image.platform.as_deref().unwrap_or_default(),
+            task_id,
+            &image.reference,
+        )
+    }
+
+    /// Deletes the tasks of the platform of the image which are not referenced by other
+    /// images or platforms, and returns the deleted task ids and the retained task ids.
+    /// All the platforms of the image are deleted if the platform is none.
+    #[instrument(skip_all)]
+    pub async fn delete_image(
+        &self,
+        image_id: &str,
+        platform: Option<&str>,
+    ) -> Result<(Vec<String>, Vec<String>)> {
+        let _guard = self.mutex.lock().await;
+        let tasks = self.metadata.get_tasks_by_image(image_id, platform)?;
+        let mut task_ids = tasks
+            .into_iter()
+            .map(|task| task.task_id)
+            .collect::<Vec<String>>();
+        task_ids.sort();
+        task_ids.dedup();
+
+        let mut deleted_task_ids = Vec::new();
+        let mut retained_task_ids = Vec::new();
+        for task_id in task_ids {
+            let images = self.metadata.get_images_by_task(&task_id)?;
+            let referenced = images.iter().any(|image| {
+                image.image_id != image_id
+                    || platform.is_some_and(|platform| image.platform != platform)
+            });
+
+            let task = self.metadata.get_task(&task_id)?;
+            if !referenced {
+                match &task {
+                    Some(task) if !task.need_evict() => {
+                        retained_task_ids.push(task_id);
+                        continue;
+                    }
+                    Some(_) => {
+                        self.delete_task(&task_id).await;
+                        deleted_task_ids.push(task_id);
+                        continue;
+                    }
+                    None => {}
+                }
+            }
+
+            // Delete the tasks by image, because the task is retained by other references
+            // or does not exist.
+            for image in images {
+                if image.image_id == image_id
+                    && platform.is_none_or(|platform| image.platform == platform)
+                {
+                    self.metadata
+                        .delete_task_by_image(image_id, &image.platform, &task_id)?;
+                }
+            }
+
+            if task.is_some() {
+                retained_task_ids.push(task_id);
+            }
+        }
+
+        Ok((deleted_task_ids, retained_task_ids))
+    }
+
+    /// Returns the metadatas of the tasks referenced by all the images.
+    #[instrument(level = "debug", skip_all)]
+    pub fn get_all_tasks_by_image(&self) -> Result<Vec<metadata::TaskByImage>> {
+        self.metadata.get_all_tasks_by_image()
+    }
+
+    /// Deletes the metadata of the task referenced by the platform of the image.
+    #[instrument(level = "debug", skip_all)]
+    pub async fn delete_task_by_image(
+        &self,
+        image_id: &str,
+        platform: &str,
+        task_id: &str,
+    ) -> Result<()> {
+        let _guard = self.mutex.lock().await;
+        self.metadata
+            .delete_task_by_image(image_id, platform, task_id)
     }
 
     /// Hard links the persistent task content to the destination.
@@ -810,6 +917,7 @@ impl Storage {
         task_id: &str,
         offset: u64,
         length: u64,
+        is_prefetch: bool,
         stream: &mut S,
         timeout: Duration,
     ) -> Result<metadata::Piece>
@@ -817,7 +925,7 @@ impl Storage {
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
         let piece = tokio::select! {
-            piece = self.handle_downloaded_from_source_finished(piece_id, task_id, offset, length, stream) => {
+            piece = self.handle_downloaded_from_source_finished(piece_id, task_id, offset, length, is_prefetch, stream) => {
                 piece
             }
             _ = sleep(timeout) => {
@@ -843,6 +951,7 @@ impl Storage {
         task_id: &str,
         offset: u64,
         length: u64,
+        is_prefetch: bool,
         stream: &mut S,
     ) -> Result<metadata::Piece>
     where
@@ -850,7 +959,7 @@ impl Storage {
     {
         let response = self
             .content
-            .write_piece_from_stream(task_id, offset, length, stream)
+            .write_piece_from_stream(task_id, offset, length, is_prefetch, stream)
             .await?;
 
         let digest = Digest::new(Algorithm::Crc32, response.hash);
@@ -874,6 +983,7 @@ impl Storage {
         length: u64,
         expected_digest: &str,
         parent_id: &str,
+        is_prefetch: bool,
         stream: &mut S,
         timeout: Duration,
     ) -> Result<metadata::Piece>
@@ -881,7 +991,7 @@ impl Storage {
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
         let piece = tokio::select! {
-            piece = self.handle_downloaded_piece_from_parent_finished(piece_id, task_id, offset, length, expected_digest, parent_id, stream) => {
+            piece = self.handle_downloaded_piece_from_parent_finished(piece_id, task_id, offset, length, expected_digest, parent_id, is_prefetch, stream) => {
                 piece
             }
             _ = sleep(timeout) => {
@@ -910,6 +1020,7 @@ impl Storage {
         length: u64,
         expected_digest: &str,
         parent_id: &str,
+        is_prefetch: bool,
         stream: &mut S,
     ) -> Result<metadata::Piece>
     where
@@ -917,7 +1028,7 @@ impl Storage {
     {
         let response = self
             .content
-            .write_piece_from_stream(task_id, offset, length, stream)
+            .write_piece_from_stream(task_id, offset, length, is_prefetch, stream)
             .await?;
 
         let length = response.length;
@@ -1444,7 +1555,7 @@ impl Storage {
 
     /// Waits for the piece to be finished.
     #[instrument(skip_all)]
-    async fn wait_for_piece_finished(&self, piece_id: &str) -> Result<metadata::Piece> {
+    pub async fn wait_for_piece_finished(&self, piece_id: &str) -> Result<metadata::Piece> {
         let piece = self
             .get_piece(piece_id)?
             .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
@@ -1522,7 +1633,10 @@ impl Storage {
 
     /// Waits for the persistent piece to be finished.
     #[instrument(skip_all)]
-    async fn wait_for_persistent_piece_finished(&self, piece_id: &str) -> Result<metadata::Piece> {
+    pub async fn wait_for_persistent_piece_finished(
+        &self,
+        piece_id: &str,
+    ) -> Result<metadata::Piece> {
         let piece = self
             .get_persistent_piece(piece_id)?
             .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
@@ -2071,6 +2185,7 @@ mod tests {
                 TASK_ID,
                 0,
                 CONTENT.len() as u64,
+                false,
                 &mut stream,
                 Duration::from_secs(5),
             )
@@ -2150,6 +2265,7 @@ mod tests {
                         TASK_ID,
                         0,
                         CONTENT.len() as u64,
+                        false,
                         &mut stream,
                         Duration::from_secs(5),
                     )
@@ -2274,6 +2390,7 @@ mod tests {
                 TASK_ID,
                 0,
                 CONTENT.len() as u64,
+                false,
                 &mut stream,
                 Duration::from_secs(5),
             )
@@ -2339,6 +2456,7 @@ mod tests {
                     CONTENT.len() as u64,
                     expected_digest,
                     "parent-1",
+                    false,
                     &mut stream,
                     Duration::from_secs(5),
                 )
@@ -2370,6 +2488,7 @@ mod tests {
                 TASK_ID,
                 0,
                 1024,
+                false,
                 &mut stream,
                 Duration::from_millis(50),
             )
@@ -2382,5 +2501,272 @@ mod tests {
             .unwrap()
             .unwrap()
             .is_finished());
+    }
+
+    const IMAGE_ID: &str = "1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d5e6f1a2b";
+    const OTHER_IMAGE_ID: &str = "6f5e4d3c2b1a6f5e4d3c2b1a6f5e4d3c2b1a6f5e4d3c2b1a6f5e4d3c2b1a6f5e";
+
+    #[tokio::test]
+    async fn delete_image_deletes_only_the_tasks_not_referenced_by_other_images() {
+        let test_cases: Vec<(
+            Option<bool>,
+            Vec<(&str, Option<&str>)>,
+            Option<&str>,
+            fn(&Storage, Vec<String>, Vec<String>),
+        )> = vec![
+            (
+                Some(true),
+                vec![(IMAGE_ID, Some("linux/amd64"))],
+                None,
+                |storage, deleted_task_ids, retained_task_ids| {
+                    assert_eq!(deleted_task_ids, vec![TASK_ID]);
+                    assert!(retained_task_ids.is_empty());
+                    assert!(storage.get_task(TASK_ID).unwrap().is_none());
+                    assert!(storage
+                        .metadata
+                        .get_images_by_task(TASK_ID)
+                        .unwrap()
+                        .is_empty());
+                },
+            ),
+            (
+                Some(true),
+                vec![
+                    (IMAGE_ID, Some("linux/amd64")),
+                    (IMAGE_ID, Some("linux/arm64")),
+                ],
+                None,
+                |storage, deleted_task_ids, retained_task_ids| {
+                    assert_eq!(deleted_task_ids, vec![TASK_ID]);
+                    assert!(retained_task_ids.is_empty());
+                    assert!(storage.get_task(TASK_ID).unwrap().is_none());
+                    assert!(storage
+                        .metadata
+                        .get_images_by_task(TASK_ID)
+                        .unwrap()
+                        .is_empty());
+                },
+            ),
+            (
+                Some(true),
+                vec![
+                    (IMAGE_ID, Some("linux/amd64")),
+                    (IMAGE_ID, Some("linux/arm64")),
+                ],
+                Some("linux/amd64"),
+                |storage, deleted_task_ids, retained_task_ids| {
+                    assert!(deleted_task_ids.is_empty());
+                    assert_eq!(retained_task_ids, vec![TASK_ID]);
+                    assert!(storage.get_task(TASK_ID).unwrap().is_some());
+                    assert_eq!(
+                        storage
+                            .metadata
+                            .get_tasks_by_image(IMAGE_ID, Some("linux/arm64"))
+                            .unwrap()
+                            .len(),
+                        1
+                    );
+                },
+            ),
+            (
+                Some(true),
+                vec![
+                    (IMAGE_ID, Some("linux/amd64")),
+                    (OTHER_IMAGE_ID, Some("linux/amd64")),
+                ],
+                None,
+                |storage, deleted_task_ids, retained_task_ids| {
+                    assert!(deleted_task_ids.is_empty());
+                    assert_eq!(retained_task_ids, vec![TASK_ID]);
+                    assert!(storage.get_task(TASK_ID).unwrap().is_some());
+                    assert!(storage
+                        .metadata
+                        .get_tasks_by_image(IMAGE_ID, None)
+                        .unwrap()
+                        .is_empty());
+                    assert_eq!(
+                        storage
+                            .metadata
+                            .get_tasks_by_image(OTHER_IMAGE_ID, None)
+                            .unwrap()
+                            .len(),
+                        1
+                    );
+                },
+            ),
+            (
+                Some(false),
+                vec![(IMAGE_ID, Some("linux/amd64"))],
+                None,
+                |storage, deleted_task_ids, retained_task_ids| {
+                    assert!(deleted_task_ids.is_empty());
+                    assert_eq!(retained_task_ids, vec![TASK_ID]);
+                    assert!(storage.get_task(TASK_ID).unwrap().is_some());
+                    assert_eq!(
+                        storage
+                            .metadata
+                            .get_tasks_by_image(IMAGE_ID, None)
+                            .unwrap()
+                            .len(),
+                        1
+                    );
+                },
+            ),
+            (
+                Some(true),
+                vec![(IMAGE_ID, None)],
+                Some("linux/amd64"),
+                |storage, deleted_task_ids, retained_task_ids| {
+                    assert!(deleted_task_ids.is_empty());
+                    assert!(retained_task_ids.is_empty());
+                    assert!(storage.get_task(TASK_ID).unwrap().is_some());
+                    assert_eq!(
+                        storage
+                            .metadata
+                            .get_tasks_by_image(IMAGE_ID, None)
+                            .unwrap()
+                            .len(),
+                        1
+                    );
+                },
+            ),
+            (
+                Some(true),
+                vec![(IMAGE_ID, None)],
+                None,
+                |storage, deleted_task_ids, retained_task_ids| {
+                    assert_eq!(deleted_task_ids, vec![TASK_ID]);
+                    assert!(retained_task_ids.is_empty());
+                    assert!(storage.get_task(TASK_ID).unwrap().is_none());
+                },
+            ),
+            (
+                None,
+                vec![(IMAGE_ID, Some("linux/amd64"))],
+                None,
+                |storage, deleted_task_ids, retained_task_ids| {
+                    assert!(deleted_task_ids.is_empty());
+                    assert!(retained_task_ids.is_empty());
+                    assert!(storage
+                        .metadata
+                        .get_tasks_by_image(IMAGE_ID, None)
+                        .unwrap()
+                        .is_empty());
+                    assert!(storage
+                        .metadata
+                        .get_images_by_task(TASK_ID)
+                        .unwrap()
+                        .is_empty());
+                },
+            ),
+        ];
+
+        for (finished, images, platform, expect) in test_cases {
+            let dir = tempdir().unwrap();
+            let storage = storage(dir.path()).await;
+            if let Some(finished) = finished {
+                storage
+                    .download_task_started(
+                        TASK_ID,
+                        CONTENT.len() as u64,
+                        CONTENT.len() as u64,
+                        None,
+                    )
+                    .await
+                    .unwrap();
+
+                if finished {
+                    storage.download_task_finished(TASK_ID).unwrap();
+                }
+            }
+
+            for (image_id, image_platform) in images {
+                storage
+                    .create_task_by_image(
+                        image_id,
+                        TASK_ID,
+                        &Image {
+                            reference: "docker.io/library/nginx:latest".to_string(),
+                            platform: image_platform.map(|platform| platform.to_string()),
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+
+            let (deleted_task_ids, retained_task_ids) =
+                storage.delete_image(IMAGE_ID, platform).await.unwrap();
+            expect(&storage, deleted_task_ids, retained_task_ids);
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_task_deletes_the_images_by_task() {
+        let dir = tempdir().unwrap();
+        let storage = storage(dir.path()).await;
+        let image = Image {
+            reference: "docker.io/library/nginx:latest".to_string(),
+            platform: Some("linux/amd64".to_string()),
+        };
+        storage
+            .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
+            .await
+            .unwrap();
+        storage
+            .create_task_by_image(IMAGE_ID, TASK_ID, &image)
+            .await
+            .unwrap();
+        storage
+            .create_task_by_image(OTHER_IMAGE_ID, TASK_ID, &image)
+            .await
+            .unwrap();
+
+        storage.delete_task(TASK_ID).await;
+        assert!(storage
+            .metadata
+            .get_images_by_task(TASK_ID)
+            .unwrap()
+            .is_empty());
+        assert!(storage
+            .metadata
+            .get_tasks_by_image(IMAGE_ID, None)
+            .unwrap()
+            .is_empty());
+        assert!(storage
+            .metadata
+            .get_tasks_by_image(OTHER_IMAGE_ID, None)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_task_by_image_after_delete_image_downloads_the_task_again() {
+        let dir = tempdir().unwrap();
+        let storage = storage(dir.path()).await;
+        let image = Image {
+            reference: "docker.io/library/nginx:latest".to_string(),
+            platform: Some("linux/amd64".to_string()),
+        };
+        storage
+            .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
+            .await
+            .unwrap();
+        storage.download_task_finished(TASK_ID).unwrap();
+        storage
+            .create_task_by_image(IMAGE_ID, TASK_ID, &image)
+            .await
+            .unwrap();
+
+        storage.delete_image(IMAGE_ID, None).await.unwrap();
+        storage
+            .create_task_by_image(OTHER_IMAGE_ID, TASK_ID, &image)
+            .await
+            .unwrap();
+        let (_, reused) = storage.prepare_download_task(TASK_ID).unwrap();
+        assert!(!reused);
+        assert_eq!(
+            storage.metadata.get_images_by_task(TASK_ID).unwrap().len(),
+            1
+        );
     }
 }

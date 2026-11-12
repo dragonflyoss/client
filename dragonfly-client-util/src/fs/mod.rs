@@ -15,6 +15,7 @@
  */
 
 use dragonfly_client_core::Result;
+use std::path::Path;
 use tokio::fs;
 
 pub mod fd;
@@ -127,10 +128,22 @@ pub async fn fadvise_willneed(f: &std::fs::File, offset: u64, length: u64) -> Re
         use std::os::unix::io::AsFd;
         use tokio::io;
 
+        // The maximum length of a single advice. The kernel truncates a longer advice to the
+        // larger of max_sectors_kb and the readahead window, commonly 1.25 MiB.
+        const MAX_WILLNEED_LENGTH: u64 = 1024 * 1024;
+
         let f = f.try_clone()?;
         tokio::task::spawn_blocking(move || {
-            fadvise(f.as_fd(), offset, NonZeroU64::new(length), Advice::WillNeed)
-                .map_err(|err| Error::IO(io::Error::from_raw_os_error(err.raw_os_error())))
+            let end = offset.saturating_add(length);
+            let mut offset = offset;
+            while offset < end {
+                let length = (end - offset).min(MAX_WILLNEED_LENGTH);
+                fadvise(f.as_fd(), offset, NonZeroU64::new(length), Advice::WillNeed)
+                    .map_err(|err| Error::IO(io::Error::from_raw_os_error(err.raw_os_error())))?;
+                offset += length;
+            }
+
+            Ok::<(), Error>(())
         })
         .await
         .map_err(io::Error::other)??;
@@ -203,10 +216,30 @@ pub async fn sync_file_range(f: &std::fs::File, offset: u64, length: u64) -> Res
     Ok(())
 }
 
+/// Writes the contents to the file only when they differ from the current contents, and
+/// returns whether the file was written. Callers use it to restart a service only when its
+/// configuration file actually changed.
+pub async fn write_if_changed<P: AsRef<Path>, C: AsRef<[u8]>>(
+    path: P,
+    contents: C,
+) -> Result<bool> {
+    let path = path.as_ref();
+    let contents = contents.as_ref();
+    match fs::read(path).await {
+        Ok(current) if current == contents => return Ok(false),
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
+    }
+
+    fs::write(path, contents).await?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use tempfile::tempdir;
 
     const CONTENT: &[u8] = b"hello, world!";
@@ -260,7 +293,7 @@ mod tests {
         let path = file(temp_dir.path());
         let f = std::fs::File::open(&path).unwrap();
 
-        let test_cases = vec![(0, 13), (7, 5), (0, 0), (13, 100)];
+        let test_cases = vec![(0, 13), (7, 5), (0, 0), (13, 100), (0, 3 * 1024 * 1024 + 1)];
 
         for (offset, length) in test_cases {
             fadvise_willneed(&f, offset, length).await.unwrap();
@@ -283,6 +316,25 @@ mod tests {
         for (offset, length) in test_cases {
             sync_file_range(&f, offset, length).await.unwrap();
             assert_eq!(std::fs::read(&path).unwrap(), CONTENT);
+        }
+    }
+
+    #[tokio::test]
+    async fn write_if_changed_writes_only_different_contents() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("config");
+
+        // (contents, expected written)
+        let test_cases = vec![
+            (b"a".as_slice(), true),
+            (b"a".as_slice(), false),
+            (b"b".as_slice(), true),
+            (b"b".as_slice(), false),
+        ];
+
+        for (contents, expected) in test_cases {
+            assert_eq!(write_if_changed(&path, contents).await.unwrap(), expected);
+            assert_eq!(std::fs::read(&path).unwrap(), contents);
         }
     }
 

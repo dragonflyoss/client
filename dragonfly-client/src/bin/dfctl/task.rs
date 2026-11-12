@@ -18,7 +18,7 @@ use bytesize::ByteSize;
 use chrono::{DateTime, Local};
 use clap::{Parser, Subcommand};
 use dragonfly_api::common::v2::{Hdfs, ObjectStorage};
-use dragonfly_api::dfdaemon::v2::{DeleteTaskRequest, ListLocalTasksRequest};
+use dragonfly_api::dfdaemon::v2::{DeleteImageRequest, DeleteTaskRequest, ListLocalTasksRequest};
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_api::scheduler::v2::{
     scheduler_client::SchedulerClient as SchedulerGRPCClient, PreheatFileRequest,
@@ -30,7 +30,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
-use dragonfly_client_request::{PreheatRequest, Proxy, Request};
+use dragonfly_client_request::{PreheatRequest, Proxy, Request, Scope};
 use dragonfly_client_util::{
     http::{
         header_vec_to_hashmap, header_vec_to_headermap,
@@ -333,8 +333,17 @@ impl LsCommand {
 /// The subcommand of task rm.
 #[derive(Debug, Clone, Parser)]
 pub struct RmCommand {
-    #[arg(help = "Specify the task ID to remove")]
+    #[arg(
+        help = "Specify the task ID to remove, or the OCI URL of the image to remove its tasks not referenced by other images (e.g., oci://docker.io/library/nginx:latest)"
+    )]
     id: String,
+
+    #[arg(
+        long,
+        env = "DFCTL_TASK_RM_PLATFORM",
+        help = "Specify the platform of the image to remove, e.g., linux/amd64 or linux/arm64, default is all the platforms of the image"
+    )]
+    platform: Option<String>,
 
     #[arg(
         short = 'e',
@@ -396,11 +405,16 @@ impl RmCommand {
 
         // Run rm sub command.
         if let Err(err) = self.run(dfdaemon_download_client).await {
+            if self.id.starts_with(&format!("{}://", oci::SCHEME)) {
+                terminal::error("Removing Image Failed!");
+            } else {
+                terminal::error("Removing Task Failed!");
+            }
+
             match err {
                 Error::TonicStatus(status) => {
                     let details = status.details();
                     if let Ok(backend_err) = serde_json::from_slice::<Backend>(details) {
-                        terminal::error("Removing Task Failed!");
                         terminal::separator();
 
                         if let Some(status_code) = backend_err.status_code {
@@ -420,7 +434,6 @@ impl RmCommand {
 
                         terminal::separator();
                     } else {
-                        terminal::error("Removing Task Failed!");
                         terminal::separator();
                         terminal::error_field("Bad Code:", status.code());
                         terminal::field("Message:", status.message());
@@ -436,7 +449,6 @@ impl RmCommand {
                     }
                 }
                 Error::BackendError(err) => {
-                    terminal::error("Removing Task Failed!");
                     terminal::separator();
                     terminal::error_field("Message:", err.message);
 
@@ -452,7 +464,6 @@ impl RmCommand {
                     terminal::separator();
                 }
                 err => {
-                    terminal::error("Removing Task Failed!");
                     terminal::separator();
                     terminal::error_field("Message:", err);
                     terminal::separator();
@@ -465,11 +476,54 @@ impl RmCommand {
         Ok(())
     }
 
-    /// Runs the rm command to delete a task by ID.
+    /// Runs the rm command to delete a task by ID, or the tasks of the image by the
+    /// OCI URL.
     async fn run(
         &self,
         dfdaemon_download_client: dragonfly_client::grpc::dfdaemon_download::DfdaemonDownloadClient,
     ) -> Result<()> {
+        if let Some(image) = self.id.strip_prefix(&format!("{}://", oci::SCHEME)) {
+            let reference: Reference = image.parse().or_err(ErrorType::ParseError)?;
+
+            // Resolve the manifest by digest first, then by tag, like the container runtimes do.
+            let registry = reference.resolve_registry();
+            let repository = reference.repository();
+            let digest_or_tag = reference
+                .digest()
+                .or_else(|| reference.tag())
+                .unwrap_or("latest");
+
+            let response = dfdaemon_download_client
+                .delete_image(DeleteImageRequest {
+                    url: format!("https://{registry}/v2/{repository}/manifests/{digest_or_tag}"),
+                    platform: self.platform.clone(),
+                    remote_ip: preferred_local_ip().map(|ip| ip.to_string()),
+                })
+                .await?;
+
+            if response.deleted_task_ids.is_empty() && response.retained_task_ids.is_empty() {
+                return Err(Error::ImageNotFound(image.to_string()));
+            }
+
+            terminal::success("Image Removed!");
+            terminal::separator();
+            for task_id in response.deleted_task_ids {
+                terminal::field("Deleted Task:", task_id);
+            }
+
+            for task_id in response.retained_task_ids {
+                terminal::field("Retained Task:", task_id);
+            }
+            terminal::separator();
+            return Ok(());
+        }
+
+        if self.platform.is_some() {
+            return Err(Error::ValidationError(
+                "platform is only supported for the OCI URL of the image".to_string(),
+            ));
+        }
+
         dfdaemon_download_client
             .delete_task(DeleteTaskRequest {
                 task_id: self.id.clone(),
@@ -478,7 +532,6 @@ impl RmCommand {
             .await?;
 
         terminal::success("Task Removed!");
-
         Ok(())
     }
 }
@@ -598,7 +651,7 @@ pub struct PreheatCommand {
     #[arg(
         long,
         env = "DFCTL_TASK_PREHEAT_PLATFORM",
-        help = "Specify the platform for image preheat, e.g., linux/amd64 or linux/arm64"
+        help = "Specify the platform for image preheat, e.g., linux/amd64 or linux/arm64, default is all the platforms of the image"
     )]
     platform: Option<String>,
 
@@ -857,10 +910,14 @@ impl PreheatCommand {
             .parse()
             .or_err(ErrorType::ParseError)?;
 
+        // Resolve the manifest by digest first, then by tag, like the container runtimes do.
         let registry = reference.resolve_registry();
         let repository = reference.repository();
-        let tag = reference.tag().unwrap_or("latest");
-        let manifest_url = format!("https://{registry}/v2/{repository}/manifests/{tag}");
+        let digest_or_tag = reference
+            .digest()
+            .or_else(|| reference.tag())
+            .unwrap_or("latest");
+        let manifest_url = format!("https://{registry}/v2/{repository}/manifests/{digest_or_tag}");
 
         let channel = Channel::from_shared(self.scheduler_endpoint.clone())
             .or_err(ErrorType::ParseError)?
@@ -1004,12 +1061,10 @@ impl PreheatCommand {
             tag: self.tag.clone(),
             application: self.application.clone(),
             filtered_query_params,
-
-            // TODO: Support content for calculating task ID.
-            content_for_calculating_task_id: None,
             enable_task_id_based_blob_digest: self.enable_task_id_based_blob_digest,
             priority: Some(self.priority),
             replicas: self.replicas as usize,
+            scope: Scope::Default,
             timeout: self.timeout,
             concurrent_task_count: self.concurrent_task_count as usize,
 
@@ -1053,6 +1108,7 @@ impl PreheatCommand {
             enable_task_id_based_blob_digest: self.enable_task_id_based_blob_digest,
             priority: Some(self.priority),
             replicas: self.replicas as usize,
+            scope: Scope::Default,
             timeout: self.timeout,
 
             // TODO: Support certificate chain.

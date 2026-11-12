@@ -371,6 +371,25 @@ impl Piece {
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
 
+        // Wait for the in-flight piece before acquiring the rate limiters.
+        if let Ok(piece) = self.storage.wait_for_piece_finished(piece_id).await {
+            debug!("finished piece {} from local", piece_id);
+            collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
+            return Ok(piece);
+        }
+
+        // Acquire the rate limiters before claiming the piece, so the claim is
+        // not held while waiting for tokens.
+        if is_prefetch {
+            self.prefetch_bandwidth_limiter
+                .acquire(length as usize)
+                .await;
+        }
+
+        self.download_bandwidth_limiter
+            .acquire(length as usize)
+            .await;
+
         // Record the start of downloading piece.
         let piece = self
             .storage
@@ -390,18 +409,6 @@ impl Piece {
                 error!("set piece metadata failed: {}", err)
             };
         });
-
-        if is_prefetch {
-            // Acquire the prefetch rate limiter.
-            self.prefetch_bandwidth_limiter
-                .acquire(length as usize)
-                .await;
-        }
-
-        // Acquire the download rate limiter.
-        self.download_bandwidth_limiter
-            .acquire(length as usize)
-            .await;
 
         // Record the start time.
         let start_time = Instant::now();
@@ -462,6 +469,7 @@ impl Piece {
                 length,
                 digest.as_str(),
                 parent.id.as_str(),
+                is_prefetch,
                 &mut stream,
                 self.config.storage.write_piece_timeout,
             )
@@ -507,6 +515,29 @@ impl Piece {
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
 
+        // Wait for the in-flight piece before acquiring the rate limiters.
+        if let Ok(piece) = self.storage.wait_for_piece_finished(piece_id).await {
+            debug!("finished piece {} from local", piece_id);
+            collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
+            return Ok(piece);
+        }
+
+        // Acquire the rate limiters before claiming the piece, so the claim is
+        // not held while waiting for tokens.
+        if is_prefetch {
+            self.prefetch_bandwidth_limiter
+                .acquire(length as usize)
+                .await;
+        }
+
+        self.back_to_source_bandwidth_limiter
+            .acquire(length as usize)
+            .await;
+
+        self.download_bandwidth_limiter
+            .acquire(length as usize)
+            .await;
+
         // Record the start of downloading piece.
         let piece = self
             .storage
@@ -526,23 +557,6 @@ impl Piece {
                 error!("set piece metadata failed: {}", err)
             };
         });
-
-        if is_prefetch {
-            // Acquire the prefetch rate limiter.
-            self.prefetch_bandwidth_limiter
-                .acquire(length as usize)
-                .await;
-        }
-
-        // Acquire the back to source rate limiter.
-        self.back_to_source_bandwidth_limiter
-            .acquire(length as usize)
-            .await;
-
-        // Acquire the download rate limiter.
-        self.download_bandwidth_limiter
-            .acquire(length as usize)
-            .await;
 
         // Download the piece from the source.
         let backend = self.backend_factory.build(url).inspect_err(|err| {
@@ -628,6 +642,7 @@ impl Piece {
                 task_id,
                 offset,
                 length,
+                is_prefetch,
                 &mut stream,
                 self.config.storage.write_piece_timeout,
             )
@@ -872,6 +887,27 @@ impl Piece {
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
 
+        // Wait for the in-flight piece before acquiring the rate limiters.
+        if let Ok(piece) = self
+            .storage
+            .wait_for_persistent_piece_finished(piece_id)
+            .await
+        {
+            debug!("finished piece {} from local", piece_id);
+            collect_download_piece_traffic_metrics(&TrafficType::LocalPeer, length);
+            return Ok(piece);
+        }
+
+        // Acquire the rate limiters before claiming the piece, so the claim is
+        // not held while waiting for tokens.
+        self.back_to_source_bandwidth_limiter
+            .acquire(length as usize)
+            .await;
+
+        self.download_bandwidth_limiter
+            .acquire(length as usize)
+            .await;
+
         // Record the start of downloading piece.
         let piece = self
             .storage
@@ -895,16 +931,6 @@ impl Piece {
                 error!("set piece metadata failed: {}", err)
             };
         });
-
-        // Acquire the back to source rate limiter.
-        self.back_to_source_bandwidth_limiter
-            .acquire(length as usize)
-            .await;
-
-        // Acquire the download rate limiter.
-        self.download_bandwidth_limiter
-            .acquire(length as usize)
-            .await;
 
         // Download the piece from the source.
         let backend = self.backend_factory.build(url).inspect_err(|err| {
@@ -1218,7 +1244,9 @@ impl Piece {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
     use std::path::Path;
+    use std::time::Duration;
     use tempfile::tempdir;
 
     async fn piece(dir: &Path) -> Piece {
@@ -1238,6 +1266,70 @@ mod tests {
             Arc::new(RateLimiter::builder().build()),
         )
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn download_from_source_waits_for_the_in_flight_piece_before_the_rate_limiters() {
+        let dir = tempdir().unwrap();
+        let piece = Arc::new(piece(dir.path()).await);
+        let task_id = "d3add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14a";
+        let piece_id = piece.id(task_id, 0);
+        let length = 64;
+
+        piece
+            .storage
+            .download_task_started(task_id, length, length, None)
+            .await
+            .unwrap();
+        piece
+            .storage
+            .download_piece_started(piece_id.as_str(), 0, 0, length)
+            .await
+            .unwrap();
+
+        let download = tokio::spawn({
+            let (piece, piece_id) = (piece.clone(), piece_id.clone());
+            async move {
+                piece
+                    .download_from_source(
+                        piece_id.as_str(),
+                        task_id,
+                        0,
+                        "http://example.com",
+                        0,
+                        length,
+                        HeaderMap::new(),
+                        false,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await
+            }
+        });
+
+        piece
+            .storage
+            .download_piece_from_source_finished(
+                piece_id.as_str(),
+                task_id,
+                0,
+                length,
+                false,
+                &mut futures::stream::iter([Ok(Bytes::from(vec![0u8; length as usize]))]),
+                Duration::from_secs(10),
+            )
+            .await
+            .unwrap();
+
+        let finished = tokio::time::timeout(Duration::from_secs(1), download)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(finished.is_finished());
     }
 
     #[tokio::test]
