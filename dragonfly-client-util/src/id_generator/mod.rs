@@ -22,6 +22,7 @@ use oci_spec::distribution::Reference;
 use sha2::{Digest, Sha256};
 use std::io::{self, Read};
 use std::path::PathBuf;
+use url::Url;
 use uuid::Uuid;
 
 /// The suffix of the seed peer.
@@ -303,13 +304,27 @@ impl IDGenerator {
         };
 
         // Parse the reference to normalize it, e.g. nginx to docker.io/library/nginx:latest
-        // and index.docker.io to docker.io.
-        let reference: Reference = reference
-            .parse()
-            .map_err(|_| Error::ValidationError(format!("invalid image reference {reference}")))?;
+        // and index.docker.io to docker.io. The grammar does not accept an IPv6 address as
+        // the registry, e.g. [::1]:5000/foo/bar:1.0, so parse it with a placeholder.
+        let ipv6_registry = reference
+            .split_once('/')
+            .map(|(registry, _)| registry)
+            .filter(|registry| registry.starts_with('['));
+        let reference: Reference = match ipv6_registry {
+            Some(registry) => reference.replacen(registry, "localhost", 1).parse(),
+            None => reference.parse(),
+        }
+        .map_err(|_| Error::ValidationError(format!("invalid image reference {reference}")))?;
+
+        // Parse the registry as a url to lowercase the host and remove the default port
+        // like containerd does, refer to
+        // https://github.com/containerd/containerd/blob/main/pkg/reference/reference.go.
+        let registry = ipv6_registry.unwrap_or(reference.registry());
+        let registry = Url::parse(&format!("https://{registry}"))
+            .map_err(|_| Error::ValidationError(format!("invalid image registry {registry}")))?;
 
         // The registry-1.docker.io is the registry api host of docker.io.
-        let registry = match reference.registry() {
+        let registry = match registry.authority() {
             "registry-1.docker.io" => "docker.io",
             registry => registry,
         };
@@ -454,14 +469,28 @@ mod tests {
                 ImageIDParameter::ReferenceBased(
                     "ghcr.io:443/dragonflyoss/client:v1.5.11".to_string(),
                 ),
-                "0402f6c5c243b8e29b760fdc7ec76a41832d7d0d12bdb9d1e14c8f4f94e4c637",
+                "49a7707602bd9428d8ad93c9bf42d1cc0b735fb01c6900450fb830f707c29290",
             ),
             (
                 ImageIDParameter::ManifestURLBased(
                     "https://ghcr.io:443/v2/dragonflyoss/client/manifests/v1.5.11?ns=ghcr.io"
                         .to_string(),
                 ),
-                "0402f6c5c243b8e29b760fdc7ec76a41832d7d0d12bdb9d1e14c8f4f94e4c637",
+                "49a7707602bd9428d8ad93c9bf42d1cc0b735fb01c6900450fb830f707c29290",
+            ),
+            (
+                ImageIDParameter::ReferenceBased("GHCR.IO/dragonflyoss/client:v1.5.11".to_string()),
+                "49a7707602bd9428d8ad93c9bf42d1cc0b735fb01c6900450fb830f707c29290",
+            ),
+            (
+                ImageIDParameter::ReferenceBased("[fd00::1]:5000/foo/bar:1.0".to_string()),
+                "2e76ee016b9388409a41ee029142824212c1b2f78b41a7458528287130df0ebc",
+            ),
+            (
+                ImageIDParameter::ManifestURLBased(
+                    "http://[FD00::1]:5000/v2/foo/bar/manifests/1.0".to_string(),
+                ),
+                "2e76ee016b9388409a41ee029142824212c1b2f78b41a7458528287130df0ebc",
             ),
             (
                 ImageIDParameter::ReferenceBased(
@@ -476,6 +505,16 @@ mod tests {
                         .to_string(),
                 ),
                 "b224a8186aa9e61ae8a1577996bccb4af3ae2d72247b18a1e60e56246d32a169",
+            ),
+            (
+                ImageIDParameter::ReferenceBased("ghcr.io/org/v2/app:1.0".to_string()),
+                "192d43bc9e269706438f3e1418db1c52f9969db742fe38f032b561351d18d858",
+            ),
+            (
+                ImageIDParameter::ManifestURLBased(
+                    "https://ghcr.io/v2/org/v2/app/manifests/1.0".to_string(),
+                ),
+                "192d43bc9e269706438f3e1418db1c52f9969db742fe38f032b561351d18d858",
             ),
         ];
 
@@ -506,6 +545,14 @@ mod tests {
             ),
             (
                 ImageIDParameter::ReferenceBased("Invalid Reference".to_string()),
+                |result| assert!(matches!(result, Err(Error::ValidationError(_)))),
+            ),
+            (
+                ImageIDParameter::ReferenceBased("[fd00::1/foo/bar:1.0".to_string()),
+                |result| assert!(matches!(result, Err(Error::ValidationError(_)))),
+            ),
+            (
+                ImageIDParameter::ReferenceBased("[fd00::1]:5000/Foo/Bar:1.0".to_string()),
                 |result| assert!(matches!(result, Err(Error::ValidationError(_)))),
             ),
         ];
