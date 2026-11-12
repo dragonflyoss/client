@@ -1097,7 +1097,7 @@ pub struct Storage {
     /// Larger buffers improve write throughput by batching disk I/O operations and reducing
     /// system call overhead, but consume more memory. Smaller buffers reduce memory usage
     /// but may degrade write performance due to frequent I/O operations.
-    /// Default is 4MiB. Adjust based on your disk type (SSD vs HDD) and available memory.
+    /// Default is 2MiB. Adjust based on your disk type (SSD vs HDD) and available memory.
     #[serde(default = "default_storage_write_buffer_size")]
     pub write_buffer_size: usize,
 
@@ -1105,7 +1105,7 @@ pub struct Storage {
     /// Larger buffers improve read throughput by reducing I/O system calls and better
     /// utilizing disk sequential read performance, but increase memory consumption.
     /// Smaller buffers reduce memory footprint but may cause more frequent I/O operations.
-    /// Default is 1MiB. Tune based on your access patterns and memory constraints.
+    /// Default is 2MiB. Tune based on your access patterns and memory constraints.
     #[serde(default = "default_storage_read_buffer_size")]
     pub read_buffer_size: usize,
 
@@ -1534,7 +1534,7 @@ pub struct Proxy {
     /// Specifies the buffer size for reading piece data from disk.
     /// Larger buffers can improve throughput for sequential reads but consume more memory.
     /// Smaller buffers reduce memory usage but may increase I/O overhead.
-    /// Default value is 1MiB. Adjust based on your disk I/O characteristics and memory constraints.
+    /// Default value is 2MiB. Adjust based on your disk I/O characteristics and memory constraints.
     #[serde(default = "default_proxy_read_buffer_size")]
     pub read_buffer_size: usize,
 }
