@@ -41,7 +41,7 @@ pub fn is_blob_url(url: &str) -> bool {
 
 /// Regex pattern for OCI manifest URLs, e.g. http(s)://<registry>/v2/<repository>/manifests/<reference>.
 static MANIFEST_URL_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(.*)://(.*)/v2/(.*)/manifests/([^?]+)(?:\?.*)?$").unwrap());
+    LazyLock::new(|| Regex::new(r"^(.*)://(.*?)/v2/(.*)/manifests/([^?]+)(?:\?.*)?$").unwrap());
 
 /// Regex pattern for OCI manifest URLs referenced by a digest, e.g.
 /// http(s)://<registry>/v2/<repository>/manifests/<digest>.
@@ -413,6 +413,10 @@ mod tests {
                     "library/nginx",
                     "latest",
                 )),
+            ),
+            (
+                "https://ghcr.io/v2/org/v2/app/manifests/1.0",
+                Some(("ghcr.io", "org/v2/app", "1.0")),
             ),
             (
                 "http://registry.example.com/v2/library/ubuntu/blobs/sha256:abc",

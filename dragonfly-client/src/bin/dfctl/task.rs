@@ -501,6 +501,10 @@ impl RmCommand {
                 })
                 .await?;
 
+            if response.deleted_task_ids.is_empty() && response.retained_task_ids.is_empty() {
+                return Err(Error::ImageNotFound(image.to_string()));
+            }
+
             terminal::success("Image Removed!");
             terminal::separator();
             for task_id in response.deleted_task_ids {
@@ -1057,9 +1061,6 @@ impl PreheatCommand {
             tag: self.tag.clone(),
             application: self.application.clone(),
             filtered_query_params,
-
-            // TODO: Support content for calculating task ID.
-            content_for_calculating_task_id: None,
             enable_task_id_based_blob_digest: self.enable_task_id_based_blob_digest,
             priority: Some(self.priority),
             replicas: self.replicas as usize,

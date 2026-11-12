@@ -111,7 +111,7 @@ impl Task {
     pub fn need_evict(&self) -> bool {
         self.is_finished()
             || self.is_failed()
-            || self.created_at + DEFAULT_DOWNLOAD_TASK_TIMEOUT < Utc::now().naive_utc()
+            || self.updated_at + DEFAULT_DOWNLOAD_TASK_TIMEOUT < Utc::now().naive_utc()
     }
 
     /// Returns whether the task is prefetched.
@@ -234,7 +234,7 @@ impl PersistentTask {
         !self.is_persistent()
             && (self.is_finished()
                 || self.is_failed()
-                || self.created_at + DEFAULT_DOWNLOAD_TASK_TIMEOUT < Utc::now().naive_utc())
+                || self.updated_at + DEFAULT_DOWNLOAD_TASK_TIMEOUT < Utc::now().naive_utc())
     }
 
     /// Returns whether the persistent task downloads failed.
@@ -352,7 +352,7 @@ impl PersistentCacheTask {
         !self.is_persistent()
             && (self.is_finished()
                 || self.is_failed()
-                || self.created_at + DEFAULT_DOWNLOAD_TASK_TIMEOUT < Utc::now().naive_utc())
+                || self.updated_at + DEFAULT_DOWNLOAD_TASK_TIMEOUT < Utc::now().naive_utc())
     }
 
     /// Returns whether the persistent cache task downloads failed.
@@ -1961,9 +1961,9 @@ mod tests {
             (NaiveDateTime::default(), None, None, true),
         ];
 
-        for (created_at, failed_at, finished_at, expected) in test_cases {
+        for (updated_at, failed_at, finished_at, expected) in test_cases {
             let task = Task {
-                created_at,
+                updated_at,
                 failed_at,
                 finished_at,
                 ..Default::default()
@@ -1985,17 +1985,17 @@ mod tests {
             (true, NaiveDateTime::default(), None, None, false),
         ];
 
-        for (persistent, created_at, failed_at, finished_at, expected) in test_cases {
+        for (persistent, updated_at, failed_at, finished_at, expected) in test_cases {
             let persistent_task = PersistentTask {
                 persistent,
-                created_at,
+                updated_at,
                 failed_at,
                 finished_at,
                 ..Default::default()
             };
             let persistent_cache_task = PersistentCacheTask {
                 persistent,
-                created_at,
+                updated_at,
                 failed_at,
                 finished_at,
                 ..Default::default()
