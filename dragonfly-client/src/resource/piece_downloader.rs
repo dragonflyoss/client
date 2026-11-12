@@ -77,14 +77,22 @@ pub struct DownloaderFactory {
 impl DownloaderFactory {
     /// Returns a new DownloadFactory.
     pub fn new(protocol: &str, config: Arc<Config>) -> Result<Self> {
+        // The TLS configuration of the piece transport, none if mutual TLS is
+        // disabled.
+        let tls = dragonfly_client_storage::tls::client_config(&config).inspect_err(|err| {
+            error!("load piece transport tls config failed: {}", err);
+        })?;
+
         let downloader: Arc<dyn Downloader> = match protocol {
             "tcp" => Arc::new(TCPDownloader::new(
                 config.clone(),
+                tls,
                 DEFAULT_DOWNLOADER_CAPACITY,
                 DEFAULT_DOWNLOADER_IDLE_TIMEOUT,
             )),
             "quic" => Arc::new(QUICDownloader::new(
                 config.clone(),
+                tls,
                 DEFAULT_DOWNLOADER_CAPACITY,
                 DEFAULT_DOWNLOADER_IDLE_TIMEOUT,
             )),
@@ -114,6 +122,7 @@ pub struct QUICDownloader {
 /// Factory for creating QUICClient instances.
 struct QUICClientFactory {
     config: Arc<Config>,
+    tls: Option<Arc<rustls::ClientConfig>>,
 }
 
 /// Implements the Factory trait for creating QUICClient instances.
@@ -123,7 +132,7 @@ impl Factory<String, QUICClient> for QUICClientFactory {
 
     /// Creates a new QUICClient connected to the given address.
     async fn make_client(&self, addr: &String) -> Result<QUICClient> {
-        QUICClient::new(self.config.clone(), addr.clone()).await
+        QUICClient::new(self.config.clone(), addr.clone(), self.tls.clone()).await
     }
 }
 
@@ -133,10 +142,16 @@ impl QUICDownloader {
     const MAX_CONNECTIONS_PER_ADDRESS: usize = 32;
 
     /// Returns a new QUICDownloader.
-    pub fn new(config: Arc<Config>, capacity: usize, idle_timeout: Duration) -> Self {
+    pub fn new(
+        config: Arc<Config>,
+        tls: Option<Arc<rustls::ClientConfig>>,
+        capacity: usize,
+        idle_timeout: Duration,
+    ) -> Self {
         Self {
             client_pool: PoolBuilder::new(QUICClientFactory {
                 config: config.clone(),
+                tls,
             })
             .capacity(capacity)
             .idle_timeout(idle_timeout)
@@ -272,6 +287,7 @@ pub struct TCPDownloader {
 /// Factory for creating TCPClient instances.
 struct TCPClientFactory {
     config: Arc<Config>,
+    tls: Option<Arc<rustls::ClientConfig>>,
 }
 
 /// Implements the Factory trait for creating TCPClient instances.
@@ -281,17 +297,27 @@ impl Factory<String, TCPClient> for TCPClientFactory {
 
     /// Creates a new TCPClient for the given address.
     async fn make_client(&self, addr: &String) -> Result<TCPClient> {
-        Ok(TCPClient::new(self.config.clone(), addr.clone()))
+        Ok(TCPClient::new(
+            self.config.clone(),
+            addr.clone(),
+            self.tls.clone(),
+        ))
     }
 }
 
 /// Implements the downloader with the TCP protocol.
 impl TCPDownloader {
     /// Returns a new TCPDownloader.
-    pub fn new(config: Arc<Config>, capacity: usize, idle_timeout: Duration) -> Self {
+    pub fn new(
+        config: Arc<Config>,
+        tls: Option<Arc<rustls::ClientConfig>>,
+        capacity: usize,
+        idle_timeout: Duration,
+    ) -> Self {
         Self {
             client_pool: PoolBuilder::new(TCPClientFactory {
                 config: config.clone(),
+                tls,
             })
             .capacity(capacity)
             .idle_timeout(idle_timeout)
