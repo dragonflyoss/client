@@ -16,17 +16,114 @@
 
 use dragonfly_client_core::Result;
 use lru::LruCache;
+use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use tracing::warn;
+use tokio::sync::oneshot;
+use tracing::{trace, warn};
 
 use super::fadvise_sequential;
 
 /// The default capacity of the file descriptor cache.
 pub const DEFAULT_FD_CACHE_CAPACITY: usize = 1024;
+
+/// The blocking write queued on a write-only file descriptor.
+type QueuedWrite = Box<dyn FnOnce(&File) + Send>;
+
+/// The queued writes of a write-only file descriptor.
+#[derive(Default)]
+struct WriteQueue {
+    /// The queued writes in submission order, at most one per writer.
+    writes: VecDeque<QueuedWrite>,
+
+    /// Whether a blocking thread is draining the queue.
+    draining: bool,
+}
+
+/// The write-only file descriptor of a file. Its writes run one at a time in
+/// submission order, so concurrent writers queue here instead of on the inode
+/// lock.
+#[derive(Clone)]
+pub struct WriteFD {
+    /// The opened file descriptor.
+    fd: Arc<File>,
+
+    /// The queued writes of the file descriptor.
+    queue: Arc<Mutex<WriteQueue>>,
+}
+
+/// Implements the write-only file descriptor.
+impl WriteFD {
+    /// Creates a new WriteFD of the opened file descriptor.
+    pub fn new(fd: Arc<File>) -> Self {
+        Self {
+            fd,
+            queue: Arc::default(),
+        }
+    }
+
+    /// Returns the opened file descriptor.
+    pub fn get_ref(&self) -> &Arc<File> {
+        &self.fd
+    }
+
+    /// Queues the write and returns the receiver of its result. The write is
+    /// skipped once its receiver is dropped.
+    pub fn spawn_blocking<F, T>(&self, write: F) -> Result<oneshot::Receiver<T>>
+    where
+        F: FnOnce(&File) -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        let (tx, rx) = oneshot::channel();
+        let write: QueuedWrite = Box::new(move |fd| {
+            // Skip the write of a dropped writer.
+            if tx.is_closed() {
+                return;
+            }
+
+            if tx.send(write(fd)).is_err() {
+                trace!("dropped the result of a write without a receiver");
+            }
+        });
+
+        let draining = {
+            let mut queue = self.queue.lock()?;
+            queue.writes.push_back(write);
+            std::mem::replace(&mut queue.draining, true)
+        };
+
+        // Drain the queue on one blocking thread.
+        if !draining {
+            let fd = self.clone();
+            tokio::task::spawn_blocking(move || fd.drain());
+        }
+
+        Ok(rx)
+    }
+
+    /// Runs the queued writes one at a time until the queue is empty.
+    fn drain(&self) {
+        loop {
+            let write = {
+                let Ok(mut queue) = self.queue.lock() else {
+                    return;
+                };
+
+                let Some(write) = queue.writes.pop_front() else {
+                    queue.draining = false;
+                    return;
+                };
+
+                write
+            };
+
+            write(&self.fd);
+        }
+    }
+}
 
 /// FDCache caches opened file descriptors by path with LRU eviction, so repeated
 /// reads and writes of the same file reuse one descriptor instead of reopening
@@ -40,7 +137,7 @@ pub struct FDCache {
     read_fds: Mutex<LruCache<PathBuf, Arc<File>>>,
 
     /// The opened file descriptors for writing by path.
-    write_fds: Mutex<LruCache<PathBuf, Arc<File>>>,
+    write_fds: Mutex<LruCache<PathBuf, WriteFD>>,
 }
 
 /// Implements the file descriptor cache.
@@ -96,14 +193,15 @@ impl FDCache {
     /// Returns the cached write-only file descriptor of the path, opening and
     /// caching it if it is absent. The open error surfaces to the caller and
     /// nothing is cached on failure, so a file that becomes writable later is
-    /// opened again on the next write.
-    pub async fn open_write(&self, path: &Path) -> Result<Arc<File>> {
+    /// opened again on the next write. Concurrent misses share one descriptor
+    /// and its write queue.
+    pub async fn open_write(&self, path: &Path) -> Result<WriteFD> {
         if let Some(fd) = self.write_fds.lock()?.get(path) {
             return Ok(fd.clone());
         }
 
         let path = path.to_path_buf();
-        let fd = Arc::new(
+        let fd = WriteFD::new(Arc::new(
             tokio::task::spawn_blocking({
                 let path = path.clone();
                 move || {
@@ -115,10 +213,9 @@ impl FDCache {
             })
             .await
             .map_err(io::Error::other)??,
-        );
+        ));
 
-        self.write_fds.lock()?.put(path, fd.clone());
-        Ok(fd)
+        Ok(self.write_fds.lock()?.get_or_insert(path, || fd).clone())
     }
 
     /// Removes the cached file descriptors of the path. It needs to be called when
@@ -150,14 +247,14 @@ mod tests {
 
         let first_write = cache.open_write(&path).await.unwrap();
         let second_write = cache.open_write(&path).await.unwrap();
-        assert!(Arc::ptr_eq(&first_write, &second_write));
-        assert!(!Arc::ptr_eq(&first, &first_write));
+        assert!(Arc::ptr_eq(first_write.get_ref(), second_write.get_ref()));
+        assert!(!Arc::ptr_eq(&first, first_write.get_ref()));
 
         cache.remove(&path).unwrap();
         let third = cache.open(&path).await.unwrap();
         let third_write = cache.open_write(&path).await.unwrap();
         assert!(!Arc::ptr_eq(&first, &third));
-        assert!(!Arc::ptr_eq(&first_write, &third_write));
+        assert!(!Arc::ptr_eq(first_write.get_ref(), third_write.get_ref()));
 
         cache.remove(&path).unwrap();
         tokio::fs::remove_file(&path).await.unwrap();
@@ -204,7 +301,78 @@ mod tests {
             .await
             .unwrap();
         let fd = cache.open_write(&path).await.unwrap();
-        fd.write_all_at(b"HELLO", 0).unwrap();
+        fd.get_ref().write_all_at(b"HELLO", 0).unwrap();
         assert_eq!(&tokio::fs::read(&path).await.unwrap()[..5], b"HELLO");
+    }
+
+    #[tokio::test]
+    async fn open_write_shares_one_fd_between_concurrent_misses() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, b"").await.unwrap();
+
+        let cache = FDCache::new(DEFAULT_FD_CACHE_CAPACITY);
+        let (first, second) = tokio::join!(cache.open_write(&path), cache.open_write(&path));
+        let (first, second) = (first.unwrap(), second.unwrap());
+        assert!(Arc::ptr_eq(first.get_ref(), second.get_ref()));
+        assert!(Arc::ptr_eq(&first.queue, &second.queue));
+    }
+
+    #[tokio::test]
+    async fn spawn_blocking_runs_the_writes_one_at_a_time_in_order() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        let cache = FDCache::new(DEFAULT_FD_CACHE_CAPACITY);
+
+        let test_cases = vec![1u8, 2, 64];
+
+        for count in test_cases {
+            tokio::fs::write(&path, b"").await.unwrap();
+            let fd = cache.open_write(&path).await.unwrap();
+            let receivers: Vec<_> = (0..count)
+                .map(|i| {
+                    fd.spawn_blocking(move |fd| {
+                        let length = fd.metadata()?.len();
+                        fd.write_all_at(&[i], length)
+                    })
+                    .unwrap()
+                })
+                .collect();
+
+            for rx in receivers {
+                rx.await.unwrap().unwrap();
+            }
+
+            assert_eq!(
+                tokio::fs::read(&path).await.unwrap(),
+                (0..count).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_blocking_skips_the_write_of_a_dropped_receiver() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        let cache = FDCache::new(DEFAULT_FD_CACHE_CAPACITY);
+
+        let test_cases: Vec<(bool, &[u8])> = vec![(true, b"kept"), (false, b"keptped")];
+
+        for (dropped, expected) in test_cases {
+            tokio::fs::write(&path, b"").await.unwrap();
+            let fd = cache.open_write(&path).await.unwrap();
+            let (blocking_tx, blocking_rx) = std::sync::mpsc::channel::<()>();
+            let blocking = fd.spawn_blocking(move |_| blocking_rx.recv()).unwrap();
+            let rx = fd
+                .spawn_blocking(|fd| fd.write_all_at(b"dropped", 0))
+                .unwrap();
+            let _rx = (!dropped).then_some(rx);
+            let kept = fd.spawn_blocking(|fd| fd.write_all_at(b"kept", 0)).unwrap();
+
+            blocking_tx.send(()).unwrap();
+            blocking.await.unwrap().unwrap();
+            kept.await.unwrap().unwrap();
+            assert_eq!(tokio::fs::read(&path).await.unwrap(), expected);
+        }
     }
 }

@@ -318,7 +318,7 @@ impl Content {
             })?;
 
         let response = super::io::write_range_from_stream(
-            fd.clone(),
+            &fd,
             offset,
             expected_length,
             self.config.storage.write_buffer_size,
@@ -329,7 +329,9 @@ impl Content {
             error!("write {:?} failed: {}", task_path, err);
         })?;
 
-        self.writeback.trigger(&fd, offset, response.length).await;
+        self.writeback
+            .trigger(fd.get_ref(), offset, response.length)
+            .await;
         Ok(response)
     }
 
@@ -536,7 +538,7 @@ impl Content {
             })?;
 
         let response = super::io::write_range(
-            fd.clone(),
+            &fd,
             offset,
             expected_length,
             self.config.storage.write_buffer_size,
@@ -548,7 +550,9 @@ impl Content {
             error!("write {:?} failed: {}", task_path, err);
         })?;
 
-        self.writeback.trigger(&fd, offset, response.length).await;
+        self.writeback
+            .trigger(fd.get_ref(), offset, response.length)
+            .await;
         Ok(response)
     }
 
@@ -575,7 +579,7 @@ impl Content {
             })?;
 
         let response = super::io::write_range_from_stream(
-            fd.clone(),
+            &fd,
             offset,
             expected_length,
             self.config.storage.write_buffer_size,
@@ -586,7 +590,9 @@ impl Content {
             error!("write {:?} failed: {}", task_path, err);
         })?;
 
-        self.writeback.trigger(&fd, offset, response.length).await;
+        self.writeback
+            .trigger(fd.get_ref(), offset, response.length)
+            .await;
         Ok(response)
     }
 
@@ -829,7 +835,7 @@ impl Content {
             })?;
 
         let response = super::io::write_range(
-            fd.clone(),
+            &fd,
             offset,
             expected_length,
             self.config.storage.write_buffer_size,
@@ -841,7 +847,9 @@ impl Content {
             error!("write {:?} failed: {}", task_path, err);
         })?;
 
-        self.writeback.trigger(&fd, offset, response.length).await;
+        self.writeback
+            .trigger(fd.get_ref(), offset, response.length)
+            .await;
         Ok(response)
     }
 
@@ -869,7 +877,7 @@ impl Content {
             })?;
 
         let response = super::io::write_range_from_stream(
-            fd.clone(),
+            &fd,
             offset,
             expected_length,
             self.config.storage.write_buffer_size,
@@ -880,7 +888,9 @@ impl Content {
             error!("write {:?} failed: {}", task_path, err);
         })?;
 
-        self.writeback.trigger(&fd, offset, response.length).await;
+        self.writeback
+            .trigger(fd.get_ref(), offset, response.length)
+            .await;
         Ok(response)
     }
 
