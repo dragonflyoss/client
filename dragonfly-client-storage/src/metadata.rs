@@ -728,6 +728,10 @@ impl<E: StorageEngineOwned> Metadata<E> {
                 // If the task exists, update the task metadata.
                 task.updated_at = Utc::now().naive_utc();
                 task.failed_at = None;
+                if task.content_length == Some(0) && content_length > 0 {
+                    // The repaired task must download its content before it can be served as finished.
+                    task.finished_at = None;
+                }
                 task.content_length = Some(content_length);
                 task.piece_length = Some(piece_length);
                 task.response_header = response_header;
@@ -2149,6 +2153,38 @@ mod tests {
             assert_eq!(task.id, TASK_ID);
             assert_eq!(metadata.get_task(TASK_ID).unwrap(), Some(task.clone()));
             expect(&task, reused);
+        }
+    }
+
+    #[test]
+    fn download_task_started_reopens_finished_empty_tasks() {
+        let test_cases = vec![(0, 4096, false), (0, 0, true), (4096, 4096, true)];
+
+        for (old_length, new_length, expected_finished) in test_cases {
+            let dir = tempdir().unwrap();
+            let metadata = metadata(dir.path());
+            metadata
+                .download_task_started(TASK_ID, 1024, old_length, None)
+                .unwrap();
+            assert!(metadata
+                .download_task_finished(TASK_ID)
+                .unwrap()
+                .is_finished());
+
+            let task = metadata
+                .download_task_started(TASK_ID, 1024, new_length, None)
+                .unwrap();
+            assert_eq!(task.content_length(), Some(new_length));
+            assert_eq!(task.is_finished(), expected_finished);
+            assert_eq!(
+                metadata.get_task(TASK_ID).unwrap().unwrap().is_finished(),
+                expected_finished
+            );
+
+            assert!(metadata
+                .download_task_finished(TASK_ID)
+                .unwrap()
+                .is_finished());
         }
     }
 
