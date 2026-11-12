@@ -18,9 +18,11 @@ use crate::digest;
 use crate::url::filter_query_params;
 use dragonfly_api::common::v2::{Download, TaskType};
 use dragonfly_client_core::{Error, Result};
+use oci_spec::distribution::Reference;
 use sha2::{Digest, Sha256};
 use std::io::{self, Read};
 use std::path::PathBuf;
+use url::Url;
 use uuid::Uuid;
 
 /// The suffix of the seed peer.
@@ -72,6 +74,16 @@ pub enum PersistentCacheTaskIDParameter {
         tag: Option<String>,
         application: Option<String>,
     },
+}
+
+/// The parameter of the image id.
+pub enum ImageIDParameter {
+    /// ManifestURLBased uses the image manifest url to generate the image id, such as the
+    /// url of the delete image request.
+    ManifestURLBased(String),
+    /// ReferenceBased uses the image reference to generate the image id, such as the
+    /// reference of the image in the download.
+    ReferenceBased(String),
 }
 
 /// Returns the repository revision from the download options of the hub backends
@@ -183,7 +195,7 @@ impl IDGenerator {
                     .to_string())
             }
             TaskIDParameter::ManifestDigestBased(url) => {
-                Ok(digest::Digest::extract_from_manifest_url(&url)
+                Ok(digest::Digest::extract_from_manifest_digest_url(&url)
                     .ok_or_else(|| Error::InvalidURI(url))?
                     .encoded()
                     .to_string())
@@ -267,6 +279,70 @@ impl IDGenerator {
         }
     }
 
+    /// Generates the image id by the canonical reference of the image, so the manifest url
+    /// and the reference of the same image generate the same image id, and all the
+    /// platforms of the image share the image id.
+    #[inline]
+    pub fn image_id(&self, parameter: ImageIDParameter) -> Result<String> {
+        let reference = match parameter {
+            ImageIDParameter::ManifestURLBased(url) => {
+                // Convert the manifest url to the reference, e.g.
+                // https://index.docker.io/v2/library/nginx/manifests/latest to
+                // index.docker.io/library/nginx:latest.
+                let (registry, repository, reference) =
+                    digest::Digest::extract_from_manifest_url(&url)
+                        .ok_or_else(|| Error::InvalidURI(url.clone()))?;
+
+                // The digest contains the colon, and the tag never does.
+                if reference.contains(':') {
+                    format!("{registry}/{repository}@{reference}")
+                } else {
+                    format!("{registry}/{repository}:{reference}")
+                }
+            }
+            ImageIDParameter::ReferenceBased(reference) => reference,
+        };
+
+        // Parse the reference to normalize it, e.g. nginx to docker.io/library/nginx:latest
+        // and index.docker.io to docker.io. The grammar does not accept an IPv6 address as
+        // the registry, e.g. [::1]:5000/foo/bar:1.0, so parse it with a placeholder.
+        let ipv6_registry = reference
+            .split_once('/')
+            .map(|(registry, _)| registry)
+            .filter(|registry| registry.starts_with('['));
+        let reference: Reference = match ipv6_registry {
+            Some(registry) => reference.replacen(registry, "localhost", 1).parse(),
+            None => reference.parse(),
+        }
+        .map_err(|_| Error::ValidationError(format!("invalid image reference {reference}")))?;
+
+        // Parse the registry as a url to lowercase the host and remove the default port
+        // like containerd does, refer to
+        // https://github.com/containerd/containerd/blob/main/pkg/reference/reference.go.
+        let registry = ipv6_registry.unwrap_or(reference.registry());
+        let registry = Url::parse(&format!("https://{registry}"))
+            .map_err(|_| Error::ValidationError(format!("invalid image registry {registry}")))?;
+
+        // The registry-1.docker.io is the registry api host of docker.io.
+        let registry = match registry.authority() {
+            "registry-1.docker.io" => "docker.io",
+            registry => registry,
+        };
+
+        // Use the digest instead of the tag if the reference has both, the same as the
+        // manifest url.
+        let reference = match reference.digest() {
+            Some(digest) => format!("{registry}/{}@{digest}", reference.repository()),
+            None => format!(
+                "{registry}/{}:{}",
+                reference.repository(),
+                reference.tag().unwrap_or("latest")
+            ),
+        };
+
+        Ok(hex::encode(Sha256::digest(reference.as_bytes())))
+    }
+
     /// Generates the peer id.
     #[inline]
     pub fn peer_id(&self) -> String {
@@ -330,6 +406,160 @@ mod tests {
 
         for (download, expected) in test_cases {
             assert_eq!(repository_revision(&download).as_deref(), expected);
+        }
+    }
+
+    #[test]
+    fn image_id_hashes_the_canonical_reference() {
+        let digest = "sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e";
+        let test_cases = vec![
+            (
+                ImageIDParameter::ReferenceBased("nginx".to_string()),
+                "86cee2c10898a48ff47a0626f8202a2408b5893aff5df58ae10d83166e6d7b0e",
+            ),
+            (
+                ImageIDParameter::ReferenceBased("docker.io/library/nginx:latest".to_string()),
+                "86cee2c10898a48ff47a0626f8202a2408b5893aff5df58ae10d83166e6d7b0e",
+            ),
+            (
+                ImageIDParameter::ReferenceBased(
+                    "registry-1.docker.io/library/nginx:latest".to_string(),
+                ),
+                "86cee2c10898a48ff47a0626f8202a2408b5893aff5df58ae10d83166e6d7b0e",
+            ),
+            (
+                ImageIDParameter::ManifestURLBased(
+                    "https://index.docker.io/v2/library/nginx/manifests/latest".to_string(),
+                ),
+                "86cee2c10898a48ff47a0626f8202a2408b5893aff5df58ae10d83166e6d7b0e",
+            ),
+            (
+                ImageIDParameter::ManifestURLBased(
+                    "https://registry-1.docker.io/v2/library/nginx/manifests/latest".to_string(),
+                ),
+                "86cee2c10898a48ff47a0626f8202a2408b5893aff5df58ae10d83166e6d7b0e",
+            ),
+            (
+                ImageIDParameter::ReferenceBased(format!("nginx:1.25@{digest}")),
+                "c5983f0e51092bd1bfc01d08620a660b7ff049d4b0c8ba7462ec2dee9066a5e8",
+            ),
+            (
+                ImageIDParameter::ManifestURLBased(format!(
+                    "https://registry-1.docker.io/v2/library/nginx/manifests/{digest}"
+                )),
+                "c5983f0e51092bd1bfc01d08620a660b7ff049d4b0c8ba7462ec2dee9066a5e8",
+            ),
+            (
+                ImageIDParameter::ReferenceBased("ghcr.io/dragonflyoss/client:v1.5.11".to_string()),
+                "49a7707602bd9428d8ad93c9bf42d1cc0b735fb01c6900450fb830f707c29290",
+            ),
+            (
+                ImageIDParameter::ManifestURLBased(
+                    "https://ghcr.io/v2/dragonflyoss/client/manifests/v1.5.11".to_string(),
+                ),
+                "49a7707602bd9428d8ad93c9bf42d1cc0b735fb01c6900450fb830f707c29290",
+            ),
+            (
+                ImageIDParameter::ManifestURLBased(
+                    "http://localhost:5000/v2/foo/bar/manifests/1.0".to_string(),
+                ),
+                "206539bb731bff283ed7c641917149fa9c41585201cae2b31806ff966972a125",
+            ),
+            (
+                ImageIDParameter::ReferenceBased(
+                    "ghcr.io:443/dragonflyoss/client:v1.5.11".to_string(),
+                ),
+                "49a7707602bd9428d8ad93c9bf42d1cc0b735fb01c6900450fb830f707c29290",
+            ),
+            (
+                ImageIDParameter::ManifestURLBased(
+                    "https://ghcr.io:443/v2/dragonflyoss/client/manifests/v1.5.11?ns=ghcr.io"
+                        .to_string(),
+                ),
+                "49a7707602bd9428d8ad93c9bf42d1cc0b735fb01c6900450fb830f707c29290",
+            ),
+            (
+                ImageIDParameter::ReferenceBased("GHCR.IO/dragonflyoss/client:v1.5.11".to_string()),
+                "49a7707602bd9428d8ad93c9bf42d1cc0b735fb01c6900450fb830f707c29290",
+            ),
+            (
+                ImageIDParameter::ReferenceBased("[fd00::1]:5000/foo/bar:1.0".to_string()),
+                "2e76ee016b9388409a41ee029142824212c1b2f78b41a7458528287130df0ebc",
+            ),
+            (
+                ImageIDParameter::ManifestURLBased(
+                    "http://[FD00::1]:5000/v2/foo/bar/manifests/1.0".to_string(),
+                ),
+                "2e76ee016b9388409a41ee029142824212c1b2f78b41a7458528287130df0ebc",
+            ),
+            (
+                ImageIDParameter::ReferenceBased(
+                    "art.example.com/artifactory/api/docker/remote/library/nginx:latest"
+                        .to_string(),
+                ),
+                "b224a8186aa9e61ae8a1577996bccb4af3ae2d72247b18a1e60e56246d32a169",
+            ),
+            (
+                ImageIDParameter::ManifestURLBased(
+                    "https://art.example.com/artifactory/api/docker/remote/v2/library/nginx/manifests/latest"
+                        .to_string(),
+                ),
+                "b224a8186aa9e61ae8a1577996bccb4af3ae2d72247b18a1e60e56246d32a169",
+            ),
+            (
+                ImageIDParameter::ReferenceBased("ghcr.io/org/v2/app:1.0".to_string()),
+                "192d43bc9e269706438f3e1418db1c52f9969db742fe38f032b561351d18d858",
+            ),
+            (
+                ImageIDParameter::ManifestURLBased(
+                    "https://ghcr.io/v2/org/v2/app/manifests/1.0".to_string(),
+                ),
+                "192d43bc9e269706438f3e1418db1c52f9969db742fe38f032b561351d18d858",
+            ),
+        ];
+
+        let generator = IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false);
+        for (parameter, expected) in test_cases {
+            assert_eq!(generator.image_id(parameter).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn image_id_fails_on_an_invalid_manifest_url_or_reference() {
+        let test_cases: Vec<(ImageIDParameter, fn(Result<String>))> = vec![
+            (
+                ImageIDParameter::ManifestURLBased("not a url".to_string()),
+                |result| assert!(matches!(result, Err(Error::InvalidURI(_)))),
+            ),
+            (
+                ImageIDParameter::ManifestURLBased(
+                    "https://ghcr.io/v2/dragonflyoss/client/blobs/sha256:abc".to_string(),
+                ),
+                |result| assert!(matches!(result, Err(Error::InvalidURI(_)))),
+            ),
+            (
+                ImageIDParameter::ManifestURLBased(
+                    "https://ghcr.io/v2/Dragonflyoss/Client/manifests/latest".to_string(),
+                ),
+                |result| assert!(matches!(result, Err(Error::ValidationError(_)))),
+            ),
+            (
+                ImageIDParameter::ReferenceBased("Invalid Reference".to_string()),
+                |result| assert!(matches!(result, Err(Error::ValidationError(_)))),
+            ),
+            (
+                ImageIDParameter::ReferenceBased("[fd00::1/foo/bar:1.0".to_string()),
+                |result| assert!(matches!(result, Err(Error::ValidationError(_)))),
+            ),
+            (
+                ImageIDParameter::ReferenceBased("[fd00::1]:5000/Foo/Bar:1.0".to_string()),
+                |result| assert!(matches!(result, Err(Error::ValidationError(_)))),
+            ),
+        ];
+
+        let generator = IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false);
+        for (parameter, expect) in test_cases {
+            expect(generator.image_id(parameter));
         }
     }
 

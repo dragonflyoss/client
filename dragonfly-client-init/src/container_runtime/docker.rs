@@ -19,6 +19,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
+use dragonfly_client_util::fs::write_if_changed;
 use serde_json::{json, Value};
 use tokio::{self, fs};
 use tracing::{info, instrument};
@@ -47,9 +48,10 @@ impl Docker {
     }
 
     /// Runs the docker runtime to initialize
-    /// runtime environment for the dfdaemon.
+    /// runtime environment for the dfdaemon. Returns whether daemon.json was
+    /// rewritten, in which case docker has to be restarted.
     #[instrument(skip_all)]
-    pub async fn run(&self) -> Result<()> {
+    pub async fn run(&self) -> Result<bool> {
         info!(
             "docker feature is enabled, proxy_addr: {}, config_path: {:?}",
             self.proxy_config.addr, self.config.config_path,
@@ -96,16 +98,12 @@ impl Docker {
             .parent()
             .ok_or(Error::Unknown("invalid config path".to_string()))?;
         fs::create_dir_all(config_dir).await?;
-
-        // Write configuration to file.
-        fs::write(
+        write_if_changed(
             config_path,
             serde_json::to_string_pretty(&Value::Object(docker_config))
                 .or_err(ErrorType::SerializeError)?,
         )
-        .await?;
-
-        Ok(())
+        .await
     }
 }
 

@@ -833,6 +833,7 @@ mod tests {
                 TASK_ID,
                 0,
                 CONTENT.len() as u64,
+                false,
                 &mut stream,
                 Duration::from_secs(5),
             )
