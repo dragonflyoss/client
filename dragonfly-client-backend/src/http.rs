@@ -55,7 +55,11 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
-use dragonfly_client_util::{http::validate_ranged_response, tls::NoVerifier};
+use dragonfly_client_util::{
+    http::validate_ranged_response,
+    tls::NoVerifier,
+    types::redacted::{KeyHeaderMap, RedactedUrl},
+};
 use futures::{StreamExt, TryStreamExt};
 use http::header::{
     HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_RANGE, LOCATION, RANGE, TRANSFER_ENCODING,
@@ -64,7 +68,7 @@ use http::header::{
 use lru::LruCache;
 use reqwest::header::HeaderMap;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
-use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
+use reqwest_retry::{policies::ExponentialBackoff, RetryError, RetryTransientMiddleware};
 use rustls_pki_types::CertificateDer;
 use std::collections::HashMap;
 use std::error::Error as _;
@@ -305,12 +309,13 @@ impl HTTP {
             if entry.created_at + self.cache_temporary_redirect_ttl > Instant::now() {
                 debug!(
                     "found cached temporary redirect for {} -> {}",
-                    url, entry.url
+                    RedactedUrl(url),
+                    RedactedUrl(entry.url.as_str())
                 );
 
                 return Some(entry.url.clone());
             } else {
-                debug!("cached temporary redirect for {} expired", url);
+                debug!("cached temporary redirect for {} expired", RedactedUrl(url));
                 temporary_redirects.pop(url);
             }
         }
@@ -331,7 +336,8 @@ impl HTTP {
             _ => {
                 debug!(
                     "skipping cache for relative redirect {} -> {}",
-                    original_url, target_url
+                    RedactedUrl(original_url),
+                    RedactedUrl(target_url)
                 );
 
                 return;
@@ -349,8 +355,32 @@ impl HTTP {
 
         debug!(
             "caching temporary redirect {} -> {}",
-            original_url, target_url
+            RedactedUrl(original_url),
+            RedactedUrl(target_url)
         );
+    }
+}
+
+/// Removes the URL, which can be presigned, from a reqwest error, including one
+/// wrapped by the retry middleware.
+fn strip_url(err: reqwest_middleware::Error) -> reqwest_middleware::Error {
+    match err {
+        reqwest_middleware::Error::Reqwest(err) => {
+            reqwest_middleware::Error::Reqwest(err.without_url())
+        }
+        reqwest_middleware::Error::Middleware(err) => match err.downcast::<RetryError>() {
+            Ok(RetryError::WithRetries { retries, err }) => reqwest_middleware::Error::Middleware(
+                RetryError::WithRetries {
+                    retries,
+                    err: strip_url(err),
+                }
+                .into(),
+            ),
+            Ok(RetryError::Error(err)) => {
+                reqwest_middleware::Error::Middleware(RetryError::Error(strip_url(err)).into())
+            }
+            Err(err) => reqwest_middleware::Error::Middleware(err),
+        },
     }
 }
 
@@ -367,7 +397,9 @@ impl Backend for HTTP {
     async fn stat(&self, request: StatRequest) -> Result<StatResponse> {
         debug!(
             "stat request {} {}: {:?}",
-            request.task_id, request.url, request.http_header
+            request.task_id,
+            RedactedUrl(&request.url),
+            request.http_header.as_ref().map(KeyHeaderMap)
         );
 
         // The header of the request is required.
@@ -415,7 +447,8 @@ impl Backend for HTTP {
                     }) {
                         debug!(
                             "stat request got rejected by cached temporary redirect {} {}",
-                            request.task_id, redirect_url
+                            request.task_id,
+                            RedactedUrl(&redirect_url)
                         );
 
                         self.temporary_redirects.lock().await.pop(&request.url);
@@ -443,7 +476,7 @@ impl Backend for HTTP {
             }
         };
 
-        let response = match result {
+        let response = match result.map_err(strip_url) {
             Ok(response) if response.status() == reqwest::StatusCode::TEMPORARY_REDIRECT => {
                 if let Some(location) = response.headers().get(LOCATION) {
                     let location = location.to_str().or_err(ErrorType::ParseError)?;
@@ -451,7 +484,8 @@ impl Backend for HTTP {
                     let redirect_url = base_url.join(location).or_err(ErrorType::ParseError)?;
                     debug!(
                         "stat request got 307 Temporary Redirect, following redirect {} -> {}",
-                        request.url, redirect_url
+                        RedactedUrl(&request.url),
+                        RedactedUrl(redirect_url.as_str())
                     );
 
                     self.store_temporary_redirect_url(&request.url, location.as_ref())
@@ -472,12 +506,15 @@ impl Backend for HTTP {
                         .timeout(request.timeout)
                         .send()
                         .await
+                        .map_err(strip_url)
                     {
                         Ok(response) => response,
                         Err(err) => {
                             error!(
                                 "stat request failed {} {}: {}",
-                                request.task_id, redirect_url, err
+                                request.task_id,
+                                RedactedUrl(redirect_url.as_str()),
+                                err
                             );
 
                             return Ok(StatResponse {
@@ -493,7 +530,8 @@ impl Backend for HTTP {
                 } else {
                     error!(
                         "stat request got 307 Temporary Redirect without Location header {} {}",
-                        request.task_id, request_url
+                        request.task_id,
+                        RedactedUrl(&request_url)
                     );
 
                     return Ok(StatResponse {
@@ -516,7 +554,8 @@ impl Backend for HTTP {
                 // retry with HEAD request to get the correct Content-Length.
                 debug!(
                     "stat request got Transfer-Encoding header, retrying with HEAD {} {}",
-                    request.task_id, request.url,
+                    request.task_id,
+                    RedactedUrl(&request.url),
                 );
 
                 match self
@@ -526,12 +565,15 @@ impl Backend for HTTP {
                     .timeout(request.timeout)
                     .send()
                     .await
+                    .map_err(strip_url)
                 {
                     Ok(response) => response,
                     Err(err) => {
                         error!(
                             "stat request failed with HEAD {} {}: {}",
-                            request.task_id, request_url, err
+                            request.task_id,
+                            RedactedUrl(&request_url),
+                            err
                         );
 
                         return Ok(StatResponse {
@@ -551,7 +593,8 @@ impl Backend for HTTP {
                 // header to retrieve headers.
                 debug!(
                     "stat request got 416 Range Not Satisfiable, retrying without Range {} {}",
-                    request.task_id, request_url,
+                    request.task_id,
+                    RedactedUrl(&request_url),
                 );
 
                 let mut request_header = request_header.clone();
@@ -563,12 +606,15 @@ impl Backend for HTTP {
                     .timeout(request.timeout)
                     .send()
                     .await
+                    .map_err(strip_url)
                 {
                     Ok(response) => response,
                     Err(err) => {
                         error!(
                             "stat request failed without Range {} {}: {}",
-                            request.task_id, request_url, err
+                            request.task_id,
+                            RedactedUrl(&request_url),
+                            err
                         );
 
                         return Ok(StatResponse {
@@ -586,7 +632,9 @@ impl Backend for HTTP {
             Err(err) => {
                 error!(
                     "stat request failed with GET {} {}: {}",
-                    request.task_id, request_url, err
+                    request.task_id,
+                    RedactedUrl(&request_url),
+                    err
                 );
 
                 return Ok(StatResponse {
@@ -614,16 +662,19 @@ impl Backend for HTTP {
             if content_length.is_none() {
                 error!(
                     "stat request got 206 Partial Content without valid Content-Range {} {}",
-                    request.task_id, request_url
+                    request.task_id,
+                    RedactedUrl(&request_url)
                 );
             }
 
             // Read the one-byte body to completion, so the connection can be reused by
             // the connection pool instead of being closed with an unread body.
-            if let Err(err) = response.bytes().await {
+            if let Err(err) = response.bytes().await.map_err(reqwest::Error::without_url) {
                 debug!(
                     "stat request failed to read response body {} {}: {}",
-                    request.task_id, request_url, err
+                    request.task_id,
+                    RedactedUrl(&request_url),
+                    err
                 );
             }
 
@@ -649,7 +700,11 @@ impl Backend for HTTP {
 
         debug!(
             "stat response {} {}: {:?} {:?} {:?}",
-            request.task_id, request_url, response_status_code, content_length, response_header
+            request.task_id,
+            RedactedUrl(&request_url),
+            response_status_code,
+            content_length,
+            KeyHeaderMap(&response_header)
         );
 
         Ok(StatResponse {
@@ -667,7 +722,10 @@ impl Backend for HTTP {
     async fn get(&self, request: GetRequest) -> Result<GetResponse<Body>> {
         debug!(
             "get request {} {} {}: {:?}",
-            request.task_id, request.piece_id, request.url, request.http_header
+            request.task_id,
+            request.piece_id,
+            RedactedUrl(&request.url),
+            request.http_header.as_ref().map(KeyHeaderMap)
         );
 
         // The header of the request is required.
@@ -707,7 +765,9 @@ impl Backend for HTTP {
                     }) {
                         debug!(
                             "get request got rejected by cached temporary redirect {} {} {}",
-                            request.task_id, request.piece_id, redirect_url
+                            request.task_id,
+                            request.piece_id,
+                            RedactedUrl(&redirect_url)
                         );
 
                         self.temporary_redirects.lock().await.pop(&request.url);
@@ -731,12 +791,15 @@ impl Backend for HTTP {
             }
         };
 
-        let mut response = match result {
+        let mut response = match result.map_err(strip_url) {
             Ok(response) => response,
             Err(err) => {
                 error!(
                     "get request failed {} {} {}: {}",
-                    request.task_id, request.piece_id, request_url, err
+                    request.task_id,
+                    request.piece_id,
+                    RedactedUrl(&request_url),
+                    err
                 );
 
                 return Ok(GetResponse {
@@ -757,7 +820,8 @@ impl Backend for HTTP {
                 let redirect_url = base_url.join(location).or_err(ErrorType::ParseError)?;
                 debug!(
                     "get request got 307 Temporary Redirect, following redirect {} -> {}",
-                    request.url, redirect_url
+                    RedactedUrl(&request.url),
+                    RedactedUrl(redirect_url.as_str())
                 );
 
                 self.store_temporary_redirect_url(&request.url, location.as_ref())
@@ -778,12 +842,16 @@ impl Backend for HTTP {
                     .timeout(request.timeout)
                     .send()
                     .await
+                    .map_err(strip_url)
                 {
                     Ok(response) => response,
                     Err(err) => {
                         error!(
                             "get request failed {} {} {}: {}",
-                            request.task_id, request.piece_id, redirect_url, err
+                            request.task_id,
+                            request.piece_id,
+                            RedactedUrl(redirect_url.as_str()),
+                            err
                         );
 
                         return Ok(GetResponse {
@@ -805,7 +873,10 @@ impl Backend for HTTP {
         {
             error!(
                 "get request failed {} {} {}: {}",
-                request.task_id, request.piece_id, request_url, err
+                request.task_id,
+                request.piece_id,
+                RedactedUrl(&request_url),
+                err
             );
 
             return Ok(GetResponse {
@@ -822,6 +893,7 @@ impl Backend for HTTP {
             response
                 .bytes_stream()
                 .map_err(move |err| {
+                    let err = err.without_url();
                     let mut chain = err.to_string();
                     let mut source = err.source();
                     while let Some(err) = source {
@@ -837,7 +909,10 @@ impl Backend for HTTP {
 
         debug!(
             "get response {} {}: {:?} {:?}",
-            request.task_id, request.piece_id, response_status_code, response_header,
+            request.task_id,
+            request.piece_id,
+            response_status_code,
+            KeyHeaderMap(&response_header),
         );
 
         Ok(GetResponse {
@@ -860,7 +935,9 @@ impl Backend for HTTP {
     async fn exists(&self, request: ExistsRequest) -> Result<bool> {
         debug!(
             "exists request {} {}: {:?}",
-            request.task_id, request.url, request.http_header
+            request.task_id,
+            RedactedUrl(&request.url),
+            request.http_header.as_ref().map(KeyHeaderMap)
         );
 
         // The header of the request is required.
@@ -892,13 +969,15 @@ impl Backend for HTTP {
             .timeout(request.timeout)
             .send()
             .await
+            .map_err(strip_url)
         {
             Ok(response) if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE => {
                 // For zero-byte files, some servers return 416 Range Not Satisfiable.
                 // Retry with a GET request without the Range header to retrieve headers.
                 debug!(
                     "exists request got 416 Range Not Satisfiable, retrying with HEAD {} {}",
-                    request.task_id, request.url
+                    request.task_id,
+                    RedactedUrl(&request.url)
                 );
 
                 self.client(request.client_cert.clone(), self.enable_hickory_dns)?
@@ -907,10 +986,13 @@ impl Backend for HTTP {
                     .timeout(request.timeout)
                     .send()
                     .await
+                    .map_err(strip_url)
                     .inspect_err(|err| {
                         error!(
                             "exists request failed {} {}: {}",
-                            request.task_id, request.url, err
+                            request.task_id,
+                            RedactedUrl(&request.url),
+                            err
                         );
                     })?
             }
@@ -918,7 +1000,9 @@ impl Backend for HTTP {
             Err(err) => {
                 error!(
                     "exists request failed {} {}: {}",
-                    request.task_id, request.url, err
+                    request.task_id,
+                    RedactedUrl(&request.url),
+                    err
                 );
 
                 return Err(Error::ReqwestMiddlewareError(err));
@@ -929,9 +1013,9 @@ impl Backend for HTTP {
         debug!(
             "exists response {} {}: {:?} {:?}",
             request.task_id,
-            request.url,
+            RedactedUrl(&request.url),
             response_status_code,
-            response.headers()
+            KeyHeaderMap(response.headers())
         );
 
         // Drop the response body to avoid reading it.
@@ -1620,9 +1704,12 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     }
 
     #[tokio::test]
-    async fn connection_failures_are_reported_per_operation() {
+    async fn connection_failures_are_reported_per_operation_without_the_url() {
         install_crypto_provider();
-        let url = format!("{}/file", start_closing_server().await);
+        let url = format!(
+            "{}/file?X-Amz-Signature=secret",
+            start_closing_server().await
+        );
         let http = HTTP::new(HTTP_SCHEME, None, 0, true, Duration::from_secs(600), true).unwrap();
 
         let stat = http
@@ -1663,9 +1750,11 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             .unwrap();
         assert!(!get.success);
         assert_eq!(get.http_status_code, None);
-        assert!(get.error_message.is_some());
+        assert!(!get.error_message.unwrap().contains("secret"));
 
-        let exists = http
+        // Retry once, so the error is wrapped by the retry middleware.
+        let exists = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true)
+            .unwrap()
             .exists(ExistsRequest {
                 task_id: "test".to_string(),
                 url,
@@ -1679,7 +1768,10 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 open_csg: None,
             })
             .await;
-        assert!(matches!(exists, Err(Error::ReqwestMiddlewareError(_))));
+        let Err(err @ Error::ReqwestMiddlewareError(_)) = exists else {
+            panic!("expected a reqwest middleware error");
+        };
+        assert!(!format!("{err} {err:?}").contains("secret"), "{err:?}");
     }
 
     #[tokio::test]

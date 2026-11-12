@@ -43,3 +43,4 @@ hyper-util.workspace = true
 tokio-rustls.workspace = true
 rcgen.workspace = true
 wiremock = "0.6.4"
+tracing-subscriber = "0.3"

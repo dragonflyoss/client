@@ -158,7 +158,7 @@ impl<T, E> OrErr<T, E> for Result<T, E> {
 }
 
 /// The error for backend.
-#[derive(Debug, thiserror::Error)]
+#[derive(thiserror::Error)]
 #[error("backend error: {message}")]
 pub struct BackendError {
     /// The error message.
@@ -169,6 +169,22 @@ pub struct BackendError {
 
     /// The headers of the response.
     pub header: Option<reqwest::header::HeaderMap>,
+}
+
+/// Debug implementation that prints only the header names, since backend errors
+/// are Debug-logged and the header values can hold credentials.
+impl fmt::Debug for BackendError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let header_names = self
+            .header
+            .as_ref()
+            .map(|headers| headers.keys().collect::<Vec<_>>());
+        f.debug_struct("BackendError")
+            .field("message", &self.message)
+            .field("status_code", &self.status_code)
+            .field("header_names", &header_names)
+            .finish()
+    }
 }
 
 /// The error when the download from parent is failed.
@@ -185,6 +201,22 @@ pub struct DownloadFromParentFailed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backend_error_debug_prints_only_header_names() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("set-cookie", "session=secret".parse().unwrap());
+        let error = BackendError {
+            message: "403 Forbidden".to_string(),
+            status_code: Some(reqwest::StatusCode::FORBIDDEN),
+            header: Some(headers),
+        };
+
+        assert_eq!(
+            format!("{error:?}"),
+            r#"BackendError { message: "403 Forbidden", status_code: Some(403), header_names: Some(["set-cookie"]) }"#
+        );
+    }
 
     #[test]
     fn as_str_names_each_error_type() {
