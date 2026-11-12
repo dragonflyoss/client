@@ -28,7 +28,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info, instrument};
 
-use crate::storage_engine::{rocksdb::RocksdbStorageEngine, DatabaseObject, StorageEngineOwned};
+use crate::storage_engine::{
+    rocksdb::RocksdbStorageEngine, DatabaseObject, StorageEngineOwned, WriteBatch,
+};
 
 /// The default timeout for downloading tasks. The started task that exceeds the
 /// timeout will be garbage collected by disk usage.
@@ -109,7 +111,7 @@ impl Task {
     pub fn need_evict(&self) -> bool {
         self.is_finished()
             || self.is_failed()
-            || self.created_at + DEFAULT_DOWNLOAD_TASK_TIMEOUT < Utc::now().naive_utc()
+            || self.updated_at + DEFAULT_DOWNLOAD_TASK_TIMEOUT < Utc::now().naive_utc()
     }
 
     /// Returns whether the task is prefetched.
@@ -232,7 +234,7 @@ impl PersistentTask {
         !self.is_persistent()
             && (self.is_finished()
                 || self.is_failed()
-                || self.created_at + DEFAULT_DOWNLOAD_TASK_TIMEOUT < Utc::now().naive_utc())
+                || self.updated_at + DEFAULT_DOWNLOAD_TASK_TIMEOUT < Utc::now().naive_utc())
     }
 
     /// Returns whether the persistent task downloads failed.
@@ -350,7 +352,7 @@ impl PersistentCacheTask {
         !self.is_persistent()
             && (self.is_finished()
                 || self.is_failed()
-                || self.created_at + DEFAULT_DOWNLOAD_TASK_TIMEOUT < Utc::now().naive_utc())
+                || self.updated_at + DEFAULT_DOWNLOAD_TASK_TIMEOUT < Utc::now().naive_utc())
     }
 
     /// Returns whether the persistent cache task downloads failed.
@@ -579,6 +581,64 @@ impl Piece {
         let encoded = hasher.finalize().to_string();
         digest::Digest::new(digest::Algorithm::Crc32, encoded).to_string()
     }
+}
+
+/// The metadata of the task referenced by the platform of the image, keyed by the
+/// image id, the platform and the task id, so the tasks of the image are got by the
+/// image id and the platform.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskByImage {
+    /// The image id.
+    pub image_id: String,
+
+    /// The platform of the image in the format of os/arch.
+    pub platform: String,
+
+    /// The task id.
+    pub task_id: String,
+
+    /// The reference of the image.
+    pub reference: String,
+
+    /// The time when the metadata is updated.
+    pub updated_at: NaiveDateTime,
+
+    /// The time when the metadata is created.
+    pub created_at: NaiveDateTime,
+}
+
+/// Implements the task by image database object.
+impl DatabaseObject for TaskByImage {
+    /// The namespace of [TaskByImage] objects.
+    const NAMESPACE: &'static str = "task_by_image";
+}
+
+/// Implements the task by image metadata.
+impl TaskByImage {
+    /// Returns whether the task by image is expired.
+    pub fn is_expired(&self, ttl: Duration) -> bool {
+        self.updated_at + ttl < Utc::now().naive_utc()
+    }
+}
+
+/// The index of [TaskByImage] keyed by the task id, the image id and the platform,
+/// so the images of the task are got by the task id.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageByTask {
+    /// The task id.
+    pub task_id: String,
+
+    /// The image id.
+    pub image_id: String,
+
+    /// The platform of the image in the format of os/arch.
+    pub platform: String,
+}
+
+/// Implements the image by task database object.
+impl DatabaseObject for ImageByTask {
+    /// The namespace of [ImageByTask] objects.
+    const NAMESPACE: &'static str = "image_by_task";
 }
 
 /// UploadStats is the in-memory upload statistics of a task, tracked outside of
@@ -1430,6 +1490,160 @@ impl<E: StorageEngineOwned> Metadata<E> {
         self.db.delete::<CacheTask>(id.as_bytes())
     }
 
+    /// Creates the metadata of the task referenced by the platform of the image, along
+    /// with its index by the task.
+    #[instrument(level = "debug", skip_all)]
+    pub fn create_task_by_image(
+        &self,
+        image_id: &str,
+        platform: &str,
+        task_id: &str,
+        reference: &str,
+    ) -> Result<TaskByImage> {
+        let id = self.task_by_image_id(image_id, platform, task_id);
+        let task = match self.db.get::<TaskByImage>(id.as_bytes())? {
+            Some(mut task) => {
+                task.updated_at = Utc::now().naive_utc();
+                task
+            }
+            None => TaskByImage {
+                image_id: image_id.to_string(),
+                platform: platform.to_string(),
+                task_id: task_id.to_string(),
+                reference: reference.to_string(),
+                updated_at: Utc::now().naive_utc(),
+                created_at: Utc::now().naive_utc(),
+            },
+        };
+
+        let image = ImageByTask {
+            task_id: task_id.to_string(),
+            image_id: image_id.to_string(),
+            platform: platform.to_string(),
+        };
+
+        let mut batch = WriteBatch::default();
+        batch.put(id.as_bytes(), &task)?;
+        batch.put(
+            self.image_by_task_id(task_id, image_id, platform)
+                .as_bytes(),
+            &image,
+        )?;
+        self.db.batch_write(batch)?;
+        Ok(task)
+    }
+
+    /// Gets the metadatas of the tasks referenced by the platform of the image, and
+    /// gets the ones of all the platforms if the platform is none.
+    #[instrument(level = "debug", skip_all)]
+    pub fn get_tasks_by_image(
+        &self,
+        image_id: &str,
+        platform: Option<&str>,
+    ) -> Result<Vec<TaskByImage>> {
+        let prefix = match platform {
+            Some(platform) => self.task_by_image_id(image_id, platform, ""),
+            None => format!("{image_id}-"),
+        };
+
+        let tasks = self
+            .db
+            .prefix_iter::<TaskByImage>(prefix.as_bytes())?
+            .map(|ele| {
+                let (_, task) = ele?;
+                Ok(task)
+            })
+            .collect::<Result<Vec<TaskByImage>>>();
+
+        tasks
+    }
+
+    /// Gets the metadatas of the tasks referenced by all the images.
+    #[instrument(level = "debug", skip_all)]
+    pub fn get_all_tasks_by_image(&self) -> Result<Vec<TaskByImage>> {
+        let tasks = self
+            .db
+            .iter::<TaskByImage>()?
+            .map(|ele| {
+                let (_, task) = ele?;
+                Ok(task)
+            })
+            .collect::<Result<Vec<TaskByImage>>>();
+
+        tasks
+    }
+
+    /// Gets the metadatas of the images referencing the task.
+    #[instrument(level = "debug", skip_all)]
+    pub fn get_images_by_task(&self, task_id: &str) -> Result<Vec<ImageByTask>> {
+        let prefix = format!("{task_id}-");
+        let images = self
+            .db
+            .prefix_iter::<ImageByTask>(prefix.as_bytes())?
+            .map(|ele| {
+                let (_, image) = ele?;
+                Ok(image)
+            })
+            .collect::<Result<Vec<ImageByTask>>>();
+
+        images
+    }
+
+    /// Deletes the metadata of the task referenced by the platform of the image, along
+    /// with its index by the task.
+    #[instrument(level = "debug", skip_all)]
+    pub fn delete_task_by_image(
+        &self,
+        image_id: &str,
+        platform: &str,
+        task_id: &str,
+    ) -> Result<()> {
+        info!(
+            "delete task by image metadata {} {} {}",
+            image_id, platform, task_id
+        );
+
+        let mut batch = WriteBatch::default();
+        batch.delete::<TaskByImage>(
+            self.task_by_image_id(image_id, platform, task_id)
+                .as_bytes(),
+        );
+        batch.delete::<ImageByTask>(
+            self.image_by_task_id(task_id, image_id, platform)
+                .as_bytes(),
+        );
+        self.db.batch_write(batch)
+    }
+
+    /// Deletes the metadatas of the images referencing the task, along with the
+    /// metadatas of the task referenced by the images.
+    #[instrument(level = "debug", skip_all)]
+    pub fn delete_images_by_task(&self, task_id: &str) -> Result<()> {
+        let images = self.get_images_by_task(task_id)?;
+        if images.is_empty() {
+            return Ok(());
+        }
+
+        let mut batch = WriteBatch::default();
+        for image in images {
+            info!(
+                "delete task by image metadata {} {} {} in batch",
+                image.image_id, image.platform, task_id
+            );
+
+            batch.delete::<TaskByImage>(
+                self.task_by_image_id(&image.image_id, &image.platform, task_id)
+                    .as_bytes(),
+            );
+            batch.delete::<ImageByTask>(
+                self.image_by_task_id(task_id, &image.image_id, &image.platform)
+                    .as_bytes(),
+            );
+        }
+
+        self.db.batch_write(batch)
+    }
+
     /// Creates a new persistent piece, which is imported by
     /// local.
     #[instrument(level = "debug", skip_all)]
@@ -1652,6 +1866,18 @@ impl<E: StorageEngineOwned> Metadata<E> {
     pub fn piece_id(&self, task_id: &str, number: u32) -> String {
         format!("{task_id}-{number}")
     }
+
+    /// Returns the task by image id.
+    #[inline]
+    fn task_by_image_id(&self, image_id: &str, platform: &str, task_id: &str) -> String {
+        format!("{image_id}-{platform}-{task_id}")
+    }
+
+    /// Returns the image by task id.
+    #[inline]
+    fn image_by_task_id(&self, task_id: &str, image_id: &str, platform: &str) -> String {
+        format!("{task_id}-{image_id}-{platform}")
+    }
 }
 
 /// Implements the metadata of the storage engine.
@@ -1671,6 +1897,8 @@ impl Metadata<RocksdbStorageEngine> {
                 PersistentTask::NAMESPACE,
                 PersistentCacheTask::NAMESPACE,
                 CacheTask::NAMESPACE,
+                TaskByImage::NAMESPACE,
+                ImageByTask::NAMESPACE,
             ],
             &[Piece::NAMESPACE],
             config.storage.keep,
@@ -1733,9 +1961,9 @@ mod tests {
             (NaiveDateTime::default(), None, None, true),
         ];
 
-        for (created_at, failed_at, finished_at, expected) in test_cases {
+        for (updated_at, failed_at, finished_at, expected) in test_cases {
             let task = Task {
-                created_at,
+                updated_at,
                 failed_at,
                 finished_at,
                 ..Default::default()
@@ -1757,17 +1985,17 @@ mod tests {
             (true, NaiveDateTime::default(), None, None, false),
         ];
 
-        for (persistent, created_at, failed_at, finished_at, expected) in test_cases {
+        for (persistent, updated_at, failed_at, finished_at, expected) in test_cases {
             let persistent_task = PersistentTask {
                 persistent,
-                created_at,
+                updated_at,
                 failed_at,
                 finished_at,
                 ..Default::default()
             };
             let persistent_cache_task = PersistentCacheTask {
                 persistent,
-                created_at,
+                updated_at,
                 failed_at,
                 finished_at,
                 ..Default::default()
@@ -2566,5 +2794,101 @@ mod tests {
             assert!(result.is_ok());
             expect(piece, metadata.get_piece(&piece_id).unwrap());
         }
+    }
+
+    #[test]
+    fn task_by_image_lifecycle_tracks_creation_and_deletion() {
+        let dir = tempdir().unwrap();
+        let metadata = metadata(dir.path());
+        let image_id = "a".repeat(64);
+        let other_image_id = "b".repeat(64);
+
+        let task = metadata
+            .create_task_by_image(
+                &image_id,
+                "linux/amd64",
+                TASK_ID,
+                "docker.io/library/nginx:latest",
+            )
+            .unwrap();
+        assert_eq!(task.image_id, image_id);
+        assert_eq!(task.platform, "linux/amd64");
+        assert_eq!(task.task_id, TASK_ID);
+        assert_eq!(task.reference, "docker.io/library/nginx:latest");
+        assert_eq!(
+            metadata.get_tasks_by_image(&image_id, None).unwrap(),
+            vec![task.clone()]
+        );
+
+        let updated_task = metadata
+            .create_task_by_image(
+                &image_id,
+                "linux/amd64",
+                TASK_ID,
+                "docker.io/library/nginx:latest",
+            )
+            .unwrap();
+        assert_eq!(updated_task.created_at, task.created_at);
+        assert!(task.is_expired(Duration::ZERO));
+        assert!(!task.is_expired(Duration::from_secs(3600)));
+
+        // The task id of the sha512 digest starts with the task id of the sha256 digest.
+        let long_task_id = format!("{TASK_ID}{TASK_ID}");
+        for (image_id, platform, task_id) in [
+            (&image_id, "linux/arm", TASK_ID),
+            (&image_id, "linux/arm64", OTHER_TASK_ID),
+            (&other_image_id, "linux/amd64", TASK_ID),
+            (&other_image_id, "linux/amd64", long_task_id.as_str()),
+        ] {
+            metadata
+                .create_task_by_image(
+                    image_id,
+                    platform,
+                    task_id,
+                    "docker.io/library/nginx:latest",
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            metadata.get_tasks_by_image(&image_id, None).unwrap().len(),
+            3
+        );
+        assert_eq!(
+            metadata
+                .get_tasks_by_image(&image_id, Some("linux/arm"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(metadata
+            .get_tasks_by_image(&image_id, Some("linux/s390x"))
+            .unwrap()
+            .is_empty());
+        assert_eq!(metadata.get_images_by_task(TASK_ID).unwrap().len(), 3);
+        assert_eq!(metadata.get_images_by_task(&long_task_id).unwrap().len(), 1);
+        assert_eq!(metadata.get_all_tasks_by_image().unwrap().len(), 5);
+
+        metadata
+            .delete_task_by_image(&image_id, "linux/amd64", TASK_ID)
+            .unwrap();
+        assert_eq!(
+            metadata.get_tasks_by_image(&image_id, None).unwrap().len(),
+            2
+        );
+        assert_eq!(metadata.get_images_by_task(TASK_ID).unwrap().len(), 2);
+
+        metadata.delete_images_by_task(TASK_ID).unwrap();
+        assert!(metadata.get_images_by_task(TASK_ID).unwrap().is_empty());
+        assert_eq!(
+            metadata.get_tasks_by_image(&image_id, None).unwrap().len(),
+            1
+        );
+        assert_eq!(
+            metadata
+                .get_tasks_by_image(&other_image_id, None)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }

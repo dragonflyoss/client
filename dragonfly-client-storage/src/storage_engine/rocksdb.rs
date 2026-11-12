@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use crate::storage_engine::{DatabaseObject, Operations, StorageEngine};
+use crate::storage_engine::{DatabaseObject, Operations, StorageEngine, Write, WriteBatch};
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
@@ -148,17 +148,47 @@ impl RocksdbStorageEngine {
         // Initialize rocksdb directory.
         let dir = dir.join(Self::DEFAULT_DIR_NAME);
 
-        // If the storage is kept, open the db and drop the unused column families.
-        // Otherwise, destroy the db.
-        if !keep {
+        // If the storage is kept, open the db and drop the unused column families,
+        // such as the ones created by a newer version before the rollback. Otherwise,
+        // destroy the db.
+        let unused_cf_names = if !keep {
             rocksdb::DB::destroy(&options, &dir).unwrap_or_else(|err| {
                 warn!("destroy {:?} failed: {}", dir, err);
             });
-        }
 
-        // Open rocksdb.
-        let db =
-            rocksdb::DB::open_cf_with_opts(&options, &dir, cfs).or_err(ErrorType::StorageError)?;
+            Vec::new()
+        } else if !dir.join("CURRENT").is_file() {
+            // The db has no CURRENT file before its first open, so it has no column families.
+            Vec::new()
+        } else {
+            rocksdb::DB::list_cf(&options, &dir)
+                .or_err(ErrorType::StorageError)?
+                .into_iter()
+                .filter(|name| {
+                    name != rocksdb::DEFAULT_COLUMN_FAMILY_NAME
+                        && cfs.iter().all(|(cf_name, _)| cf_name != name)
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // Open rocksdb with the unused column families, because rocksdb requires
+        // all the existing column families to be opened.
+        let mut db = rocksdb::DB::open_cf_with_opts(
+            &options,
+            &dir,
+            cfs.into_iter().chain(
+                unused_cf_names
+                    .iter()
+                    .map(|name| (name.clone(), rocksdb::Options::default())),
+            ),
+        )
+        .or_err(ErrorType::StorageError)?;
+
+        // Drop the unused column families.
+        for name in unused_cf_names {
+            db.drop_cf(&name).or_err(ErrorType::StorageError)?;
+            info!("drop unused column family {}", name);
+        }
 
         Ok(Self { inner: db })
     }
@@ -253,10 +283,8 @@ impl Operations for RocksdbStorageEngine {
         &self,
         prefix: &[u8],
     ) -> Result<impl Iterator<Item = Result<(Box<[u8]>, O)>>> {
-        let cf = cf_handle::<O>(self)?;
-        let iter = self.prefix_iterator_cf(cf, prefix);
-        Ok(iter.map(|ele| {
-            let (key, value) = ele.or_err(ErrorType::StorageError)?;
+        Ok(self.prefix_iter_raw::<O>(prefix)?.map(|ele| {
+            let (key, value) = ele?;
             Ok((key, O::deserialize_from(&value)?))
         }))
     }
@@ -267,10 +295,17 @@ impl Operations for RocksdbStorageEngine {
         prefix: &[u8],
     ) -> Result<impl Iterator<Item = Result<(Box<[u8]>, Box<[u8]>)>>> {
         let cf = cf_handle::<O>(self)?;
-        Ok(self.prefix_iterator_cf(cf, prefix).map(|ele| {
-            let (key, value) = ele.or_err(ErrorType::StorageError)?;
-            Ok((key, value))
-        }))
+        let prefix = prefix.to_vec();
+        Ok(self
+            .prefix_iterator_cf(cf, &prefix)
+            .map(|ele| {
+                let (key, value) = ele.or_err(ErrorType::StorageError)?;
+                Ok((key, value))
+            })
+            .take_while(move |ele| {
+                ele.as_ref()
+                    .map_or(true, |(key, _)| key.starts_with(&prefix))
+            }))
     }
 
     /// Deletes objects by keys.
@@ -285,6 +320,33 @@ impl Operations for RocksdbStorageEngine {
         options.set_sync(false);
         Ok(self
             .write_opt(batch, &options)
+            .or_err(ErrorType::StorageError)?)
+    }
+
+    /// Writes the puts and deletes of the batch atomically.
+    fn batch_write(&self, batch: WriteBatch) -> Result<()> {
+        let mut rocksdb_batch = rocksdb::WriteBatch::default();
+        for write in batch.writes {
+            match write {
+                Write::Put(namespace, key, value) => {
+                    let cf = self
+                        .cf_handle(namespace)
+                        .ok_or_else(|| Error::ColumnFamilyNotFound(namespace.to_string()))?;
+                    rocksdb_batch.put_cf(cf, key, value);
+                }
+                Write::Delete(namespace, key) => {
+                    let cf = self
+                        .cf_handle(namespace)
+                        .ok_or_else(|| Error::ColumnFamilyNotFound(namespace.to_string()))?;
+                    rocksdb_batch.delete_cf(cf, key);
+                }
+            }
+        }
+
+        let mut options = WriteOptions::default();
+        options.set_sync(false);
+        Ok(self
+            .write_opt(rocksdb_batch, &options)
             .or_err(ErrorType::StorageError)?)
     }
 }
@@ -614,6 +676,11 @@ mod tests {
                     .map(|_| ())
             },
             |engine| engine.batch_delete::<UnregisteredObject>(vec![b"1".as_slice()]),
+            |engine| {
+                let mut batch = WriteBatch::default();
+                batch.delete::<UnregisteredObject>(b"1");
+                engine.batch_write(batch)
+            },
         ];
 
         for run in test_cases {
@@ -655,5 +722,114 @@ mod tests {
             let engine = open(dir.path(), keep);
             assert_eq!(engine.get::<Object>(b"1").unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn prefix_iter_stops_at_the_prefix_without_the_prefix_extractor() {
+        let dir = tempdir().unwrap();
+        let engine = RocksdbStorageEngine::open(
+            dir.path(),
+            &dir.path().to_path_buf(),
+            &[Object::NAMESPACE],
+            &[],
+            false,
+        )
+        .unwrap();
+        for id in ["a-1", "a-2", "aa-1", "b-1"] {
+            engine
+                .put(
+                    id.as_bytes(),
+                    &Object {
+                        id: id.to_string(),
+                        value: 1,
+                    },
+                )
+                .unwrap();
+        }
+
+        let test_cases = vec![
+            ("a-", vec!["a-1", "a-2"]),
+            ("aa-", vec!["aa-1"]),
+            ("b-", vec!["b-1"]),
+            ("c-", vec![]),
+        ];
+
+        for (prefix, expected_ids) in test_cases {
+            let ids: Vec<String> = engine
+                .prefix_iter::<Object>(prefix.as_bytes())
+                .unwrap()
+                .map(|ele| {
+                    let (_, object) = ele.unwrap();
+                    object.id
+                })
+                .collect();
+            assert_eq!(ids, expected_ids);
+        }
+    }
+
+    #[test]
+    fn batch_write_puts_and_deletes_the_objects_atomically() {
+        let dir = tempdir().unwrap();
+        let engine = open(dir.path(), false);
+        let object = Object {
+            id: "1".to_string(),
+            value: 42,
+        };
+        engine.put(b"1", &object).unwrap();
+
+        let mut batch = WriteBatch::default();
+        batch.put(b"2", &object).unwrap();
+        batch.delete::<Object>(b"1");
+        engine.batch_write(batch).unwrap();
+        assert_eq!(engine.get::<Object>(b"1").unwrap(), None);
+        assert_eq!(engine.get::<Object>(b"2").unwrap(), Some(object.clone()));
+
+        let mut batch = WriteBatch::default();
+        batch.put(b"3", &object).unwrap();
+        batch
+            .put(
+                b"3",
+                &UnregisteredObject {
+                    data: "3".to_string(),
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            engine.batch_write(batch),
+            Err(Error::ColumnFamilyNotFound(ref name)) if name == UnregisteredObject::NAMESPACE
+        ));
+        assert_eq!(engine.get::<Object>(b"3").unwrap(), None);
+    }
+
+    #[test]
+    fn open_drops_the_unused_column_families_when_kept() {
+        let dir = tempdir().unwrap();
+        let open_with_unregistered = || {
+            RocksdbStorageEngine::open(
+                dir.path(),
+                &dir.path().to_path_buf(),
+                &[UnregisteredObject::NAMESPACE],
+                &[Object::NAMESPACE],
+                true,
+            )
+            .unwrap()
+        };
+
+        let engine = open_with_unregistered();
+        let object = UnregisteredObject {
+            data: "data".to_string(),
+        };
+        engine.put(b"1", &object).unwrap();
+        drop(engine);
+
+        let engine = open(dir.path(), true);
+        assert!(matches!(
+            engine.get::<UnregisteredObject>(b"1"),
+            Err(Error::ColumnFamilyNotFound(ref name)) if name == UnregisteredObject::NAMESPACE
+        ));
+        drop(engine);
+
+        let engine = open_with_unregistered();
+        assert_eq!(engine.get::<UnregisteredObject>(b"1").unwrap(), None);
     }
 }

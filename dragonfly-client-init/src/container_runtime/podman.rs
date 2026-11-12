@@ -19,6 +19,7 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
+use dragonfly_client_util::fs::write_if_changed;
 use tokio::{self, fs};
 use toml_edit::{value, Array, ArrayOfTables, Item, Table, Value};
 use tracing::{info, instrument};
@@ -47,9 +48,10 @@ impl Podman {
     }
 
     /// Runs the podman runtime to initialize
-    /// runtime environment for the dfdaemon.
+    /// runtime environment for the dfdaemon. Returns whether the registries
+    /// configuration was rewritten, in which case the runtime has to be restarted.
     #[instrument(skip_all)]
-    pub async fn run(&self) -> Result<()> {
+    pub async fn run(&self) -> Result<bool> {
         let mut registries_config_table = toml_edit::DocumentMut::new();
         registries_config_table.set_implicit(true);
 
@@ -102,13 +104,11 @@ impl Podman {
             .parent()
             .ok_or(Error::Unknown("invalid config path".to_string()))?;
         fs::create_dir_all(registries_config_dir.as_os_str()).await?;
-        fs::write(
-            self.config.config_path.as_os_str(),
-            registries_config_table.to_string().as_bytes(),
+        write_if_changed(
+            &self.config.config_path,
+            registries_config_table.to_string(),
         )
-        .await?;
-
-        Ok(())
+        .await
     }
 }
 

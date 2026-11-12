@@ -13,7 +13,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.5.8"
+version = "1.5.14"
 authors = ["The Dragonfly Developers"]
 edition = "2021"
 readme = "README.md"
@@ -33,19 +33,19 @@ chrono = { version = "0.4.45", features = ["clock", "serde"] }
 clap = { version = "4.6.1", features = ["derive", "env"] }
 crc32fast = "1.5.0"
 dashmap = "6.1.0"
-dragonfly-api = "=2.3.8"
-dragonfly-client = { path = "dragonfly-client", version = "1.5.8" }
-dragonfly-client-backend = { path = "dragonfly-client-backend", version = "1.5.8" }
-dragonfly-client-config = { path = "dragonfly-client-config", version = "1.5.8" }
-dragonfly-client-core = { path = "dragonfly-client-core", version = "1.5.8" }
-dragonfly-client-init = { path = "dragonfly-client-init", version = "1.5.8" }
-dragonfly-client-metric = { path = "dragonfly-client-metric", version = "1.5.8" }
-dragonfly-client-storage = { path = "dragonfly-client-storage", version = "1.5.8" }
-dragonfly-client-util = { path = "dragonfly-client-util", version = "1.5.8" }
+dragonfly-api = "=2.3.10"
+dragonfly-hashring = "0.3.0"
+dragonfly-client = { path = "dragonfly-client", version = "1.5.14" }
+dragonfly-client-backend = { path = "dragonfly-client-backend", version = "1.5.14" }
+dragonfly-client-config = { path = "dragonfly-client-config", version = "1.5.14" }
+dragonfly-client-core = { path = "dragonfly-client-core", version = "1.5.14" }
+dragonfly-client-init = { path = "dragonfly-client-init", version = "1.5.14" }
+dragonfly-client-metric = { path = "dragonfly-client-metric", version = "1.5.14" }
+dragonfly-client-storage = { path = "dragonfly-client-storage", version = "1.5.14" }
+dragonfly-client-util = { path = "dragonfly-client-util", version = "1.5.14" }
 fastrand = "2.4.1"
 fs2 = "0.4.3"
 futures = "0.3.32"
-hashring = "0.3.6"
 hex = "0.4"
 hostname = "^0.4"
 http = "1"
@@ -70,7 +70,7 @@ hyper-util = { version = "0.1.20", features = [
 ] }
 leaky-bucket = "1.1.2"
 local-ip-address = "0.6.5"
-lru = "0.18.1"
+lru = "0.19.0"
 oci-client = { version = "0.18.0", default-features = false, features = [
   "rustls-tls"
 ] }
@@ -129,10 +129,10 @@ tokio-stream = "0.1.18"
 tokio-util = { version = "0.7.18", features = ["full"] }
 toml = "0.8.23"
 toml_edit = "0.25.12"
-tonic = { version = "=0.14.6", features = ["tls-aws-lc"] }
+tonic = { version = "=0.14.9", features = ["tls-aws-lc"] }
 axum = { version = "=0.8.9", default-features = false }
-tonic-health = "=0.14.6"
-tonic-reflection = "=0.14.6"
+tonic-health = "=0.14.9"
+tonic-reflection = "=0.14.9"
 tracing = "0.1"
 url = "2.5.4"
 uuid = { version = "1.20", features = ["v4"] }

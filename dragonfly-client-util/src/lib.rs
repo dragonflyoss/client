@@ -18,7 +18,6 @@ pub mod buffer_pool;
 pub mod container;
 pub mod digest;
 pub mod fs;
-pub mod hashring;
 pub mod http;
 pub mod id_generator;
 pub mod net;
@@ -32,3 +31,5 @@ pub mod url;
 
 #[cfg(target_os = "linux")]
 pub mod cgroups;
+
+pub use dragonfly_hashring as hashring;

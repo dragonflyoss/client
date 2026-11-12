@@ -22,7 +22,7 @@ use dragonfly_client_config::MIN_PIECE_LENGTH;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::buffer_pool::BufferPool;
 use dragonfly_client_util::digest::Algorithm;
-use dragonfly_client_util::fs::fd::{FDCache, DEFAULT_FD_CACHE_CAPACITY};
+use dragonfly_client_util::fs::fd::{FDCache, WritePriority, DEFAULT_FD_CACHE_CAPACITY};
 use dragonfly_client_util::fs::{fadvise_dontneed, fadvise_willneed, fallocate};
 use futures::Stream;
 use std::cmp::max;
@@ -184,6 +184,10 @@ impl Content {
                 error!("create {:?} failed: {}", task_dir, err);
             })?;
 
+        self.fd_cache.remove(&task_path).unwrap_or_else(|err| {
+            error!("remove {:?} from fd_cache failed: {}", task_path, err);
+        });
+
         fallocate(&f, length).await.inspect_err(|err| {
             error!("fallocate {:?} failed: {}", task_dir, err);
         })?;
@@ -239,16 +243,16 @@ impl Content {
     pub async fn delete_task(&self, task_id: &str) -> Result<()> {
         info!("delete task content: {}", task_id);
         let task_path = self.get_task_path(task_id);
-
-        self.fd_cache.remove(&task_path).unwrap_or_else(|err| {
-            error!("remove {:?} from fd_cache failed: {}", task_path, err);
-        });
-
         fs::remove_file(task_path.as_path())
             .await
             .inspect_err(|err| {
                 error!("remove {:?} failed: {}", task_path, err);
             })?;
+
+        self.fd_cache.remove(&task_path).unwrap_or_else(|err| {
+            error!("remove {:?} from fd_cache failed: {}", task_path, err);
+        });
+
         Ok(())
     }
 
@@ -304,6 +308,7 @@ impl Content {
         task_id: &str,
         offset: u64,
         expected_length: u64,
+        is_prefetch: bool,
         stream: &mut S,
         algorithm: Algorithm,
     ) -> Result<super::io::WriteRangeResponse>
@@ -311,7 +316,7 @@ impl Content {
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
         let task_path = self.get_task_path(task_id);
-        let fd = self
+        let mut fd = self
             .fd_cache
             .open_write(&task_path)
             .await
@@ -319,8 +324,14 @@ impl Content {
                 error!("open {:?} failed: {}", task_path, err);
             })?;
 
+        fd.set_priority(if is_prefetch {
+            WritePriority::Low
+        } else {
+            WritePriority::High
+        });
+
         let response = super::io::write_range_from_stream(
-            fd.clone(),
+            &fd,
             offset,
             expected_length,
             self.config.storage.write_buffer_size,
@@ -332,7 +343,9 @@ impl Content {
             error!("write {:?} failed: {}", task_path, err);
         })?;
 
-        self.writeback.trigger(&fd, offset, response.length).await;
+        self.writeback
+            .trigger(fd.get_ref(), offset, response.length)
+            .await;
         Ok(response)
     }
 
@@ -383,6 +396,10 @@ impl Content {
             .inspect_err(|err| {
                 error!("create {:?} failed: {}", task_dir, err);
             })?;
+
+        self.fd_cache.remove(&task_path).unwrap_or_else(|err| {
+            error!("remove {:?} from fd_cache failed: {}", task_path, err);
+        });
 
         fallocate(&f, length).await.inspect_err(|err| {
             error!("fallocate {:?} failed: {}", task_dir, err);
@@ -540,7 +557,7 @@ impl Content {
             })?;
 
         let response = super::io::write_range(
-            fd.clone(),
+            &fd,
             offset,
             expected_length,
             self.config.storage.write_buffer_size,
@@ -553,7 +570,9 @@ impl Content {
             error!("write {:?} failed: {}", task_path, err);
         })?;
 
-        self.writeback.trigger(&fd, offset, response.length).await;
+        self.writeback
+            .trigger(fd.get_ref(), offset, response.length)
+            .await;
         Ok(response)
     }
 
@@ -581,7 +600,7 @@ impl Content {
             })?;
 
         let response = super::io::write_range_from_stream(
-            fd.clone(),
+            &fd,
             offset,
             expected_length,
             self.config.storage.write_buffer_size,
@@ -593,7 +612,9 @@ impl Content {
             error!("write {:?} failed: {}", task_path, err);
         })?;
 
-        self.writeback.trigger(&fd, offset, response.length).await;
+        self.writeback
+            .trigger(fd.get_ref(), offset, response.length)
+            .await;
         Ok(response)
     }
 
@@ -601,6 +622,11 @@ impl Content {
     pub async fn delete_persistent_task(&self, task_id: &str) -> Result<()> {
         info!("delete persistent task content: {}", task_id);
         let persistent_task_path = self.get_persistent_task_path(task_id);
+        fs::remove_file(persistent_task_path.as_path())
+            .await
+            .inspect_err(|err| {
+                error!("remove {:?} failed: {}", persistent_task_path, err);
+            })?;
 
         self.fd_cache
             .remove(&persistent_task_path)
@@ -611,11 +637,6 @@ impl Content {
                 );
             });
 
-        fs::remove_file(persistent_task_path.as_path())
-            .await
-            .inspect_err(|err| {
-                error!("remove {:?} failed: {}", persistent_task_path, err);
-            })?;
         Ok(())
     }
 
@@ -676,6 +697,10 @@ impl Content {
             .inspect_err(|err| {
                 error!("create {:?} failed: {}", task_dir, err);
             })?;
+
+        self.fd_cache.remove(&task_path).unwrap_or_else(|err| {
+            error!("remove {:?} from fd_cache failed: {}", task_path, err);
+        });
 
         fallocate(&f, length).await.inspect_err(|err| {
             error!("fallocate {:?} failed: {}", task_dir, err);
@@ -837,7 +862,7 @@ impl Content {
             })?;
 
         let response = super::io::write_range(
-            fd.clone(),
+            &fd,
             offset,
             expected_length,
             self.config.storage.write_buffer_size,
@@ -850,7 +875,9 @@ impl Content {
             error!("write {:?} failed: {}", task_path, err);
         })?;
 
-        self.writeback.trigger(&fd, offset, response.length).await;
+        self.writeback
+            .trigger(fd.get_ref(), offset, response.length)
+            .await;
         Ok(response)
     }
 
@@ -879,7 +906,7 @@ impl Content {
             })?;
 
         let response = super::io::write_range_from_stream(
-            fd.clone(),
+            &fd,
             offset,
             expected_length,
             self.config.storage.write_buffer_size,
@@ -891,7 +918,9 @@ impl Content {
             error!("write {:?} failed: {}", task_path, err);
         })?;
 
-        self.writeback.trigger(&fd, offset, response.length).await;
+        self.writeback
+            .trigger(fd.get_ref(), offset, response.length)
+            .await;
         Ok(response)
     }
 
@@ -899,6 +928,11 @@ impl Content {
     pub async fn delete_persistent_cache_task(&self, task_id: &str) -> Result<()> {
         info!("delete persistent cache task content: {}", task_id);
         let persistent_cache_task_path = self.get_persistent_cache_task_path(task_id);
+        fs::remove_file(persistent_cache_task_path.as_path())
+            .await
+            .inspect_err(|err| {
+                error!("remove {:?} failed: {}", persistent_cache_task_path, err);
+            })?;
 
         self.fd_cache
             .remove(&persistent_cache_task_path)
@@ -909,11 +943,6 @@ impl Content {
                 );
             });
 
-        fs::remove_file(persistent_cache_task_path.as_path())
-            .await
-            .inspect_err(|err| {
-                error!("remove {:?} failed: {}", persistent_cache_task_path, err);
-            })?;
         Ok(())
     }
 
@@ -1033,6 +1062,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_task_removes_the_stale_file_descriptors() {
+        let temp_dir = tempdir().unwrap();
+        let content = content(Config::default(), temp_dir.path()).await;
+        let task_id = "60409bd0ec44160f44c53c39b3fe1c5fdfb23faded0228c68bee83bc15a200e3";
+
+        let test_cases: Vec<(&'static [u8], bool)> =
+            vec![(b"hello, world!", false), (b"HELLO, WORLD!", true)];
+
+        for (data, is_prefetch) in test_cases {
+            let task_path = content.create_task(task_id, 13).await.unwrap();
+            content
+                .write_piece_from_stream(
+                    task_id,
+                    0,
+                    13,
+                    is_prefetch,
+                    &mut futures::stream::iter([Ok(Bytes::from_static(data))]),
+                    Algorithm::Crc32,
+                )
+                .await
+                .unwrap();
+            assert_eq!(tokio::fs::read(&task_path).await.unwrap(), data);
+
+            tokio::fs::remove_file(&task_path).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn write_piece_from_stream_reads_back_in_every_writeback_mode() {
         let test_cases = vec![
             WritebackMode::Sync,
@@ -1055,6 +1112,7 @@ mod tests {
                     task_id,
                     0,
                     13,
+                    false,
                     &mut futures::stream::iter([Ok(Bytes::from_static(data))]),
                     Algorithm::Crc32,
                 )
@@ -1087,6 +1145,7 @@ mod tests {
                 task_id,
                 0,
                 13,
+                false,
                 &mut futures::stream::iter([Ok(Bytes::from_static(data))]),
                 Algorithm::Crc32,
             )
@@ -1183,6 +1242,7 @@ mod tests {
                 task_id,
                 0,
                 13,
+                false,
                 &mut futures::stream::iter([Ok(Bytes::from_static(b"hello, world!"))]),
                 Algorithm::Crc32,
             )
@@ -1228,6 +1288,7 @@ mod tests {
                 task_id,
                 0,
                 4,
+                false,
                 &mut futures::stream::iter([Ok(Bytes::from_static(b"test"))]),
                 Algorithm::Crc32,
             )

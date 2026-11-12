@@ -22,9 +22,10 @@ use dragonfly_api::common::v2::{
 use dragonfly_api::dfdaemon::v2::{
     dfdaemon_upload_client::DfdaemonUploadClient as DfdaemonUploadGRPCClient,
     dfdaemon_upload_server::{DfdaemonUpload, DfdaemonUploadServer as DfdaemonUploadGRPCServer},
-    DeleteCacheTaskRequest, DeletePersistentCacheTaskRequest, DeletePersistentTaskRequest,
-    DeleteTaskRequest, DownloadCachePieceRequest, DownloadCachePieceResponse,
-    DownloadCacheTaskRequest, DownloadCacheTaskResponse, DownloadPersistentCacheTaskRequest,
+    DeleteCacheTaskRequest, DeleteImageRequest, DeleteImageResponse,
+    DeletePersistentCacheTaskRequest, DeletePersistentTaskRequest, DeleteTaskRequest,
+    DownloadCachePieceRequest, DownloadCachePieceResponse, DownloadCacheTaskRequest,
+    DownloadCacheTaskResponse, DownloadPersistentCacheTaskRequest,
     DownloadPersistentCacheTaskResponse, DownloadPersistentTaskRequest,
     DownloadPersistentTaskResponse, DownloadTaskRequest, DownloadTaskResponse, Entry,
     ListTaskEntriesRequest, ListTaskEntriesResponse, StatCacheTaskRequest, StatLocalTaskRequest,
@@ -54,7 +55,9 @@ use dragonfly_client_metric::{
 use dragonfly_client_util::{
     digest::{is_blob_url, is_manifest_digest_url, verify_file_digest, Digest},
     http::{hashmap_to_headermap, headermap_to_hashmap, parse_range_header},
-    id_generator::{repository_revision, PersistentTaskIDParameter, TaskIDParameter},
+    id_generator::{
+        repository_revision, ImageIDParameter, PersistentTaskIDParameter, TaskIDParameter,
+    },
     ratelimiter::bbr::BBR,
     shutdown,
     sysinfo::SystemMonitor,
@@ -357,6 +360,10 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                         return Err(Status::internal(err.to_string()));
                     }
                 }
+            }
+            Err(err @ ClientError::ValidationError(_)) => {
+                error!("download started failed by validation: {}", err);
+                return Err(Status::invalid_argument(err.to_string()));
             }
             Err(err) => {
                 error!("download started failed: {}", err);
@@ -892,10 +899,74 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
                 collect_delete_task_failure_metrics(TaskType::Standard as i32);
 
                 error!("delete task: {}", err);
-                Status::internal(err.to_string())
+                match err {
+                    ClientError::TaskNotFound(id) => {
+                        Status::not_found(format!("task not found: {id}"))
+                    }
+                    _ => Status::internal(err.to_string()),
+                }
             })?;
 
         Ok(Response::new(()))
+    }
+
+    /// Deletes the tasks of the image which are not referenced by other images in
+    /// the peer, and returns the deleted and retained task ids.
+    #[instrument(skip_all, fields(host_id, image_id, remote_ip))]
+    async fn delete_image(
+        &self,
+        request: Request<DeleteImageRequest>,
+    ) -> Result<Response<DeleteImageResponse>, Status> {
+        // If the parent context is set, use it as the parent context for the span.
+        if let Some(parent_ctx) = request.extensions().get::<Context>() {
+            let _ = Span::current().set_parent(parent_ctx.clone());
+        };
+
+        // Clone the request.
+        let request = request.into_inner();
+
+        // Generate the host id.
+        let host_id = self.task.id_generator.host_id();
+
+        // Generate the image id by the manifest url.
+        let image_id = self
+            .task
+            .id_generator
+            .image_id(ImageIDParameter::ManifestURLBased(request.url.clone()))
+            .map_err(|e| {
+                error!("generate image id: {}", e);
+                Status::invalid_argument(e.to_string())
+            })?;
+
+        // Span record the host id, image id and remote ip.
+        Span::current().record("host_id", host_id.as_str());
+        Span::current().record("image_id", image_id.as_str());
+        Span::current().record(
+            "remote_ip",
+            request.remote_ip.clone().unwrap_or_default().as_str(),
+        );
+
+        // Delete all the platforms of the image if the platform is not specified or empty.
+        let platform = request
+            .platform
+            .as_deref()
+            .filter(|platform| !platform.is_empty());
+        info!(
+            "delete image {} {:?} in upload server",
+            request.url, platform
+        );
+
+        // Delete the image from the local storage.
+        let response = self
+            .task
+            .delete_image(&image_id, platform, host_id.as_str())
+            .await
+            .map_err(|err| {
+                error!("delete image: {}", err);
+                Status::internal(err.to_string())
+            })?;
+
+        Ok(Response::new(response))
     }
 
     /// The stream of the sync pieces response.
@@ -2519,7 +2590,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         _request: Request<DownloadCacheTaskRequest>,
     ) -> Result<Response<Self::DownloadCacheTaskStream>, Status> {
-        todo!();
+        Err(Status::unimplemented("download_cache_task"))
     }
 
     /// Stats the cache task metadata.
@@ -2528,7 +2599,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         _request: Request<StatCacheTaskRequest>,
     ) -> Result<Response<CacheTask>, Status> {
-        todo!();
+        Err(Status::unimplemented("stat_cache_task"))
     }
 
     /// Deletes the cache task.
@@ -2537,7 +2608,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         _request: Request<DeleteCacheTaskRequest>,
     ) -> Result<Response<()>, Status> {
-        todo!();
+        Err(Status::unimplemented("delete_cache_task"))
     }
 
     /// The stream of the sync cache pieces response.
@@ -2549,7 +2620,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         _request: Request<SyncCachePiecesRequest>,
     ) -> Result<Response<Self::SyncCachePiecesStream>, Status> {
-        todo!();
+        Err(Status::unimplemented("sync_cache_pieces"))
     }
 
     /// Downloads the cache piece content for parent.
@@ -2561,7 +2632,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
         &self,
         _request: Request<DownloadCachePieceRequest>,
     ) -> Result<Response<DownloadCachePieceResponse>, Status> {
-        todo!();
+        Err(Status::unimplemented("download_cache_piece"))
     }
 }
 

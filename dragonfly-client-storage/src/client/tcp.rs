@@ -20,14 +20,15 @@ use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
 use futures::{Stream, StreamExt};
 use socket2::{SockRef, TcpKeepalive};
 use std::collections::VecDeque;
+use std::future::Future;
 use std::mem::MaybeUninit;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, Take};
 use tokio::net::TcpStream;
-use tokio::time;
+use tokio::time::{self, Sleep};
 use tokio_util::io::poll_read_buf;
 use tracing::{debug, error, instrument, Span};
 use vortex_protocol::{
@@ -77,6 +78,9 @@ impl TCPClient {
             buf: BytesMut::new(),
             capacity: self.config.storage.write_buffer_size,
             idle_connections: self.idle_connections.clone(),
+            read_timeout: super::DEFAULT_READ_TIMEOUT,
+            sleep: Box::pin(time::sleep(Duration::ZERO)),
+            active: false,
         }
         .boxed()
     }
@@ -449,6 +453,16 @@ struct ContentStream {
 
     /// The idle connections the connection is returned to.
     idle_connections: IdleConnections,
+
+    /// The timeout of each read, reset after a successful read.
+    read_timeout: Duration,
+
+    /// The timer of the read timeout.
+    sleep: Pin<Box<Sleep>>,
+
+    /// Whether the timer is running. It starts when a read waits on the server, so the time the
+    /// consumer spends between reads does not count.
+    active: bool,
 }
 
 impl Stream for ContentStream {
@@ -465,13 +479,32 @@ impl Stream for ContentStream {
         }
 
         let n = match poll_read_buf(Pin::new(&mut *reader), cx, &mut this.buf) {
-            Poll::Pending => return Poll::Pending,
+            Poll::Pending => {
+                if !this.active {
+                    this.sleep
+                        .as_mut()
+                        .reset(time::Instant::now() + this.read_timeout);
+                    this.active = true;
+                }
+
+                if this.sleep.as_mut().poll(cx).is_ready() {
+                    this.reader = None;
+                    return Poll::Ready(Some(Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "read piece content timeout",
+                    ))));
+                }
+
+                return Poll::Pending;
+            }
             Poll::Ready(Err(err)) => {
                 this.reader = None;
                 return Poll::Ready(Some(Err(err)));
             }
             Poll::Ready(Ok(n)) => n,
         };
+
+        this.active = false;
 
         if reader.limit() == 0 {
             // The content is read completely, so the connection is idle again.
@@ -618,6 +651,65 @@ mod tests {
             assert_eq!(received, &data[..written.min(CONTENT.len())]);
             assert_eq!(client.idle_connections.lock().unwrap().len(), expected_idle);
             assert_eq!(client.idle_connection().is_some(), expected_reusable);
+        }
+    }
+
+    #[tokio::test]
+    async fn content_stream_fails_when_the_server_stops_sending() {
+        let client = TCPClient::new(Arc::new(Config::default()), String::new());
+        let (stream, mut server) = tcp_pair().await;
+        server.write_all(&CONTENT[..5]).await.unwrap();
+
+        let mut content_stream =
+            content_stream_with_read_timeout(&client, stream, Duration::from_millis(100));
+
+        assert_eq!(content_stream.next().await.unwrap().unwrap(), &CONTENT[..5]);
+        assert_eq!(
+            content_stream.next().await.unwrap().unwrap_err().kind(),
+            std::io::ErrorKind::TimedOut
+        );
+        assert!(content_stream.next().await.is_none());
+        assert!(client.idle_connections.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn content_stream_counts_only_the_time_waiting_on_the_server() {
+        let client = TCPClient::new(Arc::new(Config::default()), String::new());
+        let (stream, mut server) = tcp_pair().await;
+        server.write_all(&CONTENT[..5]).await.unwrap();
+
+        let read_timeout = Duration::from_millis(200);
+        let mut content_stream = content_stream_with_read_timeout(&client, stream, read_timeout);
+        assert_eq!(content_stream.next().await.unwrap().unwrap(), &CONTENT[..5]);
+
+        tokio::time::sleep(read_timeout * 2).await;
+        let writer = tokio::spawn(async move {
+            tokio::time::sleep(read_timeout / 10).await;
+            server.write_all(&CONTENT[5..]).await.unwrap();
+            server
+        });
+
+        let mut received = Vec::new();
+        while let Some(chunk) = content_stream.next().await {
+            received.extend_from_slice(&chunk.unwrap());
+        }
+        assert_eq!(received, &CONTENT[5..]);
+        writer.await.unwrap();
+    }
+
+    fn content_stream_with_read_timeout(
+        client: &TCPClient,
+        stream: TcpStream,
+        read_timeout: Duration,
+    ) -> ContentStream {
+        ContentStream {
+            reader: Some(stream.take(CONTENT.len() as u64)),
+            buf: BytesMut::new(),
+            capacity: CONTENT.len(),
+            idle_connections: client.idle_connections.clone(),
+            read_timeout,
+            sleep: Box::pin(time::sleep(Duration::ZERO)),
+            active: false,
         }
     }
 

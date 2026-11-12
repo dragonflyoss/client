@@ -34,7 +34,7 @@
 //!
 //! # Features
 //!
-//! - **Connection Pooling**: Maintains a pool of HTTP clients for concurrent downloads.
+//! - **Connection Pooling**: Reuses one connection pool, with one connection per in-flight request.
 //! - **Automatic Retries**: Uses exponential backoff for transient failures.
 //! - **307 Redirect Caching**: Caches temporary redirects to reduce round trips to origin servers.
 //! - **Custom Headers**: Supports custom request headers configured in dfdaemon config.
@@ -50,7 +50,6 @@ use crate::{
     StatRequest, StatResponse, DEFAULT_USER_AGENT, KEEP_ALIVE_INTERVAL, POOL_MAX_IDLE_PER_HOST,
 };
 use async_trait::async_trait;
-use dashmap::{mapref::entry::Entry, DashMap};
 use dragonfly_api::common::v2::Range;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
@@ -102,8 +101,9 @@ pub struct HTTP {
     /// The scheme of the HTTP backend.
     scheme: String,
 
-    /// A pool of reqwest clients (each has its own connection pool).
-    clients: Arc<DashMap<usize, ClientWithMiddleware>>,
+    /// The reqwest client. Over HTTP/1.1 each in-flight request holds its own connection,
+    /// so concurrent requests to an origin open multiple TCP connections from one pool.
+    client: ClientWithMiddleware,
 
     /// The custom request headers configurated in the dfdaemon config,
     /// which will insert to the each request if original header is not already set.
@@ -132,9 +132,6 @@ pub struct HTTP {
 
 /// Implements the http interface.
 impl HTTP {
-    /// The maximum number of connections per address.
-    const MAX_CONNECTIONS_PER_ADDRESS: usize = 32;
-
     /// The default capacity for temporary redirect cache.
     const DEFAULT_CACHE_TEMPORARY_REDIRECT_CAPACITY: usize = 1000;
 
@@ -158,53 +155,43 @@ impl HTTP {
         //
         // Solution: Disable all compression formats (gzip, brotli, zstd, deflate) to ensure
         // we receive and store uncompressed content, eliminating the double-decompression issue.
-        let make_reqwest_client = || -> Result<ClientWithMiddleware> {
-            // Default TLS client config with no validation.
-            let client_config_builder = rustls::ClientConfig::builder()
-                .dangerous()
-                .with_custom_certificate_verifier(NoVerifier::new())
-                .with_no_client_auth();
+        // Default TLS client config with no validation.
+        let client_config_builder = rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(NoVerifier::new())
+            .with_no_client_auth();
 
-            let client = reqwest::Client::builder()
-                // Disable automatic compression to prevent double-decompression issues.
-                .no_gzip()
-                .no_brotli()
-                .no_zstd()
-                .no_deflate()
-                .http1_only()
-                .hickory_dns(enable_hickory_dns)
-                .use_preconfigured_tls(client_config_builder)
-                .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
-                .tcp_keepalive(KEEP_ALIVE_INTERVAL)
-                .tcp_nodelay(true)
-                .redirect(reqwest::redirect::Policy::custom(move |attempt| {
-                    if enable_cache_temporary_redirect
-                        && attempt.status() == reqwest::StatusCode::TEMPORARY_REDIRECT
-                    {
-                        attempt.stop()
-                    } else {
-                        attempt.follow()
-                    }
-                })) // Disable automatic redirects when status is 307.
-                .build()?;
+        let client = reqwest::Client::builder()
+            // Disable automatic compression to prevent double-decompression issues.
+            .no_gzip()
+            .no_brotli()
+            .no_zstd()
+            .no_deflate()
+            .http1_only()
+            .hickory_dns(enable_hickory_dns)
+            .use_preconfigured_tls(client_config_builder)
+            .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
+            .tcp_keepalive(KEEP_ALIVE_INTERVAL)
+            .tcp_nodelay(true)
+            .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+                if enable_cache_temporary_redirect
+                    && attempt.status() == reqwest::StatusCode::TEMPORARY_REDIRECT
+                {
+                    attempt.stop()
+                } else {
+                    attempt.follow()
+                }
+            })) // Disable automatic redirects when status is 307.
+            .build()?;
 
-            let retry_policy = ExponentialBackoff::builder().build_with_max_retries(max_retries);
-            let client = ClientBuilder::new(client)
-                .with(RetryTransientMiddleware::new_with_policy(retry_policy))
-                .build();
-
-            Ok(client)
-        };
-
-        let clients = DashMap::with_capacity(Self::MAX_CONNECTIONS_PER_ADDRESS);
-        for i in 0..Self::MAX_CONNECTIONS_PER_ADDRESS {
-            let client = make_reqwest_client()?;
-            clients.insert(i, client);
-        }
+        let retry_policy = ExponentialBackoff::builder().build_with_max_retries(max_retries);
+        let client = ClientBuilder::new(client)
+            .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+            .build();
 
         Ok(Self {
             scheme: scheme.to_string(),
-            clients: Arc::new(clients),
+            client,
             request_header,
             max_retries,
             temporary_redirects: Arc::new(Mutex::new(LruCache::new(
@@ -277,13 +264,7 @@ impl HTTP {
                 Ok(client)
             }
             // Default TLS client config with no validation.
-            None => match self
-                .clients
-                .entry(fastrand::usize(..Self::MAX_CONNECTIONS_PER_ADDRESS))
-            {
-                Entry::Occupied(o) => Ok(o.get().clone()),
-                Entry::Vacant(_) => Err(Error::Unknown("reqwest client not found".to_string())),
-            },
+            None => Ok(self.client.clone()),
         }
     }
 
@@ -408,8 +389,10 @@ impl Backend for HTTP {
             }),
         )?;
 
-        // Check if we have a cached temporary redirect for this URL.
-        let (request_url, request_header) =
+        // Request the cached temporary redirect for this URL if exists. If it is rejected with a
+        // client error other than 416, e.g. its signed URL has expired, remove it from the
+        // cache and request the URL itself.
+        let (request_url, request_header, redirect_result) =
             match self.get_temporary_redirect_url(&request.url).await {
                 Some(redirect_url) => {
                     let mut redirect_headers = request_header.clone();
@@ -419,23 +402,48 @@ impl Backend for HTTP {
                         &request.url.parse()?,
                     );
 
-                    (redirect_url, redirect_headers)
+                    let redirect_result = self
+                        .client(request.client_cert.clone(), self.enable_hickory_dns)?
+                        .get(&redirect_url)
+                        .headers(redirect_headers.clone())
+                        .timeout(request.timeout)
+                        .send()
+                        .await;
+                    if redirect_result.as_ref().is_ok_and(|response| {
+                        response.status().is_client_error()
+                            && response.status() != reqwest::StatusCode::RANGE_NOT_SATISFIABLE
+                    }) {
+                        debug!(
+                            "stat request got rejected by cached temporary redirect {} {}",
+                            request.task_id, redirect_url
+                        );
+
+                        self.temporary_redirects.lock().await.pop(&request.url);
+                        (request.url.clone(), request_header, None)
+                    } else {
+                        (redirect_url, redirect_headers, Some(redirect_result))
+                    }
                 }
-                None => (request.url.clone(), request_header),
+                None => (request.url.clone(), request_header, None),
             };
 
         // The signature in the signed URL generated by the object storage client will include
         // the request method. Therefore, the signed URL of the GET method cannot be requested
         // through the HEAD method. Use GET request to replace of HEAD request
         // to get header and status code.
-        let response = match self
-            .client(request.client_cert.clone(), self.enable_hickory_dns)?
-            .get(&request_url)
-            .headers(request_header.clone())
-            .timeout(request.timeout)
-            .send()
-            .await
-        {
+        let result = match redirect_result {
+            Some(redirect_result) => redirect_result,
+            None => {
+                self.client(request.client_cert.clone(), self.enable_hickory_dns)?
+                    .get(&request_url)
+                    .headers(request_header.clone())
+                    .timeout(request.timeout)
+                    .send()
+                    .await
+            }
+        };
+
+        let response = match result {
             Ok(response) if response.status() == reqwest::StatusCode::TEMPORARY_REDIRECT => {
                 if let Some(location) = response.headers().get(LOCATION) {
                     let location = location.to_str().or_err(ErrorType::ParseError)?;
@@ -673,8 +681,10 @@ impl Backend for HTTP {
         // Make the custom request headers.
         self.make_request_headers(&mut request_header, request.range)?;
 
-        // Check if we have a cached temporary redirect for this URL.
-        let (request_url, request_header) =
+        // Request the cached temporary redirect for this URL if exists. If it is rejected with a
+        // client error other than 416, e.g. its signed URL has expired, remove it from the
+        // cache and request the URL itself.
+        let (request_url, request_header, redirect_result) =
             match self.get_temporary_redirect_url(&request.url).await {
                 Some(redirect_url) => {
                     let mut redirect_headers = request_header.clone();
@@ -684,19 +694,44 @@ impl Backend for HTTP {
                         &request.url.parse()?,
                     );
 
-                    (redirect_url, redirect_headers)
+                    let redirect_result = self
+                        .client(request.client_cert.clone(), self.enable_hickory_dns)?
+                        .get(&redirect_url)
+                        .headers(redirect_headers.clone())
+                        .timeout(request.timeout)
+                        .send()
+                        .await;
+                    if redirect_result.as_ref().is_ok_and(|response| {
+                        response.status().is_client_error()
+                            && response.status() != reqwest::StatusCode::RANGE_NOT_SATISFIABLE
+                    }) {
+                        debug!(
+                            "get request got rejected by cached temporary redirect {} {} {}",
+                            request.task_id, request.piece_id, redirect_url
+                        );
+
+                        self.temporary_redirects.lock().await.pop(&request.url);
+                        (request.url.clone(), request_header, None)
+                    } else {
+                        (redirect_url, redirect_headers, Some(redirect_result))
+                    }
                 }
-                None => (request.url.clone(), request_header),
+                None => (request.url.clone(), request_header, None),
             };
 
-        let mut response = match self
-            .client(request.client_cert.clone(), self.enable_hickory_dns)?
-            .get(&request_url)
-            .headers(request_header.clone())
-            .timeout(request.timeout)
-            .send()
-            .await
-        {
+        let result = match redirect_result {
+            Some(redirect_result) => redirect_result,
+            None => {
+                self.client(request.client_cert.clone(), self.enable_hickory_dns)?
+                    .get(&request_url)
+                    .headers(request_header.clone())
+                    .timeout(request.timeout)
+                    .send()
+                    .await
+            }
+        };
+
+        let mut response = match result {
             Ok(response) => response,
             Err(err) => {
                 error!(
@@ -934,7 +969,10 @@ mod tests {
     };
     use hyper_util::rt::{TokioExecutor, TokioIo};
     use reqwest::StatusCode;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+    use tokio::sync::Barrier;
     use tokio_rustls::rustls::ServerConfig;
     use tokio_rustls::TlsAcceptor;
     use wiremock::{
@@ -1090,6 +1128,46 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
         });
 
         format!("http://{addr}")
+    }
+
+    async fn start_counting_server(barrier: Option<Arc<Barrier>>) -> (String, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let connections = Arc::new(AtomicUsize::new(0));
+        tokio::spawn({
+            let connections = connections.clone();
+            async move {
+                loop {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    connections.fetch_add(1, Ordering::SeqCst);
+                    let barrier = barrier.clone();
+                    tokio::spawn(async move {
+                        let mut request = Vec::new();
+                        let mut buffer = [0u8; 1024];
+                        loop {
+                            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                                let n = stream.read(&mut buffer).await.unwrap();
+                                if n == 0 {
+                                    return;
+                                }
+                                request.extend_from_slice(&buffer[..n]);
+                            }
+
+                            request.clear();
+                            if let Some(barrier) = &barrier {
+                                barrier.wait().await;
+                            }
+                            stream
+                                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 1\r\n\r\na")
+                                .await
+                                .unwrap();
+                        }
+                    });
+                }
+            }
+        });
+
+        (format!("http://{addr}/get"), connections)
     }
 
     #[tokio::test]
@@ -1397,6 +1475,48 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 .unwrap();
             let body = response.text().await.unwrap();
             expect(response, &body);
+        }
+    }
+
+    #[tokio::test]
+    async fn get_opens_connections_only_for_concurrent_requests() {
+        const REQUESTS: usize = 8;
+
+        let test_cases = vec![(true, REQUESTS), (false, 1)];
+
+        for (concurrent, expected_connections) in test_cases {
+            let barrier = concurrent.then(|| Arc::new(Barrier::new(REQUESTS)));
+            let (url, connections) = start_counting_server(barrier).await;
+            let http =
+                HTTP::new(HTTP_SCHEME, None, 0, true, Duration::from_secs(600), true).unwrap();
+            let request = || {
+                http.get(GetRequest {
+                    task_id: "test".to_string(),
+                    piece_id: "test".to_string(),
+                    url: url.clone(),
+                    range: None,
+                    http_header: Some(HeaderMap::new()),
+                    timeout: Duration::from_secs(5),
+                    client_cert: None,
+                    object_storage: None,
+                    hdfs: None,
+                    hugging_face: None,
+                    model_scope: None,
+                    open_csg: None,
+                })
+            };
+
+            if concurrent {
+                for response in futures::future::join_all((0..REQUESTS).map(|_| request())).await {
+                    assert_eq!(response.unwrap().text().await.unwrap(), "a");
+                }
+            } else {
+                for _ in 0..REQUESTS {
+                    assert_eq!(request().await.unwrap().text().await.unwrap(), "a");
+                }
+            }
+
+            assert_eq!(connections.load(Ordering::SeqCst), expected_connections);
         }
     }
 
@@ -1847,6 +1967,168 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 assert_eq!(response.text().await.unwrap(), "target content");
 
                 tokio::time::sleep(wait).await;
+            }
+
+            server.verify().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn get_falls_back_to_the_original_url_when_the_cached_redirect_is_rejected() {
+        install_crypto_provider();
+
+        let test_cases = vec![
+            (401, 1, StatusCode::OK),
+            (403, 1, StatusCode::OK),
+            (404, 1, StatusCode::OK),
+            (416, 0, StatusCode::RANGE_NOT_SATISFIABLE),
+        ];
+
+        for (rejected_status, expected_fallback_requests, expected_status) in test_cases {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/expired"))
+                .respond_with(ResponseTemplate::new(200).set_body_string("target content"))
+                .up_to_n_times(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/expired"))
+                .respond_with(ResponseTemplate::new(rejected_status))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/target"))
+                .respond_with(ResponseTemplate::new(200).set_body_string("target content"))
+                .expect(expected_fallback_requests)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/redirect"))
+                .respond_with(
+                    ResponseTemplate::new(307)
+                        .insert_header("Location", format!("{}/expired", server.uri()).as_str()),
+                )
+                .up_to_n_times(1)
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/redirect"))
+                .respond_with(
+                    ResponseTemplate::new(307)
+                        .insert_header("Location", format!("{}/target", server.uri()).as_str()),
+                )
+                .expect(expected_fallback_requests)
+                .mount(&server)
+                .await;
+
+            let http =
+                HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+            let url = format!("{}/redirect", server.uri());
+            for expected_status in [StatusCode::OK, expected_status] {
+                let response = http
+                    .get(GetRequest {
+                        task_id: "test".to_string(),
+                        piece_id: "test".to_string(),
+                        url: url.clone(),
+                        range: None,
+                        http_header: Some(HeaderMap::new()),
+                        timeout: Duration::from_secs(5),
+                        client_cert: None,
+                        object_storage: None,
+                        hdfs: None,
+                        hugging_face: None,
+                        model_scope: None,
+                        open_csg: None,
+                    })
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.http_status_code,
+                    Some(expected_status),
+                    "rejected status: {rejected_status}"
+                );
+            }
+
+            server.verify().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn stat_falls_back_to_the_original_url_when_the_cached_redirect_is_rejected() {
+        install_crypto_provider();
+
+        let test_cases = vec![
+            (401, 1, StatusCode::OK),
+            (403, 1, StatusCode::OK),
+            (404, 1, StatusCode::OK),
+            (416, 0, StatusCode::RANGE_NOT_SATISFIABLE),
+        ];
+
+        for (rejected_status, expected_fallback_requests, expected_status) in test_cases {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/expired"))
+                .respond_with(ResponseTemplate::new(200).set_body_string("target content"))
+                .up_to_n_times(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/expired"))
+                .respond_with(ResponseTemplate::new(rejected_status))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/target"))
+                .respond_with(ResponseTemplate::new(200).set_body_string("target content"))
+                .expect(expected_fallback_requests)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/redirect"))
+                .respond_with(
+                    ResponseTemplate::new(307)
+                        .insert_header("Location", format!("{}/expired", server.uri()).as_str()),
+                )
+                .up_to_n_times(1)
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/redirect"))
+                .respond_with(
+                    ResponseTemplate::new(307)
+                        .insert_header("Location", format!("{}/target", server.uri()).as_str()),
+                )
+                .expect(expected_fallback_requests)
+                .mount(&server)
+                .await;
+
+            let http =
+                HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+            let url = format!("{}/redirect", server.uri());
+            for expected_status in [StatusCode::OK, expected_status] {
+                let response = http
+                    .stat(StatRequest {
+                        task_id: "test".to_string(),
+                        url: url.clone(),
+                        http_header: Some(HeaderMap::new()),
+                        timeout: Duration::from_secs(5),
+                        client_cert: None,
+                        object_storage: None,
+                        hdfs: None,
+                        hugging_face: None,
+                        model_scope: None,
+                        open_csg: None,
+                    })
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.http_status_code,
+                    Some(expected_status),
+                    "rejected status: {rejected_status}"
+                );
             }
 
             server.verify().await;
