@@ -82,7 +82,7 @@ use tracing::{debug, error, info, instrument, Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
-use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
+use super::interceptor::{ClientInterceptor, ServerInterceptor};
 use super::middleware::rate_limit;
 
 /// The interval for re-checking the interested pieces when none of them is in-flight,
@@ -163,7 +163,7 @@ impl DfdaemonUploadServer {
                 persistent_cache_task: self.persistent_cache_task.clone(),
                 system_monitor: self.system_monitor.clone(),
             },
-            ExtractTracingInterceptor,
+            ServerInterceptor::new(&self.config.security.jwt),
         );
 
         // Register the reflection service.
@@ -2640,7 +2640,7 @@ impl DfdaemonUpload for DfdaemonUploadServerHandler {
 #[derive(Clone)]
 pub struct DfdaemonUploadClient {
     /// The grpc client of the dfdaemon upload.
-    pub client: DfdaemonUploadGRPCClient<InterceptedService<Channel, InjectTracingInterceptor>>,
+    pub client: DfdaemonUploadGRPCClient<InterceptedService<Channel, ClientInterceptor>>,
 }
 
 /// Dfdaemon upload client implements the dfdaemon upload grpc client.
@@ -2710,9 +2710,12 @@ impl DfdaemonUploadClient {
                 .or_err(ErrorType::ConnectError)?,
         };
 
-        let client = DfdaemonUploadGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
-            .max_decoding_message_size(usize::MAX)
-            .max_encoding_message_size(usize::MAX);
+        let client = DfdaemonUploadGRPCClient::with_interceptor(
+            channel,
+            ClientInterceptor::new(&config.security.jwt),
+        )
+        .max_decoding_message_size(usize::MAX)
+        .max_encoding_message_size(usize::MAX);
         Ok(Self { client })
     }
 

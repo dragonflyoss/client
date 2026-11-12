@@ -68,6 +68,7 @@ hyper-util = { version = "0.1.20", features = [
   "server-auto",
   "tokio",
 ] }
+jsonwebtoken = { version = "9.3.0", default-features = false }
 leaky-bucket = "1.1.2"
 local-ip-address = "0.6.5"
 lru = "0.19.0"

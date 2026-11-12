@@ -94,7 +94,7 @@ use tracing::{debug, error, info, instrument, warn, Instrument, Span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use url::Url;
 
-use super::interceptor::{ExtractTracingInterceptor, InjectTracingInterceptor};
+use super::interceptor::{ClientInterceptor, ExtractTracingInterceptor};
 use super::middleware::rate_limit;
 
 /// gRPC Unix server for download operations.
@@ -2355,7 +2355,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 #[derive(Clone)]
 pub struct DfdaemonDownloadClient {
     /// The grpc client of the dfdaemon.
-    pub client: DfdaemonDownloadGRPCClient<InterceptedService<Channel, InjectTracingInterceptor>>,
+    pub client: DfdaemonDownloadGRPCClient<InterceptedService<Channel, ClientInterceptor>>,
 }
 
 /// Dfdaemon download client implements the grpc client of the dfdaemon download.
@@ -2413,10 +2413,12 @@ impl DfdaemonDownloadClient {
                 .or_err(ErrorType::ConnectError)?,
         };
 
-        let client =
-            DfdaemonDownloadGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
-                .max_decoding_message_size(usize::MAX)
-                .max_encoding_message_size(usize::MAX);
+        let client = DfdaemonDownloadGRPCClient::with_interceptor(
+            channel,
+            ClientInterceptor::new(&config.security.jwt),
+        )
+        .max_decoding_message_size(usize::MAX)
+        .max_encoding_message_size(usize::MAX);
         Ok(Self { client })
     }
 
@@ -2448,7 +2450,7 @@ impl DfdaemonDownloadClient {
             .or_err(ErrorType::ConnectError)?;
 
         let client =
-            DfdaemonDownloadGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
+            DfdaemonDownloadGRPCClient::with_interceptor(channel, ClientInterceptor::default())
                 .max_decoding_message_size(usize::MAX)
                 .max_encoding_message_size(usize::MAX);
         Ok(Self { client })

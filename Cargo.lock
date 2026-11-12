@@ -1319,6 +1319,7 @@ dependencies = [
  "hyper-util",
  "indicatif",
  "jemalloc_pprof",
+ "jsonwebtoken 9.3.0",
  "leaky-bucket",
  "mocktail",
  "oci-client 0.18.0",
@@ -3631,9 +3632,9 @@ dependencies = [
 
 [[package]]
 name = "opentelemetry-semantic-conventions"
-version = "0.33.1"
+version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a3cf639fefd3e852869114f9925b578da6dd8e99281a2089bb0e773ead46962"
+checksum = "c913ac17a6c451661ee255f4625d143e51647ae78ebd969b75e41c4442f4fe47"
 
 [[package]]
 name = "opentelemetry_sdk"

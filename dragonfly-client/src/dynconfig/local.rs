@@ -236,16 +236,17 @@ impl Local {
             }
         };
 
-        let health_client = match HealthClient::new(&addr, client_tls_config).await {
-            Ok(health_client) => health_client,
-            Err(err) => {
-                error!(
-                    "create health client for scheduler {} failed: {}",
-                    addr, err
-                );
-                return false;
-            }
-        };
+        let health_client =
+            match HealthClient::new(&addr, client_tls_config, &config.security.jwt).await {
+                Ok(health_client) => health_client,
+                Err(err) => {
+                    error!(
+                        "create health client for scheduler {} failed: {}",
+                        addr, err
+                    );
+                    return false;
+                }
+            };
 
         match health_client.check().await {
             Ok(resp) if resp.status == ServingStatus::Serving as i32 => true,

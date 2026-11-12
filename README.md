@@ -15,6 +15,8 @@ Dragonfly client written in Rust. It can serve as both a peer and a seed peer.
 
 You can find the full documentation on the [d7y.io](https://d7y.io).
 
+- [Configure gRPC JWT authentication](docs/grpc-jwt-auth.md)
+
 ## Community
 
 Join the conversation and help the community grow. Here are the ways to get involved:
