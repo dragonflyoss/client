@@ -200,7 +200,7 @@ async fn test_concurrent_create_file_agree_on_one_data_key() {
         let cipher = encryptor.cipher(&path).await.unwrap();
         let fd = open_rw(&path);
         write_encrypted_range(
-            fd.clone(),
+            &dragonfly_client_util::fs::fd::WriteFD::new(fd.clone()),
             cipher,
             0,
             piece_length,
@@ -465,7 +465,7 @@ async fn test_random_geometries_roundtrip() {
                 max: rng.range(1, 2 * chunk_size + 3),
             };
             let response = write_encrypted_range(
-                fd.clone(),
+                &dragonfly_client_util::fs::fd::WriteFD::new(fd.clone()),
                 cipher.clone(),
                 offset,
                 length,
@@ -555,7 +555,7 @@ async fn test_duplicate_concurrent_piece_writes_stay_readable() {
                 let piece = content[offset as usize..(offset + piece_length) as usize].to_vec();
                 for _ in 0..10 {
                     write_encrypted_range(
-                        fd.clone(),
+                        &dragonfly_client_util::fs::fd::WriteFD::new(fd.clone()),
                         cipher.clone(),
                         offset,
                         piece_length,
@@ -600,7 +600,7 @@ async fn test_dropping_a_reader_with_a_prefetch_in_flight() {
     let cipher = encryptor.cipher(&path).await.unwrap();
     let fd = open_rw(&path);
     write_encrypted_range(
-        fd.clone(),
+        &dragonfly_client_util::fs::fd::WriteFD::new(fd.clone()),
         cipher.clone(),
         0,
         piece_length,

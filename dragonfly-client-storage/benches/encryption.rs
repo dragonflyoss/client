@@ -27,6 +27,7 @@ use dragonfly_client_storage::encryption::{
 };
 use dragonfly_client_storage::io::{write_range, RangeReader};
 use dragonfly_client_util::buffer_pool::BufferPool;
+use dragonfly_client_util::fs::fd::WriteFD;
 use std::fs::File;
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -67,7 +68,7 @@ fn populate(
     rt.block_on(async {
         let mut reader = Cursor::new(content);
         write_encrypted_range(
-            fd.clone(),
+            &WriteFD::new(fd.clone()),
             cipher.clone(),
             0,
             PIECE_LENGTH as u64,
@@ -189,6 +190,7 @@ fn bench_write_piece(c: &mut Criterion) {
             .open(&plain_path)
             .unwrap(),
     );
+    let plain_fd = WriteFD::new(plain_fd);
     group.bench_function("plaintext", |b| {
         b.iter(|| {
             let fd = plain_fd.clone();
@@ -196,7 +198,7 @@ fn bench_write_piece(c: &mut Criterion) {
             let pool = pool.clone();
             rt.block_on(async move {
                 let mut reader = Cursor::new(content.as_slice());
-                write_range(fd, 0, PIECE_LENGTH as u64, BUFFER_SIZE, &mut reader, &pool)
+                write_range(&fd, 0, PIECE_LENGTH as u64, BUFFER_SIZE, &mut reader, &pool)
                     .await
                     .unwrap()
             })
@@ -219,6 +221,7 @@ fn bench_write_piece(c: &mut Criterion) {
             .unwrap(),
     );
     populate(&rt, &enc_fd, &cipher, &pool, &content);
+    let enc_fd = WriteFD::new(enc_fd);
     group.bench_function(BenchmarkId::new("encrypted", DEFAULT_CHUNK_SIZE), |b| {
         b.iter(|| {
             let fd = enc_fd.clone();
@@ -228,7 +231,7 @@ fn bench_write_piece(c: &mut Criterion) {
             rt.block_on(async move {
                 let mut reader = Cursor::new(content.as_slice());
                 write_encrypted_range(
-                    fd,
+                    &fd,
                     cipher,
                     0,
                     PIECE_LENGTH as u64,
@@ -257,6 +260,7 @@ fn bench_write_piece(c: &mut Criterion) {
                 .unwrap(),
         );
         populate(&rt, &fd, &cipher, &pool, &content);
+        let fd = WriteFD::new(fd);
         group.bench_function(BenchmarkId::new("encrypted", chunk_size), |b| {
             b.iter(|| {
                 let fd = fd.clone();
@@ -266,7 +270,7 @@ fn bench_write_piece(c: &mut Criterion) {
                 rt.block_on(async move {
                     let mut reader = Cursor::new(content.as_slice());
                     write_encrypted_range(
-                        fd,
+                        &fd,
                         cipher,
                         0,
                         PIECE_LENGTH as u64,
@@ -286,6 +290,7 @@ fn bench_write_piece(c: &mut Criterion) {
     let mut group = c.benchmark_group("read_piece");
     group.throughput(Throughput::Bytes(PIECE_LENGTH as u64));
     group.sample_size(30);
+    let plain_fd = WriteFD::new(plain_fd);
     group.bench_function("plaintext", |b| {
         b.iter(|| {
             let fd = plain_fd.clone();
@@ -362,6 +367,7 @@ fn bench_write_piece(c: &mut Criterion) {
         let mut group = c.benchmark_group(format!("read_piece_paced_{rate}gib"));
         group.throughput(Throughput::Bytes(PIECE_LENGTH as u64));
         group.sample_size(20);
+        let plain_fd = WriteFD::new(plain_fd);
         group.bench_function("plaintext", |b| {
             b.iter(|| {
                 let fd = plain_fd.clone();

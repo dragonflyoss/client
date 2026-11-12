@@ -88,4 +88,40 @@ pub trait Operations {
 
     // batch_delete deletes objects by keys.
     fn batch_delete<O: DatabaseObject>(&self, keys: Vec<&[u8]>) -> Result<()>;
+
+    /// Writes the puts and deletes of the batch atomically.
+    fn batch_write(&self, batch: WriteBatch) -> Result<()>;
+}
+
+/// The write of the object in the write batch.
+enum Write {
+    /// Puts the serialized object by the namespace and the key.
+    Put(&'static str, Vec<u8>, Vec<u8>),
+
+    /// Deletes the object by the namespace and the key.
+    Delete(&'static str, Vec<u8>),
+}
+
+/// A batch of the puts and deletes of the objects in different namespaces, which
+/// is written atomically by [Operations::batch_write], such as an object and its
+/// index.
+#[derive(Default)]
+pub struct WriteBatch {
+    /// The writes of the objects in order.
+    writes: Vec<Write>,
+}
+
+/// Implements the write batch.
+impl WriteBatch {
+    /// Puts the object by key.
+    pub fn put<O: DatabaseObject>(&mut self, key: &[u8], value: &O) -> Result<()> {
+        self.writes
+            .push(Write::Put(O::NAMESPACE, key.to_vec(), value.serialized()?));
+        Ok(())
+    }
+
+    /// Deletes the object by key.
+    pub fn delete<O: DatabaseObject>(&mut self, key: &[u8]) {
+        self.writes.push(Write::Delete(O::NAMESPACE, key.to_vec()));
+    }
 }

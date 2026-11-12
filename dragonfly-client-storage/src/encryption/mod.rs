@@ -789,7 +789,7 @@ mod tests {
         for (number, piece) in content.chunks(piece_length as usize).enumerate() {
             let offset = number as u64 * piece_length;
             let response = write_encrypted_range(
-                fd.clone(),
+                &dragonfly_client_util::fs::fd::WriteFD::new(fd.clone()),
                 cipher.clone(),
                 offset,
                 piece.len() as u64,
@@ -1199,7 +1199,7 @@ mod tests {
 
         // A short reader is a length mismatch.
         let result = write_encrypted_range(
-            fd.clone(),
+            &dragonfly_client_util::fs::fd::WriteFD::new(fd.clone()),
             cipher.clone(),
             0,
             100,
@@ -1212,7 +1212,7 @@ mod tests {
 
         // Only the first `expected_length` bytes of a long reader are written.
         let response = write_encrypted_range(
-            fd.clone(),
+            &dragonfly_client_util::fs::fd::WriteFD::new(fd.clone()),
             cipher.clone(),
             100,
             100,
@@ -1226,7 +1226,7 @@ mod tests {
 
         // Ranges that are not a piece are rejected.
         assert!(write_encrypted_range(
-            fd.clone(),
+            &dragonfly_client_util::fs::fd::WriteFD::new(fd.clone()),
             cipher.clone(),
             50,
             100,
@@ -1237,7 +1237,7 @@ mod tests {
         .await
         .is_err());
         assert!(write_encrypted_range(
-            fd.clone(),
+            &dragonfly_client_util::fs::fd::WriteFD::new(fd.clone()),
             cipher.clone(),
             200,
             100,
@@ -1253,7 +1253,7 @@ mod tests {
         encryptor.create_file(&empty, 0, 0).await.unwrap();
         let cipher = encryptor.cipher(&empty).await.unwrap();
         let response = write_encrypted_range(
-            open(&empty).await,
+            &dragonfly_client_util::fs::fd::WriteFD::new(open(&empty).await),
             cipher,
             0,
             0,
@@ -1293,7 +1293,7 @@ mod tests {
                 let end = min(offset + piece_length, content.len() as u64);
                 let piece = content[offset as usize..end as usize].to_vec();
                 write_encrypted_range(
-                    fd,
+                    &dragonfly_client_util::fs::fd::WriteFD::new(fd),
                     cipher,
                     offset,
                     piece.len() as u64,
@@ -1346,7 +1346,7 @@ mod tests {
         encryptor.create_file(&path, 100, 300).await.unwrap();
         let cipher = encryptor.cipher(&path).await.unwrap();
         write_encrypted_range(
-            open(&path).await,
+            &dragonfly_client_util::fs::fd::WriteFD::new(open(&path).await),
             cipher,
             0,
             100,

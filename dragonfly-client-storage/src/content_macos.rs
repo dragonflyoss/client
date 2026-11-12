@@ -23,7 +23,7 @@ use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_config::MIN_PIECE_LENGTH;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::buffer_pool::BufferPool;
-use dragonfly_client_util::fs::fd::{FDCache, DEFAULT_FD_CACHE_CAPACITY};
+use dragonfly_client_util::fs::fd::{FDCache, WritePriority, DEFAULT_FD_CACHE_CAPACITY};
 use dragonfly_client_util::fs::{fadvise_dontneed, fadvise_willneed, fallocate};
 use futures::Stream;
 use std::cmp::max;
@@ -249,6 +249,7 @@ impl Content {
     /// Creates the content file of a task, preallocated to the length of the
     /// content, and encrypted when the encryption at rest is enabled.
     async fn create_file(&self, path: &Path, piece_length: u64, length: u64) -> Result<()> {
+        self.fd_cache.remove(path)?;
         if let Some(encryptor) = &self.encryptor {
             return encryptor.create_file(path, piece_length, length).await;
         }
@@ -373,16 +374,22 @@ impl Content {
         path: &Path,
         offset: u64,
         expected_length: u64,
+        is_prefetch: bool,
         reader: &mut R,
     ) -> Result<WriteRangeResponse> {
-        let fd = self.fd_cache.open_write(path).await.inspect_err(|err| {
+        let mut fd = self.fd_cache.open_write(path).await.inspect_err(|err| {
             error!("open {:?} failed: {}", path, err);
         })?;
+        fd.set_priority(if is_prefetch {
+            WritePriority::Low
+        } else {
+            WritePriority::High
+        });
 
         if let Some(encryptor) = &self.encryptor {
             let cipher = encryptor.cipher(path).await?;
             let response = write_encrypted_range(
-                fd.clone(),
+                &fd,
                 cipher.clone(),
                 offset,
                 expected_length,
@@ -397,12 +404,14 @@ impl Content {
 
             let (disk_offset, disk_length) =
                 cipher.layout().piece_disk_range(offset, response.length)?;
-            self.writeback.trigger(&fd, disk_offset, disk_length).await;
+            self.writeback
+                .trigger(fd.get_ref(), disk_offset, disk_length)
+                .await;
             return Ok(response);
         }
 
         let response = super::io::write_range(
-            fd.clone(),
+            &fd,
             offset,
             expected_length,
             self.config.storage.write_buffer_size,
@@ -414,7 +423,9 @@ impl Content {
             error!("write {:?} failed: {}", path, err);
         })?;
 
-        self.writeback.trigger(&fd, offset, response.length).await;
+        self.writeback
+            .trigger(fd.get_ref(), offset, response.length)
+            .await;
         Ok(response)
     }
 
@@ -427,6 +438,7 @@ impl Content {
         path: &Path,
         offset: u64,
         expected_length: u64,
+        is_prefetch: bool,
         stream: &mut S,
     ) -> Result<WriteRangeResponse>
     where
@@ -435,16 +447,21 @@ impl Content {
         if self.encryptor.is_some() {
             let mut reader = StreamReader::new(&mut *stream);
             return self
-                .write_range(path, offset, expected_length, &mut reader)
+                .write_range(path, offset, expected_length, is_prefetch, &mut reader)
                 .await;
         }
 
-        let fd = self.fd_cache.open_write(path).await.inspect_err(|err| {
+        let mut fd = self.fd_cache.open_write(path).await.inspect_err(|err| {
             error!("open {:?} failed: {}", path, err);
         })?;
+        fd.set_priority(if is_prefetch {
+            WritePriority::Low
+        } else {
+            WritePriority::High
+        });
 
         let response = super::io::write_range_from_stream(
-            fd.clone(),
+            &fd,
             offset,
             expected_length,
             self.config.storage.write_buffer_size,
@@ -455,7 +472,9 @@ impl Content {
             error!("write {:?} failed: {}", path, err);
         })?;
 
-        self.writeback.trigger(&fd, offset, response.length).await;
+        self.writeback
+            .trigger(fd.get_ref(), offset, response.length)
+            .await;
         Ok(response)
     }
 
@@ -577,20 +596,19 @@ impl Content {
     pub async fn delete_task(&self, task_id: &str) -> Result<()> {
         info!("delete task content: {}", task_id);
         let task_path = self.get_task_path(task_id);
-
-        self.fd_cache.remove(&task_path).unwrap_or_else(|err| {
-            error!("remove {:?} from fd_cache failed: {}", task_path, err);
-        });
-
-        if let Some(encryptor) = &self.encryptor {
-            encryptor.evict(&task_path);
-        }
-
         fs::remove_file(task_path.as_path())
             .await
             .inspect_err(|err| {
                 error!("remove {:?} failed: {}", task_path, err);
             })?;
+
+        self.fd_cache.remove(&task_path).unwrap_or_else(|err| {
+            error!("remove {:?} from fd_cache failed: {}", task_path, err);
+        });
+        if let Some(encryptor) = &self.encryptor {
+            encryptor.evict(&task_path);
+        }
+
         Ok(())
     }
 
@@ -628,13 +646,14 @@ impl Content {
         task_id: &str,
         offset: u64,
         expected_length: u64,
+        is_prefetch: bool,
         stream: &mut S,
     ) -> Result<WriteRangeResponse>
     where
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
         let task_path = self.get_task_path(task_id);
-        self.write_range_from_stream(&task_path, offset, expected_length, stream)
+        self.write_range_from_stream(&task_path, offset, expected_length, is_prefetch, stream)
             .await
     }
 
@@ -805,7 +824,7 @@ impl Content {
         reader: &mut R,
     ) -> Result<WriteRangeResponse> {
         let task_path = self.get_persistent_task_path(task_id);
-        self.write_range(&task_path, offset, expected_length, reader)
+        self.write_range(&task_path, offset, expected_length, false, reader)
             .await
     }
 
@@ -823,7 +842,7 @@ impl Content {
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
         let task_path = self.get_persistent_task_path(task_id);
-        self.write_range_from_stream(&task_path, offset, expected_length, stream)
+        self.write_range_from_stream(&task_path, offset, expected_length, false, stream)
             .await
     }
 
@@ -831,6 +850,11 @@ impl Content {
     pub async fn delete_persistent_task(&self, task_id: &str) -> Result<()> {
         info!("delete persistent task content: {}", task_id);
         let persistent_task_path = self.get_persistent_task_path(task_id);
+        fs::remove_file(persistent_task_path.as_path())
+            .await
+            .inspect_err(|err| {
+                error!("remove {:?} failed: {}", persistent_task_path, err);
+            })?;
 
         self.fd_cache
             .remove(&persistent_task_path)
@@ -845,11 +869,6 @@ impl Content {
             encryptor.evict(&persistent_task_path);
         }
 
-        fs::remove_file(persistent_task_path.as_path())
-            .await
-            .inspect_err(|err| {
-                error!("remove {:?} failed: {}", persistent_task_path, err);
-            })?;
         Ok(())
     }
 
@@ -1030,7 +1049,7 @@ impl Content {
         reader: &mut R,
     ) -> Result<WriteRangeResponse> {
         let task_path = self.get_persistent_cache_task_path(task_id);
-        self.write_range(&task_path, offset, expected_length, reader)
+        self.write_range(&task_path, offset, expected_length, false, reader)
             .await
     }
 
@@ -1049,7 +1068,7 @@ impl Content {
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
         let task_path = self.get_persistent_cache_task_path(task_id);
-        self.write_range_from_stream(&task_path, offset, expected_length, stream)
+        self.write_range_from_stream(&task_path, offset, expected_length, false, stream)
             .await
     }
 
@@ -1057,6 +1076,11 @@ impl Content {
     pub async fn delete_persistent_cache_task(&self, task_id: &str) -> Result<()> {
         info!("delete persistent cache task content: {}", task_id);
         let persistent_cache_task_path = self.get_persistent_cache_task_path(task_id);
+        fs::remove_file(persistent_cache_task_path.as_path())
+            .await
+            .inspect_err(|err| {
+                error!("remove {:?} failed: {}", persistent_cache_task_path, err);
+            })?;
 
         self.fd_cache
             .remove(&persistent_cache_task_path)
@@ -1071,11 +1095,6 @@ impl Content {
             encryptor.evict(&persistent_cache_task_path);
         }
 
-        fs::remove_file(persistent_cache_task_path.as_path())
-            .await
-            .inspect_err(|err| {
-                error!("remove {:?} failed: {}", persistent_cache_task_path, err);
-            })?;
         Ok(())
     }
 
@@ -1195,6 +1214,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_task_removes_the_stale_file_descriptors() {
+        let temp_dir = tempdir().unwrap();
+        let content = content(Config::default(), temp_dir.path()).await;
+        let task_id = "60409bd0ec44160f44c53c39b3fe1c5fdfb23faded0228c68bee83bc15a200e3";
+
+        let test_cases: Vec<(&'static [u8], bool)> =
+            vec![(b"hello, world!", false), (b"HELLO, WORLD!", true)];
+
+        for (data, is_prefetch) in test_cases {
+            let task_path = content.create_task(task_id, 13, 13).await.unwrap();
+            content
+                .write_piece_from_stream(
+                    task_id,
+                    0,
+                    13,
+                    is_prefetch,
+                    &mut futures::stream::iter([Ok(Bytes::from_static(data))]),
+                )
+                .await
+                .unwrap();
+            assert_eq!(tokio::fs::read(&task_path).await.unwrap(), data);
+
+            tokio::fs::remove_file(&task_path).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn write_piece_from_stream_reads_back_in_every_writeback_mode() {
         let test_cases = vec![
             WritebackMode::Sync,
@@ -1217,6 +1263,7 @@ mod tests {
                     task_id,
                     0,
                     13,
+                    false,
                     &mut futures::stream::iter([Ok(Bytes::from_static(data))]),
                 )
                 .await
@@ -1248,6 +1295,7 @@ mod tests {
                 task_id,
                 0,
                 13,
+                false,
                 &mut futures::stream::iter([Ok(Bytes::from_static(data))]),
             )
             .await
@@ -1346,6 +1394,7 @@ mod tests {
                 task_id,
                 0,
                 13,
+                false,
                 &mut futures::stream::iter([Ok(Bytes::from_static(b"hello, world!"))]),
             )
             .await
@@ -1390,6 +1439,7 @@ mod tests {
                 task_id,
                 0,
                 4,
+                false,
                 &mut futures::stream::iter([Ok(Bytes::from_static(b"test"))]),
             )
             .await
@@ -1908,7 +1958,7 @@ mod tests {
                 Ok(Bytes::copy_from_slice(&piece[piece.len() / 2..])),
             ]);
             let response = content
-                .write_piece_from_stream(task_id, offset, piece.len() as u64, &mut stream)
+                .write_piece_from_stream(task_id, offset, piece.len() as u64, false, &mut stream)
                 .await
                 .unwrap();
             assert_eq!(response.length, piece.len() as u64);
@@ -1989,7 +2039,7 @@ mod tests {
                 .unwrap();
             let mut stream = futures::stream::iter([Ok(Bytes::copy_from_slice(&data))]);
             content
-                .write_piece_from_stream(task_id, 0, data.len() as u64, &mut stream)
+                .write_piece_from_stream(task_id, 0, data.len() as u64, false, &mut stream)
                 .await
                 .unwrap();
         }
@@ -2057,7 +2107,7 @@ mod tests {
             content.create_task(task_id, 13, 13).await.unwrap();
             let mut stream = futures::stream::iter([Ok(Bytes::from_static(b"hello, world!"))]);
             content
-                .write_piece_from_stream(task_id, 0, 13, &mut stream)
+                .write_piece_from_stream(task_id, 0, 13, false, &mut stream)
                 .await
                 .unwrap();
             assert!(content

@@ -62,6 +62,10 @@ pub enum DFError {
     #[error{"piece {0} not found"}]
     PieceNotFound(String),
 
+    /// The error when the image is not found.
+    #[error{"image {0} not found"}]
+    ImageNotFound(String),
+
     /// The error when the piece state is failed.
     #[error{"piece {0} state is failed"}]
     PieceStateIsFailed(String),

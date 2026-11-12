@@ -29,8 +29,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::fs;
 use tokio::net::lookup_host;
+use tokio::task::JoinSet;
 use tonic_health::pb::health_check_response::ServingStatus;
-use tracing::{error, info, instrument};
+use tracing::{error, info, instrument, Instrument};
 use url::Url;
 
 use dragonfly_client_config::dfdaemon::{
@@ -153,7 +154,7 @@ impl Local {
         };
 
         // Filter out the unhealthy schedulers by health check.
-        let available_schedulers = self.get_available_schedulers(&schedulers).await?;
+        let available_schedulers = Self::get_available_schedulers(&self.config, &schedulers).await;
         if available_schedulers.is_empty() {
             return Err(Error::AvailableSchedulersNotFound);
         }
@@ -169,65 +170,96 @@ impl Local {
 
     /// Gets the available schedulers by checking the health of each scheduler
     /// and filtering out the unhealthy ones.
+    /// Checks the health of the schedulers concurrently and returns the serving
+    /// ones in their original order.
     #[instrument(skip_all)]
     async fn get_available_schedulers(
-        &self,
+        config: &Arc<DfdaemonConfig>,
         schedulers: &[ManagerScheduler],
-    ) -> Result<Vec<ManagerScheduler>> {
-        let mut available_schedulers: Vec<ManagerScheduler> = Vec::new();
-        for scheduler in schedulers {
-            let addr = format_url(
-                self.config.scheduler.scheme(),
-                IpAddr::from_str(&scheduler.ip)?,
-                scheduler.port as u16,
+    ) -> Vec<ManagerScheduler> {
+        let mut join_set = JoinSet::new();
+        for (i, scheduler) in schedulers.iter().enumerate() {
+            let config = config.clone();
+            let scheduler = scheduler.clone();
+            join_set.spawn(
+                async move {
+                    (
+                        i,
+                        Self::check_health(&config, &scheduler)
+                            .await
+                            .then_some(scheduler),
+                    )
+                }
+                .in_current_span(),
             );
-            let domain_name = Url::parse(addr.as_str())?
-                .host_str()
-                .ok_or(Error::InvalidParameter)
-                .inspect_err(|_err| {
-                    error!("invalid address: {}", addr);
-                })?
-                .to_string();
+        }
 
-            // Check the health of the scheduler.
-            let health_client = match HealthClient::new(
-                &addr,
-                self.config
-                    .scheduler
-                    .load_client_tls_config(domain_name.as_str())
-                    .await?,
-            )
-            .await
-            {
-                Ok(client) => client,
-                Err(err) => {
-                    error!(
-                        "create health client for scheduler {}:{} failed: {}",
-                        scheduler.ip, scheduler.port, err
-                    );
-                    continue;
-                }
-            };
-
-            match health_client.check().await {
-                Ok(resp) => {
-                    if resp.status == ServingStatus::Serving as i32 {
-                        available_schedulers.push(scheduler.clone());
-                    }
-                }
-                Err(err) => {
-                    error!("check scheduler health failed: {}", err);
-                    continue;
-                }
+        let mut healthy = vec![None; schedulers.len()];
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok((i, scheduler)) => healthy[i] = scheduler,
+                Err(err) => error!("check scheduler health failed: {}", err),
             }
         }
 
-        Ok(available_schedulers)
+        healthy.into_iter().flatten().collect()
     }
 
-    /// Resolves the scheduler address to the list of schedulers via DNS. The
-    /// resolved addresses are sorted to keep the scheduler selection stable
-    /// across refreshes, and IPv4 addresses are preferred on dual-stack hosts.
+    /// Returns whether the scheduler is serving, a scheduler that cannot be
+    /// addressed or checked is logged and treated as not serving.
+    async fn check_health(config: &DfdaemonConfig, scheduler: &ManagerScheduler) -> bool {
+        let ip = match IpAddr::from_str(&scheduler.ip) {
+            Ok(ip) => ip,
+            Err(err) => {
+                error!("invalid ip {} of scheduler: {}", scheduler.ip, err);
+                return false;
+            }
+        };
+
+        let addr = format_url(config.scheduler.scheme(), ip, scheduler.port as u16);
+        let Some(domain_name) = Url::parse(&addr)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_string))
+        else {
+            error!("invalid address: {}", addr);
+            return false;
+        };
+
+        let client_tls_config = match config.scheduler.load_client_tls_config(&domain_name).await {
+            Ok(client_tls_config) => client_tls_config,
+            Err(err) => {
+                error!(
+                    "load client tls config for scheduler {} failed: {}",
+                    addr, err
+                );
+                return false;
+            }
+        };
+
+        let health_client = match HealthClient::new(&addr, client_tls_config).await {
+            Ok(health_client) => health_client,
+            Err(err) => {
+                error!(
+                    "create health client for scheduler {} failed: {}",
+                    addr, err
+                );
+                return false;
+            }
+        };
+
+        match health_client.check().await {
+            Ok(resp) if resp.status == ServingStatus::Serving as i32 => true,
+            Ok(resp) => {
+                error!("scheduler {} is not serving: {}", addr, resp.status);
+                false
+            }
+            Err(err) => {
+                error!("check scheduler {} health failed: {}", addr, err);
+                false
+            }
+        }
+    }
+
     #[instrument(skip_all)]
     async fn resolve_schedulers(&self, addr: &str) -> Result<Vec<ManagerScheduler>> {
         let mut socket_addrs: Vec<SocketAddr> = lookup_host(addr)
@@ -291,7 +323,10 @@ mod tests {
     use super::*;
     use dragonfly_client_core::error::ExternalError;
     use std::path::Path;
-    use tokio_stream::wrappers::TcpListenerStream;
+    use std::time::{Duration, Instant};
+    use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
+    use tonic_health::pb::health_server::{Health, HealthServer};
+    use tonic_health::pb::{HealthCheckRequest, HealthCheckResponse};
 
     async fn dynconfig(dir: &Path, content: Option<&str>) -> PathBuf {
         let path = dir.join("dynconfig.yaml");
@@ -319,6 +354,71 @@ mod tests {
         });
 
         addr
+    }
+
+    async fn spawn_not_serving_health_server() -> SocketAddr {
+        let (health_reporter, health_service) = tonic_health::server::health_reporter();
+        health_reporter
+            .set_service_status("", tonic_health::ServingStatus::NotServing)
+            .await;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(health_service)
+                .serve_with_incoming(TcpListenerStream::new(listener))
+                .await
+                .unwrap();
+        });
+
+        addr
+    }
+
+    struct SlowHealth(Duration);
+
+    #[tonic::async_trait]
+    impl Health for SlowHealth {
+        async fn check(
+            &self,
+            _request: tonic::Request<HealthCheckRequest>,
+        ) -> std::result::Result<tonic::Response<HealthCheckResponse>, tonic::Status> {
+            tokio::time::sleep(self.0).await;
+            Ok(tonic::Response::new(HealthCheckResponse {
+                status: ServingStatus::Serving as i32,
+            }))
+        }
+
+        type WatchStream = ReceiverStream<std::result::Result<HealthCheckResponse, tonic::Status>>;
+
+        async fn watch(
+            &self,
+            _request: tonic::Request<HealthCheckRequest>,
+        ) -> std::result::Result<tonic::Response<Self::WatchStream>, tonic::Status> {
+            Err(tonic::Status::unimplemented("watch"))
+        }
+    }
+
+    async fn spawn_slow_health_server(delay: Duration) -> SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(HealthServer::new(SlowHealth(delay)))
+                .serve_with_incoming(TcpListenerStream::new(listener))
+                .await
+                .unwrap();
+        });
+
+        addr
+    }
+
+    fn scheduler(ip: &str, port: u16) -> ManagerScheduler {
+        ManagerScheduler {
+            ip: ip.to_string(),
+            port: port as i32,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -540,6 +640,42 @@ seedClientConfig:
                 .await;
             expect(result.err());
         }
+    }
+
+    #[tokio::test]
+    async fn check_health_rejects_unaddressable_or_unhealthy_schedulers() {
+        let config = DfdaemonConfig::default();
+        let serving = spawn_health_server().await;
+        let not_serving = spawn_not_serving_health_server().await;
+
+        let test_cases = vec![
+            (scheduler("invalid", serving.port()), false),
+            (scheduler("127.0.0.1", 1), false),
+            (scheduler("127.0.0.1", not_serving.port()), false),
+            (scheduler("127.0.0.1", serving.port()), true),
+        ];
+
+        for (scheduler, expected) in test_cases {
+            assert_eq!(Local::check_health(&config, &scheduler).await, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn get_available_schedulers_checks_concurrently() {
+        let config = Arc::new(DfdaemonConfig::default());
+        let delay = Duration::from_millis(500);
+        let mut schedulers = Vec::new();
+        for _ in 0..4 {
+            let addr = spawn_slow_health_server(delay).await;
+            schedulers.push(scheduler("127.0.0.1", addr.port()));
+        }
+
+        let start = Instant::now();
+        let available_schedulers = Local::get_available_schedulers(&config, &schedulers).await;
+        let elapsed = start.elapsed();
+
+        assert_eq!(available_schedulers, schedulers);
+        assert!(elapsed < delay * 3, "elapsed: {elapsed:?}");
     }
 
     #[tokio::test]

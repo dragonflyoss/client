@@ -20,6 +20,7 @@ use crate::io::WriteRangeResponse;
 use bytes::{Buf, Bytes, BytesMut};
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::buffer_pool::BufferPool;
+use dragonfly_client_util::fs::fd::WriteFD;
 use std::cmp::{max, min};
 use std::fs::File;
 use std::future::Future;
@@ -29,6 +30,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{ready, Context, Poll};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, ReadBuf};
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 /// The state of the in-flight read of the EncryptedRangeReader.
@@ -401,7 +403,7 @@ async fn read_full<R: AsyncRead + Unpin + ?Sized>(
 /// second ciphertext buffer is needed, and the fill and the hash of the next
 /// batch overlap the encryption and the write of the previous one.
 pub async fn write_encrypted_range<R: AsyncRead + Unpin + ?Sized>(
-    fd: Arc<File>,
+    fd: &WriteFD,
     cipher: Arc<TaskCipher>,
     offset: u64,
     expected_length: u64,
@@ -421,7 +423,7 @@ pub async fn write_encrypted_range<R: AsyncRead + Unpin + ?Sized>(
     // owns its staging buffer until it completes and returns it to the pool.
     // At most one batch is in flight, which bounds the memory of a writer to
     // two staging buffers.
-    let mut in_flight: Option<JoinHandle<io::Result<()>>> = None;
+    let mut in_flight: Option<oneshot::Receiver<io::Result<()>>> = None;
 
     let mut hasher = crc32fast::Hasher::new();
     let mut length: u64 = 0;
@@ -452,11 +454,10 @@ pub async fn write_encrypted_range<R: AsyncRead + Unpin + ?Sized>(
                 handle.await.map_err(io::Error::other)??;
             }
 
-            let fd = fd.clone();
             let cipher = cipher.clone();
             let pool = buffer_pool.clone();
             let first_chunk = next_chunk;
-            in_flight = Some(tokio::task::spawn_blocking(move || {
+            in_flight = Some(fd.spawn_blocking(move |fd| {
                 // Seal every chunk in place, storing its random nonce in front
                 // of it and its tag after it.
                 for index in 0..count {
@@ -477,7 +478,7 @@ pub async fn write_encrypted_range<R: AsyncRead + Unpin + ?Sized>(
                 fd.write_all_at(&buffer, disk_offset)?;
                 pool.give_back(buffer);
                 Ok(())
-            }));
+            })?);
             next_chunk += count;
         }
 

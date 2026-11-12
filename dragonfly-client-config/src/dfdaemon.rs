@@ -93,6 +93,17 @@ fn default_host_hostname() -> String {
     hostname::get().unwrap().to_string_lossy().to_string()
 }
 
+/// Deserializes the hostname, treating `null` and the empty string like a missing field so
+/// that they fall back to the default, as `serde(default)` alone only covers missing fields.
+fn deserialize_host_hostname<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?
+        .filter(|hostname| !hostname.is_empty())
+        .unwrap_or_else(default_host_hostname))
+}
+
 /// Returns the default plugin directory for dfdaemon.
 #[inline]
 fn default_dfdaemon_plugin_dir() -> PathBuf {
@@ -235,6 +246,17 @@ fn default_tracing_path() -> Option<PathBuf> {
     Some(PathBuf::from("/v1/traces"))
 }
 
+/// Deserializes the tracing path, treating `null` like a missing field so that it falls back
+/// to the default instead of clearing it.
+fn deserialize_tracing_path<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<PathBuf>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<PathBuf>::deserialize(deserializer)?.or_else(default_tracing_path))
+}
+
 /// Returns the default interval to announce peer to the scheduler.
 #[inline]
 fn default_scheduler_announce_interval() -> Duration {
@@ -340,6 +362,22 @@ fn default_gc_policy_disk_threshold() -> ByteSize {
     ByteSize::default()
 }
 
+/// Deserializes the disk threshold, treating `null` like a missing field so that it falls
+/// back to the default, which `bytesize_serde` alone rejects.
+fn deserialize_gc_policy_disk_threshold<'de, D>(
+    deserializer: D,
+) -> std::result::Result<ByteSize, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    struct Wrapper(#[serde(with = "bytesize_serde")] ByteSize);
+
+    Ok(Option::<Wrapper>::deserialize(deserializer)?
+        .map(|Wrapper(disk_threshold)| disk_threshold)
+        .unwrap_or_else(default_gc_policy_disk_threshold))
+}
+
 /// Returns the default high threshold percent of the disk usage.
 #[inline]
 fn default_gc_policy_disk_high_threshold_percent() -> u8 {
@@ -402,7 +440,10 @@ pub struct Host {
     pub location: Option<String>,
 
     /// The hostname of the host.
-    #[serde(default = "default_host_hostname")]
+    #[serde(
+        default = "default_host_hostname",
+        deserialize_with = "deserialize_host_hostname"
+    )]
     pub hostname: String,
 
     /// The advertise ip of the host.
@@ -1056,7 +1097,7 @@ pub struct Storage {
     /// Larger buffers improve write throughput by batching disk I/O operations and reducing
     /// system call overhead, but consume more memory. Smaller buffers reduce memory usage
     /// but may degrade write performance due to frequent I/O operations.
-    /// Default is 4MiB. Adjust based on your disk type (SSD vs HDD) and available memory.
+    /// Default is 2MiB. Adjust based on your disk type (SSD vs HDD) and available memory.
     #[serde(default = "default_storage_write_buffer_size")]
     pub write_buffer_size: usize,
 
@@ -1064,7 +1105,7 @@ pub struct Storage {
     /// Larger buffers improve read throughput by reducing I/O system calls and better
     /// utilizing disk sequential read performance, but increase memory consumption.
     /// Smaller buffers reduce memory footprint but may cause more frequent I/O operations.
-    /// Default is 1MiB. Tune based on your access patterns and memory constraints.
+    /// Default is 2MiB. Tune based on your access patterns and memory constraints.
     #[serde(default = "default_storage_read_buffer_size")]
     pub read_buffer_size: usize,
 
@@ -1267,7 +1308,8 @@ pub struct Policy {
     /// This allows dfdaemon to effectively manage a logical portion of the disk for its cache,
     /// rather than always considering the entire disk volume.
     #[serde(
-        with = "bytesize_serde",
+        serialize_with = "bytesize_serde::serialize",
+        deserialize_with = "deserialize_gc_policy_disk_threshold",
         default = "default_gc_policy_disk_threshold",
         alias = "distThreshold"
     )]
@@ -1436,16 +1478,15 @@ impl ProxyServer {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SchedulingPolicy {
-    /// Auto downloads through the scheduler unless the content length is smaller
-    /// than the minimum piece length, in which case it downloads from the source
-    /// directly, skipping the scheduler.
+    /// Auto downloads through the scheduler unless the content length or the range
+    /// length is less than or equal to 16MiB, in which case it downloads from the
+    /// source directly, skipping the scheduler.
     #[default]
     Auto,
 
-    /// Always downloads through the scheduler even if the content length is smaller
-    /// than the minimum piece length, so that the peer announces the task to the
-    /// scheduler and other peers can discover it as a parent. It is useful for
-    /// sharing small artifacts, such as OCI image manifests.
+    /// Always downloads through the scheduler even for small files, so that the peer
+    /// announces the task to the scheduler and other peers can discover it as a
+    /// parent. It is useful for sharing small artifacts, such as OCI image manifests.
     Always,
 }
 
@@ -1589,7 +1630,7 @@ pub struct Proxy {
     /// Specifies the buffer size for reading piece data from disk.
     /// Larger buffers can improve throughput for sequential reads but consume more memory.
     /// Smaller buffers reduce memory usage but may increase I/O overhead.
-    /// Default value is 1MiB. Adjust based on your disk I/O characteristics and memory constraints.
+    /// Default value is 2MiB. Adjust based on your disk I/O characteristics and memory constraints.
     #[serde(default = "default_proxy_read_buffer_size")]
     pub read_buffer_size: usize,
 }
@@ -1730,7 +1771,10 @@ pub struct Tracing {
 
     /// The path to report tracing log, example: "/v1/traces" if the protocol is "http" or
     /// "https".
-    #[serde(default = "default_tracing_path")]
+    #[serde(
+        default = "default_tracing_path",
+        deserialize_with = "deserialize_tracing_path"
+    )]
     pub path: Option<PathBuf>,
 
     /// The headers to report tracing log.
@@ -2043,6 +2087,21 @@ mod tests {
         assert_eq!(host.hostname, "host1");
         assert_eq!(host.ip, Some(Ipv4Addr::LOCALHOST.into()));
         assert_eq!(host.scheduler_cluster_id, Some(2));
+    }
+
+    #[test]
+    fn host_hostname_falls_back_to_default_when_null_or_empty() {
+        let test_cases = vec![
+            (r#"{}"#, default_host_hostname()),
+            (r#"{"hostname": null}"#, default_host_hostname()),
+            (r#"{"hostname": ""}"#, default_host_hostname()),
+            (r#"{"hostname": "host1"}"#, "host1".to_string()),
+        ];
+
+        for (json, expected) in test_cases {
+            let host: Host = serde_json::from_str(json).unwrap();
+            assert_eq!(host.hostname, expected);
+        }
     }
 
     #[test]
@@ -2695,6 +2754,9 @@ mod tests {
                     assert_eq!(gc.policy.disk_low_threshold_percent, 70);
                 },
             ),
+            (r#"{"policy": {"diskThreshold": null}}"#, |gc| {
+                assert_eq!(gc.policy.disk_threshold, ByteSize::default());
+            }),
             ("{}", |gc| {
                 assert_eq!(gc.interval, Duration::from_secs(900));
                 assert_eq!(gc.policy.task_ttl, Duration::from_secs(2_592_000));
@@ -2890,6 +2952,9 @@ mod tests {
                     assert!(tracing.headers.contains_key("X-Custom-Header"));
                 },
             ),
+            (r#"{"path": null}"#, |tracing| {
+                assert_eq!(tracing.path, Some(PathBuf::from("/v1/traces")));
+            }),
             ("{}", |tracing| {
                 assert!(tracing.protocol.is_none());
                 assert!(tracing.endpoint.is_none());
