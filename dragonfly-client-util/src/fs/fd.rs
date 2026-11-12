@@ -20,32 +20,81 @@ use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::num::NonZeroUsize;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
-use tracing::{trace, warn};
+use tracing::{error, trace, warn};
 
 use super::fadvise_sequential;
 
 /// The default capacity of the file descriptor cache.
 pub const DEFAULT_FD_CACHE_CAPACITY: usize = 1024;
 
+/// The maximum times the high priority writes can starve a low priority write.
+const MAX_STARVED_COUNT: usize = 10;
+
 /// The blocking write queued on a write-only file descriptor.
 type QueuedWrite = Box<dyn FnOnce(&File) + Send>;
 
-/// The queued writes of a write-only file descriptor.
+/// The priority of a write queued on a write-only file descriptor.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WritePriority {
+    /// Runs before the low priority writes.
+    #[default]
+    High,
+
+    /// Runs after the high priority writes.
+    Low,
+}
+
+/// The queued writes of a write-only file descriptor, at most one per writer.
 #[derive(Default)]
 struct WriteQueue {
-    /// The queued writes in submission order, at most one per writer.
-    writes: VecDeque<QueuedWrite>,
+    /// The queued high priority writes in submission order.
+    high: VecDeque<QueuedWrite>,
+
+    /// The queued low priority writes in submission order.
+    low: VecDeque<QueuedWrite>,
+
+    /// The times the high priority writes have starved a low priority write.
+    starved: usize,
 
     /// Whether a blocking thread is draining the queue.
     draining: bool,
 }
 
-/// The write-only file descriptor of a file. Its writes run one at a time in
-/// submission order, so concurrent writers queue here instead of on the inode
-/// lock.
+/// Implements the write queue.
+impl WriteQueue {
+    /// Pushes the write to the queue of its priority.
+    fn push(&mut self, priority: WritePriority, write: QueuedWrite) {
+        match priority {
+            WritePriority::High => self.high.push_back(write),
+            WritePriority::Low => self.low.push_back(write),
+        }
+    }
+
+    /// Pops the next write to run. The high priority writes run first, until
+    /// they have starved a low priority write [MAX_STARVED_COUNT] times.
+    fn pop(&mut self) -> Option<QueuedWrite> {
+        if self.low.is_empty() {
+            return self.high.pop_front();
+        }
+
+        if self.starved < MAX_STARVED_COUNT {
+            if let Some(write) = self.high.pop_front() {
+                self.starved += 1;
+                return Some(write);
+            }
+        }
+
+        self.starved = 0;
+        self.low.pop_front()
+    }
+}
+
+/// The write-only file descriptor of a file. Its writes run one at a time, so
+/// concurrent writers queue here instead of on the inode lock.
 #[derive(Clone)]
 pub struct WriteFD {
     /// The opened file descriptor.
@@ -53,6 +102,9 @@ pub struct WriteFD {
 
     /// The queued writes of the file descriptor.
     queue: Arc<Mutex<WriteQueue>>,
+
+    /// The priority of the writes.
+    priority: WritePriority,
 }
 
 /// Implements the write-only file descriptor.
@@ -62,7 +114,13 @@ impl WriteFD {
         Self {
             fd,
             queue: Arc::default(),
+            priority: WritePriority::default(),
         }
+    }
+
+    /// Sets the priority of the writes.
+    pub fn set_priority(&mut self, priority: WritePriority) {
+        self.priority = priority;
     }
 
     /// Returns the opened file descriptor.
@@ -91,7 +149,7 @@ impl WriteFD {
 
         let draining = {
             let mut queue = self.queue.lock()?;
-            queue.writes.push_back(write);
+            queue.push(self.priority, write);
             std::mem::replace(&mut queue.draining, true)
         };
 
@@ -112,7 +170,7 @@ impl WriteFD {
                     return;
                 };
 
-                let Some(write) = queue.writes.pop_front() else {
+                let Some(write) = queue.pop() else {
                     queue.draining = false;
                     return;
                 };
@@ -120,7 +178,10 @@ impl WriteFD {
                 write
             };
 
-            write(&self.fd);
+            // Keep draining after a panicking write.
+            if panic::catch_unwind(AssertUnwindSafe(|| write(&self.fd))).is_err() {
+                error!("queued write panicked");
+            }
         }
     }
 }
@@ -348,6 +409,78 @@ mod tests {
                 (0..count).collect::<Vec<_>>()
             );
         }
+    }
+
+    #[tokio::test]
+    async fn spawn_blocking_runs_the_low_priority_writes_after_the_high_priority_writes() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        let cache = FDCache::new(DEFAULT_FD_CACHE_CAPACITY);
+
+        let (high, low) = (WritePriority::High, WritePriority::Low);
+        let test_cases: Vec<(Vec<WritePriority>, Vec<u8>)> = vec![
+            (vec![high, high, high], vec![0, 1, 2]),
+            (vec![low, low, low], vec![0, 1, 2]),
+            (vec![low, high, high], vec![1, 2, 0]),
+            (vec![low, high, low, high], vec![1, 3, 0, 2]),
+            (
+                [vec![low], vec![high; 12]].concat(),
+                vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0, 11, 12],
+            ),
+        ];
+
+        for (priorities, expected) in test_cases {
+            tokio::fs::write(&path, b"").await.unwrap();
+            let fd = cache.open_write(&path).await.unwrap();
+            let (started_tx, started_rx) = oneshot::channel();
+            let (blocking_tx, blocking_rx) = std::sync::mpsc::channel::<()>();
+            let blocking = fd
+                .spawn_blocking(move |_| {
+                    started_tx.send(()).unwrap();
+                    blocking_rx.recv()
+                })
+                .unwrap();
+            started_rx.await.unwrap();
+            let receivers: Vec<_> = priorities
+                .into_iter()
+                .zip(0u8..)
+                .map(|(priority, i)| {
+                    let mut fd = fd.clone();
+                    fd.set_priority(priority);
+                    fd.spawn_blocking(move |fd| {
+                        let length = fd.metadata()?.len();
+                        fd.write_all_at(&[i], length)
+                    })
+                    .unwrap()
+                })
+                .collect();
+
+            blocking_tx.send(()).unwrap();
+            blocking.await.unwrap().unwrap();
+            for rx in receivers {
+                rx.await.unwrap().unwrap();
+            }
+
+            assert_eq!(tokio::fs::read(&path).await.unwrap(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn spawn_blocking_keeps_draining_after_a_panicking_write() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("task");
+        tokio::fs::write(&path, b"").await.unwrap();
+
+        let cache = FDCache::new(DEFAULT_FD_CACHE_CAPACITY);
+        let fd = cache.open_write(&path).await.unwrap();
+        let panicked = fd
+            .spawn_blocking(|_| -> io::Result<()> { panic!("write panicked") })
+            .unwrap();
+        let kept = fd.spawn_blocking(|fd| fd.write_all_at(b"kept", 0)).unwrap();
+
+        assert!(panicked.await.is_err());
+        kept.await.unwrap().unwrap();
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"kept");
     }
 
     #[tokio::test]

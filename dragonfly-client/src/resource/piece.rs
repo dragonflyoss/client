@@ -371,12 +371,17 @@ impl Piece {
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
 
-        // Acquire the prefetch rate limiter before claiming the piece.
+        // Acquire the rate limiters before claiming the piece, so the claim is
+        // not held while waiting for tokens.
         if is_prefetch {
             self.prefetch_bandwidth_limiter
                 .acquire(length as usize)
                 .await;
         }
+
+        self.download_bandwidth_limiter
+            .acquire(length as usize)
+            .await;
 
         // Record the start of downloading piece.
         let piece = self
@@ -397,11 +402,6 @@ impl Piece {
                 error!("set piece metadata failed: {}", err)
             };
         });
-
-        // Acquire the download rate limiter.
-        self.download_bandwidth_limiter
-            .acquire(length as usize)
-            .await;
 
         // Record the start time.
         let start_time = Instant::now();
@@ -462,6 +462,7 @@ impl Piece {
                 length,
                 digest.as_str(),
                 parent.id.as_str(),
+                is_prefetch,
                 &mut stream,
                 self.config.storage.write_piece_timeout,
             )
@@ -507,12 +508,21 @@ impl Piece {
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
 
-        // Acquire the prefetch rate limiter before claiming the piece.
+        // Acquire the rate limiters before claiming the piece, so the claim is
+        // not held while waiting for tokens.
         if is_prefetch {
             self.prefetch_bandwidth_limiter
                 .acquire(length as usize)
                 .await;
         }
+
+        self.back_to_source_bandwidth_limiter
+            .acquire(length as usize)
+            .await;
+
+        self.download_bandwidth_limiter
+            .acquire(length as usize)
+            .await;
 
         // Record the start of downloading piece.
         let piece = self
@@ -533,16 +543,6 @@ impl Piece {
                 error!("set piece metadata failed: {}", err)
             };
         });
-
-        // Acquire the back to source rate limiter.
-        self.back_to_source_bandwidth_limiter
-            .acquire(length as usize)
-            .await;
-
-        // Acquire the download rate limiter.
-        self.download_bandwidth_limiter
-            .acquire(length as usize)
-            .await;
 
         // Download the piece from the source.
         let backend = self.backend_factory.build(url).inspect_err(|err| {
@@ -628,6 +628,7 @@ impl Piece {
                 task_id,
                 offset,
                 length,
+                is_prefetch,
                 &mut stream,
                 self.config.storage.write_piece_timeout,
             )
@@ -872,6 +873,16 @@ impl Piece {
         Span::current().record("piece_id", piece_id);
         Span::current().record("piece_length", length);
 
+        // Acquire the rate limiters before claiming the piece, so the claim is
+        // not held while waiting for tokens.
+        self.back_to_source_bandwidth_limiter
+            .acquire(length as usize)
+            .await;
+
+        self.download_bandwidth_limiter
+            .acquire(length as usize)
+            .await;
+
         // Record the start of downloading piece.
         let piece = self
             .storage
@@ -895,16 +906,6 @@ impl Piece {
                 error!("set piece metadata failed: {}", err)
             };
         });
-
-        // Acquire the back to source rate limiter.
-        self.back_to_source_bandwidth_limiter
-            .acquire(length as usize)
-            .await;
-
-        // Acquire the download rate limiter.
-        self.download_bandwidth_limiter
-            .acquire(length as usize)
-            .await;
 
         // Download the piece from the source.
         let backend = self.backend_factory.build(url).inspect_err(|err| {

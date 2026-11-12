@@ -917,6 +917,7 @@ impl Storage {
         task_id: &str,
         offset: u64,
         length: u64,
+        is_prefetch: bool,
         stream: &mut S,
         timeout: Duration,
     ) -> Result<metadata::Piece>
@@ -924,7 +925,7 @@ impl Storage {
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
         let piece = tokio::select! {
-            piece = self.handle_downloaded_from_source_finished(piece_id, task_id, offset, length, stream) => {
+            piece = self.handle_downloaded_from_source_finished(piece_id, task_id, offset, length, is_prefetch, stream) => {
                 piece
             }
             _ = sleep(timeout) => {
@@ -950,6 +951,7 @@ impl Storage {
         task_id: &str,
         offset: u64,
         length: u64,
+        is_prefetch: bool,
         stream: &mut S,
     ) -> Result<metadata::Piece>
     where
@@ -957,7 +959,7 @@ impl Storage {
     {
         let response = self
             .content
-            .write_piece_from_stream(task_id, offset, length, stream)
+            .write_piece_from_stream(task_id, offset, length, is_prefetch, stream)
             .await?;
 
         let digest = Digest::new(Algorithm::Crc32, response.hash);
@@ -981,6 +983,7 @@ impl Storage {
         length: u64,
         expected_digest: &str,
         parent_id: &str,
+        is_prefetch: bool,
         stream: &mut S,
         timeout: Duration,
     ) -> Result<metadata::Piece>
@@ -988,7 +991,7 @@ impl Storage {
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
         let piece = tokio::select! {
-            piece = self.handle_downloaded_piece_from_parent_finished(piece_id, task_id, offset, length, expected_digest, parent_id, stream) => {
+            piece = self.handle_downloaded_piece_from_parent_finished(piece_id, task_id, offset, length, expected_digest, parent_id, is_prefetch, stream) => {
                 piece
             }
             _ = sleep(timeout) => {
@@ -1017,6 +1020,7 @@ impl Storage {
         length: u64,
         expected_digest: &str,
         parent_id: &str,
+        is_prefetch: bool,
         stream: &mut S,
     ) -> Result<metadata::Piece>
     where
@@ -1024,7 +1028,7 @@ impl Storage {
     {
         let response = self
             .content
-            .write_piece_from_stream(task_id, offset, length, stream)
+            .write_piece_from_stream(task_id, offset, length, is_prefetch, stream)
             .await?;
 
         let length = response.length;
@@ -2178,6 +2182,7 @@ mod tests {
                 TASK_ID,
                 0,
                 CONTENT.len() as u64,
+                false,
                 &mut stream,
                 Duration::from_secs(5),
             )
@@ -2257,6 +2262,7 @@ mod tests {
                         TASK_ID,
                         0,
                         CONTENT.len() as u64,
+                        false,
                         &mut stream,
                         Duration::from_secs(5),
                     )
@@ -2381,6 +2387,7 @@ mod tests {
                 TASK_ID,
                 0,
                 CONTENT.len() as u64,
+                false,
                 &mut stream,
                 Duration::from_secs(5),
             )
@@ -2446,6 +2453,7 @@ mod tests {
                     CONTENT.len() as u64,
                     expected_digest,
                     "parent-1",
+                    false,
                     &mut stream,
                     Duration::from_secs(5),
                 )
@@ -2477,6 +2485,7 @@ mod tests {
                 TASK_ID,
                 0,
                 1024,
+                false,
                 &mut stream,
                 Duration::from_millis(50),
             )
