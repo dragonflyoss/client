@@ -1555,7 +1555,7 @@ impl Storage {
 
     /// Waits for the piece to be finished.
     #[instrument(skip_all)]
-    async fn wait_for_piece_finished(&self, piece_id: &str) -> Result<metadata::Piece> {
+    pub async fn wait_for_piece_finished(&self, piece_id: &str) -> Result<metadata::Piece> {
         let piece = self
             .get_piece(piece_id)?
             .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
@@ -1633,7 +1633,10 @@ impl Storage {
 
     /// Waits for the persistent piece to be finished.
     #[instrument(skip_all)]
-    async fn wait_for_persistent_piece_finished(&self, piece_id: &str) -> Result<metadata::Piece> {
+    pub async fn wait_for_persistent_piece_finished(
+        &self,
+        piece_id: &str,
+    ) -> Result<metadata::Piece> {
         let piece = self
             .get_persistent_piece(piece_id)?
             .ok_or_else(|| Error::PieceNotFound(piece_id.to_string()))?;
