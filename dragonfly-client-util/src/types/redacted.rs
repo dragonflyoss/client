@@ -16,12 +16,127 @@
 
 use dragonfly_api::common::v2::{Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, OpenCsg};
 use dragonfly_api::dfdaemon::v2::DownloadPersistentTaskRequest;
-use http::header::{HOST, RANGE, USER_AGENT};
+use http::header::{
+    ACCEPT_RANGES, CACHE_CONTROL, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE,
+    ETAG, HOST, LAST_MODIFIED, LOCATION, RANGE, TRANSFER_ENCODING, USER_AGENT,
+};
+use http::HeaderMap;
+use percent_encoding::percent_decode_str;
 use std::collections::HashMap;
 use std::fmt;
 
 /// Placeholder inserted in place of redacted secret material.
 const REDACTED: &str = "[REDACTED]";
+
+/// Query params whose values are signing secrets in presigned URLs, matched
+/// case-insensitively.
+const SIGNING_QUERY_PARAMS: &[&str] = &[
+    // S3.
+    "X-Amz-Signature",
+    "X-Amz-Security-Token",
+    // GCS.
+    "X-Goog-Signature",
+    // OSS, OBS, CloudFront and GCS V2.
+    "Signature",
+    "SecurityToken",
+    "security-token",
+    "x-oss-signature",
+    "x-oss-security-token",
+    "X-Obs-Security-Token",
+    // COS.
+    "q-signature",
+    "x-cos-security-token",
+    // Azure Blob SAS.
+    "sig",
+];
+
+/// Display-safe wrapper around a URL string.
+///
+/// A presigned URL is a bearer credential until it expires, so the values of
+/// [`SIGNING_QUERY_PARAMS`] are replaced with [`REDACTED`], as is any userinfo.
+/// The URL is scanned rather than parsed, so a malformed URL is redacted too.
+pub struct RedactedUrl<'a>(pub &'a str);
+
+/// Display implementation that prints the URL with the secrets redacted.
+impl fmt::Display for RedactedUrl<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The authority ends at the first `/` rather than at `?` or `#`, so a
+        // password containing them unencoded is still redacted.
+        let url = self.0;
+        let authority_start = url.find("//").map_or(0, |i| i + "//".len());
+        let authority_end = url[authority_start..]
+            .find('/')
+            .map_or(url.len(), |i| authority_start + i);
+        let url = match url[authority_start..authority_end].rfind('@') {
+            Some(at) => {
+                write!(f, "{}{REDACTED}", &url[..authority_start])?;
+                &url[authority_start + at..]
+            }
+            None => url,
+        };
+
+        let Some((base, query)) = url.split_once('?') else {
+            return f.write_str(url);
+        };
+
+        write!(f, "{base}?")?;
+        for (i, segment) in query.split('&').enumerate() {
+            if i > 0 {
+                f.write_str("&")?;
+            }
+
+            match segment.split_once('=') {
+                Some((key, _)) if is_signing_query_param(key) => write!(f, "{key}={REDACTED}")?,
+                _ => f.write_str(segment)?,
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Debug implementation that prints the redacted URL as a quoted string.
+impl fmt::Debug for RedactedUrl<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.to_string(), f)
+    }
+}
+
+/// Returns whether the value of the query param is a signing secret, matched
+/// after percent-decoding.
+fn is_signing_query_param(key: &str) -> bool {
+    let key = percent_decode_str(key).decode_utf8_lossy();
+    SIGNING_QUERY_PARAMS
+        .iter()
+        .any(|param| key.eq_ignore_ascii_case(param))
+}
+
+/// Debug wrapper over a [`HeaderMap`] that prints only the key request and
+/// response headers, like [`KeyRequestHeader`]. `Location` is printed through
+/// [`RedactedUrl`], because a redirect target can be a presigned URL.
+pub struct KeyHeaderMap<'a>(pub &'a HeaderMap);
+
+/// Debug implementation that filters the headers by the key header names.
+impl fmt::Debug for KeyHeaderMap<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut map = f.debug_map();
+        for (key, value) in self.0.iter().filter(|(key, _)| {
+            is_key_request_header(key.as_str()) || is_key_response_header(key.as_str())
+        }) {
+            if key != LOCATION {
+                map.entry(key, value);
+                continue;
+            }
+
+            match value.to_str() {
+                Ok(url) => map.entry(key, &RedactedUrl(url)),
+                Err(_) => map.entry(key, &REDACTED),
+            };
+        }
+
+        map.finish()
+    }
+}
 
 /// Debug-safe wrapper around [`Download`].
 ///
@@ -51,7 +166,7 @@ const REDACTED: &str = "[REDACTED]";
 /// Non-secret identifiers such as `object_storage.access_key_id` are left
 /// intact because an AKIA/ASIA-style ID on its own is not sufficient to
 /// authenticate and is commonly used for request correlation in operator
-/// logs.
+/// logs. The `url` is printed through [`RedactedUrl`].
 pub struct RedactedDownload<'a>(pub &'a Download);
 
 /// Debug implementation that prints the key fields without cloning the
@@ -99,7 +214,7 @@ impl fmt::Debug for RedactedDownload<'_> {
         } = self.0;
 
         f.debug_struct("Download")
-            .field("url", url)
+            .field("url", &RedactedUrl(url))
             .field("range", range)
             .field("tag", tag)
             .field("application", application)
@@ -157,6 +272,28 @@ fn is_key_request_header(key: &str) -> bool {
     .any(|key_header| key.eq_ignore_ascii_case(key_header))
 }
 
+/// Returns whether the response header is worth printing to diagnose the
+/// origin, matched case-insensitively without allocating.
+fn is_key_response_header(key: &str) -> bool {
+    [
+        ACCEPT_RANGES.as_str(),
+        CACHE_CONTROL.as_str(),
+        CONTENT_ENCODING.as_str(),
+        CONTENT_LENGTH.as_str(),
+        CONTENT_RANGE.as_str(),
+        CONTENT_TYPE.as_str(),
+        ETAG.as_str(),
+        LAST_MODIFIED.as_str(),
+        LOCATION.as_str(),
+        TRANSFER_ENCODING.as_str(),
+        "x-amz-request-id",
+        "x-goog-request-id",
+        "x-ms-request-id",
+    ]
+    .iter()
+    .any(|key_header| key.eq_ignore_ascii_case(key_header))
+}
+
 /// Debug-safe wrapper around [`DownloadPersistentTaskRequest`].
 ///
 /// Use at log sites that would otherwise Debug-print the full
@@ -207,7 +344,7 @@ impl fmt::Debug for RedactedDownloadPersistentTaskRequest<'_> {
         } = self.0;
 
         f.debug_struct("DownloadPersistentTaskRequest")
-            .field("url", url)
+            .field("url", &RedactedUrl(url))
             .field("persistent", persistent)
             .field("output_path", output_path)
             .field("remote_ip", remote_ip)
@@ -432,6 +569,101 @@ mod tests {
         for (name, expected) in test_cases {
             assert_eq!(is_key_request_header(name), expected);
         }
+    }
+
+    #[test]
+    fn redacted_url_redacts_signing_query_params_and_userinfo() {
+        let test_cases = vec![
+            // S3 SigV4. The credential, date and expiry stay visible for
+            // diagnosing expired URLs.
+            (
+                "https://bucket.s3.amazonaws.com/key?X-Amz-Credential=AKIAEXAMPLE%2F20260101&X-Amz-Date=20260101T000000Z&X-Amz-Expires=3600&X-Amz-Security-Token=token&X-Amz-Signature=signature",
+                "https://bucket.s3.amazonaws.com/key?X-Amz-Credential=AKIAEXAMPLE%2F20260101&X-Amz-Date=20260101T000000Z&X-Amz-Expires=3600&X-Amz-Security-Token=[REDACTED]&X-Amz-Signature=[REDACTED]",
+            ),
+            // Keys are matched case-insensitively and after percent-decoding.
+            (
+                "https://example.com/key?x-goog-signature=signature&X%2DAmz%2DSignature=signature",
+                "https://example.com/key?x-goog-signature=[REDACTED]&X%2DAmz%2DSignature=[REDACTED]",
+            ),
+            (
+                "https://bucket.oss.aliyuncs.com/key?OSSAccessKeyId=id&Signature=signature&security-token=token",
+                "https://bucket.oss.aliyuncs.com/key?OSSAccessKeyId=id&Signature=[REDACTED]&security-token=[REDACTED]",
+            ),
+            (
+                "https://bucket.oss.aliyuncs.com/key?x-oss-credential=id&x-oss-signature=signature&x-oss-security-token=token",
+                "https://bucket.oss.aliyuncs.com/key?x-oss-credential=id&x-oss-signature=[REDACTED]&x-oss-security-token=[REDACTED]",
+            ),
+            (
+                "https://bucket.cos.myqcloud.com/key?q-ak=id&q-signature=signature&x-cos-security-token=token",
+                "https://bucket.cos.myqcloud.com/key?q-ak=id&q-signature=[REDACTED]&x-cos-security-token=[REDACTED]",
+            ),
+            (
+                "https://account.blob.core.windows.net/container/blob?sv=2022-11-02&sig=abc%2Bdef%3D",
+                "https://account.blob.core.windows.net/container/blob?sv=2022-11-02&sig=[REDACTED]",
+            ),
+            (
+                "https://registry.example.com/v2/blobs/sha256:abc?ns=docker.io",
+                "https://registry.example.com/v2/blobs/sha256:abc?ns=docker.io",
+            ),
+            ("not a url?Signature=signature", "not a url?Signature=[REDACTED]"),
+            (
+                "https://user:password@example.com/key?sig=signature",
+                "https://[REDACTED]@example.com/key?sig=[REDACTED]",
+            ),
+            // A bare username can be a token, and an unencoded `?` or `#` in
+            // the password does not end the userinfo.
+            ("https://token@example.com/key", "https://[REDACTED]@example.com/key"),
+            ("https://user:pass?word@example.com/key", "https://[REDACTED]@example.com/key"),
+            ("https://user:pass#word@example.com/key", "https://[REDACTED]@example.com/key"),
+            ("//user:password@example.com/key", "//[REDACTED]@example.com/key"),
+            // An `@` in the path or query is not userinfo.
+            (
+                "https://example.com/users/@me?email=a@example.com",
+                "https://example.com/users/@me?email=a@example.com",
+            ),
+        ];
+
+        for (url, expected) in test_cases {
+            assert_eq!(RedactedUrl(url).to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn key_header_map_debug_prints_only_key_headers() {
+        let mut headers = HeaderMap::new();
+        for (key, value) in [
+            ("authorization", "Bearer secret"),
+            ("cookie", "session=secret"),
+            ("set-cookie", "session=secret"),
+            ("x-api-key", "secret"),
+            ("content-length", "42"),
+            ("x-request-id", "request-id"),
+            ("location", "https://example.com/key?X-Amz-Signature=secret"),
+        ] {
+            headers.insert(key, value.parse().unwrap());
+        }
+
+        assert_eq!(
+            format!("{:?}", KeyHeaderMap(&headers)),
+            r#"{"content-length": "42", "x-request-id": "request-id", "location": "https://example.com/key?X-Amz-Signature=[REDACTED]"}"#
+        );
+
+        headers.insert(
+            LOCATION,
+            http::HeaderValue::from_bytes(b"/key?sig=secret\xff").unwrap(),
+        );
+        assert!(format!("{:?}", KeyHeaderMap(&headers)).contains(r#""location": "[REDACTED]""#));
+    }
+
+    #[test]
+    fn redacted_download_debug_redacts_url() {
+        let download = Download {
+            url: "https://example.com/key?X-Amz-Signature=secret".to_string(),
+            ..Default::default()
+        };
+
+        assert!(format!("{:?}", RedactedDownload(&download))
+            .contains(r#"url: "https://example.com/key?X-Amz-Signature=[REDACTED]""#));
     }
 
     #[test]
