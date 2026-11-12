@@ -19,15 +19,96 @@ use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::buffer_pool::BufferPool;
 use futures::{Stream, TryStreamExt};
 use std::cmp::{max, min};
+use std::collections::HashMap;
 use std::fs::File;
 use std::future::Future;
 use std::io;
-use std::os::unix::fs::FileExt;
+use std::os::unix::fs::{FileExt, MetadataExt};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::task::{ready, Context, Poll};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, ReadBuf};
 use tokio::task::JoinHandle;
+
+/// Shares write gates across file descriptors, content stores and hardlinks.
+static WRITE_GATES: LazyLock<Arc<WriteGateRegistry>> =
+    LazyLock::new(|| Arc::new(WriteGateRegistry::default()));
+
+#[derive(Default)]
+struct WriteGateRegistry {
+    gates: Mutex<HashMap<(u64, u64), Weak<WriteGate>>>,
+}
+
+impl WriteGateRegistry {
+    fn get(self: &Arc<Self>, identity: (u64, u64)) -> io::Result<Arc<WriteGate>> {
+        let mut gates = self
+            .gates
+            .lock()
+            .map_err(|_| io::Error::other("write gate registry poisoned"))?;
+        if let Some(gate) = gates.get(&identity).and_then(Weak::upgrade) {
+            return Ok(gate);
+        }
+
+        let gate = Arc::new(WriteGate {
+            identity,
+            mutex: Arc::new(tokio::sync::Mutex::new(())),
+            registry: self.clone(),
+        });
+        gates.insert(identity, Arc::downgrade(&gate));
+        Ok(gate)
+    }
+}
+
+/// Serializes prepared batches, without holding a lock while receiving data.
+struct WriteGate {
+    identity: (u64, u64),
+    mutex: Arc<tokio::sync::Mutex<()>>,
+    registry: Arc<WriteGateRegistry>,
+}
+
+impl WriteGate {
+    async fn for_file(fd: &Arc<File>) -> io::Result<Arc<Self>> {
+        let fd = fd.clone();
+        let metadata = tokio::task::spawn_blocking(move || fd.metadata())
+            .await
+            .map_err(io::Error::other)??;
+        WRITE_GATES.get((metadata.dev(), metadata.ino()))
+    }
+
+    async fn submit<T, F>(self: &Arc<Self>, write: F) -> JoinHandle<io::Result<T>>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> io::Result<T> + Send + 'static,
+    {
+        let guard = self.mutex.clone().lock_owned().await;
+        let gate = self.clone();
+        tokio::task::spawn_blocking(move || {
+            // The blocking operation keeps both the lock and the registry
+            // entry alive even if the caller is cancelled or times out.
+            let _gate = gate;
+            let _guard = guard;
+            write()
+        })
+    }
+}
+
+impl Drop for WriteGate {
+    fn drop(&mut self) {
+        // A replacement may already have been inserted while this last
+        // strong reference was dropping. Only remove our own weak entry.
+        let mut gates = self
+            .registry
+            .gates
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if gates
+            .get(&self.identity)
+            .is_some_and(|gate| std::ptr::eq(gate.as_ptr(), self))
+        {
+            gates.remove(&self.identity);
+        }
+    }
+}
 
 /// The response of writing a range.
 pub struct WriteRangeResponse {
@@ -250,7 +331,8 @@ impl AsyncRead for RangeReader {
 /// it while the data is still hot in the cache of the filling core, then
 /// hands it to the blocking thread pool for the positional write, swapping
 /// the recycled buffer of the completed write back for the next fill instead
-/// of copying, so the read and the hash overlap the write.
+/// of copying, so the read and the hash overlap the write. Prepared batches
+/// share an inode write gate with the stream write path.
 pub async fn write_range<R: AsyncRead + Unpin + ?Sized>(
     fd: Arc<File>,
     mut offset: u64,
@@ -259,6 +341,7 @@ pub async fn write_range<R: AsyncRead + Unpin + ?Sized>(
     reader: &mut R,
     buffer_pool: &BufferPool,
 ) -> Result<WriteRangeResponse> {
+    let write_gate = WriteGate::for_file(&fd).await?;
     let buffer_size = max(buffer_size, 1);
     let mut reader = reader.take(expected_length);
 
@@ -301,13 +384,17 @@ pub async fn write_range<R: AsyncRead + Unpin + ?Sized>(
         let fd = fd.clone();
         let filled_offset = offset;
         offset += filled.len() as u64;
-        in_flight = Some(tokio::task::spawn_blocking(move || {
-            fd.write_all_at(&filled, filled_offset)?;
+        in_flight = Some(
+            write_gate
+                .submit(move || {
+                    fd.write_all_at(&filled, filled_offset)?;
 
-            let mut recycled = filled;
-            recycled.clear();
-            Ok(recycled)
-        }));
+                    let mut recycled = filled;
+                    recycled.clear();
+                    Ok(recycled)
+                })
+                .await,
+        );
     }
 
     // Wait for the last write to complete and return the staging buffers to
@@ -389,7 +476,7 @@ fn write_all_vectored_at(fd: &File, chunks: &[Bytes], mut offset: u64) -> io::Re
 /// pool for a vectored positional write once they hold `buffer_size` bytes,
 /// swapping the emptied vector of the completed write back for the next
 /// batch, so the receive and the hash overlap the write and the chunks are
-/// dropped off the runtime.
+/// dropped off the runtime. Only the blocking write holds the inode gate.
 pub async fn write_range_from_stream<S>(
     fd: Arc<File>,
     mut offset: u64,
@@ -400,6 +487,7 @@ pub async fn write_range_from_stream<S>(
 where
     S: Stream<Item = io::Result<Bytes>> + Unpin + ?Sized,
 {
+    let write_gate = WriteGate::for_file(&fd).await?;
     let buffer_size = max(buffer_size, 1);
 
     // The chunks staged for the next write, swapped with the emptied vector
@@ -457,15 +545,19 @@ where
         batch_size = 0;
 
         let fd = fd.clone();
-        in_flight = Some(tokio::task::spawn_blocking(move || {
-            let mut chunks = filled;
-            write_all_vectored_at(&fd, &chunks, filled_offset)?;
+        in_flight = Some(
+            write_gate
+                .submit(move || {
+                    let mut chunks = filled;
+                    write_all_vectored_at(&fd, &chunks, filled_offset)?;
 
-            // Drop the chunks on the blocking thread and hand the emptied
-            // vector back for the next batch.
-            chunks.clear();
-            Ok(chunks)
-        }));
+                    // Drop the chunks on the blocking thread and hand the emptied
+                    // vector back for the next batch.
+                    chunks.clear();
+                    Ok(chunks)
+                })
+                .await,
+        );
     }
 
     // Wait for the last write to complete.
@@ -498,6 +590,15 @@ mod tests {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt};
     use tokio_util::io::StreamReader;
 
+    /// Unblocks the blocking test operation even if an assertion panics.
+    struct ReleaseOnDrop(std::sync::mpsc::Sender<()>);
+
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
+
     const DATA_LENGTH: u64 = 256 * 1024;
     const FILE_LENGTH: usize = 64;
     const MAX_WRITE_IOVECS: u64 = 1024;
@@ -520,6 +621,243 @@ mod tests {
                 .open(path)
                 .unwrap(),
         )
+    }
+
+    #[tokio::test]
+    async fn write_gates_share_file_identity_across_fds_and_hardlinks() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("task");
+        let alias = dir.path().join("alias");
+        let other = dir.path().join("other");
+        std::fs::write(&path, b"").unwrap();
+        std::fs::hard_link(&path, &alias).unwrap();
+        std::fs::write(&other, b"").unwrap();
+
+        let first = WriteGate::for_file(&open_rw(&path)).await.unwrap();
+        let reopened = WriteGate::for_file(&open_rw(&path)).await.unwrap();
+        let hardlink = WriteGate::for_file(&open_rw(&alias)).await.unwrap();
+        let other = WriteGate::for_file(&open_rw(&other)).await.unwrap();
+        assert!(Arc::ptr_eq(&first, &reopened));
+        assert!(Arc::ptr_eq(&first, &hardlink));
+        assert!(!Arc::ptr_eq(&first, &other));
+
+        let identity = first.identity;
+        let weak = Arc::downgrade(&first);
+        drop((first, reopened, hardlink));
+        assert!(weak.upgrade().is_none());
+        assert!(!WRITE_GATES.gates.lock().unwrap().contains_key(&identity));
+    }
+
+    #[test]
+    fn dropping_an_old_gate_keeps_its_replacement() {
+        let registry = Arc::new(WriteGateRegistry::default());
+        let identity = (1, 2);
+        let old = registry.get(identity).unwrap();
+        let replacement = Arc::new(WriteGate {
+            identity,
+            mutex: Arc::new(tokio::sync::Mutex::new(())),
+            registry: registry.clone(),
+        });
+        registry
+            .gates
+            .lock()
+            .unwrap()
+            .insert(identity, Arc::downgrade(&replacement));
+
+        drop(old);
+        assert!(Arc::ptr_eq(&registry.get(identity).unwrap(), &replacement));
+        drop(replacement);
+        assert!(registry.gates.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn recreated_file_has_a_separate_gate() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("task");
+        std::fs::write(&path, b"old").unwrap();
+        let old_fd = open_rw(&path);
+        let old_gate = WriteGate::for_file(&old_fd).await.unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, b"new").unwrap();
+        let new_gate = WriteGate::for_file(&open_rw(&path)).await.unwrap();
+        assert_ne!(old_gate.identity, new_gate.identity);
+        assert!(!Arc::ptr_eq(&old_gate, &new_gate));
+        assert!(Arc::ptr_eq(
+            &WriteGate::for_file(&old_fd).await.unwrap(),
+            &old_gate
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancelled_caller_keeps_the_gate_until_the_blocking_write_finishes() {
+        let registry = Arc::new(WriteGateRegistry::default());
+        let gate = registry.get((1, 2)).unwrap();
+        let weak = Arc::downgrade(&gate);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let release = ReleaseOnDrop(release_tx);
+
+        let caller = tokio::spawn({
+            let gate = gate.clone();
+            async move {
+                gate.submit(move || {
+                    let _ = started_tx.send(());
+                    let _ = release_rx.recv();
+                    Ok(())
+                })
+                .await
+                .await
+                .unwrap()
+            }
+        });
+        started_rx.await.unwrap();
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+
+        let mut retry = Box::pin(gate.submit(|| Ok(())));
+        assert!(futures::poll!(&mut retry).is_pending());
+
+        // Another inode can submit while this blocking write is paused.
+        registry
+            .get((1, 3))
+            .unwrap()
+            .submit(|| Ok(()))
+            .await
+            .await
+            .unwrap()
+            .unwrap();
+
+        drop(release);
+        retry.await.await.unwrap().unwrap();
+        drop(gate);
+        assert!(weak.upgrade().is_none());
+        assert!(registry.gates.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn blocking_write_keeps_the_registry_entry_alive_without_a_caller() {
+        let registry = Arc::new(WriteGateRegistry::default());
+        let identity = (1, 2);
+        let gate = registry.get(identity).unwrap();
+        let weak = Arc::downgrade(&gate);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let release = ReleaseOnDrop(release_tx);
+        let handle = gate
+            .submit(move || {
+                let _ = started_tx.send(());
+                let _ = release_rx.recv();
+                Ok(())
+            })
+            .await;
+        started_rx.await.unwrap();
+        drop(gate);
+        let retry_gate = registry.get(identity).unwrap();
+        assert!(Weak::ptr_eq(&weak, &Arc::downgrade(&retry_gate)));
+        assert!(retry_gate.mutex.try_lock().is_err());
+
+        drop(release);
+        handle.await.unwrap().unwrap();
+        drop(retry_gate);
+        assert!(weak.upgrade().is_none());
+        assert!(registry.gates.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reader_and_stream_batches_wait_for_the_same_gate() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("task");
+        let alias = dir.path().join("alias");
+        std::fs::write(&path, [0; 8]).unwrap();
+        std::fs::hard_link(&path, &alias).unwrap();
+        let gate = WriteGate::for_file(&open_rw(&path)).await.unwrap();
+        let held = gate.mutex.clone().lock_owned().await;
+        let (reader_ready_tx, reader_ready_rx) = tokio::sync::oneshot::channel();
+        let (stream_ready_tx, stream_ready_rx) = tokio::sync::oneshot::channel();
+
+        let reader_fd = open_rw(&path);
+        let reader = tokio::spawn(async move {
+            let chunks = futures::stream::once(async move {
+                let _ = reader_ready_tx.send(());
+                Ok::<_, io::Error>(Bytes::from_static(b"read"))
+            });
+            let mut reader = StreamReader::new(Box::pin(chunks));
+            write_range(reader_fd, 0, 4, 4, &mut reader, &BufferPool::new(1024)).await
+        });
+        let stream_fd = open_rw(&alias);
+        let stream = tokio::spawn(async move {
+            let mut chunks = Box::pin(futures::stream::once(async move {
+                let _ = stream_ready_tx.send(());
+                Ok::<_, io::Error>(Bytes::from_static(b"vect"))
+            }));
+            write_range_from_stream(stream_fd, 4, 4, 4, &mut chunks).await
+        });
+
+        reader_ready_rx.await.unwrap();
+        stream_ready_rx.await.unwrap();
+        assert!(!reader.is_finished());
+        assert!(!stream.is_finished());
+        assert_eq!(std::fs::read(&path).unwrap(), [0; 8]);
+        drop(held);
+        let first = reader.await.unwrap().unwrap();
+        let second = stream.await.unwrap().unwrap();
+        assert_eq!(first.hash, crc32fast::hash(b"read").to_string());
+        assert_eq!(second.hash, crc32fast::hash(b"vect").to_string());
+        assert_eq!(std::fs::read(&path).unwrap(), b"readvect");
+    }
+
+    #[tokio::test]
+    async fn waiting_for_network_data_does_not_hold_the_write_gate() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("task");
+        std::fs::write(&path, b"").unwrap();
+        let fd = open_rw(&path);
+        let gate = WriteGate::for_file(&fd).await.unwrap();
+        let (waiting_tx, waiting_rx) = tokio::sync::oneshot::channel();
+        let (data_tx, data_rx) = tokio::sync::oneshot::channel();
+        let writer = tokio::spawn(async move {
+            let mut chunks = Box::pin(futures::stream::once(async move {
+                let _ = waiting_tx.send(());
+                data_rx.await.map_err(io::Error::other)
+            }));
+            write_range_from_stream(fd, 0, 4, 4, &mut chunks).await
+        });
+        waiting_rx.await.unwrap();
+        assert!(gate.mutex.try_lock().is_ok());
+        data_tx.send(Bytes::from_static(b"data")).unwrap();
+        writer.await.unwrap().unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"data");
+    }
+
+    #[tokio::test]
+    async fn failed_writes_release_the_gate_for_both_paths() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("task");
+        std::fs::write(&path, b"").unwrap();
+        let read_only = Arc::new(File::open(&path).unwrap());
+        let gate = WriteGate::for_file(&read_only).await.unwrap();
+        assert!(write_range(
+            read_only.clone(),
+            0,
+            4,
+            4,
+            &mut b"fail".as_slice(),
+            &BufferPool::new(1024),
+        )
+        .await
+        .is_err());
+        assert!(gate.mutex.try_lock().is_ok());
+        let mut chunks = futures::stream::iter([Ok(Bytes::from_static(b"fail"))]);
+        assert!(write_range_from_stream(read_only, 0, 4, 4, &mut chunks)
+            .await
+            .is_err());
+        assert!(gate.mutex.try_lock().is_ok());
+
+        let mut chunks = futures::stream::iter([Ok(Bytes::from_static(b"pass"))]);
+        write_range_from_stream(open_rw(&path), 0, 4, 4, &mut chunks)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"pass");
     }
 
     #[tokio::test]
@@ -1092,19 +1430,42 @@ mod tests {
         let range_length: usize = 8 * 1024;
         let handles: Vec<_> = (0..8usize)
             .map(|i| {
-                let fd = fd.clone();
+                let fd = if i % 2 == 0 {
+                    fd.clone()
+                } else {
+                    open_rw(&path)
+                };
                 let piece = data[i * range_length..(i + 1) * range_length].to_vec();
                 tokio::spawn(async move {
-                    write_range(
-                        fd,
-                        (i * range_length) as u64,
-                        piece.len() as u64,
-                        1024,
-                        &mut piece.as_slice(),
-                        &BufferPool::new(64 * 1024 * 1024),
-                    )
-                    .await
-                    .unwrap();
+                    let response = if i % 2 == 0 {
+                        write_range(
+                            fd,
+                            (i * range_length) as u64,
+                            piece.len() as u64,
+                            1000,
+                            &mut piece.as_slice(),
+                            &BufferPool::new(64 * 1024 * 1024),
+                        )
+                        .await
+                        .unwrap()
+                    } else {
+                        let mut chunks = futures::stream::iter(
+                            piece
+                                .chunks(137)
+                                .map(|chunk| Ok(Bytes::copy_from_slice(chunk))),
+                        );
+                        write_range_from_stream(
+                            fd,
+                            (i * range_length) as u64,
+                            piece.len() as u64,
+                            1000,
+                            &mut chunks,
+                        )
+                        .await
+                        .unwrap()
+                    };
+                    assert_eq!(response.length, piece.len() as u64);
+                    assert_eq!(response.hash, crc32fast::hash(&piece).to_string());
                 })
             })
             .collect();

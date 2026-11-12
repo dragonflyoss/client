@@ -72,7 +72,49 @@ cargo build --release --bin dfdaemon
 ./target/release/dfdaemon --config client.yaml -l info --console
 ```
 
-## FlameGraph
+## Concurrent Piece Writes
+
+`download.concurrentPieceCount` controls concurrent piece downloads. Network
+receive and CRC32 calculation can overlap disk writes. Prepared write batches
+are serialized per `(device, inode)` within the dfdaemon process, including
+writes through separately opened descriptors and hardlink aliases. Different
+files can submit writes concurrently.
+
+The reader path fills staging buffers, while the stream path batches `Bytes`
+chunks without copying them before submitting positional writes. Both use
+`storage.writeBufferSize` as the batching threshold and share the inode gate.
+The gate is acquired after a batch is ready and held only for its blocking
+write, including partial-write retries. Receiving data, hashing and configured
+writeback run outside the gate. The existing receive/write pipeline and buffer
+reuse remain in place.
+
+Cancelling or timing out a download cannot cancel a blocking write that has
+already started. That write retains the inode gate until it finishes, so a
+retry waits before submitting another batch. This gate controls data submission;
+piece completion and writeback retain their existing semantics. It does not
+provide serialization with writers in other processes or a persistence guarantee.
+
+### Comparing write contention
+
+Compare the baseline and modified binaries on the same Linux/XFS host. Keep
+the input file, piece length, write buffer size, source/peer path, filesystem,
+kernel, storage layout and cache conditions fixed. Run a single task at piece
+concurrency `1`, `4`, `8`, `16` and `32`, and repeat each case at least three
+times. Ensure each run actually downloads and writes the data rather than
+returning an already completed task. Use a separately prepared benchmark cache
+directory; preserve operational caches.
+
+Record end-to-end throughput, process and host CPU seconds per GiB, write
+syscall counts and sizes, and kernel profiles with the write-lock wait stacks.
+Also record writeback mode, dirty-page pressure and device traffic: completion
+of buffered writes alone does not measure sustained disk throughput.
+
+Accept the change when the target write-lock waits and CPU per GiB decrease
+and throughput does not regress beyond observed run-to-run variation. Unit
+tests establish serialization and data correctness; throughput and CPU benefits
+remain unverified until this comparison is run on the target environment.
+
+## Collecting a FlameGraph
 
 Now, let's start benchmark with the following params:
 
