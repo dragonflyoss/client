@@ -21,6 +21,7 @@ use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_config::MIN_PIECE_LENGTH;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::buffer_pool::BufferPool;
+use dragonfly_client_util::digest::Algorithm;
 use dragonfly_client_util::fs::fd::{FDCache, WritePriority, DEFAULT_FD_CACHE_CAPACITY};
 use dragonfly_client_util::fs::{fadvise_dontneed, fadvise_willneed, fallocate};
 use futures::Stream;
@@ -328,7 +329,7 @@ impl Content {
     }
 
     /// Writes the piece from the stream of bytes chunks to the content and
-    /// calculates the hash of the piece by crc32.
+    /// calculates the hash of the piece with the algorithm.
     #[instrument(level = "debug", skip_all)]
     pub async fn write_piece_from_stream<S>(
         &self,
@@ -337,6 +338,7 @@ impl Content {
         expected_length: u64,
         is_prefetch: bool,
         stream: &mut S,
+        algorithm: Algorithm,
     ) -> Result<super::io::WriteRangeResponse>
     where
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
@@ -362,6 +364,7 @@ impl Content {
             expected_length,
             self.config.storage.write_buffer_size,
             stream,
+            algorithm,
         )
         .await
         .inspect_err(|err| {
@@ -562,7 +565,7 @@ impl Content {
     }
 
     /// Writes the persistent piece to the content and
-    /// calculates the hash of the piece by crc32.
+    /// calculates the hash of the piece with the algorithm.
     #[instrument(level = "debug", skip_all)]
     pub async fn write_persistent_piece<R: AsyncRead + Unpin + ?Sized>(
         &self,
@@ -570,6 +573,7 @@ impl Content {
         offset: u64,
         expected_length: u64,
         reader: &mut R,
+        algorithm: Algorithm,
     ) -> Result<super::io::WriteRangeResponse> {
         let task_path = self.get_persistent_task_path(task_id);
         let fd = self
@@ -587,6 +591,7 @@ impl Content {
             self.config.storage.write_buffer_size,
             reader,
             &self.buffer_pool,
+            algorithm,
         )
         .await
         .inspect_err(|err| {
@@ -600,7 +605,7 @@ impl Content {
     }
 
     /// Writes the persistent piece from the stream of bytes chunks to the
-    /// content and calculates the hash of the piece by crc32.
+    /// content and calculates the hash of the piece with the algorithm.
     #[instrument(level = "debug", skip_all)]
     pub async fn write_persistent_piece_from_stream<S>(
         &self,
@@ -608,6 +613,7 @@ impl Content {
         offset: u64,
         expected_length: u64,
         stream: &mut S,
+        algorithm: Algorithm,
     ) -> Result<super::io::WriteRangeResponse>
     where
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
@@ -627,6 +633,7 @@ impl Content {
             expected_length,
             self.config.storage.write_buffer_size,
             stream,
+            algorithm,
         )
         .await
         .inspect_err(|err| {
@@ -863,7 +870,7 @@ impl Content {
     }
 
     /// Writes the persistent cache piece to the content and
-    /// calculates the hash of the piece by crc32.
+    /// calculates the hash of the piece with the algorithm.
     #[instrument(level = "debug", skip_all)]
     pub async fn write_persistent_cache_piece<R: AsyncRead + Unpin + ?Sized>(
         &self,
@@ -871,6 +878,7 @@ impl Content {
         offset: u64,
         expected_length: u64,
         reader: &mut R,
+        algorithm: Algorithm,
     ) -> Result<super::io::WriteRangeResponse> {
         let task_path = self.get_persistent_cache_task_path(task_id);
         let fd = self
@@ -888,6 +896,7 @@ impl Content {
             self.config.storage.write_buffer_size,
             reader,
             &self.buffer_pool,
+            algorithm,
         )
         .await
         .inspect_err(|err| {
@@ -901,7 +910,7 @@ impl Content {
     }
 
     /// Writes the persistent cache piece from the stream of bytes chunks to
-    /// the content and calculates the hash of the piece by crc32, without
+    /// the content and calculates the hash of the piece with the algorithm, without
     /// copying the chunks.
     #[instrument(level = "debug", skip_all)]
     pub async fn write_persistent_cache_piece_from_stream<S>(
@@ -910,6 +919,7 @@ impl Content {
         offset: u64,
         expected_length: u64,
         stream: &mut S,
+        algorithm: Algorithm,
     ) -> Result<super::io::WriteRangeResponse>
     where
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
@@ -929,6 +939,7 @@ impl Content {
             expected_length,
             self.config.storage.write_buffer_size,
             stream,
+            algorithm,
         )
         .await
         .inspect_err(|err| {
@@ -1095,6 +1106,7 @@ mod tests {
                     13,
                     is_prefetch,
                     &mut futures::stream::iter([Ok(Bytes::from_static(data))]),
+                    Algorithm::Crc32,
                 )
                 .await
                 .unwrap();
@@ -1129,6 +1141,7 @@ mod tests {
                     13,
                     false,
                     &mut futures::stream::iter([Ok(Bytes::from_static(data))]),
+                    Algorithm::Crc32,
                 )
                 .await
                 .unwrap();
@@ -1161,6 +1174,7 @@ mod tests {
                 13,
                 false,
                 &mut futures::stream::iter([Ok(Bytes::from_static(data))]),
+                Algorithm::Crc32,
             )
             .await
             .unwrap();
@@ -1257,6 +1271,7 @@ mod tests {
                 13,
                 false,
                 &mut futures::stream::iter([Ok(Bytes::from_static(b"hello, world!"))]),
+                Algorithm::Crc32,
             )
             .await
             .unwrap();
@@ -1302,6 +1317,7 @@ mod tests {
                 4,
                 false,
                 &mut futures::stream::iter([Ok(Bytes::from_static(b"test"))]),
+                Algorithm::Crc32,
             )
             .await
             .unwrap();
@@ -1422,7 +1438,13 @@ mod tests {
         let task_id = "9cb27a4af09aee4eb9f904170217659683f4a0ea7cd55e1a9fbcb99ddced659a";
         content.create_persistent_task(task_id, 13).await.unwrap();
         content
-            .write_persistent_piece(task_id, 0, 13, &mut Cursor::new(b"hello, world!"))
+            .write_persistent_piece(
+                task_id,
+                0,
+                13,
+                &mut Cursor::new(b"hello, world!"),
+                Algorithm::Crc32,
+            )
             .await
             .unwrap();
 
@@ -1464,7 +1486,7 @@ mod tests {
         content.create_persistent_task(task_id, 4).await.unwrap();
 
         let response = content
-            .write_persistent_piece(task_id, 0, 4, &mut Cursor::new(b"test"))
+            .write_persistent_piece(task_id, 0, 4, &mut Cursor::new(b"test"), Algorithm::Crc32)
             .await
             .unwrap();
         assert_eq!(response.length, 4);
@@ -1476,6 +1498,7 @@ mod tests {
                 0,
                 4,
                 &mut futures::stream::iter([Ok(Bytes::from_static(b"test"))]),
+                Algorithm::Crc32,
             )
             .await
             .unwrap();
@@ -1620,7 +1643,13 @@ mod tests {
             .await
             .unwrap();
         content
-            .write_persistent_cache_piece(task_id, 0, 13, &mut Cursor::new(b"hello, world!"))
+            .write_persistent_cache_piece(
+                task_id,
+                0,
+                13,
+                &mut Cursor::new(b"hello, world!"),
+                Algorithm::Crc32,
+            )
             .await
             .unwrap();
 
@@ -1665,7 +1694,13 @@ mod tests {
             .unwrap();
 
         let response = content
-            .write_persistent_cache_piece(task_id, 0, 4, &mut Cursor::new(b"test"))
+            .write_persistent_cache_piece(
+                task_id,
+                0,
+                4,
+                &mut Cursor::new(b"test"),
+                Algorithm::Crc32,
+            )
             .await
             .unwrap();
         assert_eq!(response.length, 4);
@@ -1677,6 +1712,7 @@ mod tests {
                 0,
                 4,
                 &mut futures::stream::iter([Ok(Bytes::from_static(b"test"))]),
+                Algorithm::Crc32,
             )
             .await
             .unwrap();

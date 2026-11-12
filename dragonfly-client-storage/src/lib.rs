@@ -17,9 +17,9 @@
 use bytes::{Bytes, BytesMut};
 use chrono::NaiveDateTime;
 use dragonfly_api::common::v2::{Image, Range};
-use dragonfly_client_config::dfdaemon::Config;
+use dragonfly_client_config::dfdaemon::{Config, PieceDigestAlgorithm};
 use dragonfly_client_core::{Error, Result};
-use dragonfly_client_util::digest::{Algorithm, Digest};
+use dragonfly_client_util::digest::{Algorithm, Digest, Hasher};
 use futures::Stream;
 use page_cache::PageCache;
 use piece_notifier::{Claim, PieceNotifier};
@@ -775,9 +775,15 @@ impl Storage {
     ) -> Result<metadata::Piece> {
         let response = self
             .content
-            .write_persistent_piece(task_id, offset, length, reader)
+            .write_persistent_piece(
+                task_id,
+                offset,
+                length,
+                reader,
+                self.piece_digest_algorithm(),
+            )
             .await?;
-        let digest = Digest::new(Algorithm::Crc32, response.hash);
+        let digest = Digest::new(response.algorithm, response.hash);
 
         self.metadata.create_persistent_piece(
             piece_id,
@@ -822,9 +828,15 @@ impl Storage {
     ) -> Result<metadata::Piece> {
         let response = self
             .content
-            .write_persistent_cache_piece(task_id, offset, length, reader)
+            .write_persistent_cache_piece(
+                task_id,
+                offset,
+                length,
+                reader,
+                self.piece_digest_algorithm(),
+            )
             .await?;
-        let digest = Digest::new(Algorithm::Crc32, response.hash);
+        let digest = Digest::new(response.algorithm, response.hash);
 
         self.metadata.create_persistent_cache_piece(
             piece_id,
@@ -959,10 +971,17 @@ impl Storage {
     {
         let response = self
             .content
-            .write_piece_from_stream(task_id, offset, length, is_prefetch, stream)
+            .write_piece_from_stream(
+                task_id,
+                offset,
+                length,
+                is_prefetch,
+                stream,
+                self.piece_digest_algorithm(),
+            )
             .await?;
 
-        let digest = Digest::new(Algorithm::Crc32, response.hash);
+        let digest = Digest::new(response.algorithm, response.hash);
         self.metadata.download_piece_finished(
             piece_id,
             offset,
@@ -1026,13 +1045,14 @@ impl Storage {
     where
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
+        let algorithm = self.parent_piece_digest_algorithm(expected_digest)?;
         let response = self
             .content
-            .write_piece_from_stream(task_id, offset, length, is_prefetch, stream)
+            .write_piece_from_stream(task_id, offset, length, is_prefetch, stream, algorithm)
             .await?;
 
         let length = response.length;
-        let digest = Digest::new(Algorithm::Crc32, response.hash);
+        let digest = Digest::new(response.algorithm, response.hash);
 
         // Check the digest of the piece.
         if expected_digest.is_empty() {
@@ -1054,6 +1074,40 @@ impl Storage {
             digest.to_string().as_str(),
             Some(parent_id.to_string()),
         )
+    }
+
+    /// Returns the algorithm of the digests calculated for the pieces written
+    /// from the source or from local files.
+    fn piece_digest_algorithm(&self) -> Algorithm {
+        match self.config.storage.piece_digest_algorithm {
+            PieceDigestAlgorithm::Crc32 => Algorithm::Crc32,
+            PieceDigestAlgorithm::Sha256 => Algorithm::Sha256,
+        }
+    }
+
+    /// Returns the algorithm to verify a piece downloaded from a parent with,
+    /// which is the algorithm of the digest announced by the parent, so nodes
+    /// calculating different piece digests interoperate. When SHA-256 piece
+    /// digests are configured, a CRC32 digest announced by the parent is
+    /// rejected instead of downgrading the verification.
+    fn parent_piece_digest_algorithm(&self, expected_digest: &str) -> Result<Algorithm> {
+        if expected_digest.is_empty() {
+            return Ok(self.piece_digest_algorithm());
+        }
+
+        let expected_digest: Digest = expected_digest
+            .parse()
+            .map_err(|err: String| Error::DigestMismatch(expected_digest.to_string(), err))?;
+
+        let algorithm = expected_digest.algorithm();
+        if algorithm == Algorithm::Crc32 && self.piece_digest_algorithm() != Algorithm::Crc32 {
+            return Err(Error::DigestMismatch(
+                expected_digest.to_string(),
+                format!("{} piece digest required", self.piece_digest_algorithm()),
+            ));
+        }
+
+        Ok(algorithm)
     }
 
     /// Updates the metadata of the piece when the piece downloads failed.
@@ -1204,13 +1258,14 @@ impl Storage {
     where
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
+        let algorithm = self.parent_piece_digest_algorithm(expected_digest)?;
         let response = self
             .content
-            .write_persistent_piece_from_stream(task_id, offset, length, stream)
+            .write_persistent_piece_from_stream(task_id, offset, length, stream, algorithm)
             .await?;
 
         let length = response.length;
-        let digest = Digest::new(Algorithm::Crc32, response.hash);
+        let digest = Digest::new(response.algorithm, response.hash);
 
         // Check the digest of the piece.
         if expected_digest.is_empty() {
@@ -1292,10 +1347,16 @@ impl Storage {
     {
         let response = self
             .content
-            .write_persistent_piece_from_stream(task_id, offset, length, stream)
+            .write_persistent_piece_from_stream(
+                task_id,
+                offset,
+                length,
+                stream,
+                self.piece_digest_algorithm(),
+            )
             .await?;
 
-        let digest = Digest::new(Algorithm::Crc32, response.hash);
+        let digest = Digest::new(response.algorithm, response.hash);
         self.metadata.download_piece_finished(
             piece_id,
             offset,
@@ -1444,13 +1505,14 @@ impl Storage {
     where
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
+        let algorithm = self.parent_piece_digest_algorithm(expected_digest)?;
         let response = self
             .content
-            .write_persistent_cache_piece_from_stream(task_id, offset, length, stream)
+            .write_persistent_cache_piece_from_stream(task_id, offset, length, stream, algorithm)
             .await?;
 
         let length = response.length;
-        let digest = Digest::new(Algorithm::Crc32, response.hash);
+        let digest = Digest::new(response.algorithm, response.hash);
 
         // Check the digest of the piece.
         if expected_digest.is_empty() {
@@ -1880,7 +1942,7 @@ impl Storage {
         length: u64,
         reader: &mut R,
     ) -> Result<metadata::Piece> {
-        let mut hasher = crc32fast::Hasher::new();
+        let mut hasher = Hasher::new(self.piece_digest_algorithm());
         let mut content = BytesMut::with_capacity(length as usize);
         let mut tee = InspectReader::new(reader, |bytes| {
             hasher.update(bytes);
@@ -1893,8 +1955,7 @@ impl Storage {
             .write_piece(task_id, piece_id, content.freeze())
             .await?;
 
-        let hash = hasher.finalize().to_string();
-        let digest = Digest::new(Algorithm::Crc32, hash);
+        let digest = Digest::new(hasher.algorithm(), hasher.finalize());
         self.metadata.download_piece_finished(
             piece_id,
             offset,
@@ -1944,7 +2005,7 @@ impl Storage {
         parent_id: &str,
         reader: &mut R,
     ) -> Result<metadata::Piece> {
-        let mut hasher = crc32fast::Hasher::new();
+        let mut hasher = Hasher::new(self.parent_piece_digest_algorithm(expected_digest)?);
         let mut content = BytesMut::with_capacity(length as usize);
         let mut tee = InspectReader::new(reader, |bytes| {
             hasher.update(bytes);
@@ -1953,12 +2014,7 @@ impl Storage {
         // Keep reading until EOF to avoid truncating the piece content.
         while tee.read_buf(&mut content).await? > 0 {}
 
-        self.cache
-            .write_piece(task_id, piece_id, content.freeze())
-            .await?;
-
-        let hash = hasher.finalize().to_string();
-        let digest = Digest::new(Algorithm::Crc32, hash);
+        let digest = Digest::new(hasher.algorithm(), hasher.finalize());
 
         // Check the digest of the piece.
         if expected_digest.is_empty() {
@@ -1972,6 +2028,12 @@ impl Storage {
                 digest.to_string(),
             ));
         }
+
+        // Cache the piece only after its digest is verified, so a corrupted
+        // piece is never served from the cache.
+        self.cache
+            .write_piece(task_id, piece_id, content.freeze())
+            .await?;
 
         self.metadata.download_piece_finished(
             piece_id,
@@ -2138,10 +2200,21 @@ mod tests {
     const TASK_ID: &str = "d3add1f66b0d0b8083f14479d6e181ec9e2b34cf07d4a1a2ee2fcf51d3a3f14a";
     const CONTENT: &[u8] = b"piece content";
     const CONTENT_DIGEST: &str = "crc32:2533597436";
+    const CONTENT_SHA256_DIGEST: &str =
+        "sha256:0f2592159700536c81cd58094265e92089ebabb3e06f802c5f2d6e8e753cb233";
 
     async fn storage(dir: &Path) -> Arc<Storage> {
+        storage_with_piece_digest_algorithm(dir, PieceDigestAlgorithm::Crc32).await
+    }
+
+    async fn storage_with_piece_digest_algorithm(
+        dir: &Path,
+        piece_digest_algorithm: PieceDigestAlgorithm,
+    ) -> Arc<Storage> {
+        let mut config = Config::default();
+        config.storage.piece_digest_algorithm = piece_digest_algorithm;
         Arc::new(
-            Storage::new(Arc::new(Config::default()), dir, dir.to_path_buf())
+            Storage::new(Arc::new(config), dir, dir.to_path_buf())
                 .await
                 .unwrap(),
         )
@@ -2463,6 +2536,135 @@ mod tests {
                 .await;
             let stored = storage.get_piece(piece_id.as_str()).unwrap();
             expect(result, stored);
+        }
+    }
+
+    #[tokio::test]
+    async fn download_piece_from_parent_finished_follows_the_parent_digest_algorithm() {
+        let test_cases: Vec<(
+            PieceDigestAlgorithm,
+            &str,
+            fn(Result<metadata::Piece>, Option<metadata::Piece>),
+        )> = vec![
+            // A node calculating CRC32 digests verifies SHA-256 digests of
+            // upgraded parents.
+            (
+                PieceDigestAlgorithm::Crc32,
+                CONTENT_SHA256_DIGEST,
+                |result, _| {
+                    assert_eq!(result.unwrap().digest, CONTENT_SHA256_DIGEST);
+                },
+            ),
+            (
+                PieceDigestAlgorithm::Sha256,
+                CONTENT_SHA256_DIGEST,
+                |result, _| {
+                    assert_eq!(result.unwrap().digest, CONTENT_SHA256_DIGEST);
+                },
+            ),
+            // The digest of a piece without announced digest is calculated
+            // with the configured algorithm.
+            (PieceDigestAlgorithm::Sha256, "", |result, _| {
+                assert_eq!(result.unwrap().digest, CONTENT_SHA256_DIGEST);
+            }),
+            // A CRC32 digest is rejected when SHA-256 digests are configured,
+            // even if it matches.
+            (
+                PieceDigestAlgorithm::Sha256,
+                CONTENT_DIGEST,
+                |result, stored| {
+                    assert!(matches!(
+                        result,
+                        Err(Error::DigestMismatch(ref expected, _)) if expected == CONTENT_DIGEST
+                    ));
+                    assert!(!stored.unwrap().is_finished());
+                },
+            ),
+            (
+                PieceDigestAlgorithm::Sha256,
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                |result, stored| {
+                    assert!(matches!(
+                        result,
+                        Err(Error::DigestMismatch(_, ref actual)) if actual == CONTENT_SHA256_DIGEST
+                    ));
+                    assert!(!stored.unwrap().is_finished());
+                },
+            ),
+            (PieceDigestAlgorithm::Crc32, "md5:1", |result, stored| {
+                assert!(matches!(result, Err(Error::DigestMismatch(..))));
+                assert!(!stored.unwrap().is_finished());
+            }),
+        ];
+
+        for (piece_digest_algorithm, expected_digest, expect) in test_cases {
+            let dir = tempdir().unwrap();
+            let storage =
+                storage_with_piece_digest_algorithm(dir.path(), piece_digest_algorithm).await;
+            storage
+                .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
+                .await
+                .unwrap();
+
+            let piece_id = storage.piece_id(TASK_ID, 0);
+            storage
+                .download_piece_started(piece_id.as_str(), 0, 0, CONTENT.len() as u64)
+                .await
+                .unwrap();
+            let mut stream = futures::stream::iter([Ok(Bytes::from_static(CONTENT))]);
+            let result = storage
+                .download_piece_from_parent_finished(
+                    piece_id.as_str(),
+                    TASK_ID,
+                    0,
+                    CONTENT.len() as u64,
+                    expected_digest,
+                    "parent-1",
+                    false,
+                    &mut stream,
+                    Duration::from_secs(5),
+                )
+                .await;
+            let stored = storage.get_piece(piece_id.as_str()).unwrap();
+            expect(result, stored);
+        }
+    }
+
+    #[tokio::test]
+    async fn download_piece_from_source_finished_uses_the_configured_algorithm() {
+        let test_cases = vec![
+            (PieceDigestAlgorithm::Crc32, CONTENT_DIGEST),
+            (PieceDigestAlgorithm::Sha256, CONTENT_SHA256_DIGEST),
+        ];
+
+        for (piece_digest_algorithm, expected_digest) in test_cases {
+            let dir = tempdir().unwrap();
+            let storage =
+                storage_with_piece_digest_algorithm(dir.path(), piece_digest_algorithm).await;
+            storage
+                .download_task_started(TASK_ID, CONTENT.len() as u64, CONTENT.len() as u64, None)
+                .await
+                .unwrap();
+
+            let piece_id = storage.piece_id(TASK_ID, 0);
+            storage
+                .download_piece_started(piece_id.as_str(), 0, 0, CONTENT.len() as u64)
+                .await
+                .unwrap();
+            let mut stream = futures::stream::iter([Ok(Bytes::from_static(CONTENT))]);
+            let piece = storage
+                .download_piece_from_source_finished(
+                    piece_id.as_str(),
+                    TASK_ID,
+                    0,
+                    CONTENT.len() as u64,
+                    false,
+                    &mut stream,
+                    Duration::from_secs(5),
+                )
+                .await
+                .unwrap();
+            assert_eq!(piece.digest, expected_digest);
         }
     }
 
