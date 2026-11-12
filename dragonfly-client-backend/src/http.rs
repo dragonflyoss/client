@@ -55,7 +55,10 @@ use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
 };
-use dragonfly_client_util::{http::validate_ranged_response, tls::NoVerifier};
+use dragonfly_client_util::{
+    http::validate_ranged_response,
+    tls::{new_client_tls_config, new_client_tls_config_with_roots},
+};
 use futures::{StreamExt, TryStreamExt};
 use http::header::{
     HeaderName, HeaderValue, CONTENT_LENGTH, CONTENT_RANGE, LOCATION, RANGE, TRANSFER_ENCODING,
@@ -143,6 +146,7 @@ impl HTTP {
         enable_cache_temporary_redirect: bool,
         cache_temporary_redirect_ttl: Duration,
         enable_hickory_dns: bool,
+        insecure_skip_verify: bool,
     ) -> Result<HTTP> {
         // Disable automatic compression to prevent double-decompression issues.
         //
@@ -155,11 +159,8 @@ impl HTTP {
         //
         // Solution: Disable all compression formats (gzip, brotli, zstd, deflate) to ensure
         // we receive and store uncompressed content, eliminating the double-decompression issue.
-        // Default TLS client config with no validation.
-        let client_config_builder = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(NoVerifier::new())
-            .with_no_client_auth();
+        // Verify native roots unless verification is explicitly skipped.
+        let client_config_builder = new_client_tls_config(insecure_skip_verify);
 
         let client = reqwest::Client::builder()
             // Disable automatic compression to prevent double-decompression issues.
@@ -211,13 +212,9 @@ impl HTTP {
     ) -> Result<ClientWithMiddleware> {
         match client_cert.as_ref() {
             Some(client_cert) => {
-                let mut root_cert_store = rustls::RootCertStore::empty();
-                root_cert_store.add_parsable_certificates(client_cert.to_owned());
-
                 // TLS client config using the custom CA store for lookups.
-                let client_config_builder = rustls::ClientConfig::builder()
-                    .with_root_certificates(root_cert_store)
-                    .with_no_client_auth();
+                let client_config_builder =
+                    new_client_tls_config_with_roots(client_cert.to_owned());
 
                 // Disable automatic compression to prevent double-decompression issues.
                 //
@@ -263,7 +260,7 @@ impl HTTP {
 
                 Ok(client)
             }
-            // Default TLS client config with no validation.
+            // Reuse the client configured with the requested TLS verification policy.
             None => Ok(self.client.clone()),
         }
     }
@@ -1290,7 +1287,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             ),
         ];
 
-        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            false,
+        )
+        .unwrap();
         for (mocks, expect) in test_cases {
             let server = MockServer::start().await;
             for mock in mocks {
@@ -1450,7 +1456,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             ),
         ];
 
-        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            false,
+        )
+        .unwrap();
         for (mocks, range, expect) in test_cases {
             let server = MockServer::start().await;
             for mock in mocks {
@@ -1487,8 +1502,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
         for (concurrent, expected_connections) in test_cases {
             let barrier = concurrent.then(|| Arc::new(Barrier::new(REQUESTS)));
             let (url, connections) = start_counting_server(barrier).await;
-            let http =
-                HTTP::new(HTTP_SCHEME, None, 0, true, Duration::from_secs(600), true).unwrap();
+            let http = HTTP::new(
+                HTTP_SCHEME,
+                None,
+                0,
+                true,
+                Duration::from_secs(600),
+                true,
+                false,
+            )
+            .unwrap();
             let request = || {
                 http.get(GetRequest {
                     task_id: "test".to_string(),
@@ -1530,7 +1553,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             (vec![(Some("bytes=0-"), 416), (None, 200)], true),
         ];
 
-        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            false,
+        )
+        .unwrap();
         for (responses, expected) in test_cases {
             let server = MockServer::start().await;
             for &(range, status) in &responses {
@@ -1565,7 +1597,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     #[tokio::test]
     async fn requests_without_header_are_rejected() {
         install_crypto_provider();
-        let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            1,
+            true,
+            Duration::from_secs(600),
+            true,
+            false,
+        )
+        .unwrap();
         let url = "http://127.0.0.1/missing";
 
         let stat = http
@@ -1623,7 +1664,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     async fn connection_failures_are_reported_per_operation() {
         install_crypto_provider();
         let url = format!("{}/file", start_closing_server().await);
-        let http = HTTP::new(HTTP_SCHEME, None, 0, true, Duration::from_secs(600), true).unwrap();
+        let http = HTTP::new(
+            HTTP_SCHEME,
+            None,
+            0,
+            true,
+            Duration::from_secs(600),
+            true,
+            false,
+        )
+        .unwrap();
 
         let stat = http
             .stat(StatRequest {
@@ -1686,9 +1736,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
     async fn https_requests_trust_the_given_ca_or_skip_verification() {
         install_crypto_provider();
 
-        let test_cases: Vec<(Option<&str>, fn(StatResponse), fn(GetResponse<Body>, &str))> = vec![
+        #[allow(clippy::type_complexity)]
+        let test_cases: Vec<(
+            Option<&str>,
+            bool,
+            fn(StatResponse),
+            fn(GetResponse<Body>, &str),
+        )> = vec![
             (
                 Some(CA_CERT),
+                false,
                 |response| assert_eq!(response.http_status_code, Some(StatusCode::OK)),
                 |response, body| {
                     assert_eq!(response.http_status_code, Some(StatusCode::OK));
@@ -1697,11 +1754,21 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
             ),
             (
                 Some(WRONG_CA_CERT),
+                false,
                 |response| assert!(!response.success),
                 |response, _| assert!(!response.success),
             ),
+            // A self-signed certificate is rejected by default.
             (
                 None,
+                false,
+                |response| assert!(!response.success),
+                |response, _| assert!(!response.success),
+            ),
+            // Unless the verification is explicitly skipped.
+            (
+                None,
+                true,
                 |response| assert_eq!(response.http_status_code, Some(StatusCode::OK)),
                 |response, body| {
                     assert_eq!(response.http_status_code, Some(StatusCode::OK));
@@ -1711,8 +1778,17 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
         ];
 
         let server_url = start_https_server(SERVER_CERT, SERVER_KEY).await;
-        let http = HTTP::new(HTTPS_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
-        for (ca_pem, expect_stat, expect_get) in test_cases {
+        for (ca_pem, insecure_skip_verify, expect_stat, expect_get) in test_cases {
+            let http = HTTP::new(
+                HTTPS_SCHEME,
+                None,
+                1,
+                true,
+                Duration::from_secs(600),
+                true,
+                insecure_skip_verify,
+            )
+            .unwrap();
             let client_cert = ca_pem.map(|pem| load_certs_from_pem(pem).unwrap());
             let response = http
                 .stat(StatRequest {
@@ -1879,6 +1955,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 true,
                 Duration::from_secs(600),
                 true,
+                false,
             )
             .unwrap();
 
@@ -1943,7 +2020,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 .mount(&server)
                 .await;
 
-            let http = HTTP::new(HTTP_SCHEME, None, 1, enable_cache, ttl, true).unwrap();
+            let http = HTTP::new(HTTP_SCHEME, None, 1, enable_cache, ttl, true, false).unwrap();
             let url = format!("{}/redirect", server.uri());
             for _ in 0..2 {
                 let mut response = http
@@ -2023,8 +2100,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 .mount(&server)
                 .await;
 
-            let http =
-                HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+            let http = HTTP::new(
+                HTTP_SCHEME,
+                None,
+                1,
+                true,
+                Duration::from_secs(600),
+                true,
+                false,
+            )
+            .unwrap();
             let url = format!("{}/redirect", server.uri());
             for expected_status in [StatusCode::OK, expected_status] {
                 let response = http
@@ -2105,8 +2190,16 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                 .mount(&server)
                 .await;
 
-            let http =
-                HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
+            let http = HTTP::new(
+                HTTP_SCHEME,
+                None,
+                1,
+                true,
+                Duration::from_secs(600),
+                true,
+                false,
+            )
+            .unwrap();
             let url = format!("{}/redirect", server.uri());
             for expected_status in [StatusCode::OK, expected_status] {
                 let response = http
