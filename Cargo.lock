@@ -1288,7 +1288,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client"
-version = "1.5.13"
+version = "1.5.14"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1366,7 +1366,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-backend"
-version = "1.5.13"
+version = "1.5.14"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1402,7 +1402,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-config"
-version = "1.5.13"
+version = "1.5.14"
 dependencies = [
  "bytesize",
  "bytesize-serde",
@@ -1432,7 +1432,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-core"
-version = "1.5.13"
+version = "1.5.14"
 dependencies = [
  "cgroups-rs",
  "http",
@@ -1452,7 +1452,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-init"
-version = "1.5.13"
+version = "1.5.14"
 dependencies = [
  "anyhow",
  "clap",
@@ -1470,7 +1470,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-metric"
-version = "1.5.13"
+version = "1.5.14"
 dependencies = [
  "bytes",
  "dragonfly-api",
@@ -1487,12 +1487,13 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-request"
-version = "1.14.0"
+version = "1.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7a339497afacb66b2d0925cd5cc35eab04bed5c68f3adf859cd5a0386914140"
+checksum = "89ff48b7c131191610065f83329654a407f43c37851ca48df4b645399bb21329"
 dependencies = [
  "async-trait",
  "backon",
+ "base64 0.22.1",
  "bytes",
  "dashmap",
  "dragonfly-api",
@@ -1524,7 +1525,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-storage"
-version = "1.5.13"
+version = "1.5.14"
 dependencies = [
  "bincode",
  "bytes",
@@ -1559,7 +1560,7 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-util"
-version = "1.5.13"
+version = "1.5.14"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2094,7 +2095,7 @@ dependencies = [
 
 [[package]]
 name = "hdfs"
-version = "1.5.13"
+version = "1.5.14"
 dependencies = [
  "async-trait",
  "dragonfly-client-backend",
