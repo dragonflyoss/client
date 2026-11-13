@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
-use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
+use crate::grpc::{
+    dfdaemon_upload::DfdaemonUploadClient, scheduler::SchedulerClient, REQUEST_TIMEOUT,
+};
 use crate::resource::parent_selector::ParentSelector;
 use dragonfly_api::common::v2::{
     Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, OpenCsg, Peer, Piece, SchedulingPolicy,
@@ -24,7 +26,7 @@ use dragonfly_api::dfdaemon::{
     self,
     v2::{
         download_task_response, DeleteImageResponse, DownloadTaskResponse, ListLocalTasksResponse,
-        StatLocalTaskResponse,
+        StatLocalTaskRequest, StatLocalTaskResponse,
     },
 };
 use dragonfly_api::errordetails::v2::{Backend, Unknown};
@@ -34,8 +36,8 @@ use dragonfly_api::scheduler::v2::{
     DownloadPeerBackToSourceFinishedRequest, DownloadPeerBackToSourceStartedRequest,
     DownloadPeerFailedRequest, DownloadPeerFinishedRequest, DownloadPeerStartedRequest,
     DownloadPieceBackToSourceFailedRequest, DownloadPieceBackToSourceFinishedRequest,
-    DownloadPieceFailedRequest, DownloadPieceFinishedRequest, RegisterPeerRequest,
-    ReschedulePeerRequest, StatTaskRequest,
+    DownloadPieceFailedRequest, DownloadPieceFinishedRequest, ListPeersRequest,
+    RegisterPeerRequest, ReschedulePeerRequest, StatTaskRequest,
 };
 use dragonfly_client_backend::{BackendFactory, StatRequest};
 use dragonfly_client_config::dfdaemon::Config;
@@ -51,6 +53,7 @@ use dragonfly_client_storage::{metadata, Storage};
 use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
     id_generator::{IDGenerator, ImageIDParameter},
+    net::format_url,
     shutdown,
 };
 use futures::future::select_all;
@@ -68,6 +71,7 @@ use tokio::sync::{
     Mutex, Notify, OwnedSemaphorePermit, Semaphore,
 };
 use tokio::task::JoinSet;
+use tokio::time;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Status};
 use tracing::{debug, error, info, instrument, warn, Instrument};
@@ -79,6 +83,18 @@ use super::*;
 /// (e.g. the prefetch) to be written to the local storage, before falling back to
 /// downloading with the scheduler.
 const DEFAULT_WAIT_FOR_IN_FLIGHT_PIECE_TIMEOUT: Duration = Duration::from_millis(1000);
+
+/// The maximum duration to wait for the source to respond to the stat request of the
+/// task, before falling back to getting the metadata of the task from the peers.
+pub const DEFAULT_WAIT_FOR_SOURCE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The maximum duration to wait for a peer to return the metadata of the task,
+/// including the time to connect to it.
+const DEFAULT_WAIT_FOR_PEER_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// The page size to list the peers that succeeded to download the task. The peers
+/// are asked one by one, so it bounds the time to wait for them.
+const DEFAULT_LIST_PEERS_PAGE_SIZE: i32 = 3;
 
 /// Represents a task manager.
 pub struct Task {
@@ -215,64 +231,114 @@ impl Task {
             backend.scheme().as_str(),
             http::Method::HEAD.as_str(),
         );
-        let response = backend
-            .stat(StatRequest {
-                task_id: id.to_string(),
-                url: request.url,
-                http_header: Some(request_header),
-                timeout: self.config.download.piece_timeout,
-                client_cert: None,
-                object_storage: request.object_storage,
-                hdfs: request.hdfs,
-                hugging_face: request.hugging_face,
-                model_scope: request.model_scope,
-                open_csg: request.open_csg,
-            })
+        let stat = backend.stat(StatRequest {
+            task_id: id.to_string(),
+            url: request.url,
+            http_header: Some(request_header),
+            timeout: self.config.download.piece_timeout,
+            client_cert: None,
+            object_storage: request.object_storage,
+            hdfs: request.hdfs,
+            hugging_face: request.hugging_face,
+            model_scope: request.model_scope,
+            open_csg: request.open_csg,
+        });
+        tokio::pin!(stat);
+
+        // Wait for the source for a short time. If the source is unavailable, i.e. it
+        // does not respond in time or responds with a server error, get the metadata
+        // of the task from the peers. The request is still in flight, and is awaited
+        // if the peers do not have the metadata.
+        let response = time::timeout(DEFAULT_WAIT_FOR_SOURCE_TIMEOUT, &mut stat)
             .await
-            .inspect_err(|_err| {
+            .ok();
+        let peer_response = match &response {
+            Some(Ok(response))
+                if response.success
+                    || response
+                        .http_status_code
+                        .is_some_and(|code| !code.is_server_error()) =>
+            {
+                None
+            }
+            Some(Err(_)) => None,
+            _ => self
+                .stat_from_peers(id)
+                .await
+                .inspect_err(|err| warn!("stat task from peers failed: {}", err))
+                .ok(),
+        };
+
+        let (content_length, piece_length, response_header) = match peer_response {
+            Some(StatLocalTaskResponse {
+                content_length: Some(content_length),
+                piece_length: Some(piece_length),
+                response_header,
+                ..
+            }) => {
                 // Collect the backend request failure metrics.
                 collect_backend_request_failure_metrics(
                     backend.scheme().as_str(),
                     http::Method::HEAD.as_str(),
                 );
-            })?;
 
-        // Check if the status code is success.
-        if !response.success {
-            // Collect the backend request failure metrics.
-            collect_backend_request_failure_metrics(
-                backend.scheme().as_str(),
-                http::Method::HEAD.as_str(),
-            );
+                info!("source is unavailable, use the task metadata from the peers");
+                (
+                    content_length,
+                    piece_length,
+                    Some(hashmap_to_headermap(&response_header)?),
+                )
+            }
+            _ => {
+                let response = match response {
+                    Some(response) => response,
+                    None => stat.await,
+                }
+                .inspect_err(|_err| {
+                    // Collect the backend request failure metrics.
+                    collect_backend_request_failure_metrics(
+                        backend.scheme().as_str(),
+                        http::Method::HEAD.as_str(),
+                    );
+                })?;
 
-            return Err(Error::BackendError(Box::new(BackendError {
-                message: response.error_message.unwrap_or_default(),
-                status_code: response.http_status_code,
-                header: response.http_header,
-            })));
-        }
+                // Check if the status code is success.
+                if !response.success {
+                    // Collect the backend request failure metrics.
+                    collect_backend_request_failure_metrics(
+                        backend.scheme().as_str(),
+                        http::Method::HEAD.as_str(),
+                    );
 
-        // Collect the backend request finished metrics.
-        collect_backend_request_finished_metrics(
-            backend.scheme().as_str(),
-            http::Method::HEAD.as_str(),
-            start_time.elapsed(),
-        );
+                    return Err(Error::BackendError(Box::new(BackendError {
+                        message: response.error_message.unwrap_or_default(),
+                        status_code: response.http_status_code,
+                        header: response.http_header,
+                    })));
+                }
 
-        let content_length = match response.content_length {
-            Some(content_length) => content_length,
-            None => return Err(Error::InvalidContentLength),
-        };
+                // Collect the backend request finished metrics.
+                collect_backend_request_finished_metrics(
+                    backend.scheme().as_str(),
+                    http::Method::HEAD.as_str(),
+                    start_time.elapsed(),
+                );
 
-        let piece_length = match request.piece_length {
-            Some(piece_length) => self
-                .piece
-                .calculate_piece_length(piece::PieceLengthStrategy::FixedPieceLength(piece_length)),
-            None => {
-                self.piece
-                    .calculate_piece_length(piece::PieceLengthStrategy::OptimizeByFileLength(
-                        content_length,
-                    ))
+                let content_length = match response.content_length {
+                    Some(content_length) => content_length,
+                    None => return Err(Error::InvalidContentLength),
+                };
+
+                let piece_length = match request.piece_length {
+                    Some(piece_length) => self.piece.calculate_piece_length(
+                        piece::PieceLengthStrategy::FixedPieceLength(piece_length),
+                    ),
+                    None => self.piece.calculate_piece_length(
+                        piece::PieceLengthStrategy::OptimizeByFileLength(content_length),
+                    ),
+                };
+
+                (content_length, piece_length, response.http_header)
             }
         };
 
@@ -286,7 +352,7 @@ impl Task {
 
         let task = self
             .storage
-            .download_task_started(id, piece_length, content_length, response.http_header)
+            .download_task_started(id, piece_length, content_length, response_header)
             .await;
 
         // Attempt to create a hard link from the task file to the output path.
@@ -311,6 +377,61 @@ impl Task {
         }
 
         task
+    }
+
+    /// Returns the metadata of the task from the peers that succeeded to download the
+    /// task. The peers are listed by the scheduler, no peer is registered and no seed
+    /// peer is triggered.
+    #[instrument(skip_all)]
+    pub async fn stat_from_peers(&self, id: &str) -> ClientResult<StatLocalTaskResponse> {
+        // List the peers that succeeded to download the task, the first page is enough.
+        let response = self
+            .scheduler_client
+            .list_peers(
+                id,
+                ListPeersRequest {
+                    task_id: Some(id.to_string()),
+                    page_size: Some(DEFAULT_LIST_PEERS_PAGE_SIZE),
+                    page_token: None,
+                },
+            )
+            .await?;
+
+        // Return the metadata from the first host that knows the content length and
+        // the piece length.
+        let hosts = response.peers.into_iter().filter_map(|peer| peer.host);
+        for host in hosts {
+            let response = time::timeout(DEFAULT_WAIT_FOR_PEER_TIMEOUT, async {
+                let addr = format_url(
+                    self.config.upload.client.scheme(),
+                    host.ip.parse()?,
+                    host.port as u16,
+                );
+
+                DfdaemonUploadClient::new(self.config.clone(), addr, false)
+                    .await?
+                    .stat_local_task(StatLocalTaskRequest {
+                        task_id: id.to_string(),
+                        remote_ip: self.config.host.ip.map(|ip| ip.to_string()),
+                    })
+                    .await
+            })
+            .await
+            .unwrap_or_else(|err| Err(err.into()));
+
+            match response {
+                Ok(response)
+                    if response.content_length.is_some() && response.piece_length.is_some() =>
+                {
+                    info!("stat task from host {}", host.id);
+                    return Ok(response);
+                }
+                Ok(_) => warn!("host {} does not know the content length", host.id),
+                Err(err) => warn!("stat task from host {} failed: {}", host.id, err),
+            }
+        }
+
+        Err(Error::TaskNotFound(id.to_string()))
     }
 
     /// Updates the metadata of the task when the task downloads finished.

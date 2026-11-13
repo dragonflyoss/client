@@ -1272,9 +1272,9 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-api"
-version = "2.3.10"
+version = "2.3.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d135bdd4d856946953e4c2bd007d69a8f8841e53401bec8b4f48daf39b0515de"
+checksum = "f566718b46a73043aaff4379078d3339131a169628461414c8b1cb620427402a"
 dependencies = [
  "prost 0.14.4",
  "prost-types",
@@ -1487,13 +1487,13 @@ dependencies = [
 
 [[package]]
 name = "dragonfly-client-request"
-version = "1.14.1"
+version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89ff48b7c131191610065f83329654a407f43c37851ca48df4b645399bb21329"
+checksum = "81fd436c7b69f52164ee096bf5204b53d5904b96109f1501a9f3211c87d23c83"
 dependencies = [
  "async-trait",
  "backon",
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "dashmap",
  "dragonfly-api",

@@ -16,7 +16,10 @@
 
 use crate::dynconfig::Dynconfig;
 use crate::grpc::REQUEST_TIMEOUT;
-use crate::resource::{piece::MIN_PIECE_LENGTH, task::Task};
+use crate::resource::{
+    piece::MIN_PIECE_LENGTH,
+    task::{Task, DEFAULT_WAIT_FOR_SOURCE_TIMEOUT},
+};
 use bytes::Bytes;
 use dragonfly_api::common::v2::{Download, TaskType};
 use dragonfly_api::dfdaemon::v2::{
@@ -487,6 +490,21 @@ pub async fn http_handler(
                 .await;
         }
 
+        // Proxy the HEAD request directly to the remote server, and respond with the
+        // task metadata from the peers if the remote server is unavailable.
+        if request.method() == Method::HEAD {
+            return proxy_head_request(
+                config.clone(),
+                task,
+                rule,
+                request,
+                remote_ip,
+                http_client,
+                https_client,
+            )
+            .await;
+        }
+
         debug!(
             "proxy HTTP request bypassing dfdaemon for non-GET method: {:?}",
             RedactedHTTPProxyRequest(&request)
@@ -774,6 +792,21 @@ pub async fn upgraded_handler(
                 .await;
         }
 
+        // Proxy the HEAD request directly to the remote server, and respond with the
+        // task metadata from the peers if the remote server is unavailable.
+        if request.method() == Method::HEAD {
+            return proxy_head_request(
+                config.clone(),
+                task,
+                rule,
+                request,
+                remote_ip,
+                http_client,
+                https_client,
+            )
+            .await;
+        }
+
         debug!(
             "proxy HTTPS request bypassing dfdaemon for non-GET method: {:?}",
             RedactedHTTPProxyRequest(&request),
@@ -838,7 +871,7 @@ async fn proxy_via_dfdaemon(
 
     // Make the download task request.
     let download_task_request =
-        match make_download_task_request(config.clone(), rule, request, remote_ip) {
+        match make_download_task_request(config.clone(), rule, &request, remote_ip) {
             Ok(download_task_request) => download_task_request,
             Err(err) => {
                 error!("make download task request failed: {}", err);
@@ -1208,6 +1241,75 @@ async fn proxy_via_dfdaemon(
     }
 }
 
+/// Proxies the HEAD request directly to the remote server. If the remote server is
+/// unavailable, i.e. it does not respond in time or responds with a server error,
+/// responds with the metadata of the task from the local storage or the peers.
+#[instrument(skip_all)]
+async fn proxy_head_request(
+    config: Arc<Config>,
+    task: Arc<Task>,
+    rule: &Rule,
+    request: Request<hyper::body::Incoming>,
+    remote_ip: std::net::IpAddr,
+    http_client: Client<HttpConnector, hyper::body::Incoming>,
+    https_client: Client<hyper_rustls::HttpsConnector<HttpConnector>, hyper::body::Incoming>,
+) -> ClientResult<Response> {
+    // Generate the task id before the request is consumed, it is the same as the
+    // task id of the GET request.
+    let task_id = make_download_task_request(config, rule, &request, remote_ip)
+        .and_then(|request| request.download.ok_or(ClientError::InvalidParameter))
+        .and_then(|download| task::generate_task_id(&task, &download));
+
+    let remote_response = async move {
+        if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
+            proxy_via_https(request, https_client).await
+        } else {
+            proxy_via_http(request, http_client).await
+        }
+    };
+    tokio::pin!(remote_response);
+
+    // Wait for the remote server for a short time. The request is still in flight
+    // after the timeout, and is awaited if the metadata of the task is not found.
+    let result =
+        match tokio::time::timeout(DEFAULT_WAIT_FOR_SOURCE_TIMEOUT, &mut remote_response).await {
+            Ok(Ok(response)) if !response.status().is_server_error() => return Ok(response),
+            result => result.ok(),
+        };
+
+    // Get the metadata of the task from the local storage if the content length is
+    // known, otherwise from the peers.
+    let stat = async {
+        let task_id = task_id?;
+        match task.stat_local(task_id.as_str()).await {
+            Ok(stat) if stat.content_length.is_some() => Ok(stat),
+            _ => task.stat_from_peers(task_id.as_str()).await,
+        }
+    }
+    .await
+    .inspect_err(|err| warn!("stat task from peers failed: {}", err));
+
+    let Ok(stat) = stat else {
+        return match result {
+            Some(result) => result,
+            None => remote_response.await,
+        };
+    };
+
+    // Respond with the response header of the task and the content length.
+    info!("remote server is unavailable, respond with the task metadata");
+    let mut response = Response::new(empty());
+    *response.headers_mut() = hashmap_to_headermap(&stat.response_header)?;
+    response.headers_mut().insert(
+        reqwest::header::CONTENT_LENGTH,
+        stat.content_length
+            .ok_or(ClientError::InvalidContentLength)?
+            .into(),
+    );
+
+    Ok(response)
+}
+
 /// Proxies the HTTP request directly to the remote server.
 #[instrument(level = "debug", skip_all)]
 async fn proxy_via_http(
@@ -1318,7 +1420,7 @@ fn make_registry_mirror_request(
 fn make_download_task_request(
     config: Arc<Config>,
     rule: &Rule,
-    request: Request<hyper::body::Incoming>,
+    request: &Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
 ) -> ClientResult<DownloadTaskRequest> {
     let header = request.headers();

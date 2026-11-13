@@ -2751,6 +2751,17 @@ impl DfdaemonUploadClient {
         Ok(response.into_inner())
     }
 
+    /// Stats the task metadata in the local storage of the peer.
+    #[instrument(skip_all)]
+    pub async fn stat_local_task(
+        &self,
+        request: StatLocalTaskRequest,
+    ) -> ClientResult<StatLocalTaskResponse> {
+        let request = Self::make_request(request);
+        let response = self.client.clone().stat_local_task(request).await?;
+        Ok(response.into_inner())
+    }
+
     /// List task entries in the task.
     #[instrument(skip_all)]
     pub async fn list_task_entries(
