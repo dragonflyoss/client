@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use super::encryption::Encryption;
 use bytes::Bytes;
 use bytesize::ByteSize;
 use dragonfly_api::common::v2::Range;
@@ -21,7 +22,7 @@ use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_config::MIN_PIECE_LENGTH;
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::buffer_pool::BufferPool;
-use dragonfly_client_util::fs::fd::{FDCache, WritePriority, DEFAULT_FD_CACHE_CAPACITY};
+use dragonfly_client_util::fs::fd::{FDCache, WriteFD, WritePriority, DEFAULT_FD_CACHE_CAPACITY};
 use dragonfly_client_util::fs::{fadvise_dontneed, fadvise_willneed, fallocate};
 use futures::Stream;
 use std::cmp::max;
@@ -49,12 +50,23 @@ pub struct Content {
 
     /// Initiates writeback of written piece ranges per storage.writebackMode.
     writeback: super::content::Writeback,
+
+    encryption: Option<Arc<Encryption>>,
 }
 
 /// Implements the content storage.
 impl Content {
     /// Returns a new content.
     pub async fn new(config: Arc<Config>, dir: &Path) -> Result<Content> {
+        let encryption = Encryption::from_config(&config.storage.encryption)?;
+        Self::new_with_encryption(config, dir, encryption).await
+    }
+
+    pub(crate) async fn new_with_encryption(
+        config: Arc<Config>,
+        dir: &Path,
+        encryption: Option<Arc<Encryption>>,
+    ) -> Result<Content> {
         let dir = dir.join(super::content::DEFAULT_CONTENT_DIR);
 
         // If the storage is not kept, remove the directory.
@@ -81,7 +93,117 @@ impl Content {
             config,
             dir,
             fd_cache: FDCache::new(DEFAULT_FD_CACHE_CAPACITY),
+            encryption,
         })
+    }
+
+    async fn open_write(&self, path: &Path) -> Result<WriteFD> {
+        match &self.encryption {
+            Some(encryption) => encryption.open_write(path).await,
+            None => {
+                let fd = self.fd_cache.open(path).await?;
+                super::encryption::ensure_plaintext(&fd)?;
+                self.fd_cache.open_write(path).await
+            }
+        }
+    }
+
+    async fn initialize_file(&self, file: fs::File, content_length: u64) -> Result<()> {
+        let storage_length = match &self.encryption {
+            Some(encryption) => encryption.encrypted_length(content_length)?,
+            None => content_length,
+        };
+        fallocate(&file, storage_length).await?;
+        if let Some(encryption) = &self.encryption {
+            encryption.initialize(&file.into_std().await, content_length)?;
+        }
+        Ok(())
+    }
+
+    async fn validate_existing(&self, path: &Path) -> Result<()> {
+        let fd = self.fd_cache.open(path).await?;
+        match &self.encryption {
+            Some(encryption) => {
+                encryption.content_length(&fd)?;
+            }
+            None => super::encryption::ensure_plaintext(&fd)?,
+        }
+        Ok(())
+    }
+
+    fn reader(
+        &self,
+        fd: Arc<std::fs::File>,
+        path: PathBuf,
+        offset: u64,
+        length: u64,
+    ) -> Result<super::io::RangeReader> {
+        let reader = match &self.encryption {
+            Some(encryption) => super::io::RangeReader::new_encrypted(
+                fd,
+                path,
+                encryption.clone(),
+                offset,
+                length,
+                self.config.storage.read_buffer_size,
+                self.buffer_pool.clone(),
+            ),
+            None => {
+                super::encryption::ensure_plaintext(&fd)?;
+                super::io::RangeReader::new(
+                    fd,
+                    offset,
+                    length,
+                    self.config.storage.read_buffer_size,
+                    self.buffer_pool.clone(),
+                )
+            }
+        };
+        Ok(reader)
+    }
+
+    pub(crate) fn physical_range(&self, offset: u64, length: u64) -> Result<(u64, u64)> {
+        match &self.encryption {
+            Some(encryption) => Ok(encryption.physical_range(offset, length)?),
+            None => Ok((offset, length)),
+        }
+    }
+
+    async fn trigger_writeback(&self, fd: &WriteFD, offset: u64, length: u64) {
+        match self.physical_range(offset, length) {
+            Ok((offset, length)) => self.writeback.trigger(fd.get_ref(), offset, length).await,
+            Err(err) => warn!("failed to calculate writeback range: {}", err),
+        }
+    }
+
+    async fn copy_content(&self, from: &Path, to: &Path) -> Result<u64> {
+        let Some(encryption) = &self.encryption else {
+            let fd = self.fd_cache.open(from).await?;
+            super::encryption::ensure_plaintext(&fd)?;
+            return Ok(fs::copy(from, to).await?);
+        };
+
+        let fd = self.fd_cache.open(from).await?;
+        let content_length = encryption.content_length(&fd)?;
+        let mut reader = self.reader(fd, from.to_path_buf(), 0, content_length)?;
+        let mut output = fs::File::create(to).await?;
+        let copied = tokio::io::copy_buf(&mut reader, &mut output).await?;
+        if copied != content_length {
+            return Err(Error::Unknown(format!(
+                "expected length {content_length} but copied {copied}"
+            )));
+        }
+        Ok(copied)
+    }
+
+    fn ensure_hard_link_supported(&self) -> Result<()> {
+        if self.encryption.is_some() {
+            return Err(Error::Unknown(
+                "hard links are unavailable when storage encryption is enabled; use copy"
+                    .to_string(),
+            ));
+        }
+        Ok(())
     }
 
     /// Returns the available space of the disk.
@@ -125,6 +247,10 @@ impl Content {
 
     /// Checks if the storage has enough space to store the content.
     pub fn has_enough_space(&self, content_length: u64) -> Result<bool> {
+        let content_length = match &self.encryption {
+            Some(encryption) => encryption.encrypted_length(content_length)?,
+            None => content_length,
+        };
         let available_space = self.available_space()?;
         if available_space < content_length {
             warn!(
@@ -166,6 +292,7 @@ impl Content {
     pub async fn create_task(&self, task_id: &str, length: u64) -> Result<PathBuf> {
         let task_path = self.get_task_path(task_id);
         if task_path.exists() {
+            self.validate_existing(&task_path).await?;
             return Ok(task_path);
         }
 
@@ -187,8 +314,17 @@ impl Content {
             error!("remove {:?} from fd_cache failed: {}", task_path, err);
         });
 
-        fallocate(&f, length).await.inspect_err(|err| {
-            error!("fallocate {:?} failed: {}", task_dir, err);
+        if let Some(encryption) = &self.encryption {
+            encryption.evict_write_fd(&task_path).unwrap_or_else(|err| {
+                error!(
+                    "remove {:?} from encrypted write fd cache failed: {}",
+                    task_path, err
+                );
+            });
+        }
+
+        self.initialize_file(f, length).await.inspect_err(|err| {
+            error!("initialize {:?} failed: {}", task_dir, err);
         })?;
 
         Ok(task_dir.join(task_id))
@@ -205,7 +341,9 @@ impl Content {
     ///    2.2. If the hard link fails, copy the task content to the destination once the task is finished, then return immediately.
     #[instrument(level = "debug", skip_all)]
     pub async fn hard_link_task(&self, task_id: &str, to: &Path) -> Result<()> {
+        self.ensure_hard_link_supported()?;
         let task_path = self.get_task_path(task_id);
+        self.validate_existing(&task_path).await?;
         if let Err(err) = fs::hard_link(task_path.clone(), to).await {
             if err.kind() == std::io::ErrorKind::AlreadyExists {
                 if let Ok(true) = self.is_same_dev_inode(&task_path, to).await {
@@ -225,7 +363,8 @@ impl Content {
     /// Copies the task content to the destination.
     #[instrument(level = "debug", skip_all)]
     pub async fn copy_task(&self, task_id: &str, to: &Path) -> Result<()> {
-        let length = fs::copy(self.get_task_path(task_id), to).await?;
+        let task_path = self.get_task_path(task_id);
+        let length = self.copy_content(&task_path, to).await?;
 
         // Triggers writeback of the copied content per storage.writebackMode.
         if let Ok(f) = fs::File::open(to).await {
@@ -251,6 +390,10 @@ impl Content {
         self.fd_cache.remove(&task_path).unwrap_or_else(|err| {
             error!("remove {:?} from fd_cache failed: {}", task_path, err);
         });
+
+        if let Some(encryption) = &self.encryption {
+            encryption.remove_cached_state(&task_path);
+        }
 
         Ok(())
     }
@@ -285,18 +428,15 @@ impl Content {
         // on the shared descriptor break the sequential detection. Skip the
         // small ranges, which the kernel readahead covers quickly.
         if target_length >= MIN_PIECE_LENGTH {
-            fadvise_willneed(&fd, target_offset, target_length)
-                .await
-                .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
+            match self.physical_range(target_offset, target_length) {
+                Ok((offset, length)) => fadvise_willneed(&fd, offset, length)
+                    .await
+                    .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err)),
+                Err(err) => warn!("failed to calculate readahead range: {}", err),
+            }
         }
 
-        Ok(super::io::RangeReader::new(
-            fd,
-            target_offset,
-            target_length,
-            self.config.storage.read_buffer_size,
-            self.buffer_pool.clone(),
-        ))
+        self.reader(fd, task_path, target_offset, target_length)
     }
 
     /// Writes the piece from the stream of bytes chunks to the content and
@@ -314,13 +454,9 @@ impl Content {
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
         let task_path = self.get_task_path(task_id);
-        let mut fd = self
-            .fd_cache
-            .open_write(&task_path)
-            .await
-            .inspect_err(|err| {
-                error!("open {:?} failed: {}", task_path, err);
-            })?;
+        let mut fd = self.open_write(&task_path).await.inspect_err(|err| {
+            error!("open {:?} failed: {}", task_path, err);
+        })?;
 
         fd.set_priority(if is_prefetch {
             WritePriority::Low
@@ -328,21 +464,34 @@ impl Content {
             WritePriority::High
         });
 
-        let response = super::io::write_range_from_stream(
-            &fd,
-            offset,
-            expected_length,
-            self.config.storage.write_buffer_size,
-            stream,
-        )
-        .await
+        let response = match &self.encryption {
+            Some(encryption) => {
+                super::io::write_encrypted_range_from_stream(
+                    &fd,
+                    &task_path,
+                    encryption.clone(),
+                    offset,
+                    expected_length,
+                    stream,
+                )
+                .await
+            }
+            None => {
+                super::io::write_range_from_stream(
+                    &fd,
+                    offset,
+                    expected_length,
+                    self.config.storage.write_buffer_size,
+                    stream,
+                )
+                .await
+            }
+        }
         .inspect_err(|err| {
             error!("write {:?} failed: {}", task_path, err);
         })?;
 
-        self.writeback
-            .trigger(fd.get_ref(), offset, response.length)
-            .await;
+        self.trigger_writeback(&fd, offset, response.length).await;
         Ok(response)
     }
 
@@ -377,6 +526,7 @@ impl Content {
     pub async fn create_persistent_task(&self, task_id: &str, length: u64) -> Result<PathBuf> {
         let task_path = self.get_persistent_task_path(task_id);
         if task_path.exists() {
+            self.validate_existing(&task_path).await?;
             return Ok(task_path);
         }
 
@@ -398,8 +548,17 @@ impl Content {
             error!("remove {:?} from fd_cache failed: {}", task_path, err);
         });
 
-        fallocate(&f, length).await.inspect_err(|err| {
-            error!("fallocate {:?} failed: {}", task_dir, err);
+        if let Some(encryption) = &self.encryption {
+            encryption.evict_write_fd(&task_path).unwrap_or_else(|err| {
+                error!(
+                    "remove {:?} from encrypted write fd cache failed: {}",
+                    task_path, err
+                );
+            });
+        }
+
+        self.initialize_file(f, length).await.inspect_err(|err| {
+            error!("initialize {:?} failed: {}", task_dir, err);
         })?;
 
         Ok(task_dir.join(task_id))
@@ -435,7 +594,9 @@ impl Content {
     ///    2.2. If the hard link fails, copy the persistent task content to the destination once the task is finished, then return immediately.
     #[instrument(level = "debug", skip_all)]
     pub async fn hard_link_persistent_task(&self, task_id: &str, to: &Path) -> Result<()> {
+        self.ensure_hard_link_supported()?;
         let task_path = self.get_persistent_task_path(task_id);
+        self.validate_existing(&task_path).await?;
         if let Err(err) = fs::hard_link(task_path.clone(), to).await {
             if err.kind() == std::io::ErrorKind::AlreadyExists {
                 if let Ok(true) = self.is_same_dev_inode(&task_path, to).await {
@@ -463,6 +624,7 @@ impl Content {
     ///    2.2. If hard link fails, return an error.
     #[instrument(level = "debug", skip_all)]
     pub async fn hard_link_to_persistent_task(&self, from: &Path, task_id: &str) -> Result<()> {
+        self.ensure_hard_link_supported()?;
         let task_path = self.get_persistent_task_path(task_id);
         if let Err(err) = fs::hard_link(from, &task_path).await {
             if err.kind() == std::io::ErrorKind::AlreadyExists {
@@ -483,7 +645,8 @@ impl Content {
     /// Copies the persistent task content to the destination.
     #[instrument(level = "debug", skip_all)]
     pub async fn copy_persistent_task(&self, task_id: &str, to: &Path) -> Result<()> {
-        let length = fs::copy(self.get_persistent_task_path(task_id), to).await?;
+        let task_path = self.get_persistent_task_path(task_id);
+        let length = self.copy_content(&task_path, to).await?;
 
         // Triggers writeback of the copied content per storage.writebackMode.
         if let Ok(f) = fs::File::open(to).await {
@@ -519,18 +682,15 @@ impl Content {
         // on the shared descriptor break the sequential detection. Skip the
         // small ranges, which the kernel readahead covers quickly.
         if target_length >= MIN_PIECE_LENGTH {
-            fadvise_willneed(&fd, target_offset, target_length)
-                .await
-                .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
+            match self.physical_range(target_offset, target_length) {
+                Ok((offset, length)) => fadvise_willneed(&fd, offset, length)
+                    .await
+                    .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err)),
+                Err(err) => warn!("failed to calculate readahead range: {}", err),
+            }
         }
 
-        Ok(super::io::RangeReader::new(
-            fd,
-            target_offset,
-            target_length,
-            self.config.storage.read_buffer_size,
-            self.buffer_pool.clone(),
-        ))
+        self.reader(fd, task_path, target_offset, target_length)
     }
 
     /// Writes the persistent piece to the content and
@@ -544,30 +704,39 @@ impl Content {
         reader: &mut R,
     ) -> Result<super::io::WriteRangeResponse> {
         let task_path = self.get_persistent_task_path(task_id);
-        let fd = self
-            .fd_cache
-            .open_write(&task_path)
-            .await
-            .inspect_err(|err| {
-                error!("open {:?} failed: {}", task_path, err);
-            })?;
+        let fd = self.open_write(&task_path).await.inspect_err(|err| {
+            error!("open {:?} failed: {}", task_path, err);
+        })?;
 
-        let response = super::io::write_range(
-            &fd,
-            offset,
-            expected_length,
-            self.config.storage.write_buffer_size,
-            reader,
-            &self.buffer_pool,
-        )
-        .await
+        let response = match &self.encryption {
+            Some(encryption) => {
+                super::io::write_encrypted_range(
+                    &fd,
+                    &task_path,
+                    encryption.clone(),
+                    offset,
+                    expected_length,
+                    reader,
+                )
+                .await
+            }
+            None => {
+                super::io::write_range(
+                    &fd,
+                    offset,
+                    expected_length,
+                    self.config.storage.write_buffer_size,
+                    reader,
+                    &self.buffer_pool,
+                )
+                .await
+            }
+        }
         .inspect_err(|err| {
             error!("write {:?} failed: {}", task_path, err);
         })?;
 
-        self.writeback
-            .trigger(fd.get_ref(), offset, response.length)
-            .await;
+        self.trigger_writeback(&fd, offset, response.length).await;
         Ok(response)
     }
 
@@ -585,29 +754,38 @@ impl Content {
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
         let task_path = self.get_persistent_task_path(task_id);
-        let fd = self
-            .fd_cache
-            .open_write(&task_path)
-            .await
-            .inspect_err(|err| {
-                error!("open {:?} failed: {}", task_path, err);
-            })?;
+        let fd = self.open_write(&task_path).await.inspect_err(|err| {
+            error!("open {:?} failed: {}", task_path, err);
+        })?;
 
-        let response = super::io::write_range_from_stream(
-            &fd,
-            offset,
-            expected_length,
-            self.config.storage.write_buffer_size,
-            stream,
-        )
-        .await
+        let response = match &self.encryption {
+            Some(encryption) => {
+                super::io::write_encrypted_range_from_stream(
+                    &fd,
+                    &task_path,
+                    encryption.clone(),
+                    offset,
+                    expected_length,
+                    stream,
+                )
+                .await
+            }
+            None => {
+                super::io::write_range_from_stream(
+                    &fd,
+                    offset,
+                    expected_length,
+                    self.config.storage.write_buffer_size,
+                    stream,
+                )
+                .await
+            }
+        }
         .inspect_err(|err| {
             error!("write {:?} failed: {}", task_path, err);
         })?;
 
-        self.writeback
-            .trigger(fd.get_ref(), offset, response.length)
-            .await;
+        self.trigger_writeback(&fd, offset, response.length).await;
         Ok(response)
     }
 
@@ -630,6 +808,9 @@ impl Content {
                 );
             });
 
+        if let Some(encryption) = &self.encryption {
+            encryption.remove_cached_state(&persistent_task_path);
+        }
         Ok(())
     }
 
@@ -674,6 +855,7 @@ impl Content {
     ) -> Result<PathBuf> {
         let task_path = self.get_persistent_cache_task_path(task_id);
         if task_path.exists() {
+            self.validate_existing(&task_path).await?;
             return Ok(task_path);
         }
 
@@ -695,8 +877,17 @@ impl Content {
             error!("remove {:?} from fd_cache failed: {}", task_path, err);
         });
 
-        fallocate(&f, length).await.inspect_err(|err| {
-            error!("fallocate {:?} failed: {}", task_dir, err);
+        if let Some(encryption) = &self.encryption {
+            encryption.evict_write_fd(&task_path).unwrap_or_else(|err| {
+                error!(
+                    "remove {:?} from encrypted write fd cache failed: {}",
+                    task_path, err
+                );
+            });
+        }
+
+        self.initialize_file(f, length).await.inspect_err(|err| {
+            error!("initialize {:?} failed: {}", task_dir, err);
         })?;
 
         Ok(task_dir.join(task_id))
@@ -732,7 +923,9 @@ impl Content {
     ///    2.2. If the hard link fails, copy the persistent cache task content to the destination once the task is finished, then return immediately.
     #[instrument(level = "debug", skip_all)]
     pub async fn hard_link_persistent_cache_task(&self, task_id: &str, to: &Path) -> Result<()> {
+        self.ensure_hard_link_supported()?;
         let task_path = self.get_persistent_cache_task_path(task_id);
+        self.validate_existing(&task_path).await?;
         if let Err(err) = fs::hard_link(task_path.clone(), to).await {
             if err.kind() == std::io::ErrorKind::AlreadyExists {
                 if let Ok(true) = self.is_same_dev_inode(&task_path, to).await {
@@ -764,6 +957,7 @@ impl Content {
         from: &Path,
         task_id: &str,
     ) -> Result<()> {
+        self.ensure_hard_link_supported()?;
         let task_path = self.get_persistent_cache_task_path(task_id);
         if let Err(err) = fs::hard_link(from, &task_path).await {
             if err.kind() == std::io::ErrorKind::AlreadyExists {
@@ -784,7 +978,8 @@ impl Content {
     /// Copies the persistent cache task content to the destination.
     #[instrument(level = "debug", skip_all)]
     pub async fn copy_persistent_cache_task(&self, task_id: &str, to: &Path) -> Result<()> {
-        let length = fs::copy(self.get_persistent_cache_task_path(task_id), to).await?;
+        let task_path = self.get_persistent_cache_task_path(task_id);
+        let length = self.copy_content(&task_path, to).await?;
 
         // Triggers writeback of the copied content per storage.writebackMode.
         if let Ok(f) = fs::File::open(to).await {
@@ -820,18 +1015,15 @@ impl Content {
         // on the shared descriptor break the sequential detection. Skip the
         // small ranges, which the kernel readahead covers quickly.
         if target_length >= MIN_PIECE_LENGTH {
-            fadvise_willneed(&fd, target_offset, target_length)
-                .await
-                .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err));
+            match self.physical_range(target_offset, target_length) {
+                Ok((offset, length)) => fadvise_willneed(&fd, offset, length)
+                    .await
+                    .unwrap_or_else(|err| warn!("fadvise_willneed failed: {}", err)),
+                Err(err) => warn!("failed to calculate readahead range: {}", err),
+            }
         }
 
-        Ok(super::io::RangeReader::new(
-            fd,
-            target_offset,
-            target_length,
-            self.config.storage.read_buffer_size,
-            self.buffer_pool.clone(),
-        ))
+        self.reader(fd, task_path, target_offset, target_length)
     }
 
     /// Writes the persistent cache piece to the content and
@@ -845,30 +1037,39 @@ impl Content {
         reader: &mut R,
     ) -> Result<super::io::WriteRangeResponse> {
         let task_path = self.get_persistent_cache_task_path(task_id);
-        let fd = self
-            .fd_cache
-            .open_write(&task_path)
-            .await
-            .inspect_err(|err| {
-                error!("open {:?} failed: {}", task_path, err);
-            })?;
+        let fd = self.open_write(&task_path).await.inspect_err(|err| {
+            error!("open {:?} failed: {}", task_path, err);
+        })?;
 
-        let response = super::io::write_range(
-            &fd,
-            offset,
-            expected_length,
-            self.config.storage.write_buffer_size,
-            reader,
-            &self.buffer_pool,
-        )
-        .await
+        let response = match &self.encryption {
+            Some(encryption) => {
+                super::io::write_encrypted_range(
+                    &fd,
+                    &task_path,
+                    encryption.clone(),
+                    offset,
+                    expected_length,
+                    reader,
+                )
+                .await
+            }
+            None => {
+                super::io::write_range(
+                    &fd,
+                    offset,
+                    expected_length,
+                    self.config.storage.write_buffer_size,
+                    reader,
+                    &self.buffer_pool,
+                )
+                .await
+            }
+        }
         .inspect_err(|err| {
             error!("write {:?} failed: {}", task_path, err);
         })?;
 
-        self.writeback
-            .trigger(fd.get_ref(), offset, response.length)
-            .await;
+        self.trigger_writeback(&fd, offset, response.length).await;
         Ok(response)
     }
 
@@ -887,29 +1088,38 @@ impl Content {
         S: Stream<Item = std::io::Result<Bytes>> + Unpin + ?Sized,
     {
         let task_path = self.get_persistent_cache_task_path(task_id);
-        let fd = self
-            .fd_cache
-            .open_write(&task_path)
-            .await
-            .inspect_err(|err| {
-                error!("open {:?} failed: {}", task_path, err);
-            })?;
+        let fd = self.open_write(&task_path).await.inspect_err(|err| {
+            error!("open {:?} failed: {}", task_path, err);
+        })?;
 
-        let response = super::io::write_range_from_stream(
-            &fd,
-            offset,
-            expected_length,
-            self.config.storage.write_buffer_size,
-            stream,
-        )
-        .await
+        let response = match &self.encryption {
+            Some(encryption) => {
+                super::io::write_encrypted_range_from_stream(
+                    &fd,
+                    &task_path,
+                    encryption.clone(),
+                    offset,
+                    expected_length,
+                    stream,
+                )
+                .await
+            }
+            None => {
+                super::io::write_range_from_stream(
+                    &fd,
+                    offset,
+                    expected_length,
+                    self.config.storage.write_buffer_size,
+                    stream,
+                )
+                .await
+            }
+        }
         .inspect_err(|err| {
             error!("write {:?} failed: {}", task_path, err);
         })?;
 
-        self.writeback
-            .trigger(fd.get_ref(), offset, response.length)
-            .await;
+        self.trigger_writeback(&fd, offset, response.length).await;
         Ok(response)
     }
 
@@ -932,6 +1142,9 @@ impl Content {
                 );
             });
 
+        if let Some(encryption) = &self.encryption {
+            encryption.remove_cached_state(&persistent_cache_task_path);
+        }
         Ok(())
     }
 
@@ -957,6 +1170,7 @@ impl Content {
 mod tests {
     use super::*;
     use crate::content::DEFAULT_TASK_DIR;
+    use chacha20poly1305::aead::{rand_core::RngCore, OsRng};
     use dragonfly_client_config::dfdaemon::WritebackMode;
     use std::io::Cursor;
     use tempfile::tempdir;
@@ -964,6 +1178,17 @@ mod tests {
 
     async fn content(config: Config, dir: &Path) -> Content {
         Content::new(Arc::new(config), dir).await.unwrap()
+    }
+
+    fn encrypted_config(dir: &Path) -> Config {
+        let mut key = [0u8; 32];
+        OsRng.fill_bytes(&mut key);
+        let key_path = dir.join("storage-key");
+        std::fs::write(key_path, key).unwrap();
+        let mut config = Config::default();
+        config.storage.encryption.enable = true;
+        config.storage.encryption.key_file = Some(dir.join("storage-key"));
+        config
     }
 
     #[tokio::test]
@@ -1073,6 +1298,41 @@ mod tests {
                 .unwrap();
             assert_eq!(tokio::fs::read(&task_path).await.unwrap(), data);
 
+            tokio::fs::remove_file(&task_path).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn create_task_removes_stale_encrypted_file_descriptors() {
+        let temp_dir = tempdir().unwrap();
+        let content = content(encrypted_config(temp_dir.path()), temp_dir.path()).await;
+        let task_id = "60409bd0ec44160f44c53c39b3fe1c5fdfb23faded0228c68bee83bc15a200e3";
+        let test_cases: Vec<(&'static [u8], bool)> =
+            vec![(b"hello, world!", true), (b"HELLO, WORLD!", false)];
+
+        for (data, is_prefetch) in test_cases {
+            let task_path = content
+                .create_task(task_id, data.len() as u64)
+                .await
+                .unwrap();
+            content
+                .write_piece_from_stream(
+                    task_id,
+                    0,
+                    data.len() as u64,
+                    is_prefetch,
+                    &mut futures::stream::iter([Ok(Bytes::from_static(data))]),
+                )
+                .await
+                .unwrap();
+
+            let mut reader = content
+                .read_piece(task_id, 0, data.len() as u64, None)
+                .await
+                .unwrap();
+            let mut output = Vec::new();
+            reader.read_to_end(&mut output).await.unwrap();
+            assert_eq!(output, data);
             tokio::fs::remove_file(&task_path).await.unwrap();
         }
     }
@@ -1710,5 +1970,219 @@ mod tests {
                 expected_enough
             );
         }
+    }
+
+    #[tokio::test]
+    async fn encrypted_task_round_trips_large_content_ranges_and_copy() {
+        let temp_dir = tempdir().unwrap();
+        let content = content(encrypted_config(temp_dir.path()), temp_dir.path()).await;
+        let task_id = "encrypted-large-task";
+        let data: Vec<u8> = (0..2 * super::super::encryption::DEFAULT_CHUNK_SIZE + 17)
+            .map(|index| (index % 251) as u8)
+            .collect();
+        let task_path = content
+            .create_task(task_id, data.len() as u64)
+            .await
+            .unwrap();
+        let chunks = data
+            .chunks(1024 * 1024)
+            .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
+            .collect::<Vec<_>>();
+        let response = content
+            .write_piece_from_stream(
+                task_id,
+                0,
+                data.len() as u64,
+                false,
+                &mut futures::stream::iter(chunks),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.length, data.len() as u64);
+        assert_eq!(response.hash, crc32fast::hash(&data).to_string());
+        assert_eq!(&std::fs::read(&task_path).unwrap()[..8], b"DFENC001");
+
+        let mut reader = content
+            .read_piece(task_id, 0, data.len() as u64, None)
+            .await
+            .unwrap();
+        let mut output = Vec::new();
+        reader.read_to_end(&mut output).await.unwrap();
+        assert_eq!(output, data);
+        assert!(reader.is_encrypted());
+        assert!(reader.try_into_parts().is_none());
+
+        let range_offset = super::super::encryption::DEFAULT_CHUNK_SIZE as u64 - 7;
+        let mut reader = content
+            .read_piece(task_id, range_offset, 65, None)
+            .await
+            .unwrap();
+        let mut output = Vec::new();
+        while let Some(chunk) = reader
+            .read_chunk()
+            .await
+            .ok()
+            .filter(|chunk| !chunk.is_empty())
+        {
+            output.extend_from_slice(&chunk);
+        }
+        assert_eq!(
+            output,
+            data[range_offset as usize..range_offset as usize + 65]
+        );
+
+        let destination = temp_dir.path().join("decrypted-output");
+        content.copy_task(task_id, &destination).await.unwrap();
+        assert_eq!(std::fs::read(destination).unwrap(), data);
+        let linked = temp_dir.path().join("linked-output");
+        assert!(content.hard_link_task(task_id, &linked).await.is_err());
+        assert!(!linked.exists());
+    }
+
+    #[tokio::test]
+    async fn disabling_encryption_rejects_retained_ciphertext() {
+        let temp_dir = tempdir().unwrap();
+        let mut config = encrypted_config(temp_dir.path());
+        config.storage.keep = true;
+        let content = content(config, temp_dir.path()).await;
+        let task_id = "retained-encrypted-task";
+        let data: Vec<u8> = (0..1025).map(|index| (index % 251) as u8).collect();
+        content
+            .create_task(task_id, data.len() as u64)
+            .await
+            .unwrap();
+        content
+            .write_piece_from_stream(
+                task_id,
+                0,
+                data.len() as u64,
+                false,
+                &mut futures::stream::iter([Ok(Bytes::copy_from_slice(&data))]),
+            )
+            .await
+            .unwrap();
+        drop(content);
+
+        let mut config = Config::default();
+        config.storage.keep = true;
+        let content = self::content(config, temp_dir.path()).await;
+        assert!(content
+            .create_task(task_id, data.len() as u64)
+            .await
+            .is_err());
+        assert!(content
+            .read_piece(task_id, 0, data.len() as u64, None)
+            .await
+            .is_err());
+        assert!(content
+            .write_piece_from_stream(
+                task_id,
+                0,
+                data.len() as u64,
+                false,
+                &mut futures::stream::iter([Ok(Bytes::copy_from_slice(&data))]),
+            )
+            .await
+            .is_err());
+        let copied = temp_dir.path().join("copied-ciphertext");
+        assert!(content.copy_task(task_id, &copied).await.is_err());
+        assert!(!copied.exists());
+        let linked = temp_dir.path().join("linked-ciphertext");
+        assert!(content.hard_link_task(task_id, &linked).await.is_err());
+        assert!(!linked.exists());
+    }
+
+    #[tokio::test]
+    async fn plaintext_with_encryption_magic_prefix_remains_supported() {
+        let temp_dir = tempdir().unwrap();
+        let content = content(Config::default(), temp_dir.path()).await;
+        let task_id = "plaintext-magic-prefix";
+        let mut data: Vec<u8> = (0..128).map(|index| (index % 251) as u8).collect();
+        data[..8].copy_from_slice(b"DFENC001");
+        content
+            .create_task(task_id, data.len() as u64)
+            .await
+            .unwrap();
+        content
+            .write_piece_from_stream(
+                task_id,
+                0,
+                data.len() as u64,
+                false,
+                &mut futures::stream::iter([Ok(Bytes::copy_from_slice(&data))]),
+            )
+            .await
+            .unwrap();
+
+        let mut reader = content
+            .read_piece(task_id, 0, data.len() as u64, None)
+            .await
+            .unwrap();
+        let mut output = Vec::new();
+        reader.read_to_end(&mut output).await.unwrap();
+        assert_eq!(output, data);
+        let copied = temp_dir.path().join("copied-plaintext");
+        content.copy_task(task_id, &copied).await.unwrap();
+        assert_eq!(std::fs::read(copied).unwrap(), data);
+    }
+
+    #[tokio::test]
+    async fn encrypted_persistent_content_supports_reader_and_stream_writes() {
+        let temp_dir = tempdir().unwrap();
+        let content = content(encrypted_config(temp_dir.path()), temp_dir.path()).await;
+        let data: Vec<u8> = (0..8193).map(|index| (index % 241) as u8).collect();
+
+        content
+            .create_persistent_task("persistent-encrypted", data.len() as u64)
+            .await
+            .unwrap();
+        content
+            .write_persistent_piece(
+                "persistent-encrypted",
+                0,
+                data.len() as u64,
+                &mut Cursor::new(&data),
+            )
+            .await
+            .unwrap();
+        let mut reader = content
+            .read_persistent_piece("persistent-encrypted", 0, data.len() as u64, None)
+            .await
+            .unwrap();
+        let mut output = Vec::new();
+        reader.read_to_end(&mut output).await.unwrap();
+        assert_eq!(output, data);
+
+        content
+            .create_persistent_cache_task("persistent-cache-encrypted", data.len() as u64)
+            .await
+            .unwrap();
+        content
+            .write_persistent_cache_piece_from_stream(
+                "persistent-cache-encrypted",
+                0,
+                data.len() as u64,
+                &mut futures::stream::iter([Ok(Bytes::copy_from_slice(&data))]),
+            )
+            .await
+            .unwrap();
+        let mut reader = content
+            .read_persistent_cache_piece("persistent-cache-encrypted", 0, data.len() as u64, None)
+            .await
+            .unwrap();
+        let mut output = Vec::new();
+        reader.read_to_end(&mut output).await.unwrap();
+        assert_eq!(output, data);
+
+        let source = temp_dir.path().join("source");
+        std::fs::write(&source, &data).unwrap();
+        assert!(content
+            .hard_link_to_persistent_task(&source, "new-persistent")
+            .await
+            .is_err());
+        assert!(content
+            .hard_link_to_persistent_cache_task(&source, "new-persistent-cache")
+            .await
+            .is_err());
     }
 }
