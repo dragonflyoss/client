@@ -75,24 +75,35 @@ impl GC {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    // Snapshot the tasks once and share it between the passes.
-                    if let Ok(tasks) = self.storage.get_tasks().inspect_err(|err| {
-                        info!("failed to get tasks: {}", err);
-                    }) {
-                        // Drop the page cache of the cold tasks.
-                        if let Err(err) = self.drop_task_page_cache(&tasks).await {
-                            info!("failed to drop task page cache: {}", err);
+                    if self.storage.is_memory() {
+                        match self.storage.collect_memory_garbage() {
+                            Ok(tasks) => {
+                                for task in tasks {
+                                    self.delete_task_from_scheduler(task).await;
+                                }
+                            }
+                            Err(err) => info!("failed to collect memory garbage: {}", err),
+                        }
+                    } else {
+                        // Snapshot the tasks once and share it between the passes.
+                        if let Ok(tasks) = self.storage.get_tasks().inspect_err(|err| {
+                            info!("failed to get tasks: {}", err);
+                        }) {
+                            // Drop the page cache of the cold tasks.
+                            if let Err(err) = self.drop_task_page_cache(&tasks).await {
+                                info!("failed to drop task page cache: {}", err);
+                            }
+
+                            // Evict the task by ttl.
+                            if let Err(err) = self.evict_task_by_ttl(&tasks).await {
+                                info!("failed to evict task by ttl: {}", err);
+                            }
                         }
 
-                        // Evict the task by ttl.
-                        if let Err(err) = self.evict_task_by_ttl(&tasks).await {
-                            info!("failed to evict task by ttl: {}", err);
+                        // Evict the task by disk usage.
+                        if let Err(err) = self.evict_task_by_disk_usage().await {
+                            info!("failed to evict task by disk usage: {}", err);
                         }
-                    }
-
-                    // Evict the task by disk usage.
-                    if let Err(err) = self.evict_task_by_disk_usage().await {
-                        info!("failed to evict task by disk usage: {}", err);
                     }
 
                     // Evict the task by image.

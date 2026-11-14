@@ -51,7 +51,6 @@ use vortex_protocol::{
     Header, Message, HEADER_SIZE,
 };
 
-#[cfg(not(target_os = "linux"))]
 use tokio::io::copy_buf;
 
 /// A TCP-based server for dfdaemon upload service.
@@ -710,23 +709,29 @@ impl TCPServerHandler {
         Ok(())
     }
 
-    /// Streams the remaining range of the piece file directly to the TCP
-    /// socket with sendfile, so the piece bytes move from the page cache to
-    /// the socket inside the kernel without passing through user space.
+    /// Streams file ranges with sendfile and memory ranges with copy_buf.
     #[cfg(target_os = "linux")]
     #[instrument(skip_all)]
     async fn write_stream(
         &self,
-        reader: RangeReader,
+        mut reader: RangeReader,
         writer: &mut OwnedWriteHalf,
     ) -> ClientResult<()> {
         debug!("start to write stream to tcp writer");
-        let (fd, offset, remaining) = reader.into_parts();
-        let sent = sendfile_range(writer.as_ref(), &fd, offset, remaining)
-            .await
-            .inspect_err(|err| {
-                error!("sendfile failed: {}", err);
+        let (remaining, sent) = if let Some((fd, offset, remaining)) = reader.file_parts() {
+            let sent = sendfile_range(writer.as_ref(), &fd, offset, remaining)
+                .await
+                .inspect_err(|err| {
+                    error!("sendfile failed: {}", err);
+                })?;
+            (remaining, sent)
+        } else {
+            let remaining = reader.remaining();
+            let sent = copy_buf(&mut reader, writer).await.inspect_err(|err| {
+                error!("copy failed: {}", err);
             })?;
+            (remaining, sent)
+        };
 
         if sent != remaining {
             return Err(ClientError::Unknown(format!(
@@ -966,6 +971,24 @@ mod tests {
 
         drop(client);
         assert!(server.await.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn write_stream_sends_memory_content() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let handler = handler(temp_dir.path()).await;
+        let (sender, mut receiver) = tcp_pair().await;
+        let writer = tokio::spawn(async move {
+            let (_, mut writer) = sender.into_split();
+            let reader =
+                RangeReader::new_memory(Bytes::from_static(CONTENT), 4, BufferPool::new(0));
+            handler.write_stream(reader, &mut writer).await.unwrap();
+        });
+
+        let mut received = Vec::new();
+        receiver.read_to_end(&mut received).await.unwrap();
+        writer.await.unwrap();
+        assert_eq!(received, CONTENT);
     }
 
     #[tokio::test(flavor = "multi_thread")]

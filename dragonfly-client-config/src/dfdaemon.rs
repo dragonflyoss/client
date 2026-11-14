@@ -325,6 +325,33 @@ fn default_storage_cache_capacity() -> ByteSize {
     ByteSize::mib(64)
 }
 
+pub const MAX_STORAGE_CAPACITY_BYTES: u64 = 1024 * 1024 * 1024 * 1024;
+
+#[inline]
+fn default_storage_capacity() -> ByteSize {
+    ByteSize::mib(64)
+}
+
+fn validate_storage_capacity(
+    capacity: &ByteSize,
+) -> std::result::Result<(), validator::ValidationError> {
+    if capacity.as_u64() == 0 || capacity.as_u64() > MAX_STORAGE_CAPACITY_BYTES {
+        return Err(validator::ValidationError::new("range"));
+    }
+
+    Ok(())
+}
+
+fn serialize_storage_capacity<S>(
+    capacity: &ByteSize,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_u64(capacity.as_u64())
+}
+
 /// Returns the default interval to do gc.
 #[inline]
 fn default_gc_interval() -> Duration {
@@ -1012,7 +1039,7 @@ impl Default for Dynconfig {
 }
 
 /// The storage server configuration for dfdaemon.
-#[derive(Debug, Clone, Validate, Deserialize)]
+#[derive(Debug, Clone, Validate, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct StorageServer {
     /// The listen ip of the storage server.
@@ -1046,7 +1073,7 @@ impl Default for StorageServer {
 
 /// WritebackMode controls how the storage initiates writeback of written
 /// piece ranges to disk.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WritebackMode {
     /// Sync awaits sync_file_range on the write path after each piece write.
@@ -1066,10 +1093,38 @@ pub enum WritebackMode {
     Off,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StorageType {
+    #[default]
+    Disk,
+    Memory,
+}
+
+impl fmt::Display for StorageType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StorageType::Disk => write!(f, "disk"),
+            StorageType::Memory => write!(f, "memory"),
+        }
+    }
+}
+
 /// The storage configuration for dfdaemon.
-#[derive(Debug, Clone, Validate, Deserialize)]
+#[derive(Debug, Clone, Validate, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Storage {
+    #[serde(default, rename = "type")]
+    pub kind: StorageType,
+
+    #[serde(
+        deserialize_with = "bytesize_serde::deserialize",
+        serialize_with = "serialize_storage_capacity",
+        default = "default_storage_capacity"
+    )]
+    #[validate(custom(function = "validate_storage_capacity"))]
+    pub capacity: ByteSize,
+
     /// The storage server configuration for dfdaemon.
     pub server: StorageServer,
 
@@ -1147,6 +1202,8 @@ pub struct Storage {
 impl Default for Storage {
     fn default() -> Self {
         Storage {
+            kind: StorageType::default(),
+            capacity: default_storage_capacity(),
             server: StorageServer::default(),
             writeback_mode: WritebackMode::default(),
             dir: crate::default_storage_dir(),
@@ -2465,6 +2522,8 @@ mod tests {
         let test_cases: Vec<(&str, fn(&Storage))> = vec![
             (
                 r#"{
+                    "type": "memory",
+                    "capacity": "1GiB",
                     "server": {
                         "ip": "128.0.0.1",
                         "tcpPort": 4005,
@@ -2480,6 +2539,8 @@ mod tests {
                     "cacheCapacity": "256MB"
                 }"#,
                 |storage| {
+                    assert_eq!(storage.kind, StorageType::Memory);
+                    assert_eq!(storage.capacity, ByteSize::gib(1));
                     assert_eq!(storage.server.ip.unwrap().to_string(), "128.0.0.1");
                     assert_eq!(storage.server.tcp_port, 4005);
                     assert!(storage.server.tcp_fastopen);
@@ -2494,6 +2555,8 @@ mod tests {
                 },
             ),
             ("{}", |storage| {
+                assert_eq!(storage.kind, StorageType::Disk);
+                assert_eq!(storage.capacity, ByteSize::mib(64));
                 assert!(storage.server.ip.is_none());
                 assert_eq!(storage.server.tcp_port, 4005);
                 assert!(!storage.server.tcp_fastopen);
@@ -2511,6 +2574,67 @@ mod tests {
         for (json, expect) in test_cases {
             let storage: Storage = serde_json::from_str(json).unwrap();
             expect(&storage);
+        }
+    }
+
+    #[test]
+    fn storage_type_serializes_and_deserializes_lowercase_names() {
+        for (kind, expected) in [(StorageType::Disk, "disk"), (StorageType::Memory, "memory")] {
+            let quoted = format!("\"{expected}\"");
+            assert_eq!(kind.to_string(), expected);
+            assert_eq!(serde_json::to_string(&kind).unwrap(), quoted);
+            assert_eq!(serde_json::from_str::<StorageType>(&quoted).unwrap(), kind);
+        }
+
+        assert_eq!(StorageType::default(), StorageType::Disk);
+        assert!(serde_json::from_str::<StorageType>("\"unknown\"").is_err());
+    }
+
+    #[test]
+    fn memory_storage_uses_default_capacity_and_round_trips() {
+        let storage: Storage = serde_json::from_str(r#"{"type":"memory"}"#).unwrap();
+        assert_eq!(storage.kind, StorageType::Memory);
+        assert_eq!(storage.capacity, ByteSize::mib(64));
+        storage.validate().unwrap();
+
+        let serialized = serde_json::to_string(&storage).unwrap();
+        let deserialized: Storage = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.kind, storage.kind);
+        assert_eq!(deserialized.capacity, storage.capacity);
+    }
+
+    #[test]
+    fn storage_capacity_validation_checks_bounds() {
+        for capacity in [0, MAX_STORAGE_CAPACITY_BYTES + 1, u64::MAX] {
+            let storage = Storage {
+                kind: StorageType::Memory,
+                capacity: ByteSize::b(capacity),
+                ..Default::default()
+            };
+            let err = storage.validate().unwrap_err().to_string();
+            assert!(err.starts_with("capacity: Validation error: range"));
+        }
+
+        for capacity in [1, MAX_STORAGE_CAPACITY_BYTES] {
+            let storage = Storage {
+                kind: StorageType::Memory,
+                capacity: ByteSize::b(capacity),
+                ..Default::default()
+            };
+            storage.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn storage_rejects_invalid_capacity_values() {
+        let storage: Storage = serde_json::from_str(r#"{"type":"memory","capacity":0}"#).unwrap();
+        assert!(storage.validate().is_err());
+
+        for json in [
+            r#"{"type":"memory","capacity":-1}"#,
+            r#"{"type":"memory","capacity":"invalid"}"#,
+        ] {
+            assert!(serde_json::from_str::<Storage>(json).is_err());
         }
     }
 
