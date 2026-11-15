@@ -441,13 +441,14 @@ Z+yQ5jhu/fmSBNhqO/8Lp+Y=
             .extensions()
             .iter()
             .find_map(|ext| match ext.parsed_extension() {
-                x509_parser::extensions::ParsedExtension::AuthorityKeyIdentifier(aki) => {
-                    Some(aki)
-                }
+                x509_parser::extensions::ParsedExtension::AuthorityKeyIdentifier(aki) => Some(aki),
                 _ => None,
             })
             .expect("leaf certificate has no Authority Key Identifier");
-        let key_id = aki.key_identifier.as_ref().expect("AKI has no key identifier");
+        let key_id = aki
+            .key_identifier
+            .as_ref()
+            .expect("AKI has no key identifier");
 
         // The key identifier must match the CA certificate's Subject Key Identifier.
         let ca_der = rustls_pemfile::certs(&mut io::BufReader::new(SERVER_CERT.as_bytes()))
