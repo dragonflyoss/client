@@ -190,10 +190,10 @@ fn bench_write_piece(c: &mut Criterion) {
             .open(&plain_path)
             .unwrap(),
     );
-    let plain_fd = WriteFD::new(plain_fd);
+    let plain_writer = WriteFD::new(plain_fd.clone());
     group.bench_function("plaintext", |b| {
         b.iter(|| {
-            let fd = plain_fd.clone();
+            let fd = plain_writer.clone();
             let content = content.clone();
             let pool = pool.clone();
             rt.block_on(async move {
@@ -221,10 +221,10 @@ fn bench_write_piece(c: &mut Criterion) {
             .unwrap(),
     );
     populate(&rt, &enc_fd, &cipher, &pool, &content);
-    let enc_fd = WriteFD::new(enc_fd);
+    let enc_writer = WriteFD::new(enc_fd.clone());
     group.bench_function(BenchmarkId::new("encrypted", DEFAULT_CHUNK_SIZE), |b| {
         b.iter(|| {
-            let fd = enc_fd.clone();
+            let fd = enc_writer.clone();
             let cipher = cipher.clone();
             let content = content.clone();
             let pool = pool.clone();
@@ -290,7 +290,6 @@ fn bench_write_piece(c: &mut Criterion) {
     let mut group = c.benchmark_group("read_piece");
     group.throughput(Throughput::Bytes(PIECE_LENGTH as u64));
     group.sample_size(30);
-    let plain_fd = WriteFD::new(plain_fd);
     group.bench_function("plaintext", |b| {
         b.iter(|| {
             let fd = plain_fd.clone();
@@ -367,7 +366,6 @@ fn bench_write_piece(c: &mut Criterion) {
         let mut group = c.benchmark_group(format!("read_piece_paced_{rate}gib"));
         group.throughput(Throughput::Bytes(PIECE_LENGTH as u64));
         group.sample_size(20);
-        let plain_fd = WriteFD::new(plain_fd);
         group.bench_function("plaintext", |b| {
             b.iter(|| {
                 let fd = plain_fd.clone();
