@@ -22,7 +22,6 @@ use std::io::{self, Read};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::LazyLock;
-use tracing::instrument;
 
 /// The separator character for digest formatting.
 pub const SEPARATOR: &str = ":";
@@ -210,7 +209,6 @@ impl FromStr for Digest {
 }
 
 /// Calculates the digest of a file.
-#[instrument(level = "debug", skip_all)]
 pub fn calculate_file_digest(algorithm: Algorithm, path: &Path) -> ClientResult<Digest> {
     let f = std::fs::File::open(path)?;
     let mut reader = io::BufReader::with_capacity(DEFAULT_READ_BUFFER_SIZE, f);
@@ -243,13 +241,13 @@ pub fn calculate_file_digest(algorithm: Algorithm, path: &Path) -> ClientResult<
 }
 
 /// Verifies the digest of a file against an expected digest.
-pub fn verify_file_digest(expected_digest: Digest, file_path: &Path) -> ClientResult<()> {
-    let digest = match calculate_file_digest(expected_digest.algorithm(), file_path) {
-        Ok(digest) => digest,
-        Err(err) => {
-            return Err(err);
-        }
-    };
+pub async fn verify_file_digest(expected_digest: Digest, file_path: &Path) -> ClientResult<()> {
+    // Hash the file on a blocking thread to keep the worker free.
+    let algorithm = expected_digest.algorithm();
+    let path = file_path.to_path_buf();
+    let digest = tokio::task::spawn_blocking(move || calculate_file_digest(algorithm, &path))
+        .await
+        .map_err(io::Error::other)??;
 
     if digest.to_string() != expected_digest.to_string() {
         return Err(ClientError::DigestMismatch(
@@ -622,8 +620,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn verify_file_digest_accepts_only_the_matching_digest() {
+    #[tokio::test]
+    async fn verify_file_digest_accepts_only_the_matching_digest() {
         let temp_file = NamedTempFile::new().unwrap();
         std::fs::write(temp_file.path(), b"test content").unwrap();
 
@@ -651,10 +649,13 @@ mod tests {
         ];
 
         for (algorithm, encoded, expect) in test_cases {
-            expect(verify_file_digest(
-                Digest::new(algorithm, encoded.to_string()),
-                temp_file.path(),
-            ));
+            expect(
+                verify_file_digest(
+                    Digest::new(algorithm, encoded.to_string()),
+                    temp_file.path(),
+                )
+                .await,
+            );
         }
     }
 }

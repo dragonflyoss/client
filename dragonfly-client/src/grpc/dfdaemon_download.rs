@@ -617,6 +617,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
                                     if let Err(err) =
                                         verify_file_digest(digest, Path::new(output_path.as_str()))
+                                            .await
                                     {
                                         error!("verify file digest: {}", err);
                                         handle_error(&out_stream_tx, err).await;
@@ -1461,6 +1462,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
                                 if let Err(err) =
                                     verify_file_digest(digest, Path::new(output_path.as_str()))
+                                        .await
                                 {
                                     error!("verify file digest: {}", err);
                                     handle_error(&out_stream_tx, err).await;
@@ -2018,6 +2020,7 @@ impl DfdaemonDownload for DfdaemonDownloadServerHandler {
 
                                 if let Err(err) =
                                     verify_file_digest(digest, Path::new(output_path.as_str()))
+                                        .await
                                 {
                                     error!("verify file digest: {}", err);
                                     handle_error(&out_stream_tx, err).await;
