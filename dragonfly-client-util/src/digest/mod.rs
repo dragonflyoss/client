@@ -22,7 +22,6 @@ use std::io::{self, Read};
 use std::path::Path;
 use std::str::FromStr;
 use std::sync::LazyLock;
-use tracing::{instrument, Span};
 
 /// The separator character for digest formatting.
 pub const SEPARATOR: &str = ":";
@@ -210,7 +209,6 @@ impl FromStr for Digest {
 }
 
 /// Calculates the digest of a file.
-#[instrument(level = "debug", skip_all)]
 pub fn calculate_file_digest(algorithm: Algorithm, path: &Path) -> ClientResult<Digest> {
     let f = std::fs::File::open(path)?;
     let mut reader = io::BufReader::with_capacity(DEFAULT_READ_BUFFER_SIZE, f);
@@ -247,12 +245,9 @@ pub async fn verify_file_digest(expected_digest: Digest, file_path: &Path) -> Cl
     // Hash the file on a blocking thread to keep the worker free.
     let algorithm = expected_digest.algorithm();
     let path = file_path.to_path_buf();
-    let span = Span::current();
-    let digest = tokio::task::spawn_blocking(move || {
-        span.in_scope(|| calculate_file_digest(algorithm, &path))
-    })
-    .await
-    .map_err(io::Error::other)??;
+    let digest = tokio::task::spawn_blocking(move || calculate_file_digest(algorithm, &path))
+        .await
+        .map_err(io::Error::other)??;
 
     if digest.to_string() != expected_digest.to_string() {
         return Err(ClientError::DigestMismatch(
