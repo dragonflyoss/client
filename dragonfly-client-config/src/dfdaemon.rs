@@ -2302,6 +2302,145 @@ mod tests {
         assert!(format!("{tls_config:?}").contains("127.0.0.1"));
     }
 
+    /// Writes a CA, a server certificate with the given DNS SANs only, and a client
+    /// certificate, all signed by the CA, and returns their PEM files.
+    fn write_mtls_certs(server_dns_names: Vec<String>) -> MtlsCerts {
+        let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new());
+        ca_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "test-ca");
+        ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let ca = Certificate::from_params(ca_params).unwrap();
+
+        let leaf = |sans: Vec<String>, common_name: &str| {
+            let mut params = rcgen::CertificateParams::new(sans);
+            params
+                .distinguished_name
+                .push(rcgen::DnType::CommonName, common_name);
+            let cert = Certificate::from_params(params).unwrap();
+            (
+                cert.serialize_pem_with_signer(&ca).unwrap(),
+                cert.serialize_private_key_pem(),
+            )
+        };
+        let (server_cert, server_key) = leaf(server_dns_names, "test-server");
+        let (client_cert, client_key) = leaf(Vec::new(), "test-client");
+
+        let write = |content: String| {
+            let file = NamedTempFile::new().unwrap();
+            std::fs::write(file.path(), content).unwrap();
+            file
+        };
+        MtlsCerts {
+            ca_cert: write(ca.serialize_pem().unwrap()),
+            server_cert: write(server_cert),
+            server_key: write(server_key),
+            client_cert: write(client_cert),
+            client_key: write(client_key),
+        }
+    }
+
+    struct MtlsCerts {
+        ca_cert: NamedTempFile,
+        server_cert: NamedTempFile,
+        server_key: NamedTempFile,
+        client_cert: NamedTempFile,
+        client_key: NamedTempFile,
+    }
+
+    /// Starts a gRPC server on 127.0.0.1 with the given server TLS config and returns
+    /// the address it listens on.
+    async fn serve_tls(server: &UploadServer) -> std::net::SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let tls_config = server.load_server_tls_config().await.unwrap().unwrap();
+        let (_, health_service) = tonic_health::server::health_reporter();
+        tokio::spawn(
+            tonic::transport::Server::builder()
+                .tls_config(tls_config)
+                .unwrap()
+                .add_service(health_service)
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
+        );
+        addr
+    }
+
+    /// Dials the server by IP with the given client TLS config and reports whether
+    /// the TLS handshake and a health check request succeed.
+    async fn handshake(addr: std::net::SocketAddr, tls_config: ClientTlsConfig) -> bool {
+        let channel = match tonic::transport::Endpoint::from_shared(format!("https://{addr}"))
+            .unwrap()
+            .tls_config(tls_config)
+            .unwrap()
+            .connect()
+            .await
+        {
+            Ok(channel) => channel,
+            Err(_) => return false,
+        };
+
+        tonic_health::pb::health_client::HealthClient::new(channel)
+            .check(tonic_health::pb::HealthCheckRequest::default())
+            .await
+            .is_ok()
+    }
+
+    #[tokio::test]
+    async fn load_client_tls_config_verifies_dns_only_certificate_by_server_name() {
+        let certs = write_mtls_certs(vec!["dfdaemon.example.com".to_string()]);
+        let addr = serve_tls(&UploadServer {
+            ca_cert: Some(certs.ca_cert.path().to_path_buf()),
+            cert: Some(certs.server_cert.path().to_path_buf()),
+            key: Some(certs.server_key.path().to_path_buf()),
+            ..Default::default()
+        })
+        .await;
+        let dial_host = addr.ip().to_string();
+
+        let test_cases = vec![
+            (None, false),
+            (Some("dfdaemon.example.com".to_string()), true),
+            (Some("other.example.com".to_string()), false),
+        ];
+
+        for (server_name, expected) in test_cases {
+            let scheduler = Scheduler {
+                ca_cert: Some(certs.ca_cert.path().to_path_buf()),
+                cert: Some(certs.client_cert.path().to_path_buf()),
+                key: Some(certs.client_key.path().to_path_buf()),
+                server_name: server_name.clone(),
+                ..Default::default()
+            };
+            let tls_config = scheduler
+                .load_client_tls_config(&dial_host)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                handshake(addr, tls_config).await,
+                expected,
+                "scheduler with server name {server_name:?}"
+            );
+
+            let upload_client = UploadClient {
+                ca_cert: Some(certs.ca_cert.path().to_path_buf()),
+                cert: Some(certs.client_cert.path().to_path_buf()),
+                key: Some(certs.client_key.path().to_path_buf()),
+                server_name: server_name.clone(),
+            };
+            let tls_config = upload_client
+                .load_client_tls_config(&dial_host)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                handshake(addr, tls_config).await,
+                expected,
+                "upload client with server name {server_name:?}"
+            );
+        }
+    }
+
     #[test]
     fn scheme_is_https_only_with_all_pem_paths() {
         let pem = Some(PathBuf::from("/etc/tls/tls.pem"));

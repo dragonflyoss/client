@@ -1433,7 +1433,9 @@ dependencies = [
  "serde_yaml",
  "tempfile",
  "tokio",
+ "tokio-stream",
  "tonic",
+ "tonic-health",
  "tracing",
  "validator",
 ]
