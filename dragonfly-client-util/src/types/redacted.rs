@@ -17,7 +17,7 @@
 use dragonfly_api::common::v2::{Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, OpenCsg};
 use dragonfly_api::dfdaemon::v2::DownloadPersistentTaskRequest;
 use http::header::{HOST, RANGE, USER_AGENT};
-use std::collections::HashMap;
+use http::Request;
 use std::fmt;
 
 /// Placeholder inserted in place of redacted secret material.
@@ -122,41 +122,6 @@ impl fmt::Debug for RedactedDownload<'_> {
     }
 }
 
-/// Clones the optional sub-message only when present and scrubs its secrets,
-/// so the common absent case costs nothing.
-fn scrubbed<T: Clone>(value: &Option<T>, scrub: fn(&mut Option<T>)) -> Option<T> {
-    let mut value = value.clone();
-    scrub(&mut value);
-    value
-}
-
-/// Debug wrapper over the request header map that prints only the key
-/// headers, so the hot log line stays small and the sensitive headers never
-/// reach the logs.
-struct KeyRequestHeader<'a>(&'a HashMap<String, String>);
-
-/// Debug implementation that filters the headers by the key header names.
-impl fmt::Debug for KeyRequestHeader<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_map()
-            .entries(self.0.iter().filter(|(key, _)| is_key_request_header(key)))
-            .finish()
-    }
-}
-
-/// Returns whether the header is worth printing on the per-request log path,
-/// matched case-insensitively without allocating.
-fn is_key_request_header(key: &str) -> bool {
-    [
-        RANGE.as_str(),
-        USER_AGENT.as_str(),
-        HOST.as_str(),
-        "x-request-id",
-    ]
-    .iter()
-    .any(|key_header| key.eq_ignore_ascii_case(key_header))
-}
-
 /// Debug-safe wrapper around [`DownloadPersistentTaskRequest`].
 ///
 /// Use at log sites that would otherwise Debug-print the full
@@ -219,18 +184,92 @@ impl fmt::Debug for RedactedDownloadPersistentTaskRequest<'_> {
     }
 }
 
+/// Debug-safe wrapper around [`http::Request`] received by the proxy.
+///
+/// Use at log sites that would otherwise Debug-print the full request
+/// (e.g. `info!("proxy HTTP request: {:?}", request)`):
+///
+/// ```ignore
+/// use crate::types::redacted::RedactedHTTPProxyRequest;
+/// info!("proxy HTTP request: {:?}", RedactedHTTPProxyRequest(&request));
+/// ```
+///
+/// Only the `method`, `uri`, `version` and the key headers are printed, so
+/// the sensitive headers and the body never reach the logs.
+pub struct RedactedHTTPProxyRequest<'a, B>(pub &'a Request<B>);
+
+/// Debug implementation that prints the request line and the key headers
+/// without the body, since it runs on the per-request log path.
+impl<B> fmt::Debug for RedactedHTTPProxyRequest<'_, B> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Request")
+            .field("method", self.0.method())
+            .field("uri", self.0.uri())
+            .field("version", &self.0.version())
+            .field("headers", &KeyRequestHeader(self.0.headers()))
+            .finish_non_exhaustive()
+    }
+}
+
+/// Debug wrapper over the request header map that prints only the key
+/// headers, so the hot log line stays small and the sensitive headers never
+/// reach the logs.
+struct KeyRequestHeader<'a, T>(&'a T);
+
+/// Debug implementation that filters the headers by the key header names.
+impl<'a, T, K, V> fmt::Debug for KeyRequestHeader<'a, T>
+where
+    &'a T: IntoIterator<Item = (K, V)>,
+    K: AsRef<str> + fmt::Debug,
+    V: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map()
+            .entries(
+                self.0
+                    .into_iter()
+                    .filter(|(key, _)| is_key_request_header(key.as_ref())),
+            )
+            .finish()
+    }
+}
+
+/// Returns whether the header is worth printing on the per-request log path,
+/// matched case-insensitively without allocating.
+fn is_key_request_header(key: &str) -> bool {
+    [
+        RANGE.as_str(),
+        USER_AGENT.as_str(),
+        HOST.as_str(),
+        "x-request-id",
+    ]
+    .iter()
+    .any(|key_header| key.eq_ignore_ascii_case(key_header))
+}
+
+/// Clones the optional sub-message only when present and scrubs its secrets,
+/// so the common absent case costs nothing.
+fn scrubbed<T: Clone>(value: &Option<T>, scrub: fn(&mut Option<T>)) -> Option<T> {
+    let mut value = value.clone();
+    scrub(&mut value);
+    value
+}
+
 /// Mutates the given `ObjectStorage` by replacing any present secrets with [`REDACTED`].
 fn scrub_object_storage(os: &mut Option<ObjectStorage>) {
     if let Some(os) = os.as_mut() {
         if os.access_key_secret.is_some() {
             os.access_key_secret = Some(REDACTED.to_string());
         }
+
         if os.session_token.is_some() {
             os.session_token = Some(REDACTED.to_string());
         }
+
         if os.security_token.is_some() {
             os.security_token = Some(REDACTED.to_string());
         }
+
         if os.credential_path.is_some() {
             os.credential_path = Some(REDACTED.to_string());
         }
@@ -278,6 +317,7 @@ mod tests {
     #![allow(clippy::type_complexity)]
 
     use super::*;
+    use std::collections::HashMap;
 
     const ACCESS_KEY_SECRET: &str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
 
@@ -585,5 +625,43 @@ mod tests {
                 .as_deref(),
             Some(ACCESS_KEY_SECRET)
         );
+    }
+
+    #[test]
+    fn redacted_http_proxy_request_debug_prints_the_request_line() {
+        let request = Request::builder()
+            .method("GET")
+            .uri("http://example.com/path")
+            .body(())
+            .unwrap();
+
+        let output = format!("{:?}", RedactedHTTPProxyRequest(&request));
+        assert!(output.contains("GET"));
+        assert!(output.contains("http://example.com/path"));
+        assert!(output.contains("HTTP/1.1"));
+    }
+
+    #[test]
+    fn redacted_http_proxy_request_debug_prints_only_key_request_headers() {
+        let test_cases = vec![
+            ("range", "bytes=0-1023", true),
+            ("user-agent", "dfget/2.3", true),
+            ("host", "registry.example.com", true),
+            ("x-request-id", "req-42", true),
+            ("accept", "application/octet-stream", false),
+            ("authorization", "Bearer SECRET_BEARER", false),
+        ];
+
+        for (name, value, expected) in test_cases {
+            let request = Request::builder()
+                .uri("http://example.com/path")
+                .header(name, value)
+                .body(())
+                .unwrap();
+
+            let output = format!("{:?}", RedactedHTTPProxyRequest(&request));
+            assert_eq!(output.contains(name), expected);
+            assert_eq!(output.contains(value), expected);
+        }
     }
 }
