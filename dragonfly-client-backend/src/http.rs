@@ -508,6 +508,45 @@ impl Backend for HTTP {
                     });
                 }
             }
+            Ok(response) if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE => {
+                // For zero-byte files, some servers return 416 Range Not Satisfiable for
+                // the "bytes=0-0" request. Retry with a GET request without the Range
+                // header to retrieve headers. Keep this before the Transfer-Encoding case:
+                // object storage such as S3 sends the 416 body chunked, and rejects the
+                // HEAD retry for a URL presigned for GET.
+                debug!(
+                    "stat request got 416 Range Not Satisfiable, retrying without Range {} {}",
+                    request.task_id, request_url,
+                );
+
+                let mut request_header = request_header.clone();
+                request_header.remove(RANGE);
+                match self
+                    .client(request.client_cert.clone(), self.enable_hickory_dns)?
+                    .get(&request_url)
+                    .headers(request_header)
+                    .timeout(request.timeout)
+                    .send()
+                    .await
+                {
+                    Ok(response) => response,
+                    Err(err) => {
+                        error!(
+                            "stat request failed without Range {} {}: {}",
+                            request.task_id, request_url, err
+                        );
+
+                        return Ok(StatResponse {
+                            success: false,
+                            content_length: None,
+                            http_header: None,
+                            http_status_code: None,
+                            entries: Vec::new(),
+                            error_message: Some(err.to_string()),
+                        });
+                    }
+                }
+            }
             Ok(response)
                 if response.headers().get(TRANSFER_ENCODING).is_some()
                     && response.headers().get(CONTENT_LENGTH).is_none() =>
@@ -531,43 +570,6 @@ impl Backend for HTTP {
                     Err(err) => {
                         error!(
                             "stat request failed with HEAD {} {}: {}",
-                            request.task_id, request_url, err
-                        );
-
-                        return Ok(StatResponse {
-                            success: false,
-                            content_length: None,
-                            http_header: None,
-                            http_status_code: None,
-                            entries: Vec::new(),
-                            error_message: Some(err.to_string()),
-                        });
-                    }
-                }
-            }
-            Ok(response) if response.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE => {
-                // For zero-byte files, some servers return 416 Range Not Satisfiable for
-                // the "bytes=0-0" request. Retry with a GET request without the Range
-                // header to retrieve headers.
-                debug!(
-                    "stat request got 416 Range Not Satisfiable, retrying without Range {} {}",
-                    request.task_id, request_url,
-                );
-
-                let mut request_header = request_header.clone();
-                request_header.remove(RANGE);
-                match self
-                    .client(request.client_cert.clone(), self.enable_hickory_dns)?
-                    .get(&request_url)
-                    .headers(request_header)
-                    .timeout(request.timeout)
-                    .send()
-                    .await
-                {
-                    Ok(response) => response,
-                    Err(err) => {
-                        error!(
-                            "stat request failed without Range {} {}: {}",
                             request.task_id, request_url, err
                         );
 
@@ -1224,6 +1226,31 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
                         .and(path("/stat"))
                         .and(header("range", "bytes=0-0"))
                         .respond_with(ResponseTemplate::new(416)),
+                    Mock::given(method("GET")).and(path("/stat")).respond_with(
+                        ResponseTemplate::new(200).insert_header("Content-Length", "0"),
+                    ),
+                ],
+                |response| {
+                    assert!(response.success);
+                    assert_eq!(response.http_status_code, Some(StatusCode::OK));
+                    assert_eq!(response.content_length, Some(0));
+                },
+            ),
+            (
+                // Object storage such as S3 returns the 416 for a zero-byte object as a chunked
+                // error body, and rejects HEAD on a URL presigned for GET.
+                vec![
+                    Mock::given(method("GET"))
+                        .and(path("/stat"))
+                        .and(header("range", "bytes=0-0"))
+                        .respond_with(
+                            ResponseTemplate::new(416)
+                                .insert_header("Transfer-Encoding", "chunked")
+                                .set_body_string("<Error><Code>InvalidRange</Code></Error>"),
+                        ),
+                    Mock::given(method("HEAD"))
+                        .and(path("/stat"))
+                        .respond_with(ResponseTemplate::new(403)),
                     Mock::given(method("GET")).and(path("/stat")).respond_with(
                         ResponseTemplate::new(200).insert_header("Content-Length", "0"),
                     ),
