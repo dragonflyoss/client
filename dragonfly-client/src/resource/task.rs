@@ -49,6 +49,7 @@ use dragonfly_client_metric::{
 };
 use dragonfly_client_storage::{metadata, Storage};
 use dragonfly_client_util::{
+    digest::{Algorithm, Digest},
     http::{hashmap_to_headermap, headermap_to_hashmap},
     id_generator::{IDGenerator, ImageIDParameter},
     shutdown,
@@ -71,6 +72,7 @@ use tokio::task::JoinSet;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Status};
 use tracing::{debug, error, info, instrument, warn, Instrument};
+use url::{Position, Url};
 
 use super::*;
 
@@ -79,6 +81,33 @@ use super::*;
 /// (e.g. the prefetch) to be written to the local storage, before falling back to
 /// downloading with the scheduler.
 const DEFAULT_WAIT_FOR_IN_FLIGHT_PIECE_TIMEOUT: Duration = Duration::from_millis(1000);
+
+/// Checks whether an OCI blob digest rules out an empty HTTP response.
+fn blob_requires_content(url: &str) -> bool {
+    let Ok(url) = Url::parse(url) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return false;
+    }
+
+    Digest::extract_from_blob_url(&url[..Position::AfterPath]).is_some_and(|digest| {
+        let empty = match digest.algorithm() {
+            Algorithm::Sha256 => "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            Algorithm::Sha512 => concat!(
+                "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce",
+                "47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e"
+            ),
+            Algorithm::Crc32 => return false,
+        };
+
+        digest
+            .encoded()
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+            && !digest.encoded().eq_ignore_ascii_case(empty)
+    })
+}
 
 /// Represents a task manager.
 pub struct Task {
@@ -168,7 +197,9 @@ impl Task {
         }
 
         let (task, reused) = self.storage.prepare_download_task(id)?;
-        if reused {
+        let invalid_empty_cache =
+            task.content_length() == Some(0) && blob_requires_content(&request.url);
+        if reused && !invalid_empty_cache {
             // Attempt to create a hard link from the task file to the output path.
             //
             // Behavior based on force_hard_link setting:
@@ -206,6 +237,7 @@ impl Task {
 
         // Head the url to get the content length.
         let backend = self.backend_factory.build(request.url.as_str())?;
+        let requires_content = invalid_empty_cache || blob_requires_content(&request.url);
 
         // Record the start time.
         let start_time = Instant::now();
@@ -260,6 +292,10 @@ impl Task {
         );
 
         let content_length = match response.content_length {
+            Some(0) if requires_content => {
+                error!("origin returned an empty response for non-empty OCI blob task {id}");
+                return Err(Error::InvalidContentLength);
+            }
             Some(content_length) => content_length,
             None => return Err(Error::InvalidContentLength),
         };
@@ -278,7 +314,9 @@ impl Task {
 
         // If the task is not finished, check if the storage has enough space to
         // store the task.
-        if !task.is_finished() && !self.storage.has_enough_space(content_length)? {
+        if (!task.is_finished() || invalid_empty_cache)
+            && !self.storage.has_enough_space(content_length)?
+        {
             return Err(Error::NoSpace(format!(
                 "not enough space to store the task: content_length={content_length}"
             )));
@@ -2628,6 +2666,41 @@ impl Task {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn blob_requires_content_checks_the_url_and_digest() {
+        let registry = "https://registry.example/v2/project/image/blobs";
+        let empty_sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let empty_sha512 = concat!(
+            "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce",
+            "47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e"
+        );
+        let non_empty = format!("{registry}/sha256:{}", "a".repeat(64));
+        let test_cases = vec![
+            (non_empty.clone(), true),
+            (format!("{non_empty}?ns=registry.example"), true),
+            (format!("{non_empty}#fragment"), true),
+            (non_empty.replacen("https:", "http:", 1), true),
+            (format!("{registry}/sha512:{}", "a".repeat(128)), true),
+            (format!("{registry}/sha256:{empty_sha256}"), false),
+            (format!("{registry}/sha512:{empty_sha512}"), false),
+            (
+                format!("{registry}/sha256:{}", empty_sha256.to_uppercase()),
+                false,
+            ),
+            ("https://files.example/empty.txt".to_string(), false),
+            (format!("https://files.example/?url={non_empty}"), false),
+            (non_empty.replacen("https:", "file:", 1), false),
+            (format!("{registry}/sha256:{}", "z".repeat(64)), false),
+            (format!("{registry}/sha256:{}", "a".repeat(63)), false),
+            (format!("{registry}/crc32:1234"), false),
+            ("invalid URL".to_string(), false),
+        ];
+
+        for (url, expected) in test_cases {
+            assert_eq!(blob_requires_content(&url), expected);
+        }
+    }
 
     #[tokio::test]
     async fn delete_task_removes_the_task_from_storage() {
