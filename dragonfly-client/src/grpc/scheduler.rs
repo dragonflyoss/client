@@ -189,16 +189,13 @@ impl SchedulerClient {
         Ok(())
     }
 
-    /// Lists the peers in the scheduler that is selected by the task id.
+    /// Lists the peers of the task.
     #[instrument(level = "debug", skip(self))]
-    pub async fn list_peers(
-        &self,
-        task_id: &str,
-        request: ListPeersRequest,
-    ) -> Result<ListPeersResponse> {
+    pub async fn list_peers(&self, request: ListPeersRequest) -> Result<ListPeersResponse> {
+        let task_id = request.task_id.clone().unwrap_or_default();
         let request = Self::make_request(request);
         let response = self
-            .client(task_id, None)
+            .client(task_id.as_str(), None)
             .await?
             .list_peers(request)
             .await?;

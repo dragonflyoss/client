@@ -39,7 +39,7 @@ use dragonfly_api::scheduler::v2::{
     DownloadPieceFailedRequest, DownloadPieceFinishedRequest, ListPeersRequest,
     RegisterPeerRequest, ReschedulePeerRequest, StatTaskRequest,
 };
-use dragonfly_client_backend::{BackendFactory, StatRequest};
+use dragonfly_client_backend::{BackendFactory, StatRequest, StatResponse};
 use dragonfly_client_config::dfdaemon::Config;
 use dragonfly_client_core::{
     error::{BackendError, DownloadFromParentFailed, ErrorType, OrErr},
@@ -59,7 +59,9 @@ use dragonfly_client_util::{
 use futures::future::select_all;
 use leaky_bucket::RateLimiter;
 use reqwest::header::HeaderMap;
+use std::net::IpAddr;
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -71,7 +73,6 @@ use tokio::sync::{
     Mutex, Notify, OwnedSemaphorePermit, Semaphore,
 };
 use tokio::task::JoinSet;
-use tokio::time;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Status};
 use tracing::{debug, error, info, instrument, warn, Instrument};
@@ -245,28 +246,18 @@ impl Task {
         });
         tokio::pin!(stat);
 
-        // Wait for the source for a short time. If the source is unavailable, i.e. it
-        // does not respond in time or responds with a server error, get the metadata
-        // of the task from the peers. The request is still in flight, and is awaited
-        // if the peers do not have the metadata.
-        let response = time::timeout(DEFAULT_WAIT_FOR_SOURCE_TIMEOUT, &mut stat)
+        // Stat the task from the peers if the source is unavailable, the stat of the
+        // source is still in flight.
+        let response = tokio::time::timeout(DEFAULT_WAIT_FOR_SOURCE_TIMEOUT, &mut stat)
             .await
             .ok();
-        let peer_response = match &response {
-            Some(Ok(response))
-                if response.success
-                    || response
-                        .http_status_code
-                        .is_some_and(|code| !code.is_server_error()) =>
-            {
-                None
-            }
-            Some(Err(_)) => None,
-            _ => self
-                .stat_from_peers(id)
+        let peer_response = if Self::is_source_unavailable(response.as_ref()) {
+            self.stat_from_peers(id)
                 .await
                 .inspect_err(|err| warn!("stat task from peers failed: {}", err))
-                .ok(),
+                .ok()
+        } else {
+            None
         };
 
         let (content_length, piece_length, response_header) = match peer_response {
@@ -290,6 +281,7 @@ impl Task {
                 )
             }
             _ => {
+                // Wait for the stat of the source if it is still in flight.
                 let response = match response {
                     Some(response) => response,
                     None => stat.await,
@@ -379,61 +371,6 @@ impl Task {
         task
     }
 
-    /// Returns the metadata of the task from the peers that succeeded to download the
-    /// task. The peers are listed by the scheduler, no peer is registered and no seed
-    /// peer is triggered.
-    #[instrument(skip_all)]
-    pub async fn stat_from_peers(&self, id: &str) -> ClientResult<StatLocalTaskResponse> {
-        // List the peers that succeeded to download the task, the first page is enough.
-        let response = self
-            .scheduler_client
-            .list_peers(
-                id,
-                ListPeersRequest {
-                    task_id: Some(id.to_string()),
-                    page_size: Some(DEFAULT_LIST_PEERS_PAGE_SIZE),
-                    page_token: None,
-                },
-            )
-            .await?;
-
-        // Return the metadata from the first host that knows the content length and
-        // the piece length.
-        let hosts = response.peers.into_iter().filter_map(|peer| peer.host);
-        for host in hosts {
-            let response = time::timeout(DEFAULT_WAIT_FOR_PEER_TIMEOUT, async {
-                let addr = format_url(
-                    self.config.upload.client.scheme(),
-                    host.ip.parse()?,
-                    host.port as u16,
-                );
-
-                DfdaemonUploadClient::new(self.config.clone(), addr, false)
-                    .await?
-                    .stat_local_task(StatLocalTaskRequest {
-                        task_id: id.to_string(),
-                        remote_ip: self.config.host.ip.map(|ip| ip.to_string()),
-                    })
-                    .await
-            })
-            .await
-            .unwrap_or_else(|err| Err(err.into()));
-
-            match response {
-                Ok(response)
-                    if response.content_length.is_some() && response.piece_length.is_some() =>
-                {
-                    info!("stat task from host {}", host.id);
-                    return Ok(response);
-                }
-                Ok(_) => warn!("host {} does not know the content length", host.id),
-                Err(err) => warn!("stat task from host {} failed: {}", host.id, err),
-            }
-        }
-
-        Err(Error::TaskNotFound(id.to_string()))
-    }
-
     /// Updates the metadata of the task when the task downloads finished.
     #[instrument(level = "debug", skip_all)]
     pub fn download_finished(&self, id: &str) -> ClientResult<metadata::Task> {
@@ -467,6 +404,21 @@ impl Task {
     #[instrument(skip_all)]
     pub async fn copy_task(&self, id: &str, to: &Path) -> ClientResult<()> {
         self.storage.copy_task(id, to).await
+    }
+
+    /// Returns whether the source is unavailable by the response of the stat request, i.e.
+    /// it does not respond in time, can not be connected or responds with a server error.
+    fn is_source_unavailable(response: Option<&ClientResult<StatResponse>>) -> bool {
+        match response {
+            Some(Ok(response)) => {
+                !response.success
+                    && response
+                        .http_status_code
+                        .is_none_or(|code| code.is_server_error())
+            }
+            Some(Err(_)) => false,
+            None => true,
+        }
     }
 
     /// Returns whether the download should bypass the scheduler and download the
@@ -2619,6 +2571,61 @@ impl Task {
         })
     }
 
+    /// Returns the task metadata from the peers that have downloaded the task, which are
+    /// listed by the scheduler without registering a peer.
+    #[instrument(skip_all)]
+    pub async fn stat_from_peers(&self, task_id: &str) -> ClientResult<StatLocalTaskResponse> {
+        // List the peers from the scheduler, only the first page is used.
+        let response = self
+            .scheduler_client
+            .list_peers(ListPeersRequest {
+                task_id: Some(task_id.to_string()),
+                page_size: Some(DEFAULT_LIST_PEERS_PAGE_SIZE),
+                page_token: None,
+            })
+            .await?;
+
+        // Stat the task from the hosts in order, until one of them has the content
+        // length and the piece length.
+        let hosts = response.peers.into_iter().filter_map(|peer| peer.host);
+        for host in hosts {
+            let response = tokio::time::timeout(DEFAULT_WAIT_FOR_PEER_TIMEOUT, async {
+                let dfdaemon_upload_client = DfdaemonUploadClient::new(
+                    self.config.clone(),
+                    format_url(
+                        self.config.upload.client.scheme(),
+                        IpAddr::from_str(&host.ip)?,
+                        host.port as u16,
+                    ),
+                    false,
+                )
+                .await?;
+
+                dfdaemon_upload_client
+                    .stat_local_task(StatLocalTaskRequest {
+                        task_id: task_id.to_string(),
+                        remote_ip: self.config.host.ip.map(|ip| ip.to_string()),
+                    })
+                    .await
+            })
+            .await
+            .unwrap_or_else(|err| Err(err.into()));
+
+            match response {
+                Ok(response)
+                    if response.content_length.is_some() && response.piece_length.is_some() =>
+                {
+                    info!("stat task from host {}", host.id);
+                    return Ok(response);
+                }
+                Ok(_) => warn!("host {} does not know the content length", host.id),
+                Err(err) => warn!("stat task from host {} failed: {}", host.id, err),
+            }
+        }
+
+        Err(Error::TaskNotFound(task_id.to_string()))
+    }
+
     /// Returns the tasks from local storage.
     #[instrument(skip_all)]
     pub async fn list_local(&self) -> ClientResult<ListLocalTasksResponse> {
@@ -2747,6 +2754,8 @@ impl Task {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::type_complexity)]
+
     use super::*;
     use tempfile::tempdir;
 
@@ -2779,5 +2788,44 @@ mod tests {
         storage.delete_task(task_id).await;
         let task = storage.get_task(task_id).unwrap();
         assert!(task.is_none());
+    }
+
+    #[test]
+    fn is_source_unavailable_requires_a_timeout_a_connect_failure_or_a_server_error() {
+        let test_cases: Vec<(
+            Option<ClientResult<(bool, Option<reqwest::StatusCode>)>>,
+            bool,
+        )> = vec![
+            (None, true),
+            (Some(Ok((false, None))), true),
+            (
+                Some(Ok((false, Some(reqwest::StatusCode::SERVICE_UNAVAILABLE)))),
+                true,
+            ),
+            (Some(Ok((true, Some(reqwest::StatusCode::OK)))), false),
+            (
+                Some(Ok((false, Some(reqwest::StatusCode::UNAUTHORIZED)))),
+                false,
+            ),
+            (
+                Some(Ok((false, Some(reqwest::StatusCode::NOT_FOUND)))),
+                false,
+            ),
+            (Some(Err(Error::InvalidParameter)), false),
+        ];
+
+        for (response, expected) in test_cases {
+            let response = response.map(|response| {
+                response.map(|(success, http_status_code)| StatResponse {
+                    success,
+                    content_length: None,
+                    http_header: None,
+                    http_status_code,
+                    entries: Vec::new(),
+                    error_message: None,
+                })
+            });
+            assert_eq!(Task::is_source_unavailable(response.as_ref()), expected);
+        }
     }
 }

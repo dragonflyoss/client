@@ -23,7 +23,7 @@ use crate::resource::{
 use bytes::Bytes;
 use dragonfly_api::common::v2::{Download, TaskType};
 use dragonfly_api::dfdaemon::v2::{
-    download_task_response, DownloadTaskRequest, DownloadTaskStartedResponse,
+    download_task_response, DownloadTaskRequest, DownloadTaskStartedResponse, StatLocalTaskResponse,
 };
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client_config::dfdaemon::{Config, Rule};
@@ -1241,9 +1241,8 @@ async fn proxy_via_dfdaemon(
     }
 }
 
-/// Proxies the HEAD request directly to the remote server. If the remote server is
-/// unavailable, i.e. it does not respond in time or responds with a server error,
-/// responds with the metadata of the task from the local storage or the peers.
+/// Proxies the HEAD request directly to the remote server, and responds with the task
+/// metadata from the local storage or the peers if the remote server is unavailable.
 #[instrument(skip_all)]
 async fn proxy_head_request(
     config: Arc<Config>,
@@ -1258,7 +1257,7 @@ async fn proxy_head_request(
     // task id of the GET request.
     let task_id = make_download_task_request(config, rule, &request, remote_ip)
         .and_then(|request| request.download.ok_or(ClientError::InvalidParameter))
-        .and_then(|download| task::generate_task_id(&task, &download));
+        .and_then(|download| task::generate_task_id(&task.id_generator, &download));
 
     let remote_response = async move {
         if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
@@ -1269,16 +1268,16 @@ async fn proxy_head_request(
     };
     tokio::pin!(remote_response);
 
-    // Wait for the remote server for a short time. The request is still in flight
-    // after the timeout, and is awaited if the metadata of the task is not found.
+    // Return the response of the remote server if it is available, otherwise the
+    // request is still in flight.
     let result =
         match tokio::time::timeout(DEFAULT_WAIT_FOR_SOURCE_TIMEOUT, &mut remote_response).await {
             Ok(Ok(response)) if !response.status().is_server_error() => return Ok(response),
             result => result.ok(),
         };
 
-    // Get the metadata of the task from the local storage if the content length is
-    // known, otherwise from the peers.
+    // Stat the task from the local storage, or from the peers if the content length
+    // is unknown.
     let stat = async {
         let task_id = task_id?;
         match task.stat_local(task_id.as_str()).await {
@@ -1287,25 +1286,28 @@ async fn proxy_head_request(
         }
     }
     .await
-    .inspect_err(|err| warn!("stat task from peers failed: {}", err));
+    .inspect_err(|err| warn!("stat task failed: {}", err));
 
-    let Ok(stat) = stat else {
+    // Respond as the remote server does if the task metadata is unknown.
+    let Ok(StatLocalTaskResponse {
+        content_length: Some(content_length),
+        response_header,
+        ..
+    }) = stat
+    else {
         return match result {
             Some(result) => result,
             None => remote_response.await,
         };
     };
 
-    // Respond with the response header of the task and the content length.
+    // Respond with the response header and the content length of the task.
     info!("remote server is unavailable, respond with the task metadata");
     let mut response = Response::new(empty());
-    *response.headers_mut() = hashmap_to_headermap(&stat.response_header)?;
-    response.headers_mut().insert(
-        reqwest::header::CONTENT_LENGTH,
-        stat.content_length
-            .ok_or(ClientError::InvalidContentLength)?
-            .into(),
-    );
+    *response.headers_mut() = hashmap_to_headermap(&response_header)?;
+    response
+        .headers_mut()
+        .insert(reqwest::header::CONTENT_LENGTH, content_length.into());
 
     Ok(response)
 }

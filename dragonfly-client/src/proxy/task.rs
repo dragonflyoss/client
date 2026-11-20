@@ -31,7 +31,7 @@ use dragonfly_client_metric::{
 use dragonfly_client_util::{
     digest::{is_blob_url, is_manifest_digest_url},
     http::{headermap_to_hashmap, parse_range_header},
-    id_generator::{repository_revision, TaskIDParameter},
+    id_generator::{repository_revision, IDGenerator, TaskIDParameter},
     types::redacted::RedactedDownload,
 };
 use std::sync::Arc;
@@ -45,8 +45,8 @@ use tracing::{debug, error, info, instrument, warn, Instrument, Span};
 type DownloadTaskStream = mpsc::Receiver<Result<DownloadTaskResponse, Status>>;
 
 /// Generates the task id of the download.
-pub fn generate_task_id(task_manager: &Task, download: &Download) -> ClientResult<String> {
-    task_manager.id_generator.task_id(
+pub fn generate_task_id(id_generator: &IDGenerator, download: &Download) -> ClientResult<String> {
+    id_generator.task_id(
         if let Some(content) = download.content_for_calculating_task_id.clone() {
             TaskIDParameter::Content(content)
         } else if download.enable_task_id_based_blob_digest && is_blob_url(&download.url) {
@@ -107,7 +107,7 @@ pub async fn download(
     download.concurrent_piece_count = Some(config.download.concurrent_piece_count);
 
     // Generate the task id.
-    let task_id = generate_task_id(&task_manager, &download).inspect_err(|err| {
+    let task_id = generate_task_id(&task_manager.id_generator, &download).inspect_err(|err| {
         error!("generate task id: {}", err);
     })?;
 
@@ -417,4 +417,85 @@ pub async fn prefetch(
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_task_id_prefers_the_content_then_the_digest_then_the_url() {
+        let id_generator =
+            IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false);
+        let blob_url = "http://registry.example.com/v2/library/ubuntu/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e";
+        let manifest_url = "http://registry.example.com/v2/library/ubuntu/manifests/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e";
+
+        let test_cases = vec![
+            (
+                Download {
+                    url: blob_url.to_string(),
+                    content_for_calculating_task_id: Some("content".to_string()),
+                    enable_task_id_based_blob_digest: true,
+                    ..Default::default()
+                },
+                TaskIDParameter::Content("content".to_string()),
+            ),
+            (
+                Download {
+                    url: blob_url.to_string(),
+                    enable_task_id_based_blob_digest: true,
+                    ..Default::default()
+                },
+                TaskIDParameter::BlobDigestBased(blob_url.to_string()),
+            ),
+            (
+                Download {
+                    url: manifest_url.to_string(),
+                    enable_task_id_based_blob_digest: true,
+                    ..Default::default()
+                },
+                TaskIDParameter::ManifestDigestBased(manifest_url.to_string()),
+            ),
+            (
+                Download {
+                    url: blob_url.to_string(),
+                    tag: Some("tag".to_string()),
+                    ..Default::default()
+                },
+                TaskIDParameter::URLBased {
+                    url: blob_url.to_string(),
+                    piece_length: None,
+                    tag: Some("tag".to_string()),
+                    application: None,
+                    filtered_query_params: Vec::new(),
+                    revision: None,
+                },
+            ),
+            (
+                Download {
+                    url: "https://example.com/file.txt".to_string(),
+                    piece_length: Some(4 * 1024 * 1024),
+                    application: Some("application".to_string()),
+                    filtered_query_params: vec!["signature".to_string()],
+                    enable_task_id_based_blob_digest: true,
+                    ..Default::default()
+                },
+                TaskIDParameter::URLBased {
+                    url: "https://example.com/file.txt".to_string(),
+                    piece_length: Some(4 * 1024 * 1024),
+                    tag: None,
+                    application: Some("application".to_string()),
+                    filtered_query_params: vec!["signature".to_string()],
+                    revision: None,
+                },
+            ),
+        ];
+
+        for (download, parameter) in test_cases {
+            assert_eq!(
+                generate_task_id(&id_generator, &download).unwrap(),
+                id_generator.task_id(parameter).unwrap()
+            );
+        }
+    }
 }
