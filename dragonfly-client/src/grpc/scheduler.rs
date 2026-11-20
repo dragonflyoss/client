@@ -25,9 +25,10 @@ use dragonfly_api::scheduler::v2::{
     AnnouncePersistentCachePeerResponse, AnnouncePersistentPeerRequest,
     AnnouncePersistentPeerResponse, DeleteHostRequest, DeletePeerRequest,
     DeletePersistentCachePeerRequest, DeletePersistentCacheTaskRequest,
-    DeletePersistentPeerRequest, DeletePersistentTaskRequest, DeleteTaskRequest, StatPeerRequest,
-    StatPersistentCachePeerRequest, StatPersistentCacheTaskRequest, StatPersistentPeerRequest,
-    StatPersistentTaskRequest, StatTaskRequest, UploadPersistentCacheTaskFailedRequest,
+    DeletePersistentPeerRequest, DeletePersistentTaskRequest, DeleteTaskRequest, ListPeersRequest,
+    ListPeersResponse, StatPeerRequest, StatPersistentCachePeerRequest,
+    StatPersistentCacheTaskRequest, StatPersistentPeerRequest, StatPersistentTaskRequest,
+    StatTaskRequest, UploadPersistentCacheTaskFailedRequest,
     UploadPersistentCacheTaskFinishedRequest, UploadPersistentCacheTaskStartedRequest,
     UploadPersistentTaskFailedRequest, UploadPersistentTaskFinishedRequest,
     UploadPersistentTaskStartedRequest,
@@ -186,6 +187,19 @@ impl SchedulerClient {
             .delete_task(request)
             .await?;
         Ok(())
+    }
+
+    /// Lists the peers of the task.
+    #[instrument(level = "debug", skip(self))]
+    pub async fn list_peers(&self, request: ListPeersRequest) -> Result<ListPeersResponse> {
+        let task_id = request.task_id.clone().unwrap_or_default();
+        let request = Self::make_request(request);
+        let response = self
+            .client(task_id.as_str(), None)
+            .await?
+            .list_peers(request)
+            .await?;
+        Ok(response.into_inner())
     }
 
     /// Announces the host to the scheduler.
