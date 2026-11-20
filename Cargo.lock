@@ -3126,8 +3126,9 @@ dependencies = [
 
 [[package]]
 name = "mocktail"
-version = "0.3.0"
-source = "git+https://github.com/IBM/mocktail?rev=860e75e171a8eb818083813dbeed4401d1a40b3b#860e75e171a8eb818083813dbeed4401d1a40b3b"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4bcc75e35f42d969170376b211d7d03399b657cd8d2d77730c2d23069eff1cc"
 dependencies = [
  "bytes",
  "futures",
