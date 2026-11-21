@@ -118,7 +118,6 @@ sha2 = "0.10"
 sysinfo = { version = "0.38.0", default-features = false, features = [
   "component",
   "disk",
-  "network",
   "system",
   "user"
 ] }
