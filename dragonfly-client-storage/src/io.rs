@@ -17,6 +17,7 @@
 use bytes::{Bytes, BytesMut};
 use dragonfly_client_core::{Error, Result};
 use dragonfly_client_util::buffer_pool::BufferPool;
+use dragonfly_client_util::digest::{Algorithm, Hasher};
 use dragonfly_client_util::fs::fd::WriteFD;
 use futures::{Stream, TryStreamExt};
 use std::cmp::{max, min};
@@ -36,7 +37,10 @@ pub struct WriteRangeResponse {
     /// The length of the written range.
     pub length: u64,
 
-    /// The CRC32 hash of the written range.
+    /// The algorithm of the hash of the written range.
+    pub algorithm: Algorithm,
+
+    /// The encoded hash of the written range.
     pub hash: String,
 }
 
@@ -247,8 +251,8 @@ impl AsyncRead for RangeReader {
 }
 
 /// Writes exactly `expected_length` bytes from the reader to the file with
-/// positional writes starting at `offset`, and calculates the CRC32 hash of
-/// the written content. The reader fills one buffer on the runtime and hashes
+/// positional writes starting at `offset`, and calculates the hash of the
+/// written content with `algorithm`. The reader fills one buffer on the runtime and hashes
 /// it while the data is still hot in the cache of the filling core, then
 /// queues it on the file descriptor for the positional write, swapping the
 /// recycled buffer of the completed write back for the next fill instead of
@@ -260,6 +264,7 @@ pub async fn write_range<R: AsyncRead + Unpin + ?Sized>(
     buffer_size: usize,
     reader: &mut R,
     buffer_pool: &BufferPool,
+    algorithm: Algorithm,
 ) -> Result<WriteRangeResponse> {
     let buffer_size = max(buffer_size, 1);
     let mut reader = reader.take(expected_length);
@@ -273,7 +278,7 @@ pub async fn write_range<R: AsyncRead + Unpin + ?Sized>(
     // buffer until it completes.
     let mut in_flight: Option<oneshot::Receiver<io::Result<BytesMut>>> = None;
 
-    let mut hasher = crc32fast::Hasher::new();
+    let mut hasher = Hasher::new(algorithm);
     let mut length: u64 = 0;
     loop {
         // Fill the buffer until it is full or the reader reaches EOF.
@@ -326,7 +331,8 @@ pub async fn write_range<R: AsyncRead + Unpin + ?Sized>(
 
     Ok(WriteRangeResponse {
         length,
-        hash: hasher.finalize().to_string(),
+        algorithm,
+        hash: hasher.finalize(),
     })
 }
 
@@ -384,7 +390,7 @@ fn write_all_vectored_at(fd: &File, chunks: &[Bytes], mut offset: u64) -> io::Re
 
 /// Writes exactly `expected_length` bytes from the stream of bytes chunks to
 /// the file with positional writes starting at `offset`, and calculates the
-/// CRC32 hash of the written content. Each chunk is hashed on the runtime
+/// hash of the written content with `algorithm`. Each chunk is hashed on the runtime
 /// while its data is still hot in the cache of the polling core and staged
 /// without copying, then the staged chunks are queued on the file descriptor
 /// for a vectored positional write once they reach a `buffer_size` boundary
@@ -397,6 +403,7 @@ pub async fn write_range_from_stream<S>(
     expected_length: u64,
     buffer_size: usize,
     stream: &mut S,
+    algorithm: Algorithm,
 ) -> Result<WriteRangeResponse>
 where
     S: Stream<Item = io::Result<Bytes>> + Unpin + ?Sized,
@@ -411,7 +418,7 @@ where
     // The in-flight write queued on the file descriptor, owning the staged
     // chunks until it completes.
     let mut in_flight: Option<oneshot::Receiver<io::Result<Vec<Bytes>>>> = None;
-    let mut hasher = crc32fast::Hasher::new();
+    let mut hasher = Hasher::new(algorithm);
     let mut length: u64 = 0;
     let mut eof = false;
 
@@ -501,7 +508,8 @@ where
 
     Ok(WriteRangeResponse {
         length,
-        hash: hasher.finalize().to_string(),
+        algorithm,
+        hash: hasher.finalize(),
     })
 }
 
@@ -796,6 +804,7 @@ mod tests {
             4 * 1024,
             &mut data.as_slice(),
             &BufferPool::new(64 * 1024 * 1024),
+            Algorithm::Crc32,
         )
         .await
         .unwrap();
@@ -840,6 +849,7 @@ mod tests {
                 buffer_size,
                 &mut data.as_slice(),
                 &BufferPool::new(64 * 1024 * 1024),
+                Algorithm::Crc32,
             )
             .await
             .unwrap();
@@ -931,6 +941,7 @@ mod tests {
                 buffer_size,
                 &mut reader,
                 &BufferPool::new(64 * 1024 * 1024),
+                Algorithm::Crc32,
             )
             .await;
             expect(result.map(|response| response.length));
@@ -977,6 +988,7 @@ mod tests {
                 expected_length,
                 buffer_size,
                 &mut stream,
+                Algorithm::Crc32,
             )
             .await
             .unwrap();
@@ -1006,9 +1018,16 @@ mod tests {
             Ok(Bytes::from_static(b", world!")),
         ]);
         let fd = WriteFD::new(open_rw(&path));
-        let response = write_range_from_stream(&fd, 0, data.len() as u64, 512, &mut stream)
-            .await
-            .unwrap();
+        let response = write_range_from_stream(
+            &fd,
+            0,
+            data.len() as u64,
+            512,
+            &mut stream,
+            Algorithm::Crc32,
+        )
+        .await
+        .unwrap();
         assert_eq!(response.length, data.len() as u64);
         assert_eq!(response.hash, crc32fast::hash(data).to_string());
         assert_eq!(tokio::fs::read(&path).await.unwrap(), data);
@@ -1092,8 +1111,15 @@ mod tests {
 
         for (fd, expected_length, buffer_size, chunks, expect) in test_cases {
             let mut stream = futures::stream::iter(chunks);
-            let result =
-                write_range_from_stream(&fd, 0, expected_length, buffer_size, &mut stream).await;
+            let result = write_range_from_stream(
+                &fd,
+                0,
+                expected_length,
+                buffer_size,
+                &mut stream,
+                Algorithm::Crc32,
+            )
+            .await;
             expect(result.map(|response| response.length));
         }
     }
@@ -1121,6 +1147,7 @@ mod tests {
                         1024,
                         &mut piece.as_slice(),
                         &BufferPool::new(64 * 1024 * 1024),
+                        Algorithm::Crc32,
                     )
                     .await
                     .unwrap();
