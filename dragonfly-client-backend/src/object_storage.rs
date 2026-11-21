@@ -314,6 +314,7 @@ impl ObjectStorage {
                 message: format!("{} need object_storage parameter", self.scheme),
                 status_code: None,
                 header: None,
+                body: None,
             })));
         };
 
@@ -428,6 +429,7 @@ impl ObjectStorage {
                 ),
                 status_code: None,
                 header: None,
+                body: None,
             })));
         };
 
@@ -472,6 +474,7 @@ impl ObjectStorage {
                 ),
                 status_code: None,
                 header: None,
+                body: None,
             })));
         };
 
@@ -527,6 +530,7 @@ impl ObjectStorage {
                 ),
                 status_code: None,
                 header: None,
+                body: None,
             })));
         };
 
@@ -571,6 +575,7 @@ impl ObjectStorage {
                 ),
                 status_code: None,
                 header: None,
+                body: None,
             })));
         };
 
@@ -648,6 +653,7 @@ impl crate::Backend for ObjectStorage {
                         message: err.to_string(),
                         status_code: None,
                         header: None,
+                        body: None,
                     }))
                 })?
                 .into_iter()
@@ -675,6 +681,7 @@ impl crate::Backend for ObjectStorage {
                 message: err.to_string(),
                 status_code: None,
                 header: None,
+                body: None,
             }))
         })?;
 
@@ -692,6 +699,7 @@ impl crate::Backend for ObjectStorage {
             http_status_code: None,
             error_message: None,
             entries,
+            body: None,
         })
     }
 
@@ -731,6 +739,7 @@ impl crate::Backend for ObjectStorage {
                     message: err.to_string(),
                     status_code: None,
                     header: None,
+                    body: None,
                 }))
             })?;
 
@@ -748,6 +757,7 @@ impl crate::Backend for ObjectStorage {
                         message: err.to_string(),
                         status_code: None,
                         header: None,
+                        body: None,
                     }))
                 })?,
             None => operator_reader.into_bytes_stream(..).await.map_err(|err| {
@@ -760,6 +770,7 @@ impl crate::Backend for ObjectStorage {
                     message: err.to_string(),
                     status_code: None,
                     header: None,
+                    body: None,
                 }))
             })?,
         };
@@ -808,6 +819,7 @@ impl crate::Backend for ObjectStorage {
                     message: err.to_string(),
                     status_code: None,
                     header: None,
+                    body: None,
                 }))
             })?;
 

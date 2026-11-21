@@ -249,6 +249,7 @@ impl Task {
                 message: response.error_message.unwrap_or_default(),
                 status_code: response.http_status_code,
                 header: response.http_header,
+                body: response.body,
             })));
         }
 

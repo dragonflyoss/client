@@ -119,6 +119,7 @@ pub fn validate_ranged_response(
             message,
             status_code: Some(status_code),
             header: Some(response_header.clone()),
+            body: None,
         }))
     };
 
