@@ -34,5 +34,8 @@ const DEFAULT_KEEPALIVE_TIME: Duration = Duration::from_secs(5);
 /// The default number of keepalive retries.
 const DEFAULT_KEEPALIVE_RETRIES: u32 = 3;
 
+/// The default timeout of the TLS handshake of a connection.
+const DEFAULT_TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// The default maximum idle timeout for connections.
 const DEFAULT_MAX_IDLE_TIMEOUT: Duration = Duration::from_secs(30);

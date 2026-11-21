@@ -318,6 +318,13 @@ async fn main() -> Result<(), anyhow::Error> {
         shutdown_complete_tx.clone(),
     );
 
+    // Load the mutual TLS configuration of the piece transport, none if it is
+    // disabled.
+    let storage_server_tls =
+        dragonfly_client_storage::tls::server_config(&config).inspect_err(|err| {
+            error!("load storage server tls config failed: {}", err);
+        })?;
+
     // Initialize storage tcp server.
     let mut storage_tcp_server = TCPServer::new(
         config.clone(),
@@ -328,6 +335,7 @@ async fn main() -> Result<(), anyhow::Error> {
         id_generator.clone(),
         storage.clone(),
         upload_bandwidth_limiter.clone(),
+        storage_server_tls.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );
@@ -341,6 +349,7 @@ async fn main() -> Result<(), anyhow::Error> {
         id_generator.clone(),
         storage.clone(),
         upload_bandwidth_limiter.clone(),
+        storage_server_tls.clone(),
         shutdown.clone(),
         shutdown_complete_tx.clone(),
     );

@@ -58,19 +58,27 @@ pub struct QUICClient {
 
 /// Implements the QUIC-based client for quic storage service.
 impl QUICClient {
-    /// Creates a new QUICClient connected to the server.
-    pub async fn new(config: Arc<Config>, addr: String) -> ClientResult<Self> {
-        let mut client_config = ClientConfig::new(Arc::new(
-            QuicClientConfig::try_from(
+    /// Creates a new QUICClient connected to the server. The server is
+    /// authenticated with the TLS configuration if it is some, otherwise its
+    /// certificate is not verified.
+    pub async fn new(
+        config: Arc<Config>,
+        addr: String,
+        tls: Option<Arc<rustls::ClientConfig>>,
+    ) -> ClientResult<Self> {
+        let quic_client_config = match tls {
+            Some(tls) => QuicClientConfig::try_from(tls),
+            None => QuicClientConfig::try_from(
                 quinn::rustls::ClientConfig::builder()
                     .dangerous()
                     .with_custom_certificate_verifier(NoVerifier::new())
                     .with_no_client_auth(),
-            )
-            .map_err(|err| {
-                ClientError::Unknown(format!("failed to create quic client config: {err}"))
-            })?,
-        ));
+            ),
+        }
+        .map_err(|err| {
+            ClientError::Unknown(format!("failed to create quic client config: {err}"))
+        })?;
+        let mut client_config = ClientConfig::new(Arc::new(quic_client_config));
 
         let mut transport = TransportConfig::default();
         transport.keep_alive_interval(Some(super::DEFAULT_KEEPALIVE_INTERVAL));
@@ -102,10 +110,14 @@ impl QUICClient {
         )?;
         endpoint.set_default_client_config(client_config);
 
-        // Connect's server name used for verifying the certificate. Since we used
-        // NoVerifier, it can be anything.
+        // Connect's server name used for verifying the certificate. The
+        // certificate is not verified, or verified against the CA without
+        // checking its name, so it can be anything.
         let connecting = endpoint
-            .connect(addr.parse().or_err(ErrorType::ParseError)?, "d7y")
+            .connect(
+                addr.parse().or_err(ErrorType::ParseError)?,
+                crate::tls::SERVER_NAME,
+            )
             .or_err(ErrorType::ConnectError)?;
 
         let connection = time::timeout(super::DEFAULT_CONNECT_TIMEOUT, connecting)
