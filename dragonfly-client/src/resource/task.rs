@@ -15,7 +15,7 @@
  */
 
 use crate::grpc::{
-    dfdaemon_upload::DfdaemonUploadClient, scheduler::SchedulerClient, REQUEST_TIMEOUT,
+    dfdaemon_upload::DfdaemonUploadClient, scheduler::SchedulerClient, PAGE_SIZE, REQUEST_TIMEOUT,
 };
 use crate::resource::parent_selector::ParentSelector;
 use dragonfly_api::common::v2::{
@@ -59,7 +59,9 @@ use dragonfly_client_util::{
 use futures::future::select_all;
 use leaky_bucket::RateLimiter;
 use reqwest::header::HeaderMap;
+use std::net::IpAddr;
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -71,7 +73,6 @@ use tokio::sync::{
     Mutex, Notify, OwnedSemaphorePermit, Semaphore,
 };
 use tokio::task::JoinSet;
-use tokio::time;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Status};
 use tracing::{debug, error, info, instrument, warn, Instrument};
@@ -83,18 +84,6 @@ use super::*;
 /// (e.g. the prefetch) to be written to the local storage, before falling back to
 /// downloading with the scheduler.
 const DEFAULT_WAIT_FOR_IN_FLIGHT_PIECE_TIMEOUT: Duration = Duration::from_millis(1000);
-
-/// The maximum duration to wait for the source to respond to the stat request of the
-/// task, before falling back to getting the metadata of the task from the peers.
-pub const DEFAULT_WAIT_FOR_SOURCE_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// The maximum duration to wait for a peer to return the metadata of the task,
-/// including the time to connect to it.
-const DEFAULT_WAIT_FOR_PEER_TIMEOUT: Duration = Duration::from_secs(3);
-
-/// The page size to list the peers that succeeded to download the task. The peers
-/// are asked one by one, so it bounds the time to wait for them.
-const DEFAULT_LIST_PEERS_PAGE_SIZE: i32 = 3;
 
 /// Represents a task manager.
 pub struct Task {
@@ -231,105 +220,43 @@ impl Task {
             backend.scheme().as_str(),
             http::Method::HEAD.as_str(),
         );
-        let stat = backend.stat(StatRequest {
-            task_id: id.to_string(),
-            url: request.url,
-            http_header: Some(request_header),
-            timeout: self.config.download.piece_timeout,
-            client_cert: None,
-            object_storage: request.object_storage,
-            hdfs: request.hdfs,
-            hugging_face: request.hugging_face,
-            model_scope: request.model_scope,
-            open_csg: request.open_csg,
-        });
-        tokio::pin!(stat);
-
-        // Wait for the source for a short time. If the source is unavailable, i.e. it
-        // does not respond in time or responds with a server error, get the metadata
-        // of the task from the peers. The request is still in flight, and is awaited
-        // if the peers do not have the metadata.
-        let response = time::timeout(DEFAULT_WAIT_FOR_SOURCE_TIMEOUT, &mut stat)
+        let response = backend
+            .stat(StatRequest {
+                task_id: id.to_string(),
+                url: request.url,
+                http_header: Some(request_header),
+                timeout: self.config.download.piece_timeout,
+                client_cert: None,
+                object_storage: request.object_storage,
+                hdfs: request.hdfs,
+                hugging_face: request.hugging_face,
+                model_scope: request.model_scope,
+                open_csg: request.open_csg,
+            })
             .await
-            .ok();
-        let peer_response = match &response {
-            Some(Ok(response))
-                if response.success
-                    || response
-                        .http_status_code
-                        .is_some_and(|code| !code.is_server_error()) =>
-            {
-                None
-            }
-            Some(Err(_)) => None,
-            _ => self
-                .stat_from_peers(id)
-                .await
-                .inspect_err(|err| warn!("stat task from peers failed: {}", err))
-                .ok(),
-        };
-
-        let (content_length, piece_length, response_header) = match peer_response {
-            Some(StatLocalTaskResponse {
-                content_length: Some(content_length),
-                piece_length: Some(piece_length),
-                response_header,
-                ..
-            }) => {
+            .inspect_err(|_err| {
                 // Collect the backend request failure metrics.
                 collect_backend_request_failure_metrics(
                     backend.scheme().as_str(),
                     http::Method::HEAD.as_str(),
                 );
+            })?;
 
-                info!("source is unavailable, use the task metadata from the peers");
-                (
-                    content_length,
-                    piece_length,
-                    Some(hashmap_to_headermap(&response_header)?),
-                )
-            }
-            _ => {
-                let response = match response {
-                    Some(response) => response,
-                    None => stat.await,
-                }
-                .inspect_err(|_err| {
-                    // Collect the backend request failure metrics.
-                    collect_backend_request_failure_metrics(
-                        backend.scheme().as_str(),
-                        http::Method::HEAD.as_str(),
-                    );
-                })?;
+        let (content_length, piece_length, response_header) = if response.success {
+            // Collect the backend request finished metrics.
+            collect_backend_request_finished_metrics(
+                backend.scheme().as_str(),
+                http::Method::HEAD.as_str(),
+                start_time.elapsed(),
+            );
 
-                // Check if the status code is success.
-                if !response.success {
-                    // Collect the backend request failure metrics.
-                    collect_backend_request_failure_metrics(
-                        backend.scheme().as_str(),
-                        http::Method::HEAD.as_str(),
-                    );
+            let content_length = match response.content_length {
+                Some(content_length) => content_length,
+                None => return Err(Error::InvalidContentLength),
+            };
 
-                    return Err(Error::BackendError(Box::new(BackendError {
-                        message: response.error_message.unwrap_or_default(),
-                        status_code: response.http_status_code,
-                        header: response.http_header,
-                    })));
-                }
-
-                // Collect the backend request finished metrics.
-                collect_backend_request_finished_metrics(
-                    backend.scheme().as_str(),
-                    http::Method::HEAD.as_str(),
-                    start_time.elapsed(),
-                );
-
-                let content_length = match response.content_length {
-                    Some(content_length) => content_length,
-                    None => return Err(Error::InvalidContentLength),
-                };
-
-                let piece_length = match request.piece_length {
+            let piece_length =
+                match request.piece_length {
                     Some(piece_length) => self.piece.calculate_piece_length(
                         piece::PieceLengthStrategy::FixedPieceLength(piece_length),
                     ),
@@ -338,8 +265,49 @@ impl Task {
                     ),
                 };
 
-                (content_length, piece_length, response.http_header)
+            (content_length, piece_length, response.http_header)
+        } else {
+            // Collect the backend request failure metrics.
+            collect_backend_request_failure_metrics(
+                backend.scheme().as_str(),
+                http::Method::HEAD.as_str(),
+            );
+
+            let err = Error::BackendError(Box::new(BackendError {
+                message: response.error_message.unwrap_or_default(),
+                status_code: response.http_status_code,
+                header: response.http_header,
+            }));
+
+            // If the source responds with a non-server error, return the error directly.
+            if response
+                .http_status_code
+                .is_some_and(|code| !code.is_server_error())
+            {
+                return Err(err);
             }
+
+            // If the source can not be connected or responds with a server error, stat
+            // the task from the parents.
+            info!("source is unavailable, stat task from parents");
+            let Ok(metadata::Task {
+                content_length: Some(content_length),
+                piece_length: Some(piece_length),
+                response_header,
+                ..
+            }) = self
+                .stat_from_parents(id)
+                .await
+                .inspect_err(|err| warn!("stat task from parents failed: {}", err))
+            else {
+                return Err(err);
+            };
+
+            (
+                content_length,
+                piece_length,
+                Some(hashmap_to_headermap(&response_header)?),
+            )
         };
 
         // If the task is not finished, check if the storage has enough space to
@@ -377,61 +345,6 @@ impl Task {
         }
 
         task
-    }
-
-    /// Returns the metadata of the task from the peers that succeeded to download the
-    /// task. The peers are listed by the scheduler, no peer is registered and no seed
-    /// peer is triggered.
-    #[instrument(skip_all)]
-    pub async fn stat_from_peers(&self, id: &str) -> ClientResult<StatLocalTaskResponse> {
-        // List the peers that succeeded to download the task, the first page is enough.
-        let response = self
-            .scheduler_client
-            .list_peers(
-                id,
-                ListPeersRequest {
-                    task_id: Some(id.to_string()),
-                    page_size: Some(DEFAULT_LIST_PEERS_PAGE_SIZE),
-                    page_token: None,
-                },
-            )
-            .await?;
-
-        // Return the metadata from the first host that knows the content length and
-        // the piece length.
-        let hosts = response.peers.into_iter().filter_map(|peer| peer.host);
-        for host in hosts {
-            let response = time::timeout(DEFAULT_WAIT_FOR_PEER_TIMEOUT, async {
-                let addr = format_url(
-                    self.config.upload.client.scheme(),
-                    host.ip.parse()?,
-                    host.port as u16,
-                );
-
-                DfdaemonUploadClient::new(self.config.clone(), addr, false)
-                    .await?
-                    .stat_local_task(StatLocalTaskRequest {
-                        task_id: id.to_string(),
-                        remote_ip: self.config.host.ip.map(|ip| ip.to_string()),
-                    })
-                    .await
-            })
-            .await
-            .unwrap_or_else(|err| Err(err.into()));
-
-            match response {
-                Ok(response)
-                    if response.content_length.is_some() && response.piece_length.is_some() =>
-                {
-                    info!("stat task from host {}", host.id);
-                    return Ok(response);
-                }
-                Ok(_) => warn!("host {} does not know the content length", host.id),
-                Err(err) => warn!("stat task from host {} failed: {}", host.id, err),
-            }
-        }
-
-        Err(Error::TaskNotFound(id.to_string()))
     }
 
     /// Updates the metadata of the task when the task downloads finished.
@@ -2617,6 +2530,69 @@ impl Task {
             failed_at: task.failed_at.map(Into::into),
             finished_at: task.finished_at.map(Into::into),
         })
+    }
+
+    /// Returns the task metadata from the parents that have downloaded the task, which are
+    /// listed by the scheduler without registering a peer.
+    #[instrument(skip_all)]
+    pub async fn stat_from_parents(&self, task_id: &str) -> ClientResult<metadata::Task> {
+        // List the parents from the scheduler, only the first page is used.
+        let response = self
+            .scheduler_client
+            .list_peers(ListPeersRequest {
+                task_id: Some(task_id.to_string()),
+                page_size: Some(PAGE_SIZE),
+                page_token: None,
+            })
+            .await?;
+
+        // Stat the task from the parents in order, until one of them has the content
+        // length and the piece length.
+        let parent_hosts = response.peers.into_iter().filter_map(|parent| parent.host);
+        for parent_host in parent_hosts {
+            let dfdaemon_upload_client = match DfdaemonUploadClient::new(
+                self.config.clone(),
+                format_url(
+                    self.config.upload.client.scheme(),
+                    IpAddr::from_str(&parent_host.ip)?,
+                    parent_host.port as u16,
+                ),
+                false,
+            )
+            .await
+            {
+                Ok(client) => client,
+                Err(err) => {
+                    error!("failed to connect to parent {}: {}", parent_host.id, err);
+                    continue;
+                }
+            };
+
+            match dfdaemon_upload_client
+                .stat_local_task(StatLocalTaskRequest {
+                    task_id: task_id.to_string(),
+                    remote_ip: self.config.host.ip.map(|ip| ip.to_string()),
+                })
+                .await
+            {
+                Ok(response)
+                    if response.content_length.is_some() && response.piece_length.is_some() =>
+                {
+                    info!("stat task from parent {}", parent_host.id);
+                    return Ok(metadata::Task {
+                        id: response.task_id,
+                        piece_length: response.piece_length,
+                        content_length: response.content_length,
+                        response_header: response.response_header,
+                        ..Default::default()
+                    });
+                }
+                Ok(_) => warn!("parent {} does not know the content length", parent_host.id),
+                Err(err) => warn!("stat task from parent {} failed: {}", parent_host.id, err),
+            }
+        }
+
+        Err(Error::TaskNotFound(task_id.to_string()))
     }
 
     /// Returns the tasks from local storage.

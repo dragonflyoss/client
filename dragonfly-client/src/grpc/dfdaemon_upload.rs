@@ -2751,7 +2751,7 @@ impl DfdaemonUploadClient {
         Ok(response.into_inner())
     }
 
-    /// Stats the task metadata in the local storage of the peer.
+    /// Stats the local task metadata.
     #[instrument(skip_all)]
     pub async fn stat_local_task(
         &self,

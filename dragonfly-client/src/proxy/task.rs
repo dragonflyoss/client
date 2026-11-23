@@ -18,7 +18,7 @@ use crate::dynconfig::block_list::DownloadBlockListCheckParams;
 use crate::dynconfig::Dynconfig;
 use crate::grpc::DOWNLOAD_STREAM_BUFFER_SIZE;
 use crate::resource::task::Task;
-use dragonfly_api::common::v2::{Download, TaskType};
+use dragonfly_api::common::v2::TaskType;
 use dragonfly_api::dfdaemon::v2::{DownloadTaskRequest, DownloadTaskResponse};
 use dragonfly_api::errordetails::v2::Backend;
 use dragonfly_client_config::dfdaemon::Config;
@@ -43,29 +43,6 @@ use tracing::{debug, error, info, instrument, warn, Instrument, Span};
 
 /// DownloadTaskStream is the stream of the download task responses.
 type DownloadTaskStream = mpsc::Receiver<Result<DownloadTaskResponse, Status>>;
-
-/// Generates the task id of the download.
-pub fn generate_task_id(task_manager: &Task, download: &Download) -> ClientResult<String> {
-    task_manager.id_generator.task_id(
-        if let Some(content) = download.content_for_calculating_task_id.clone() {
-            TaskIDParameter::Content(content)
-        } else if download.enable_task_id_based_blob_digest && is_blob_url(&download.url) {
-            TaskIDParameter::BlobDigestBased(download.url.clone())
-        } else if download.enable_task_id_based_blob_digest && is_manifest_digest_url(&download.url)
-        {
-            TaskIDParameter::ManifestDigestBased(download.url.clone())
-        } else {
-            TaskIDParameter::URLBased {
-                url: download.url.clone(),
-                piece_length: download.piece_length,
-                tag: download.tag.clone(),
-                application: download.application.clone(),
-                filtered_query_params: download.filtered_query_params.clone(),
-                revision: repository_revision(download),
-            }
-        },
-    )
-}
 
 /// Download the task by the task manager directly. It is similar to the
 /// download_task of the dfdaemon download gRPC server, but removes the gRPC-related
@@ -107,9 +84,31 @@ pub async fn download(
     download.concurrent_piece_count = Some(config.download.concurrent_piece_count);
 
     // Generate the task id.
-    let task_id = generate_task_id(&task_manager, &download).inspect_err(|err| {
-        error!("generate task id: {}", err);
-    })?;
+    let task_id = task_manager
+        .id_generator
+        .task_id(
+            if let Some(content) = download.content_for_calculating_task_id.clone() {
+                TaskIDParameter::Content(content)
+            } else if download.enable_task_id_based_blob_digest && is_blob_url(&download.url) {
+                TaskIDParameter::BlobDigestBased(download.url.clone())
+            } else if download.enable_task_id_based_blob_digest
+                && is_manifest_digest_url(&download.url)
+            {
+                TaskIDParameter::ManifestDigestBased(download.url.clone())
+            } else {
+                TaskIDParameter::URLBased {
+                    url: download.url.clone(),
+                    piece_length: download.piece_length,
+                    tag: download.tag.clone(),
+                    application: download.application.clone(),
+                    filtered_query_params: download.filtered_query_params.clone(),
+                    revision: repository_revision(&download),
+                }
+            },
+        )
+        .inspect_err(|err| {
+            error!("generate task id: {}", err);
+        })?;
 
     // Generate the host id.
     let host_id = task_manager.id_generator.host_id();
