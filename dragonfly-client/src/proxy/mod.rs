@@ -30,8 +30,11 @@ use dragonfly_client_metric::{
     collect_proxy_request_failure_metrics, collect_proxy_request_rate_limited_metrics,
     collect_proxy_request_started_metrics, collect_proxy_request_via_dfdaemon_metrics,
 };
+use dragonfly_client_storage::metadata;
 use dragonfly_client_util::{
+    digest::{is_blob_url, is_manifest_digest_url},
     http::{hashmap_to_headermap, headermap_to_hashmap},
+    id_generator::{repository_revision, TaskIDParameter},
     shutdown,
     tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
     types::redacted::RedactedHTTPProxyRequest,
@@ -67,6 +70,9 @@ pub mod task;
 /// Supported HTTP protocols, including HTTP/1.1 and HTTP/1.0.
 static SUPPORTED_HTTP_PROTOCOLS: LazyLock<Vec<Vec<u8>>> =
     LazyLock::new(|| vec![b"http/1.1".to_vec(), b"http/1.0".to_vec()]);
+
+/// The default timeout for proxying the request directly to the remote server.
+const DEFAULT_PROXY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Response type for the proxy server.
 pub type Response = hyper::Response<BoxBody<Bytes, ClientError>>;
@@ -143,6 +149,15 @@ impl Proxy {
                 .with_no_client_auth(),
         };
 
+        // Initialize the connectors with the connect timeout.
+        let mut http_connector = HttpConnector::new();
+        http_connector.set_connect_timeout(Some(DEFAULT_PROXY_TIMEOUT));
+        http_connector.set_keepalive(Some(Duration::from_secs(90)));
+
+        let mut https_connector = HttpConnector::new();
+        https_connector.set_connect_timeout(Some(DEFAULT_PROXY_TIMEOUT));
+        https_connector.enforce_http(false);
+
         let mut proxy = Self {
             config: config.clone(),
             task: task.clone(),
@@ -150,13 +165,13 @@ impl Proxy {
             http_client: Client::builder(TokioExecutor::new())
                 .http1_preserve_header_case(true)
                 .http1_title_case_headers(true)
-                .build_http(),
+                .build(http_connector),
             https_client: Client::builder(TokioExecutor::new()).build(
                 hyper_rustls::HttpsConnectorBuilder::new()
                     .with_tls_config(client_config_builder)
                     .https_or_http()
                     .enable_http1()
-                    .build(),
+                    .wrap_connector(https_connector),
             ),
             server_ca_cert: Arc::new(None),
             request_rate_limiter: Arc::new(
@@ -487,6 +502,21 @@ pub async fn http_handler(
                 .await;
         }
 
+        // If the request is a HEAD request, proxy the request directly to the remote server,
+        // and respond with the task metadata if the remote server is unavailable.
+        if request.method() == Method::HEAD {
+            return proxy_head_via_dfdaemon(
+                config.clone(),
+                task,
+                rule,
+                request,
+                remote_ip,
+                http_client,
+                https_client,
+            )
+            .await;
+        }
+
         debug!(
             "proxy HTTP request bypassing dfdaemon for non-GET method: {:?}",
             RedactedHTTPProxyRequest(&request)
@@ -774,6 +804,21 @@ pub async fn upgraded_handler(
                 .await;
         }
 
+        // If the request is a HEAD request, proxy the request directly to the remote server,
+        // and respond with the task metadata if the remote server is unavailable.
+        if request.method() == Method::HEAD {
+            return proxy_head_via_dfdaemon(
+                config.clone(),
+                task,
+                rule,
+                request,
+                remote_ip,
+                http_client,
+                https_client,
+            )
+            .await;
+        }
+
         debug!(
             "proxy HTTPS request bypassing dfdaemon for non-GET method: {:?}",
             RedactedHTTPProxyRequest(&request),
@@ -838,7 +883,7 @@ async fn proxy_via_dfdaemon(
 
     // Make the download task request.
     let download_task_request =
-        match make_download_task_request(config.clone(), rule, request, remote_ip) {
+        match make_download_task_request(config.clone(), rule, &request, remote_ip) {
             Ok(download_task_request) => download_task_request,
             Err(err) => {
                 error!("make download task request failed: {}", err);
@@ -1208,6 +1253,116 @@ async fn proxy_via_dfdaemon(
     }
 }
 
+/// Proxies the HEAD request via the dfdaemon. It proxies the request directly to the
+/// remote server first, and responds with the task metadata from the local storage or
+/// the parents if the remote server is unavailable.
+#[instrument(skip_all)]
+async fn proxy_head_via_dfdaemon(
+    config: Arc<Config>,
+    task_manager: Arc<Task>,
+    rule: &Rule,
+    request: Request<hyper::body::Incoming>,
+    remote_ip: std::net::IpAddr,
+    http_client: Client<HttpConnector, hyper::body::Incoming>,
+    https_client: Client<hyper_rustls::HttpsConnector<HttpConnector>, hyper::body::Incoming>,
+) -> ClientResult<Response> {
+    // Make the download task request.
+    let download_task_request = match make_download_task_request(config, rule, &request, remote_ip)
+    {
+        Ok(download_task_request) => download_task_request,
+        Err(err) => {
+            error!("make download task request failed: {}", err);
+            return Ok(make_error_response(
+                header::ErrorType::Proxy,
+                http::StatusCode::BAD_REQUEST,
+                None,
+            ));
+        }
+    };
+
+    // Proxy the request directly to the remote server.
+    let response = if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
+        proxy_via_https(request, https_client).await
+    } else {
+        proxy_via_http(request, http_client).await
+    };
+
+    // If the remote server is available, return the response directly.
+    if response
+        .as_ref()
+        .is_ok_and(|response| !response.status().is_server_error())
+    {
+        return response;
+    }
+
+    // Get the download from the request.
+    let Some(download) = &download_task_request.download else {
+        error!("missing download");
+        return Err(ClientError::InvalidParameter);
+    };
+
+    // Generate the task id, it is the same as the task id of the GET request.
+    let task_id = match task_manager.id_generator.task_id(
+        if let Some(content) = download.content_for_calculating_task_id.clone() {
+            TaskIDParameter::Content(content)
+        } else if download.enable_task_id_based_blob_digest && is_blob_url(&download.url) {
+            TaskIDParameter::BlobDigestBased(download.url.clone())
+        } else if download.enable_task_id_based_blob_digest && is_manifest_digest_url(&download.url)
+        {
+            TaskIDParameter::ManifestDigestBased(download.url.clone())
+        } else {
+            TaskIDParameter::URLBased {
+                url: download.url.clone(),
+                piece_length: download.piece_length,
+                tag: download.tag.clone(),
+                application: download.application.clone(),
+                filtered_query_params: download.filtered_query_params.clone(),
+                revision: repository_revision(download),
+            }
+        },
+    ) {
+        Ok(task_id) => task_id,
+        Err(err) => {
+            error!("generate task id failed: {}", err);
+            return response;
+        }
+    };
+
+    // Get the task from the local storage. If the content length is unknown, stat
+    // the task from the parents.
+    let task = match task_manager.get(task_id.as_str()) {
+        Ok(Some(task)) if task.content_length.is_some() => Ok(task),
+        _ => {
+            info!("remote server is unavailable, stat task from parents");
+            task_manager
+                .stat_from_parents(task_id.as_str())
+                .await
+                .inspect_err(|err| warn!("stat task from parents failed: {}", err))
+        }
+    };
+
+    // If the content length of the task is unknown, return the response of the
+    // remote server.
+    let Ok(metadata::Task {
+        content_length: Some(content_length),
+        response_header,
+        ..
+    }) = task
+    else {
+        return response;
+    };
+
+    // Construct the response by the response header and the content length of the task.
+    info!("remote server is unavailable, respond with the task metadata");
+    let mut response = Response::new(empty());
+    *response.headers_mut() = hashmap_to_headermap(&response_header)?;
+    response
+        .headers_mut()
+        .insert(reqwest::header::CONTENT_LENGTH, content_length.into());
+
+    Ok(response)
+}
+
 /// Proxies the HTTP request directly to the remote server.
 #[instrument(level = "debug", skip_all)]
 async fn proxy_via_http(
@@ -1318,7 +1473,7 @@ fn make_registry_mirror_request(
 fn make_download_task_request(
     config: Arc<Config>,
     rule: &Rule,
-    request: Request<hyper::body::Incoming>,
+    request: &Request<hyper::body::Incoming>,
     remote_ip: std::net::IpAddr,
 ) -> ClientResult<DownloadTaskRequest> {
     let header = request.headers();

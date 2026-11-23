@@ -73,6 +73,9 @@ pub const INITIAL_CONNECTION_WINDOW_SIZE: u32 = 4 * 1024 * 1024;
 /// The buffer size for download gRPC stream messages.
 pub const DOWNLOAD_STREAM_BUFFER_SIZE: usize = 12;
 
+/// The page size for GRPC list requests.
+pub const PAGE_SIZE: i32 = 3;
+
 /// Prefetches the task if prefetch flag is true.
 #[instrument(skip_all)]
 pub async fn prefetch_task(

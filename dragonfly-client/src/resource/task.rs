@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
-use crate::grpc::{scheduler::SchedulerClient, REQUEST_TIMEOUT};
+use crate::grpc::{
+    dfdaemon_upload::DfdaemonUploadClient, scheduler::SchedulerClient, PAGE_SIZE, REQUEST_TIMEOUT,
+};
 use crate::resource::parent_selector::ParentSelector;
 use dragonfly_api::common::v2::{
     Download, Hdfs, HuggingFace, ModelScope, ObjectStorage, OpenCsg, Peer, Piece, SchedulingPolicy,
@@ -24,7 +26,7 @@ use dragonfly_api::dfdaemon::{
     self,
     v2::{
         download_task_response, DeleteImageResponse, DownloadTaskResponse, ListLocalTasksResponse,
-        StatLocalTaskResponse,
+        StatLocalTaskRequest, StatLocalTaskResponse,
     },
 };
 use dragonfly_api::errordetails::v2::{Backend, Unknown};
@@ -34,8 +36,8 @@ use dragonfly_api::scheduler::v2::{
     DownloadPeerBackToSourceFinishedRequest, DownloadPeerBackToSourceStartedRequest,
     DownloadPeerFailedRequest, DownloadPeerFinishedRequest, DownloadPeerStartedRequest,
     DownloadPieceBackToSourceFailedRequest, DownloadPieceBackToSourceFinishedRequest,
-    DownloadPieceFailedRequest, DownloadPieceFinishedRequest, RegisterPeerRequest,
-    ReschedulePeerRequest, StatTaskRequest,
+    DownloadPieceFailedRequest, DownloadPieceFinishedRequest, ListPeersRequest,
+    RegisterPeerRequest, ReschedulePeerRequest, StatTaskRequest,
 };
 use dragonfly_client_backend::{BackendFactory, StatRequest};
 use dragonfly_client_config::dfdaemon::Config;
@@ -51,12 +53,15 @@ use dragonfly_client_storage::{metadata, Storage};
 use dragonfly_client_util::{
     http::{hashmap_to_headermap, headermap_to_hashmap},
     id_generator::{IDGenerator, ImageIDParameter},
+    net::format_url,
     shutdown,
 };
 use futures::future::select_all;
 use leaky_bucket::RateLimiter;
 use reqwest::header::HeaderMap;
+use std::net::IpAddr;
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -237,43 +242,72 @@ impl Task {
                 );
             })?;
 
-        // Check if the status code is success.
-        if !response.success {
+        let (content_length, piece_length, response_header) = if response.success {
+            // Collect the backend request finished metrics.
+            collect_backend_request_finished_metrics(
+                backend.scheme().as_str(),
+                http::Method::HEAD.as_str(),
+                start_time.elapsed(),
+            );
+
+            let content_length = match response.content_length {
+                Some(content_length) => content_length,
+                None => return Err(Error::InvalidContentLength),
+            };
+
+            let piece_length =
+                match request.piece_length {
+                    Some(piece_length) => self.piece.calculate_piece_length(
+                        piece::PieceLengthStrategy::FixedPieceLength(piece_length),
+                    ),
+                    None => self.piece.calculate_piece_length(
+                        piece::PieceLengthStrategy::OptimizeByFileLength(content_length),
+                    ),
+                };
+
+            (content_length, piece_length, response.http_header)
+        } else {
             // Collect the backend request failure metrics.
             collect_backend_request_failure_metrics(
                 backend.scheme().as_str(),
                 http::Method::HEAD.as_str(),
             );
 
-            return Err(Error::BackendError(Box::new(BackendError {
+            let err = Error::BackendError(Box::new(BackendError {
                 message: response.error_message.unwrap_or_default(),
                 status_code: response.http_status_code,
                 header: response.http_header,
-            })));
-        }
+            }));
 
-        // Collect the backend request finished metrics.
-        collect_backend_request_finished_metrics(
-            backend.scheme().as_str(),
-            http::Method::HEAD.as_str(),
-            start_time.elapsed(),
-        );
-
-        let content_length = match response.content_length {
-            Some(content_length) => content_length,
-            None => return Err(Error::InvalidContentLength),
-        };
-
-        let piece_length = match request.piece_length {
-            Some(piece_length) => self
-                .piece
-                .calculate_piece_length(piece::PieceLengthStrategy::FixedPieceLength(piece_length)),
-            None => {
-                self.piece
-                    .calculate_piece_length(piece::PieceLengthStrategy::OptimizeByFileLength(
-                        content_length,
-                    ))
+            // If the source responds with a non-server error, return the error directly.
+            if response
+                .http_status_code
+                .is_some_and(|code| !code.is_server_error())
+            {
+                return Err(err);
             }
+
+            // If the source can not be connected or responds with a server error, stat
+            // the task from the parents.
+            info!("source is unavailable, stat task from parents");
+            let Ok(metadata::Task {
+                content_length: Some(content_length),
+                piece_length: Some(piece_length),
+                response_header,
+                ..
+            }) = self
+                .stat_from_parents(id)
+                .await
+                .inspect_err(|err| warn!("stat task from parents failed: {}", err))
+            else {
+                return Err(err);
+            };
+
+            (
+                content_length,
+                piece_length,
+                Some(hashmap_to_headermap(&response_header)?),
+            )
         };
 
         // If the task is not finished, check if the storage has enough space to
@@ -286,7 +320,7 @@ impl Task {
 
         let task = self
             .storage
-            .download_task_started(id, piece_length, content_length, response.http_header)
+            .download_task_started(id, piece_length, content_length, response_header)
             .await;
 
         // Attempt to create a hard link from the task file to the output path.
@@ -2496,6 +2530,69 @@ impl Task {
             failed_at: task.failed_at.map(Into::into),
             finished_at: task.finished_at.map(Into::into),
         })
+    }
+
+    /// Returns the task metadata from the parents that have downloaded the task, which are
+    /// listed by the scheduler without registering a peer.
+    #[instrument(skip_all)]
+    pub async fn stat_from_parents(&self, task_id: &str) -> ClientResult<metadata::Task> {
+        // List the parents from the scheduler, only the first page is used.
+        let response = self
+            .scheduler_client
+            .list_peers(ListPeersRequest {
+                task_id: Some(task_id.to_string()),
+                page_size: Some(PAGE_SIZE),
+                page_token: None,
+            })
+            .await?;
+
+        // Stat the task from the parents in order, until one of them has the content
+        // length and the piece length.
+        let parent_hosts = response.peers.into_iter().filter_map(|parent| parent.host);
+        for parent_host in parent_hosts {
+            let dfdaemon_upload_client = match DfdaemonUploadClient::new(
+                self.config.clone(),
+                format_url(
+                    self.config.upload.client.scheme(),
+                    IpAddr::from_str(&parent_host.ip)?,
+                    parent_host.port as u16,
+                ),
+                false,
+            )
+            .await
+            {
+                Ok(client) => client,
+                Err(err) => {
+                    error!("failed to connect to parent {}: {}", parent_host.id, err);
+                    continue;
+                }
+            };
+
+            match dfdaemon_upload_client
+                .stat_local_task(StatLocalTaskRequest {
+                    task_id: task_id.to_string(),
+                    remote_ip: self.config.host.ip.map(|ip| ip.to_string()),
+                })
+                .await
+            {
+                Ok(response)
+                    if response.content_length.is_some() && response.piece_length.is_some() =>
+                {
+                    info!("stat task from parent {}", parent_host.id);
+                    return Ok(metadata::Task {
+                        id: response.task_id,
+                        piece_length: response.piece_length,
+                        content_length: response.content_length,
+                        response_header: response.response_header,
+                        ..Default::default()
+                    });
+                }
+                Ok(_) => warn!("parent {} does not know the content length", parent_host.id),
+                Err(err) => warn!("stat task from parent {} failed: {}", parent_host.id, err),
+            }
+        }
+
+        Err(Error::TaskNotFound(task_id.to_string()))
     }
 
     /// Returns the tasks from local storage.
