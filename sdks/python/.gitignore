@@ -1,0 +1,13 @@
+# Python build and test artifacts.
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.coverage
+.coverage.*
+coverage.xml
+.pytest_cache/
+.venv/
+venv/
