@@ -26,6 +26,7 @@ use tokio_stream::wrappers::TcpListenerStream;
 struct TestScheduler {
     requests: Arc<Mutex<Vec<AnnouncePeerRequest>>>,
     reject_registration: bool,
+    reject_cached_registration: bool,
     reject_completion: bool,
     stall_completion: bool,
 }
@@ -54,7 +55,8 @@ macro_rules! scheduler_impl {
                         match event {
                             announce_peer_request::Request::RegisterPeerRequest(register) => {
                                 let cached = register.download.unwrap().metadata_only;
-                                if !cached && this.reject_registration {
+                                if (!cached && this.reject_registration)
+                                    || (cached && this.reject_cached_registration) {
                                     tx.send(Err(Status::unavailable("registration rejected"))).await.unwrap();
                                     return;
                                 }
@@ -151,6 +153,10 @@ impl Drop for Fixture {
 
 impl Fixture {
     async fn new(scheduler: TestScheduler) -> Self {
+        Self::with_content_length(scheduler, 4096).await
+    }
+
+    async fn with_content_length(scheduler: TestScheduler, content_length: u64) -> Self {
         let dir = tempdir().unwrap();
         let log_dir = dir.path().join("log");
         std::fs::create_dir_all(&log_dir).unwrap();
@@ -195,7 +201,7 @@ impl Fixture {
                 .unwrap(),
         );
         storage
-            .download_task_started("fallback-task", 4096, 4096, None)
+            .download_task_started("fallback-task", content_length, content_length, None)
             .await
             .unwrap();
         let task = storage.get_task("fallback-task").unwrap().unwrap();
@@ -209,9 +215,26 @@ impl Fixture {
             storage,
             client,
             Arc::new(BackendFactory::new(config, None).unwrap()),
-            Arc::new(RateLimiter::builder().initial(1 << 20).build()),
-            Arc::new(RateLimiter::builder().initial(1 << 20).build()),
-            Arc::new(RateLimiter::builder().initial(1 << 20).build()),
+            // 测试不测带宽限制，额度需覆盖大文件及失败后的再次下载，
+            // 避免默认每次仅补充少量令牌导致 Auto 大文件用例长时间等待。
+            Arc::new(
+                RateLimiter::builder()
+                    .initial(content_length as usize * 2)
+                    .refill(content_length as usize)
+                    .build(),
+            ),
+            Arc::new(
+                RateLimiter::builder()
+                    .initial(content_length as usize * 2)
+                    .refill(content_length as usize)
+                    .build(),
+            ),
+            Arc::new(
+                RateLimiter::builder()
+                    .initial(content_length as usize * 2)
+                    .refill(content_length as usize)
+                    .build(),
+            ),
             shutdown,
             shutdown_tx,
         )
@@ -233,6 +256,17 @@ async fn source(
     Arc<std::sync::atomic::AtomicUsize>,
     tokio::task::JoinHandle<()>,
 ) {
+    source_with_content_length(truncate_first, 4096).await
+}
+
+async fn source_with_content_length(
+    truncate_first: bool,
+    content_length: usize,
+) -> (
+    String,
+    Arc<std::sync::atomic::AtomicUsize>,
+    tokio::task::JoinHandle<()>,
+) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -245,8 +279,12 @@ async fn source(
                 header.push(socket.read_u8().await.unwrap());
             }
             let first = requests.fetch_add(1, Ordering::SeqCst) == 0;
-            socket.write_all(b"HTTP/1.1 206 Partial Content\r\nContent-Length: 4096\r\nContent-Range: bytes 0-4095/4096\r\nConnection: close\r\n\r\n").await.unwrap();
-            let length = if truncate_first && first { 2048 } else { 4096 };
+            socket.write_all(format!("HTTP/1.1 206 Partial Content\r\nContent-Length: {content_length}\r\nContent-Range: bytes 0-{}/{content_length}\r\nConnection: close\r\n\r\n", content_length - 1).as_bytes()).await.unwrap();
+            let length = if truncate_first && first {
+                content_length / 2
+            } else {
+                content_length
+            };
             socket.write_all(&vec![42; length]).await.unwrap();
             socket.shutdown().await.unwrap();
         }
@@ -522,4 +560,195 @@ async fn local_cache_announcement_keeps_normal_peer_events() {
             _
         ))
     ));
+}
+
+// 首轮主动绕过调度下载到本地，第二轮走普通 download 入口命中缓存。
+// 验证实际缓存命中分支恢复 Peer 宣告，同时不会重新访问源站。
+async fn repeated_cached_download(
+    scheduler: TestScheduler,
+    range: Option<common::Range>,
+    policy: SchedulingPolicy,
+) -> Vec<AnnouncePeerRequest> {
+    let fixture = Fixture::new(scheduler).await;
+    let (url, count, server) = source(false).await;
+    let (progress, _rx) = mpsc::channel(16);
+    fixture
+        .manager
+        .download(
+            &fixture.task,
+            "test-host",
+            "first-peer",
+            Download {
+                url: url.clone(),
+                ..Default::default()
+            },
+            progress.clone(),
+        )
+        .await
+        .unwrap();
+    assert!(fixture.scheduler.requests.lock().await.is_empty());
+
+    let start = Instant::now();
+    fixture
+        .manager
+        .download(
+            &fixture.task,
+            "test-host",
+            "cached-peer",
+            Download {
+                url,
+                range,
+                scheduling_policy: policy as i32,
+                ..Default::default()
+            },
+            progress,
+        )
+        .await
+        .unwrap();
+    assert!(start.elapsed() < REQUEST_TIMEOUT + Duration::from_secs(2));
+    server.abort();
+    assert_eq!(count.load(Ordering::SeqCst), 1, "cache hit fetched source");
+    let requests = fixture.scheduler.requests.lock().await.clone();
+    requests
+}
+
+#[tokio::test]
+async fn repeated_full_cache_hit_restores_scheduler_peer() {
+    let requests =
+        repeated_cached_download(TestScheduler::default(), None, SchedulingPolicy::Always).await;
+    assert_eq!(requests.len(), 3);
+    assert!(requests
+        .iter()
+        .all(|request| request.peer_id == "cached-peer"));
+    let Some(announce_peer_request::Request::RegisterPeerRequest(register)) = &requests[0].request
+    else {
+        panic!("expected cached peer registration");
+    };
+    let download = register.download.as_ref().unwrap();
+    assert!(download.metadata_only);
+    assert!(!download.need_back_to_source);
+    assert_eq!(download.range, None);
+    assert_eq!(download.actual_content_length, Some(4096));
+    assert!(matches!(
+        requests[1].request,
+        Some(announce_peer_request::Request::DownloadPeerStartedRequest(
+            _
+        ))
+    ));
+    assert!(matches!(
+        requests[2].request,
+        Some(announce_peer_request::Request::DownloadPeerFinishedRequest(
+            _
+        ))
+    ));
+}
+
+#[tokio::test]
+async fn repeated_range_cache_hit_preserves_range() {
+    let range = Some(common::Range {
+        start: 1024,
+        length: 1024,
+    });
+    let requests =
+        repeated_cached_download(TestScheduler::default(), range, SchedulingPolicy::Always).await;
+    let Some(announce_peer_request::Request::RegisterPeerRequest(register)) = &requests[0].request
+    else {
+        panic!("expected cached peer registration");
+    };
+    assert_eq!(register.download.as_ref().unwrap().range, range);
+    assert!(matches!(
+        requests[2].request,
+        Some(announce_peer_request::Request::DownloadPeerFinishedRequest(
+            _
+        ))
+    ));
+}
+
+#[tokio::test]
+async fn repeated_cache_hit_report_rejection_keeps_download_successful() {
+    let requests = repeated_cached_download(
+        TestScheduler {
+            reject_completion: true,
+            ..Default::default()
+        },
+        None,
+        SchedulingPolicy::Always,
+    )
+    .await;
+    assert_eq!(requests.len(), 3);
+}
+
+#[tokio::test]
+async fn repeated_cache_hit_registration_rejection_keeps_download_successful() {
+    let requests = repeated_cached_download(
+        TestScheduler {
+            reject_cached_registration: true,
+            ..Default::default()
+        },
+        None,
+        SchedulingPolicy::Always,
+    )
+    .await;
+    assert_eq!(requests.len(), 1);
+}
+
+#[tokio::test]
+async fn repeated_cache_hit_report_timeout_keeps_download_successful() {
+    let requests = repeated_cached_download(
+        TestScheduler {
+            stall_completion: true,
+            ..Default::default()
+        },
+        None,
+        SchedulingPolicy::Always,
+    )
+    .await;
+    assert_eq!(requests.len(), 3);
+}
+
+#[tokio::test]
+async fn repeated_small_cache_hit_keeps_intentional_scheduler_bypass() {
+    let requests =
+        repeated_cached_download(TestScheduler::default(), None, SchedulingPolicy::Auto).await;
+    assert!(requests.is_empty());
+}
+
+#[tokio::test]
+async fn repeated_large_cache_hit_announces_with_auto_policy() {
+    // 对应模型分层使用默认 Auto 策略的场景，而不是仅验证显式 Always。
+    let content_length = 16 * 1024 * 1024 + 1;
+    let fixture = Fixture::with_content_length(TestScheduler::default(), content_length).await;
+    let (url, count, server) = source_with_content_length(false, content_length as usize).await;
+    let (progress, _rx) = mpsc::channel(16);
+    for peer_id in ["first-peer", "cached-peer"] {
+        fixture
+            .manager
+            .download(
+                &fixture.task,
+                "test-host",
+                peer_id,
+                Download {
+                    url: url.clone(),
+                    ..Default::default()
+                },
+                progress.clone(),
+            )
+            .await
+            .unwrap();
+        if peer_id == "first-peer" {
+            fixture.scheduler.requests.lock().await.clear();
+        }
+    }
+    server.abort();
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    let requests = fixture.scheduler.requests.lock().await;
+    assert_eq!(requests.len(), 3);
+    let Some(announce_peer_request::Request::RegisterPeerRequest(register)) = &requests[0].request
+    else {
+        panic!("expected cached peer registration");
+    };
+    assert!(register.download.as_ref().unwrap().metadata_only);
+    assert!(requests
+        .iter()
+        .all(|request| request.peer_id == "cached-peer"));
 }

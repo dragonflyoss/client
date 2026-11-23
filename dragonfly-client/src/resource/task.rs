@@ -487,6 +487,8 @@ impl Task {
         // Check if all pieces are downloaded.
         if interested_pieces.is_empty() {
             info!("all pieces are downloaded from local");
+            self.announce_local_cache_finished(task, host_id, peer_id, request)
+                .await;
             return Ok(());
         };
 
@@ -528,6 +530,8 @@ impl Task {
             // Check if all pieces are downloaded.
             if interested_pieces.is_empty() {
                 info!("all pieces are downloaded from local");
+                self.announce_local_cache_finished(task, host_id, peer_id, request)
+                    .await;
                 return Ok(());
             };
 
@@ -1130,6 +1134,48 @@ impl Task {
     ) -> ClientResult<()> {
         self.announce_completed_peer(task, host_id, peer_id, request, false)
             .await
+    }
+
+    /// Restores scheduler visibility after a local cache hit without changing the download result.
+    #[instrument(skip_all)]
+    async fn announce_local_cache_finished(
+        &self,
+        task: &metadata::Task,
+        host_id: &str,
+        peer_id: &str,
+        request: Download,
+    ) {
+        // 下载中断后再次执行时，本地缓存仍在，Scheduler 的旧 Peer 却可能已失效。
+        // 使用本次请求的新 Peer 宣告缓存；不能因为本地命中就跳过调度记录恢复。
+        // 保留小文件/小 Range 主动绕过 Scheduler 的策略，Always 则仍需宣告。
+        if self.should_bypass_scheduler(&request, task.content_length().unwrap_or_default()) {
+            return;
+        }
+
+        // 请求分片已齐不代表整个文件已齐，保留 Range 并发送普通 Peer 完成事件。
+        // 不冒充回源完成；Task 的状态恢复交由 Scheduler 依据完整性处理。
+        let result = tokio::time::timeout(
+            REQUEST_TIMEOUT,
+            self.announce_completed_peer(task, host_id, peer_id, request, false),
+        )
+        .await;
+        match result {
+            Ok(Ok(())) => info!(
+                task_id = %task.id,
+                peer_id,
+                "announced local cache hit"
+            ),
+            Ok(Err(err)) => warn!(
+                task_id = %task.id,
+                peer_id,
+                "announce local cache hit failed: {err}"
+            ),
+            Err(err) => warn!(
+                task_id = %task.id,
+                peer_id,
+                "announce local cache hit timed out: {err}"
+            ),
+        }
     }
 
     /// Reports a successful source fallback without changing the download result.
