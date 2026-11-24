@@ -502,19 +502,23 @@ pub async fn http_handler(
                 .await;
         }
 
-        // If the request is a HEAD request, proxy the request directly to the remote server,
-        // and respond with the task metadata if the remote server is unavailable.
+        // If the request is a HEAD request for the blob or the manifest referenced by the
+        // digest, proxy the request directly to the remote server, and respond with the task
+        // metadata if the remote server is unavailable.
         if request.method() == Method::HEAD {
-            return proxy_head_via_dfdaemon(
-                config.clone(),
-                task,
-                rule,
-                request,
-                remote_ip,
-                http_client,
-                https_client,
-            )
-            .await;
+            let url = request_uri.to_string();
+            if is_blob_digest_url(&url) || is_manifest_digest_url(&url) {
+                return proxy_head_via_dfdaemon(
+                    config.clone(),
+                    task,
+                    rule,
+                    request,
+                    remote_ip,
+                    http_client,
+                    https_client,
+                )
+                .await;
+            }
         }
 
         debug!(
@@ -804,19 +808,23 @@ pub async fn upgraded_handler(
                 .await;
         }
 
-        // If the request is a HEAD request, proxy the request directly to the remote server,
-        // and respond with the task metadata if the remote server is unavailable.
+        // If the request is a HEAD request for the blob or the manifest referenced by the
+        // digest, proxy the request directly to the remote server, and respond with the task
+        // metadata if the remote server is unavailable.
         if request.method() == Method::HEAD {
-            return proxy_head_via_dfdaemon(
-                config.clone(),
-                task,
-                rule,
-                request,
-                remote_ip,
-                http_client,
-                https_client,
-            )
-            .await;
+            let url = request_uri.to_string();
+            if is_blob_digest_url(&url) || is_manifest_digest_url(&url) {
+                return proxy_head_via_dfdaemon(
+                    config.clone(),
+                    task,
+                    rule,
+                    request,
+                    remote_ip,
+                    http_client,
+                    https_client,
+                )
+                .await;
+            }
         }
 
         debug!(
