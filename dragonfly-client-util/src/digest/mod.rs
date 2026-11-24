@@ -30,17 +30,22 @@ pub const SEPARATOR: &str = ":";
 pub const DEFAULT_READ_BUFFER_SIZE: usize = 2 * 1024 * 1024;
 
 /// Regex pattern for OCI blob URLs, e.g. http(s)://<registry>/v2/<repository>/blobs/<digest>.
-static BLOB_URL_REGEX: LazyLock<Regex> =
+static BLOB_DIGEST_URL_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(.*)://(.*)/v2/(.*)/blobs/([^?]+)(?:\?.*)?$").unwrap());
 
 /// Checks if the URL is an OCI blob URL.
-pub fn is_blob_url(url: &str) -> bool {
-    BLOB_URL_REGEX.is_match(url)
+pub fn is_blob_digest_url(url: &str) -> bool {
+    BLOB_DIGEST_URL_REGEX.is_match(url)
 }
 
 /// Regex pattern for OCI manifest URLs, e.g. http(s)://<registry>/v2/<repository>/manifests/<reference>.
 static MANIFEST_URL_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(.*)://(.*?)/v2/(.*)/manifests/([^?]+)(?:\?.*)?$").unwrap());
+
+/// Checks if the URL is an OCI manifest URL.
+pub fn is_manifest_url(url: &str) -> bool {
+    MANIFEST_URL_REGEX.is_match(url)
+}
 
 /// Regex pattern for OCI manifest URLs referenced by a digest, e.g.
 /// http(s)://<registry>/v2/<repository>/manifests/<digest>.
@@ -114,7 +119,7 @@ impl Digest {
 
     /// Extracts the digest from an OCI blob URL, e.g. http(s)://<registry>/v2/<repository>/blobs/<digest>.
     pub fn extract_from_blob_url(url: &str) -> Option<Self> {
-        BLOB_URL_REGEX
+        BLOB_DIGEST_URL_REGEX
             .captures(url)
             .and_then(|caps| caps.get(4))
             .map(|m| m.as_str())?
@@ -267,7 +272,7 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn is_blob_url_matches_oci_blob_urls() {
+    fn is_blob_digest_url_matches_oci_blob_urls() {
         let test_cases = vec![
             (
                 "http://registry.example.com/v2/library/ubuntu/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e",
@@ -286,7 +291,7 @@ mod tests {
         ];
 
         for (url, expected) in test_cases {
-            assert_eq!(is_blob_url(url), expected);
+            assert_eq!(is_blob_digest_url(url), expected);
         }
     }
 
@@ -426,6 +431,30 @@ mod tests {
 
         for (url, expected) in test_cases {
             assert_eq!(Digest::extract_from_manifest_url(url), expected);
+        }
+    }
+
+    #[test]
+    fn is_manifest_url_matches_oci_manifest_urls() {
+        let test_cases = vec![
+            (
+                "http://registry.example.com/v2/library/ubuntu/manifests/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e",
+                true,
+            ),
+            (
+                "http://localhost:5000/v2/myrepo/manifests/latest?ns=docker.io",
+                true,
+            ),
+            (
+                "http://registry.example.com/v2/library/ubuntu/blobs/sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e",
+                false,
+            ),
+            ("http://registry.example.com/manifests/latest", false),
+            ("https://example.com/file.txt", false),
+        ];
+
+        for (url, expected) in test_cases {
+            assert_eq!(is_manifest_url(url), expected);
         }
     }
 

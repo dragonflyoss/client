@@ -32,7 +32,7 @@ use dragonfly_client_metric::{
 };
 use dragonfly_client_storage::metadata;
 use dragonfly_client_util::{
-    digest::{is_blob_url, is_manifest_digest_url},
+    digest::{is_blob_digest_url, is_manifest_digest_url},
     http::{hashmap_to_headermap, headermap_to_hashmap},
     id_generator::{repository_revision, TaskIDParameter},
     shutdown,
@@ -1305,7 +1305,7 @@ async fn proxy_head_via_dfdaemon(
     let task_id = match task_manager.id_generator.task_id(
         if let Some(content) = download.content_for_calculating_task_id.clone() {
             TaskIDParameter::Content(content)
-        } else if download.enable_task_id_based_blob_digest && is_blob_url(&download.url) {
+        } else if download.enable_task_id_based_blob_digest && is_blob_digest_url(&download.url) {
             TaskIDParameter::BlobDigestBased(download.url.clone())
         } else if download.enable_task_id_based_blob_digest && is_manifest_digest_url(&download.url)
         {
