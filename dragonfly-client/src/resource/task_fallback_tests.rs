@@ -107,6 +107,7 @@ macro_rules! scheduler_impl {
 
 scheduler_impl! {
     stat_peer: scheduler::StatPeerRequest => common::Peer,
+    list_peers: scheduler::ListPeersRequest => scheduler::ListPeersResponse,
     delete_peer: scheduler::DeletePeerRequest => (),
     stat_task: scheduler::StatTaskRequest => common::Task,
     delete_task: scheduler::DeleteTaskRequest => (),
