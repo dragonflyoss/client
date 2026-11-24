@@ -703,6 +703,10 @@ pub struct UploadClient {
     /// The client key path with PEM format for the upload client and it is used for
     /// mutual TLS.
     pub key: Option<PathBuf>,
+
+    /// The TLS server name used when verifying the certificate of a peer or seed
+    /// peer. If not configured, the dial host is used as the domain name.
+    pub server_name: Option<String>,
 }
 
 /// Implement UploadClient.
@@ -730,6 +734,8 @@ impl UploadClient {
 
             let ca_cert = fs::read(&ca_cert_path).await?;
             let ca_cert = TonicCertificate::from_pem(ca_cert);
+
+            let domain_name = self.server_name.as_deref().unwrap_or(domain_name);
 
             // TODO(gaius): Use trust_anchor to skip the verify of hostname.
             return Ok(Some(
@@ -890,6 +896,10 @@ pub struct Scheduler {
     /// The client key path with PEM format for the scheduler and it is used for
     /// mutual TLS.
     pub key: Option<PathBuf>,
+
+    /// The TLS server name used when verifying the scheduler certificate. If not
+    /// configured, the dial host is used as the domain name.
+    pub server_name: Option<String>,
 }
 
 /// Implement Default for Scheduler.
@@ -902,6 +912,7 @@ impl Default for Scheduler {
             ca_cert: None,
             cert: None,
             key: None,
+            server_name: None,
         }
     }
 }
@@ -931,6 +942,8 @@ impl Scheduler {
 
             let ca_cert = fs::read(&ca_cert_path).await?;
             let ca_cert = TonicCertificate::from_pem(ca_cert);
+
+            let domain_name = self.server_name.as_deref().unwrap_or(domain_name);
 
             // TODO(gaius): Use trust_anchor to skip the verify of hostname.
             return Ok(Some(
@@ -2114,7 +2127,8 @@ mod tests {
                     "client": {
                         "caCert": "/etc/ssl/certs/ca.crt",
                         "cert": "/etc/ssl/certs/client.crt",
-                        "key": "/etc/ssl/private/client.pem"
+                        "key": "/etc/ssl/private/client.pem",
+                        "serverName": "peer.example.com"
                     },
                     "disableShared": false,
                     "bandwidthLimit": "10GB"
@@ -2148,6 +2162,10 @@ mod tests {
                         upload.client.key,
                         Some(PathBuf::from("/etc/ssl/private/client.pem"))
                     );
+                    assert_eq!(
+                        upload.client.server_name,
+                        Some("peer.example.com".to_string())
+                    );
                     assert!(!upload.disable_shared);
                     assert_eq!(upload.bandwidth_limit, ByteSize::gb(10));
                 },
@@ -2163,6 +2181,7 @@ mod tests {
                 assert!(upload.client.ca_cert.is_none());
                 assert!(upload.client.cert.is_none());
                 assert!(upload.client.key.is_none());
+                assert!(upload.client.server_name.is_none());
                 assert!(!upload.disable_shared);
                 assert_eq!(upload.bandwidth_limit, ByteSize::gb(50));
             }),
@@ -2254,6 +2273,7 @@ mod tests {
                 ca_cert: ca_cert.clone(),
                 cert: cert.clone(),
                 key: key.clone(),
+                ..Default::default()
             };
             expect(upload_client.load_client_tls_config("example.com").await);
 
@@ -2275,6 +2295,211 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn scheduler_load_client_tls_config_uses_server_name_when_set() {
+        let (ca_file, cert_file, key_file) = temp_certs().await;
+
+        let scheduler_with_server_name = Scheduler {
+            ca_cert: Some(ca_file.path().to_path_buf()),
+            cert: Some(cert_file.path().to_path_buf()),
+            key: Some(key_file.path().to_path_buf()),
+            server_name: Some("custom-scheduler.example.com".to_string()),
+            ..Default::default()
+        };
+        let tls_config = scheduler_with_server_name
+            .load_client_tls_config("127.0.0.1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(format!("{tls_config:?}").contains("custom-scheduler.example.com"));
+        assert!(!format!("{tls_config:?}").contains("127.0.0.1"));
+
+        let scheduler_without_server_name = Scheduler {
+            ca_cert: Some(ca_file.path().to_path_buf()),
+            cert: Some(cert_file.path().to_path_buf()),
+            key: Some(key_file.path().to_path_buf()),
+            server_name: None,
+            ..Default::default()
+        };
+        let tls_config = scheduler_without_server_name
+            .load_client_tls_config("127.0.0.1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(format!("{tls_config:?}").contains("127.0.0.1"));
+    }
+
+    #[tokio::test]
+    async fn upload_client_load_client_tls_config_uses_server_name_when_set() {
+        let (ca_file, cert_file, key_file) = temp_certs().await;
+
+        let upload_client_with_server_name = UploadClient {
+            ca_cert: Some(ca_file.path().to_path_buf()),
+            cert: Some(cert_file.path().to_path_buf()),
+            key: Some(key_file.path().to_path_buf()),
+            server_name: Some("custom-peer.example.com".to_string()),
+        };
+        let tls_config = upload_client_with_server_name
+            .load_client_tls_config("127.0.0.1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(format!("{tls_config:?}").contains("custom-peer.example.com"));
+        assert!(!format!("{tls_config:?}").contains("127.0.0.1"));
+
+        let upload_client_without_server_name = UploadClient {
+            ca_cert: Some(ca_file.path().to_path_buf()),
+            cert: Some(cert_file.path().to_path_buf()),
+            key: Some(key_file.path().to_path_buf()),
+            server_name: None,
+        };
+        let tls_config = upload_client_without_server_name
+            .load_client_tls_config("127.0.0.1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(format!("{tls_config:?}").contains("127.0.0.1"));
+    }
+
+    /// Writes a CA, a server certificate with the given DNS SANs only, and a client
+    /// certificate, all signed by the CA, and returns their PEM files.
+    fn write_mtls_certs(server_dns_names: Vec<String>) -> MtlsCerts {
+        let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new());
+        ca_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "test-ca");
+        ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let ca = Certificate::from_params(ca_params).unwrap();
+
+        let leaf = |sans: Vec<String>, common_name: &str| {
+            let mut params = rcgen::CertificateParams::new(sans);
+            params
+                .distinguished_name
+                .push(rcgen::DnType::CommonName, common_name);
+            let cert = Certificate::from_params(params).unwrap();
+            (
+                cert.serialize_pem_with_signer(&ca).unwrap(),
+                cert.serialize_private_key_pem(),
+            )
+        };
+        let (server_cert, server_key) = leaf(server_dns_names, "test-server");
+        let (client_cert, client_key) = leaf(Vec::new(), "test-client");
+
+        let write = |content: String| {
+            let file = NamedTempFile::new().unwrap();
+            std::fs::write(file.path(), content).unwrap();
+            file
+        };
+        MtlsCerts {
+            ca_cert: write(ca.serialize_pem().unwrap()),
+            server_cert: write(server_cert),
+            server_key: write(server_key),
+            client_cert: write(client_cert),
+            client_key: write(client_key),
+        }
+    }
+
+    struct MtlsCerts {
+        ca_cert: NamedTempFile,
+        server_cert: NamedTempFile,
+        server_key: NamedTempFile,
+        client_cert: NamedTempFile,
+        client_key: NamedTempFile,
+    }
+
+    /// Starts a gRPC server on 127.0.0.1 with the given server TLS config and returns
+    /// the address it listens on.
+    async fn serve_tls(server: &UploadServer) -> std::net::SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let tls_config = server.load_server_tls_config().await.unwrap().unwrap();
+        let (_, health_service) = tonic_health::server::health_reporter();
+        tokio::spawn(
+            tonic::transport::Server::builder()
+                .tls_config(tls_config)
+                .unwrap()
+                .add_service(health_service)
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
+        );
+        addr
+    }
+
+    /// Dials the server by IP with the given client TLS config and reports whether
+    /// the TLS handshake and a health check request succeed.
+    async fn handshake(addr: std::net::SocketAddr, tls_config: ClientTlsConfig) -> bool {
+        let channel = match tonic::transport::Endpoint::from_shared(format!("https://{addr}"))
+            .unwrap()
+            .tls_config(tls_config)
+            .unwrap()
+            .connect()
+            .await
+        {
+            Ok(channel) => channel,
+            Err(_) => return false,
+        };
+
+        tonic_health::pb::health_client::HealthClient::new(channel)
+            .check(tonic_health::pb::HealthCheckRequest::default())
+            .await
+            .is_ok()
+    }
+
+    #[tokio::test]
+    async fn load_client_tls_config_verifies_dns_only_certificate_by_server_name() {
+        let certs = write_mtls_certs(vec!["dfdaemon.example.com".to_string()]);
+        let addr = serve_tls(&UploadServer {
+            ca_cert: Some(certs.ca_cert.path().to_path_buf()),
+            cert: Some(certs.server_cert.path().to_path_buf()),
+            key: Some(certs.server_key.path().to_path_buf()),
+            ..Default::default()
+        })
+        .await;
+        let dial_host = addr.ip().to_string();
+
+        let test_cases = vec![
+            (None, false),
+            (Some("dfdaemon.example.com".to_string()), true),
+            (Some("other.example.com".to_string()), false),
+        ];
+
+        for (server_name, expected) in test_cases {
+            let scheduler = Scheduler {
+                ca_cert: Some(certs.ca_cert.path().to_path_buf()),
+                cert: Some(certs.client_cert.path().to_path_buf()),
+                key: Some(certs.client_key.path().to_path_buf()),
+                server_name: server_name.clone(),
+                ..Default::default()
+            };
+            let tls_config = scheduler
+                .load_client_tls_config(&dial_host)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                handshake(addr, tls_config).await,
+                expected,
+                "scheduler with server name {server_name:?}"
+            );
+
+            let upload_client = UploadClient {
+                ca_cert: Some(certs.ca_cert.path().to_path_buf()),
+                cert: Some(certs.client_cert.path().to_path_buf()),
+                key: Some(certs.client_key.path().to_path_buf()),
+                server_name: server_name.clone(),
+            };
+            let tls_config = upload_client
+                .load_client_tls_config(&dial_host)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                handshake(addr, tls_config).await,
+                expected,
+                "upload client with server name {server_name:?}"
+            );
+        }
+    }
+
     #[test]
     fn scheme_is_https_only_with_all_pem_paths() {
         let pem = Some(PathBuf::from("/etc/tls/tls.pem"));
@@ -2291,6 +2516,7 @@ mod tests {
                 ca_cert: ca_cert.clone(),
                 cert: cert.clone(),
                 key: key.clone(),
+                ..Default::default()
             };
             assert_eq!(upload_client.scheme(), expected);
 
@@ -2347,7 +2573,8 @@ mod tests {
                     "maxScheduleCount": 3,
                     "caCert": "/etc/ssl/certs/ca.crt",
                     "cert": "/etc/ssl/certs/client.crt",
-                    "key": "/etc/ssl/private/client.pem"
+                    "key": "/etc/ssl/private/client.pem",
+                    "serverName": "scheduler.example.com"
                 }"#,
                 |scheduler| {
                     assert_eq!(scheduler.announce_interval, Duration::from_secs(30));
@@ -2365,6 +2592,10 @@ mod tests {
                         scheduler.key,
                         Some(PathBuf::from("/etc/ssl/private/client.pem"))
                     );
+                    assert_eq!(
+                        scheduler.server_name,
+                        Some("scheduler.example.com".to_string())
+                    );
                 },
             ),
             ("{}", |scheduler| {
@@ -2374,6 +2605,7 @@ mod tests {
                 assert!(scheduler.ca_cert.is_none());
                 assert!(scheduler.cert.is_none());
                 assert!(scheduler.key.is_none());
+                assert!(scheduler.server_name.is_none());
             }),
         ];
 

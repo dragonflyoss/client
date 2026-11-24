@@ -35,3 +35,7 @@ hostname.workspace = true
 humantime-serde.workspace = true
 home = "0.5.11"
 http-serde = "2.1.1"
+
+[dev-dependencies]
+tonic-health.workspace = true
+tokio-stream = { workspace = true, features = ["net"] }
