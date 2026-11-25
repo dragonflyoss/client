@@ -186,6 +186,14 @@ struct Args {
     recursive: bool,
 
     #[arg(
+        long = "mkdir",
+        default_value_t = false,
+        env = "DFGET_MKDIR",
+        help = "Specify whether to create the output directory and its parents if it does not exist. It can only be used when downloading a directory. If the output path exists and is not a directory, an error is returned"
+    )]
+    mkdir: bool,
+
+    #[arg(
         long = "timeout",
         value_parser= humantime::parse_duration,
         default_value = "2h",
@@ -1293,17 +1301,28 @@ fn convert_args(mut args: Args) -> Args {
 /// The validation prevents common user errors and potential security issues before
 /// starting the download process.
 fn validate_args(args: &Args) -> Result<()> {
-    // If the URL is a directory, the output path should be a directory.
+    // If the URL is a directory, the output path should be a directory. When the `mkdir` is
+    // specified, the missing output directory is created with its parents, and an existing
+    // non-directory is never replaced.
     if args.url.path().ends_with('/') && !args.output.is_dir() {
-        return Err(Error::ValidationError(format!(
-            "output path {} is not a directory",
-            args.output.to_string_lossy()
-        )));
+        if args.mkdir && !args.output.exists() {
+            std::fs::create_dir_all(&args.output)?;
+        } else {
+            return Err(Error::ValidationError(format!(
+                "output path {} is not a directory",
+                args.output.to_string_lossy()
+            )));
+        }
     }
 
     // If the URL is a file, the output path should be a file and the parent directory should
     // exist.
     if !args.url.path().ends_with('/') {
+        if args.mkdir {
+            return Err(Error::ValidationError(
+                "--mkdir can only be used when downloading a directory, please use --recursive or a url ending with '/'".to_string(),
+            ));
+        }
         let absolute_path = Path::new(&args.output).absolutize()?;
         match absolute_path.parent() {
             Some(parent_path) => {
@@ -1686,6 +1705,60 @@ mod tests {
                 expected.map_err(|err| err.to_string())
             );
         }
+    }
+
+    #[test]
+    fn validate_args_creates_output_directory_with_mkdir() {
+        let tempdir = tempdir().unwrap();
+        let output_dir = tempdir.path().to_str().unwrap();
+        let nested_dir = format!("{output_dir}/missing/nested");
+        let existing_file = format!("{output_dir}/existing.txt");
+        std::fs::File::create(&existing_file).unwrap();
+
+        let args = Args::parse_from([
+            "dfget",
+            "http://test.local/test-dir/",
+            "--output",
+            nested_dir.as_str(),
+            "--mkdir",
+        ]);
+        assert!(validate_args(&args).is_ok());
+        assert!(Path::new(&nested_dir).is_dir());
+
+        let args = Args::parse_from([
+            "dfget",
+            "http://test.local/test-dir/",
+            "--output",
+            output_dir,
+            "--mkdir",
+        ]);
+        assert!(validate_args(&args).is_ok());
+
+        let args = Args::parse_from([
+            "dfget",
+            "http://test.local/test-dir/",
+            "--output",
+            existing_file.as_str(),
+            "--mkdir",
+        ]);
+        assert!(matches!(
+            validate_args(&args),
+            Err(Error::ValidationError(message)) if message.contains("is not a directory")
+        ));
+        assert!(Path::new(&existing_file).is_file());
+
+        let args = Args::parse_from([
+            "dfget",
+            "http://test.local/test.txt",
+            "--output",
+            output_dir,
+            "--mkdir",
+        ]);
+        assert!(matches!(
+            validate_args(&args),
+            Err(Error::ValidationError(message))
+                if message.contains("--mkdir can only be used when downloading a directory")
+        ));
     }
 
     #[test]
