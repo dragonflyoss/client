@@ -23,6 +23,9 @@ use dragonfly_api::dfdaemon::v2::{
     download_task_response, DownloadTaskRequest, DownloadTaskStartedResponse,
 };
 use dragonfly_api::errordetails::v2::Backend;
+use dragonfly_api::scheduler::v2::{
+    AnnounceImageManifestRequest, StatImageManifestRequest, StatImageManifestResponse,
+};
 use dragonfly_client_config::dfdaemon::{Config, Rule};
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
@@ -32,9 +35,9 @@ use dragonfly_client_metric::{
 };
 use dragonfly_client_storage::metadata;
 use dragonfly_client_util::{
-    digest::{is_blob_digest_url, is_manifest_digest_url},
+    digest::{is_blob_digest_url, is_manifest_digest_url, is_manifest_url, Algorithm, Digest},
     http::{hashmap_to_headermap, headermap_to_hashmap},
-    id_generator::{repository_revision, TaskIDParameter},
+    id_generator::{repository_revision, ImageIDParameter, TaskIDParameter},
     shutdown,
     tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
     types::redacted::RedactedHTTPProxyRequest,
@@ -73,6 +76,10 @@ static SUPPORTED_HTTP_PROTOCOLS: LazyLock<Vec<Vec<u8>>> =
 
 /// The default timeout for proxying the request directly to the remote server.
 const DEFAULT_PROXY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The header of the digest of the manifest in the response of the registry, refer to
+/// https://github.com/opencontainers/distribution-spec/blob/main/spec.md#pulling-manifests.
+const DOCKER_CONTENT_DIGEST_HEADER: &str = "docker-content-digest";
 
 /// Response type for the proxy server.
 pub type Response = hyper::Response<BoxBody<Bytes, ClientError>>;
@@ -484,6 +491,15 @@ pub async fn http_handler(
         }
     }
 
+    // If the image manifest cache is enabled and the request is a HEAD request for the
+    // manifest referenced by the tag, proxy the request via the scheduler.
+    if config.proxy.manifest_cache.enable && request.method() == Method::HEAD {
+        let url = request.uri().to_string();
+        if is_manifest_url(&url) && !is_manifest_digest_url(&url) {
+            return proxy_head_via_scheduler(task, url, request, http_client, https_client).await;
+        }
+    }
+
     // If find the matching rule, proxy the request via the dfdaemon.
     // Only GET requests are routed to P2P; other methods (HEAD/PUT/POST/DELETE)
     // fall through to direct proxy to avoid data loss.
@@ -784,6 +800,15 @@ pub async fn upgraded_handler(
             )
             .build()
             .or_err(ErrorType::ParseError)?;
+    }
+
+    // If the image manifest cache is enabled and the request is a HEAD request for the
+    // manifest referenced by the tag, proxy the request via the scheduler.
+    if config.proxy.manifest_cache.enable && request.method() == Method::HEAD {
+        let url = request.uri().to_string();
+        if is_manifest_url(&url) && !is_manifest_digest_url(&url) {
+            return proxy_head_via_scheduler(task, url, request, http_client, https_client).await;
+        }
     }
 
     // If find the matching rule, proxy the request via the dfdaemon.
@@ -1378,6 +1403,85 @@ async fn proxy_head_via_dfdaemon(
     proxy_via_http(request, http_client).await
 }
 
+/// Proxies the HEAD request for the manifest referenced by the tag via the scheduler. It
+/// proxies the request directly to the remote server first, and announces the image
+/// manifest that the tag is resolved to by the remote server to the scheduler. If the
+/// remote server is unavailable, it responds with the image manifest announced to the
+/// scheduler.
+#[instrument(skip_all)]
+async fn proxy_head_via_scheduler(
+    task_manager: Arc<Task>,
+    url: String,
+    request: Request<hyper::body::Incoming>,
+    http_client: Client<HttpConnector, hyper::body::Incoming>,
+    https_client: Client<hyper_rustls::HttpsConnector<HttpConnector>, hyper::body::Incoming>,
+) -> ClientResult<Response> {
+    // Proxy the request directly to the remote server.
+    let response = if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
+        proxy_via_https(request, https_client).await
+    } else {
+        proxy_via_http(request, http_client).await
+    };
+
+    // Get the canonical reference of the image, it is the key of the image manifest in
+    // the scheduler.
+    let reference = match task_manager
+        .id_generator
+        .image_reference(ImageIDParameter::ManifestURLBased(url))
+    {
+        Ok(reference) => reference,
+        Err(err) => {
+            error!("get image reference failed: {}", err);
+            return response;
+        }
+    };
+
+    // If the remote server is available, announce the image manifest that the tag is
+    // resolved to and return the response directly.
+    let host_id = task_manager.id_generator.host_id();
+    match &response {
+        Ok(remote_response) if !remote_response.status().is_server_error() => {
+            if let Some(request) = make_announce_image_manifest_request(
+                host_id,
+                reference,
+                remote_response.status(),
+                remote_response.headers(),
+            ) {
+                let scheduler_client = task_manager.scheduler_client.clone();
+                tokio::spawn(
+                    async move {
+                        if let Err(err) = scheduler_client.announce_image_manifest(request).await {
+                            warn!("announce image manifest failed: {}", err);
+                        }
+                    }
+                    .in_current_span(),
+                );
+            }
+
+            return response;
+        }
+        _ => {}
+    }
+
+    // Stat the image manifest that the tag is resolved to from the scheduler. If the
+    // scheduler does not have it, return the response of the remote server.
+    info!("remote server is unavailable, stat image manifest from scheduler");
+    let image_manifest = match task_manager
+        .scheduler_client
+        .stat_image_manifest(StatImageManifestRequest { host_id, reference })
+        .await
+    {
+        Ok(image_manifest) => image_manifest,
+        Err(err) => {
+            warn!("stat image manifest from scheduler failed: {}", err);
+            return response;
+        }
+    };
+
+    info!("remote server is unavailable, respond with the image manifest");
+    make_image_manifest_response(&image_manifest)
+}
+
 /// Proxies the HTTP request directly to the remote server.
 #[instrument(level = "debug", skip_all)]
 async fn proxy_via_http(
@@ -1697,6 +1801,83 @@ fn empty() -> BoxBody<Bytes, ClientError> {
         .boxed()
 }
 
+/// Makes the announce image manifest request by the response of the HEAD request for the
+/// manifest referenced by the tag. It returns None if the response does not resolve the
+/// tag, i.e. the status is not successful, or the digest, the media type or the content
+/// length is missing or invalid.
+fn make_announce_image_manifest_request(
+    host_id: String,
+    reference: String,
+    status: http::StatusCode,
+    header: &http::HeaderMap,
+) -> Option<AnnounceImageManifestRequest> {
+    if !status.is_success() {
+        return None;
+    }
+
+    // The scheduler only accepts the sha256 or sha512 digest of the image manifest.
+    let digest: Digest = header
+        .get(DOCKER_CONTENT_DIGEST_HEADER)?
+        .to_str()
+        .ok()?
+        .parse()
+        .ok()?;
+    if !matches!(digest.algorithm(), Algorithm::Sha256 | Algorithm::Sha512) {
+        return None;
+    }
+
+    let media_type = header.get(reqwest::header::CONTENT_TYPE)?.to_str().ok()?;
+    if media_type.is_empty() {
+        return None;
+    }
+
+    let content_length = header
+        .get(reqwest::header::CONTENT_LENGTH)?
+        .to_str()
+        .ok()?
+        .parse()
+        .ok()?;
+
+    Some(AnnounceImageManifestRequest {
+        host_id,
+        reference,
+        digest: digest.to_string(),
+        media_type: media_type.to_string(),
+        content_length,
+    })
+}
+
+/// Makes the response of the HEAD request for the manifest referenced by the tag by the
+/// image manifest. The digest, the media type and the content length in the header are
+/// all that containerd needs to resolve the tag, refer to
+/// https://github.com/containerd/containerd/blob/main/core/remotes/docker/resolver.go.
+fn make_image_manifest_response(
+    image_manifest: &StatImageManifestResponse,
+) -> ClientResult<Response> {
+    let mut response = Response::new(empty());
+    let header = response.headers_mut();
+    header.insert(
+        DOCKER_CONTENT_DIGEST_HEADER,
+        image_manifest
+            .digest
+            .parse()
+            .or_err(ErrorType::ParseError)?,
+    );
+    header.insert(
+        reqwest::header::CONTENT_TYPE,
+        image_manifest
+            .media_type
+            .parse()
+            .or_err(ErrorType::ParseError)?,
+    );
+    header.insert(
+        reqwest::header::CONTENT_LENGTH,
+        image_manifest.content_length.into(),
+    );
+
+    Ok(response)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::type_complexity)]
@@ -1971,6 +2152,132 @@ mod tests {
             );
 
             expect(response.headers());
+        }
+    }
+
+    #[test]
+    fn make_announce_image_manifest_request_requires_a_resolved_tag() {
+        const DIGEST: &str =
+            "sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e";
+        const MEDIA_TYPE: &str = "application/vnd.oci.image.index.v1+json";
+        let test_cases: Vec<(
+            u16,
+            Vec<(&str, &str)>,
+            fn(Option<AnnounceImageManifestRequest>),
+        )> = vec![
+            (
+                200,
+                vec![
+                    (DOCKER_CONTENT_DIGEST_HEADER, DIGEST),
+                    ("content-type", MEDIA_TYPE),
+                    ("content-length", "855"),
+                ],
+                |request| {
+                    let request = request.unwrap();
+                    assert_eq!(request.host_id, "127.0.0.1-localhost");
+                    assert_eq!(request.reference, "docker.io/library/nginx:latest");
+                    assert_eq!(request.digest, DIGEST);
+                    assert_eq!(request.media_type, MEDIA_TYPE);
+                    assert_eq!(request.content_length, 855);
+                },
+            ),
+            (
+                404,
+                vec![
+                    (DOCKER_CONTENT_DIGEST_HEADER, DIGEST),
+                    ("content-type", MEDIA_TYPE),
+                    ("content-length", "855"),
+                ],
+                |request| assert!(request.is_none()),
+            ),
+            (
+                200,
+                vec![("content-type", MEDIA_TYPE), ("content-length", "855")],
+                |request| assert!(request.is_none()),
+            ),
+            (
+                200,
+                vec![
+                    (DOCKER_CONTENT_DIGEST_HEADER, "crc32:1a2b3c4d"),
+                    ("content-type", MEDIA_TYPE),
+                    ("content-length", "855"),
+                ],
+                |request| assert!(request.is_none()),
+            ),
+            (
+                200,
+                vec![
+                    (DOCKER_CONTENT_DIGEST_HEADER, DIGEST),
+                    ("content-length", "855"),
+                ],
+                |request| assert!(request.is_none()),
+            ),
+            (
+                200,
+                vec![
+                    (DOCKER_CONTENT_DIGEST_HEADER, DIGEST),
+                    ("content-type", MEDIA_TYPE),
+                ],
+                |request| assert!(request.is_none()),
+            ),
+        ];
+
+        for (status, header, expect) in test_cases {
+            let header: http::HeaderMap = header
+                .into_iter()
+                .map(|(name, value)| {
+                    (
+                        http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                        http::HeaderValue::from_str(value).unwrap(),
+                    )
+                })
+                .collect();
+
+            expect(make_announce_image_manifest_request(
+                "127.0.0.1-localhost".to_string(),
+                "docker.io/library/nginx:latest".to_string(),
+                http::StatusCode::from_u16(status).unwrap(),
+                &header,
+            ));
+        }
+    }
+
+    #[test]
+    fn make_image_manifest_response_sets_the_headers_of_the_image_manifest() {
+        let test_cases: Vec<(&str, &str, u64, fn(ClientResult<Response>))> =
+            vec![
+                (
+                    "sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e",
+                    "application/vnd.oci.image.index.v1+json",
+                    855,
+                    |response| {
+                        let response = response.unwrap();
+                        assert_eq!(response.status(), http::StatusCode::OK);
+                        assert_eq!(
+                        response.headers().get(DOCKER_CONTENT_DIGEST_HEADER).unwrap(),
+                        "sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e"
+                    );
+                        assert_eq!(
+                            response.headers().get("content-type").unwrap(),
+                            "application/vnd.oci.image.index.v1+json"
+                        );
+                        assert_eq!(response.headers().get("content-length").unwrap(), "855");
+                    },
+                ),
+                (
+                    "sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e",
+                    "application/vnd.oci.image.index.v1+json\n",
+                    855,
+                    |response| assert!(response.is_err()),
+                ),
+            ];
+
+        for (digest, media_type, content_length, expect) in test_cases {
+            expect(make_image_manifest_response(&StatImageManifestResponse {
+                digest: digest.to_string(),
+                media_type: media_type.to_string(),
+                content_length,
+            }));
         }
     }
 }

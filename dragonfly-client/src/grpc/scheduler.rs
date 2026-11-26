@@ -21,14 +21,14 @@ use dragonfly_api::common::v2::{
 use dragonfly_api::manager::v2::Scheduler;
 use dragonfly_api::scheduler::v2::{
     scheduler_client::SchedulerClient as SchedulerGRPCClient, AnnounceHostRequest,
-    AnnouncePeerRequest, AnnouncePeerResponse, AnnouncePersistentCachePeerRequest,
-    AnnouncePersistentCachePeerResponse, AnnouncePersistentPeerRequest,
-    AnnouncePersistentPeerResponse, DeleteHostRequest, DeletePeerRequest,
-    DeletePersistentCachePeerRequest, DeletePersistentCacheTaskRequest,
+    AnnounceImageManifestRequest, AnnouncePeerRequest, AnnouncePeerResponse,
+    AnnouncePersistentCachePeerRequest, AnnouncePersistentCachePeerResponse,
+    AnnouncePersistentPeerRequest, AnnouncePersistentPeerResponse, DeleteHostRequest,
+    DeletePeerRequest, DeletePersistentCachePeerRequest, DeletePersistentCacheTaskRequest,
     DeletePersistentPeerRequest, DeletePersistentTaskRequest, DeleteTaskRequest, ListPeersRequest,
-    ListPeersResponse, StatPeerRequest, StatPersistentCachePeerRequest,
-    StatPersistentCacheTaskRequest, StatPersistentPeerRequest, StatPersistentTaskRequest,
-    StatTaskRequest, UploadPersistentCacheTaskFailedRequest,
+    ListPeersResponse, StatImageManifestRequest, StatImageManifestResponse, StatPeerRequest,
+    StatPersistentCachePeerRequest, StatPersistentCacheTaskRequest, StatPersistentPeerRequest,
+    StatPersistentTaskRequest, StatTaskRequest, UploadPersistentCacheTaskFailedRequest,
     UploadPersistentCacheTaskFinishedRequest, UploadPersistentCacheTaskStartedRequest,
     UploadPersistentTaskFailedRequest, UploadPersistentTaskFinishedRequest,
     UploadPersistentTaskStartedRequest,
@@ -200,6 +200,37 @@ impl SchedulerClient {
             .list_peers(request)
             .await?;
         Ok(response.into_inner())
+    }
+
+    /// Stats the image manifest that the tag of the image is resolved to.
+    #[instrument(level = "debug", skip(self))]
+    pub async fn stat_image_manifest(
+        &self,
+        request: StatImageManifestRequest,
+    ) -> Result<StatImageManifestResponse> {
+        let reference = request.reference.clone();
+        let request = Self::make_request(request);
+        let response = self
+            .client(reference.as_str(), None)
+            .await?
+            .stat_image_manifest(request)
+            .await?;
+        Ok(response.into_inner())
+    }
+
+    /// Announces the image manifest that the tag of the image is resolved to.
+    #[instrument(level = "debug", skip(self))]
+    pub async fn announce_image_manifest(
+        &self,
+        request: AnnounceImageManifestRequest,
+    ) -> Result<()> {
+        let reference = request.reference.clone();
+        let request = Self::make_request(request);
+        self.client(reference.as_str(), None)
+            .await?
+            .announce_image_manifest(request)
+            .await?;
+        Ok(())
     }
 
     /// Announces the host to the scheduler.
