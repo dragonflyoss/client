@@ -9,6 +9,9 @@ keywords.workspace = true
 license.workspace = true
 edition.workspace = true
 
+[features]
+fips = ["dragonfly-client-util/fips", "quinn/rustls-aws-lc-rs-fips"]
+
 [dependencies]
 dragonfly-client-core.workspace = true
 dragonfly-client-config.workspace = true
