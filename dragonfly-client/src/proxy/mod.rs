@@ -33,7 +33,7 @@ use dragonfly_client_metric::{
 };
 use dragonfly_client_storage::metadata;
 use dragonfly_client_util::{
-    digest::{is_blob_digest_url, is_manifest_digest_url, is_manifest_url, Algorithm, Digest},
+    digest::{is_blob_digest_url, is_manifest_digest_url, is_manifest_url},
     http::{hashmap_to_headermap, headermap_to_hashmap},
     id_generator::{repository_revision, ImageIDParameter, TaskIDParameter},
     shutdown,
@@ -1485,20 +1485,38 @@ async fn proxy_head_manifest_tag_via_scheduler(
     // Announce the image manifest that the tag is resolved to by the remote server to the
     // scheduler.
     if let Ok(remote_response) = &response {
-        if let Some(request) = make_announce_manifest_tag_request(
-            host_id,
-            reference,
-            remote_response.status(),
-            remote_response.headers(),
-        ) {
-            let scheduler_client = task_manager.scheduler_client.clone();
-            tokio::spawn(
-                async move {
-                    if let Err(err) = scheduler_client.announce_manifest_tag(request).await {
-                        warn!("announce manifest tag failed: {}", err);
+        if remote_response.status().is_success() {
+            let header = remote_response.headers();
+            if let (Some(digest), Some(media_type), Some(content_length)) = (
+                header::get_docker_content_digest(header),
+                header::get_content_type(header),
+                header::get_content_length(header),
+            ) {
+                let request = AnnounceManifestTagRequest {
+                    host_id,
+                    reference,
+                    digest: digest.to_string(),
+                    media_type,
+                    content_length,
+                };
+                let scheduler_client = task_manager.scheduler_client.clone();
+                tokio::spawn(
+                    async move {
+                        if let Err(err) = scheduler_client.announce_manifest_tag(request).await {
+                            warn!("announce manifest tag failed: {}", err);
+                        }
                     }
-                }
-                .in_current_span(),
+                    .in_current_span(),
+                );
+            } else {
+                warn!(
+                    "manifest tag is not announced, the response header does not resolve the tag"
+                );
+            }
+        } else {
+            warn!(
+                "manifest tag is not announced, the remote server responds with status {}",
+                remote_response.status()
             );
         }
     }
@@ -1825,52 +1843,6 @@ fn empty() -> BoxBody<Bytes, ClientError> {
         .boxed()
 }
 
-/// Makes the announce manifest tag request by the response of the HEAD request for the
-/// manifest referenced by the tag. It returns None if the response does not resolve the
-/// tag, i.e. the status is not successful, or the digest, the media type or the content
-/// length is missing or invalid.
-fn make_announce_manifest_tag_request(
-    host_id: String,
-    reference: String,
-    status: http::StatusCode,
-    header: &http::HeaderMap,
-) -> Option<AnnounceManifestTagRequest> {
-    if !status.is_success() {
-        return None;
-    }
-
-    // The scheduler only accepts the sha256 or sha512 digest of the image manifest.
-    let digest: Digest = header
-        .get(header::DOCKER_CONTENT_DIGEST_HEADER)?
-        .to_str()
-        .ok()?
-        .parse()
-        .ok()?;
-    if !matches!(digest.algorithm(), Algorithm::Sha256 | Algorithm::Sha512) {
-        return None;
-    }
-
-    let media_type = header.get(reqwest::header::CONTENT_TYPE)?.to_str().ok()?;
-    if media_type.is_empty() {
-        return None;
-    }
-
-    let content_length = header
-        .get(reqwest::header::CONTENT_LENGTH)?
-        .to_str()
-        .ok()?
-        .parse()
-        .ok()?;
-
-    Some(AnnounceManifestTagRequest {
-        host_id,
-        reference,
-        digest: digest.to_string(),
-        media_type: media_type.to_string(),
-        content_length,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::type_complexity)]
@@ -2145,93 +2117,6 @@ mod tests {
             );
 
             expect(response.headers());
-        }
-    }
-
-    #[test]
-    fn make_announce_manifest_tag_request_requires_a_resolved_tag() {
-        const DIGEST: &str =
-            "sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e";
-        const MEDIA_TYPE: &str = "application/vnd.oci.image.index.v1+json";
-        let test_cases: Vec<(
-            u16,
-            Vec<(&str, &str)>,
-            fn(Option<AnnounceManifestTagRequest>),
-        )> = vec![
-            (
-                200,
-                vec![
-                    (header::DOCKER_CONTENT_DIGEST_HEADER, DIGEST),
-                    ("content-type", MEDIA_TYPE),
-                    ("content-length", "855"),
-                ],
-                |request| {
-                    let request = request.unwrap();
-                    assert_eq!(request.host_id, "127.0.0.1-localhost");
-                    assert_eq!(request.reference, "docker.io/library/nginx:latest");
-                    assert_eq!(request.digest, DIGEST);
-                    assert_eq!(request.media_type, MEDIA_TYPE);
-                    assert_eq!(request.content_length, 855);
-                },
-            ),
-            (
-                404,
-                vec![
-                    (header::DOCKER_CONTENT_DIGEST_HEADER, DIGEST),
-                    ("content-type", MEDIA_TYPE),
-                    ("content-length", "855"),
-                ],
-                |request| assert!(request.is_none()),
-            ),
-            (
-                200,
-                vec![("content-type", MEDIA_TYPE), ("content-length", "855")],
-                |request| assert!(request.is_none()),
-            ),
-            (
-                200,
-                vec![
-                    (header::DOCKER_CONTENT_DIGEST_HEADER, "crc32:1a2b3c4d"),
-                    ("content-type", MEDIA_TYPE),
-                    ("content-length", "855"),
-                ],
-                |request| assert!(request.is_none()),
-            ),
-            (
-                200,
-                vec![
-                    (header::DOCKER_CONTENT_DIGEST_HEADER, DIGEST),
-                    ("content-length", "855"),
-                ],
-                |request| assert!(request.is_none()),
-            ),
-            (
-                200,
-                vec![
-                    (header::DOCKER_CONTENT_DIGEST_HEADER, DIGEST),
-                    ("content-type", MEDIA_TYPE),
-                ],
-                |request| assert!(request.is_none()),
-            ),
-        ];
-
-        for (status, header, expect) in test_cases {
-            let header: http::HeaderMap = header
-                .into_iter()
-                .map(|(name, value)| {
-                    (
-                        http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
-                        http::HeaderValue::from_str(value).unwrap(),
-                    )
-                })
-                .collect();
-
-            expect(make_announce_manifest_tag_request(
-                "127.0.0.1-localhost".to_string(),
-                "docker.io/library/nginx:latest".to_string(),
-                http::StatusCode::from_u16(status).unwrap(),
-                &header,
-            ));
         }
     }
 }

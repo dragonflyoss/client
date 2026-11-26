@@ -16,13 +16,14 @@
 
 use bytesize::ByteSize;
 use dragonfly_api::common::v2::{Priority, SchedulingPolicy};
-use reqwest::header::HeaderMap;
+use dragonfly_client_util::digest::Digest;
+use reqwest::header::{HeaderMap, CONTENT_LENGTH, CONTENT_TYPE};
 use std::{fmt, str::FromStr};
 use tracing::error;
 
 /// The header of the digest of the manifest in the response of the registry, refer to
 /// https://github.com/opencontainers/distribution-spec/blob/main/spec.md#pulling-manifests.
-pub const DOCKER_CONTENT_DIGEST_HEADER: &str = "docker-content-digest";
+pub const DOCKER_CONTENT_DIGEST_HEADER: &str = "Docker-Content-Digest";
 
 /// The header key of tag in http request.
 pub const DRAGONFLY_TAG_HEADER: &str = "X-Dragonfly-Tag";
@@ -164,6 +165,54 @@ impl FromStr for ErrorType {
             "dfdaemon" => Ok(ErrorType::Dfdaemon),
             _ => Err(format!("invalid error type: {s}")),
         }
+    }
+}
+
+/// Get Docker-Content-Digest header value to determine the digest of the manifest.
+pub fn get_docker_content_digest(header: &HeaderMap) -> Option<Digest> {
+    match header.get(DOCKER_CONTENT_DIGEST_HEADER) {
+        Some(digest) => match digest.to_str() {
+            Ok(digest) => match digest.parse::<Digest>() {
+                Ok(digest) => Some(digest),
+                Err(err) => {
+                    error!("parse docker content digest from header failed: {}", err);
+                    None
+                }
+            },
+            Err(err) => {
+                error!("get docker content digest from header failed: {}", err);
+                None
+            }
+        },
+        None => None,
+    }
+}
+
+/// Get Content-Type header value to determine the media type of the content.
+pub fn get_content_type(header: &HeaderMap) -> Option<String> {
+    header
+        .get(CONTENT_TYPE)
+        .and_then(|content_type| content_type.to_str().ok())
+        .map(|content_type| content_type.to_string())
+}
+
+/// Get Content-Length header value to determine the length of the content.
+pub fn get_content_length(header: &HeaderMap) -> Option<u64> {
+    match header.get(CONTENT_LENGTH) {
+        Some(content_length) => match content_length.to_str() {
+            Ok(content_length) => match content_length.parse::<u64>() {
+                Ok(content_length) => Some(content_length),
+                Err(err) => {
+                    error!("parse content length from header failed: {}", err);
+                    None
+                }
+            },
+            Err(err) => {
+                error!("get content length from header failed: {}", err);
+                None
+            }
+        },
+        None => None,
     }
 }
 
@@ -386,6 +435,7 @@ mod tests {
     #[test]
     fn string_getters_return_the_header_value() {
         let test_cases: Vec<(&'static str, fn(&HeaderMap) -> Option<String>)> = vec![
+            ("content-type", get_content_type),
             (DRAGONFLY_TAG_HEADER, get_tag),
             (DRAGONFLY_APPLICATION_HEADER, get_application),
             (DRAGONFLY_REGISTRY_HEADER, get_registry),
@@ -405,6 +455,50 @@ mod tests {
 
             headers.insert(name, HeaderValue::from_str("é").unwrap());
             assert_eq!(getter(&headers), None);
+        }
+    }
+
+    #[test]
+    fn get_docker_content_digest_parses_the_header_or_returns_none() {
+        const DIGEST: &str =
+            "sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e";
+        let test_cases = vec![
+            (Some(DIGEST), Some(DIGEST)),
+            (Some("invalid"), None),
+            (Some("é"), None),
+            (None, None),
+        ];
+
+        for (value, expected) in test_cases {
+            let mut headers = HeaderMap::new();
+            if let Some(value) = value {
+                headers.insert(
+                    DOCKER_CONTENT_DIGEST_HEADER,
+                    HeaderValue::from_str(value).unwrap(),
+                );
+            }
+            assert_eq!(
+                get_docker_content_digest(&headers).map(|digest| digest.to_string()),
+                expected.map(str::to_string)
+            );
+        }
+    }
+
+    #[test]
+    fn get_content_length_parses_the_header_or_returns_none() {
+        let test_cases = vec![
+            (Some("855"), Some(855)),
+            (Some("invalid"), None),
+            (Some("é"), None),
+            (None, None),
+        ];
+
+        for (value, expected) in test_cases {
+            let mut headers = HeaderMap::new();
+            if let Some(value) = value {
+                headers.insert(CONTENT_LENGTH, HeaderValue::from_str(value).unwrap());
+            }
+            assert_eq!(get_content_length(&headers), expected);
         }
     }
 
