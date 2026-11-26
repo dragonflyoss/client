@@ -20,6 +20,10 @@ use reqwest::header::HeaderMap;
 use std::{fmt, str::FromStr};
 use tracing::error;
 
+/// The header of the digest of the manifest in the response of the registry, refer to
+/// https://github.com/opencontainers/distribution-spec/blob/main/spec.md#pulling-manifests.
+pub const DOCKER_CONTENT_DIGEST_HEADER: &str = "docker-content-digest";
+
 /// The header key of tag in http request.
 pub const DRAGONFLY_TAG_HEADER: &str = "X-Dragonfly-Tag";
 

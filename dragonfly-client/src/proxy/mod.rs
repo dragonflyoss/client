@@ -23,9 +23,7 @@ use dragonfly_api::dfdaemon::v2::{
     download_task_response, DownloadTaskRequest, DownloadTaskStartedResponse,
 };
 use dragonfly_api::errordetails::v2::Backend;
-use dragonfly_api::scheduler::v2::{
-    AnnounceImageManifestRequest, StatImageManifestRequest, StatImageManifestResponse,
-};
+use dragonfly_api::scheduler::v2::{AnnounceManifestTagRequest, StatManifestTagRequest};
 use dragonfly_client_config::dfdaemon::{Config, Rule};
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
@@ -76,10 +74,6 @@ static SUPPORTED_HTTP_PROTOCOLS: LazyLock<Vec<Vec<u8>>> =
 
 /// The default timeout for proxying the request directly to the remote server.
 const DEFAULT_PROXY_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// The header of the digest of the manifest in the response of the registry, refer to
-/// https://github.com/opencontainers/distribution-spec/blob/main/spec.md#pulling-manifests.
-const DOCKER_CONTENT_DIGEST_HEADER: &str = "docker-content-digest";
 
 /// Response type for the proxy server.
 pub type Response = hyper::Response<BoxBody<Bytes, ClientError>>;
@@ -491,12 +485,19 @@ pub async fn http_handler(
         }
     }
 
-    // If the image manifest cache is enabled and the request is a HEAD request for the
+    // If the manifest tag cache is enabled and the request is a HEAD request for the
     // manifest referenced by the tag, proxy the request via the scheduler.
-    if config.proxy.manifest_cache.enable && request.method() == Method::HEAD {
+    if config.proxy.manifest_tag_cache.enable && request.method() == Method::HEAD {
         let url = request.uri().to_string();
         if is_manifest_url(&url) && !is_manifest_digest_url(&url) {
-            return proxy_head_via_scheduler(task, url, request, http_client, https_client).await;
+            return proxy_head_manifest_tag_via_scheduler(
+                task,
+                url,
+                request,
+                http_client,
+                https_client,
+            )
+            .await;
         }
     }
 
@@ -802,12 +803,19 @@ pub async fn upgraded_handler(
             .or_err(ErrorType::ParseError)?;
     }
 
-    // If the image manifest cache is enabled and the request is a HEAD request for the
+    // If the manifest tag cache is enabled and the request is a HEAD request for the
     // manifest referenced by the tag, proxy the request via the scheduler.
-    if config.proxy.manifest_cache.enable && request.method() == Method::HEAD {
+    if config.proxy.manifest_tag_cache.enable && request.method() == Method::HEAD {
         let url = request.uri().to_string();
         if is_manifest_url(&url) && !is_manifest_digest_url(&url) {
-            return proxy_head_via_scheduler(task, url, request, http_client, https_client).await;
+            return proxy_head_manifest_tag_via_scheduler(
+                task,
+                url,
+                request,
+                http_client,
+                https_client,
+            )
+            .await;
         }
     }
 
@@ -1404,27 +1412,17 @@ async fn proxy_head_via_dfdaemon(
 }
 
 /// Proxies the HEAD request for the manifest referenced by the tag via the scheduler. It
-/// proxies the request directly to the remote server first, and announces the image
-/// manifest that the tag is resolved to by the remote server to the scheduler. If the
-/// remote server is unavailable, it responds with the image manifest announced to the
-/// scheduler.
+/// responds with the image manifest announced to the scheduler first. If the scheduler
+/// does not have it, it proxies the request directly to the remote server, and announces
+/// the image manifest that the tag is resolved to by the remote server to the scheduler.
 #[instrument(skip_all)]
-async fn proxy_head_via_scheduler(
+async fn proxy_head_manifest_tag_via_scheduler(
     task_manager: Arc<Task>,
     url: String,
     request: Request<hyper::body::Incoming>,
     http_client: Client<HttpConnector, hyper::body::Incoming>,
     https_client: Client<hyper_rustls::HttpsConnector<HttpConnector>, hyper::body::Incoming>,
 ) -> ClientResult<Response> {
-    // Proxy the request directly to the remote server.
-    let response = if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
-        proxy_via_https(request, https_client).await
-    } else {
-        proxy_via_http(request, http_client).await
-    };
-
-    // Get the canonical reference of the image, it is the key of the image manifest in
-    // the scheduler.
     let reference = match task_manager
         .id_generator
         .image_reference(ImageIDParameter::ManifestURLBased(url))
@@ -1432,54 +1430,80 @@ async fn proxy_head_via_scheduler(
         Ok(reference) => reference,
         Err(err) => {
             error!("get image reference failed: {}", err);
-            return response;
+            return Ok(make_error_response(
+                header::ErrorType::Proxy,
+                http::StatusCode::BAD_REQUEST,
+                None,
+            ));
         }
     };
 
-    // If the remote server is available, announce the image manifest that the tag is
-    // resolved to and return the response directly.
     let host_id = task_manager.id_generator.host_id();
-    match &response {
-        Ok(remote_response) if !remote_response.status().is_server_error() => {
-            if let Some(request) = make_announce_image_manifest_request(
-                host_id,
-                reference,
-                remote_response.status(),
-                remote_response.headers(),
-            ) {
-                let scheduler_client = task_manager.scheduler_client.clone();
-                tokio::spawn(
-                    async move {
-                        if let Err(err) = scheduler_client.announce_image_manifest(request).await {
-                            warn!("announce image manifest failed: {}", err);
-                        }
-                    }
-                    .in_current_span(),
-                );
-            }
-
-            return response;
-        }
-        _ => {}
-    }
-
-    // Stat the image manifest that the tag is resolved to from the scheduler. If the
-    // scheduler does not have it, return the response of the remote server.
-    info!("remote server is unavailable, stat image manifest from scheduler");
-    let image_manifest = match task_manager
+    match task_manager
         .scheduler_client
-        .stat_image_manifest(StatImageManifestRequest { host_id, reference })
+        .stat_manifest_tag(StatManifestTagRequest {
+            host_id: host_id.clone(),
+            reference: reference.clone(),
+        })
         .await
     {
-        Ok(image_manifest) => image_manifest,
-        Err(err) => {
-            warn!("stat image manifest from scheduler failed: {}", err);
-            return response;
+        Ok(manifest_tag) => {
+            info!("respond with the manifest tag from scheduler");
+            let mut response = Response::new(empty());
+            let header = response.headers_mut();
+            header.insert(
+                header::DOCKER_CONTENT_DIGEST_HEADER,
+                manifest_tag.digest.parse().or_err(ErrorType::ParseError)?,
+            );
+            header.insert(
+                reqwest::header::CONTENT_TYPE,
+                manifest_tag
+                    .media_type
+                    .parse()
+                    .or_err(ErrorType::ParseError)?,
+            );
+            header.insert(
+                reqwest::header::CONTENT_LENGTH,
+                manifest_tag.content_length.into(),
+            );
+
+            return Ok(response);
         }
+        Err(ClientError::TonicStatus(status)) if status.code() == tonic::Code::NotFound => {
+            info!("manifest tag not found in scheduler, proxy to the remote server");
+        }
+        Err(err) => warn!("stat manifest tag from scheduler failed: {}", err),
+    }
+
+    // Proxy the request directly to the remote server.
+    let response = if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
+        proxy_via_https(request, https_client).await
+    } else {
+        proxy_via_http(request, http_client).await
     };
 
-    info!("remote server is unavailable, respond with the image manifest");
-    make_image_manifest_response(&image_manifest)
+    // Announce the image manifest that the tag is resolved to by the remote server to the
+    // scheduler.
+    if let Ok(remote_response) = &response {
+        if let Some(request) = make_announce_manifest_tag_request(
+            host_id,
+            reference,
+            remote_response.status(),
+            remote_response.headers(),
+        ) {
+            let scheduler_client = task_manager.scheduler_client.clone();
+            tokio::spawn(
+                async move {
+                    if let Err(err) = scheduler_client.announce_manifest_tag(request).await {
+                        warn!("announce manifest tag failed: {}", err);
+                    }
+                }
+                .in_current_span(),
+            );
+        }
+    }
+
+    response
 }
 
 /// Proxies the HTTP request directly to the remote server.
@@ -1801,23 +1825,23 @@ fn empty() -> BoxBody<Bytes, ClientError> {
         .boxed()
 }
 
-/// Makes the announce image manifest request by the response of the HEAD request for the
+/// Makes the announce manifest tag request by the response of the HEAD request for the
 /// manifest referenced by the tag. It returns None if the response does not resolve the
 /// tag, i.e. the status is not successful, or the digest, the media type or the content
 /// length is missing or invalid.
-fn make_announce_image_manifest_request(
+fn make_announce_manifest_tag_request(
     host_id: String,
     reference: String,
     status: http::StatusCode,
     header: &http::HeaderMap,
-) -> Option<AnnounceImageManifestRequest> {
+) -> Option<AnnounceManifestTagRequest> {
     if !status.is_success() {
         return None;
     }
 
     // The scheduler only accepts the sha256 or sha512 digest of the image manifest.
     let digest: Digest = header
-        .get(DOCKER_CONTENT_DIGEST_HEADER)?
+        .get(header::DOCKER_CONTENT_DIGEST_HEADER)?
         .to_str()
         .ok()?
         .parse()
@@ -1838,44 +1862,13 @@ fn make_announce_image_manifest_request(
         .parse()
         .ok()?;
 
-    Some(AnnounceImageManifestRequest {
+    Some(AnnounceManifestTagRequest {
         host_id,
         reference,
         digest: digest.to_string(),
         media_type: media_type.to_string(),
         content_length,
     })
-}
-
-/// Makes the response of the HEAD request for the manifest referenced by the tag by the
-/// image manifest. The digest, the media type and the content length in the header are
-/// all that containerd needs to resolve the tag, refer to
-/// https://github.com/containerd/containerd/blob/main/core/remotes/docker/resolver.go.
-fn make_image_manifest_response(
-    image_manifest: &StatImageManifestResponse,
-) -> ClientResult<Response> {
-    let mut response = Response::new(empty());
-    let header = response.headers_mut();
-    header.insert(
-        DOCKER_CONTENT_DIGEST_HEADER,
-        image_manifest
-            .digest
-            .parse()
-            .or_err(ErrorType::ParseError)?,
-    );
-    header.insert(
-        reqwest::header::CONTENT_TYPE,
-        image_manifest
-            .media_type
-            .parse()
-            .or_err(ErrorType::ParseError)?,
-    );
-    header.insert(
-        reqwest::header::CONTENT_LENGTH,
-        image_manifest.content_length.into(),
-    );
-
-    Ok(response)
 }
 
 #[cfg(test)]
@@ -2156,19 +2149,19 @@ mod tests {
     }
 
     #[test]
-    fn make_announce_image_manifest_request_requires_a_resolved_tag() {
+    fn make_announce_manifest_tag_request_requires_a_resolved_tag() {
         const DIGEST: &str =
             "sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e";
         const MEDIA_TYPE: &str = "application/vnd.oci.image.index.v1+json";
         let test_cases: Vec<(
             u16,
             Vec<(&str, &str)>,
-            fn(Option<AnnounceImageManifestRequest>),
+            fn(Option<AnnounceManifestTagRequest>),
         )> = vec![
             (
                 200,
                 vec![
-                    (DOCKER_CONTENT_DIGEST_HEADER, DIGEST),
+                    (header::DOCKER_CONTENT_DIGEST_HEADER, DIGEST),
                     ("content-type", MEDIA_TYPE),
                     ("content-length", "855"),
                 ],
@@ -2184,7 +2177,7 @@ mod tests {
             (
                 404,
                 vec![
-                    (DOCKER_CONTENT_DIGEST_HEADER, DIGEST),
+                    (header::DOCKER_CONTENT_DIGEST_HEADER, DIGEST),
                     ("content-type", MEDIA_TYPE),
                     ("content-length", "855"),
                 ],
@@ -2198,7 +2191,7 @@ mod tests {
             (
                 200,
                 vec![
-                    (DOCKER_CONTENT_DIGEST_HEADER, "crc32:1a2b3c4d"),
+                    (header::DOCKER_CONTENT_DIGEST_HEADER, "crc32:1a2b3c4d"),
                     ("content-type", MEDIA_TYPE),
                     ("content-length", "855"),
                 ],
@@ -2207,7 +2200,7 @@ mod tests {
             (
                 200,
                 vec![
-                    (DOCKER_CONTENT_DIGEST_HEADER, DIGEST),
+                    (header::DOCKER_CONTENT_DIGEST_HEADER, DIGEST),
                     ("content-length", "855"),
                 ],
                 |request| assert!(request.is_none()),
@@ -2215,7 +2208,7 @@ mod tests {
             (
                 200,
                 vec![
-                    (DOCKER_CONTENT_DIGEST_HEADER, DIGEST),
+                    (header::DOCKER_CONTENT_DIGEST_HEADER, DIGEST),
                     ("content-type", MEDIA_TYPE),
                 ],
                 |request| assert!(request.is_none()),
@@ -2233,51 +2226,12 @@ mod tests {
                 })
                 .collect();
 
-            expect(make_announce_image_manifest_request(
+            expect(make_announce_manifest_tag_request(
                 "127.0.0.1-localhost".to_string(),
                 "docker.io/library/nginx:latest".to_string(),
                 http::StatusCode::from_u16(status).unwrap(),
                 &header,
             ));
-        }
-    }
-
-    #[test]
-    fn make_image_manifest_response_sets_the_headers_of_the_image_manifest() {
-        let test_cases: Vec<(&str, &str, u64, fn(ClientResult<Response>))> =
-            vec![
-                (
-                    "sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e",
-                    "application/vnd.oci.image.index.v1+json",
-                    855,
-                    |response| {
-                        let response = response.unwrap();
-                        assert_eq!(response.status(), http::StatusCode::OK);
-                        assert_eq!(
-                        response.headers().get(DOCKER_CONTENT_DIGEST_HEADER).unwrap(),
-                        "sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e"
-                    );
-                        assert_eq!(
-                            response.headers().get("content-type").unwrap(),
-                            "application/vnd.oci.image.index.v1+json"
-                        );
-                        assert_eq!(response.headers().get("content-length").unwrap(), "855");
-                    },
-                ),
-                (
-                    "sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e",
-                    "application/vnd.oci.image.index.v1+json\n",
-                    855,
-                    |response| assert!(response.is_err()),
-                ),
-            ];
-
-        for (digest, media_type, content_length, expect) in test_cases {
-            expect(make_image_manifest_response(&StatImageManifestResponse {
-                digest: digest.to_string(),
-                media_type: media_type.to_string(),
-                content_length,
-            }));
         }
     }
 }

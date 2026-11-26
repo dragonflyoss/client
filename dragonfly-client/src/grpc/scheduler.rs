@@ -21,12 +21,12 @@ use dragonfly_api::common::v2::{
 use dragonfly_api::manager::v2::Scheduler;
 use dragonfly_api::scheduler::v2::{
     scheduler_client::SchedulerClient as SchedulerGRPCClient, AnnounceHostRequest,
-    AnnounceImageManifestRequest, AnnouncePeerRequest, AnnouncePeerResponse,
+    AnnounceManifestTagRequest, AnnouncePeerRequest, AnnouncePeerResponse,
     AnnouncePersistentCachePeerRequest, AnnouncePersistentCachePeerResponse,
     AnnouncePersistentPeerRequest, AnnouncePersistentPeerResponse, DeleteHostRequest,
     DeletePeerRequest, DeletePersistentCachePeerRequest, DeletePersistentCacheTaskRequest,
     DeletePersistentPeerRequest, DeletePersistentTaskRequest, DeleteTaskRequest, ListPeersRequest,
-    ListPeersResponse, StatImageManifestRequest, StatImageManifestResponse, StatPeerRequest,
+    ListPeersResponse, StatManifestTagRequest, StatManifestTagResponse, StatPeerRequest,
     StatPersistentCachePeerRequest, StatPersistentCacheTaskRequest, StatPersistentPeerRequest,
     StatPersistentTaskRequest, StatTaskRequest, UploadPersistentCacheTaskFailedRequest,
     UploadPersistentCacheTaskFinishedRequest, UploadPersistentCacheTaskStartedRequest,
@@ -204,31 +204,28 @@ impl SchedulerClient {
 
     /// Stats the image manifest that the tag of the image is resolved to.
     #[instrument(level = "debug", skip(self))]
-    pub async fn stat_image_manifest(
+    pub async fn stat_manifest_tag(
         &self,
-        request: StatImageManifestRequest,
-    ) -> Result<StatImageManifestResponse> {
+        request: StatManifestTagRequest,
+    ) -> Result<StatManifestTagResponse> {
         let reference = request.reference.clone();
         let request = Self::make_request(request);
         let response = self
             .client(reference.as_str(), None)
             .await?
-            .stat_image_manifest(request)
+            .stat_manifest_tag(request)
             .await?;
         Ok(response.into_inner())
     }
 
     /// Announces the image manifest that the tag of the image is resolved to.
     #[instrument(level = "debug", skip(self))]
-    pub async fn announce_image_manifest(
-        &self,
-        request: AnnounceImageManifestRequest,
-    ) -> Result<()> {
+    pub async fn announce_manifest_tag(&self, request: AnnounceManifestTagRequest) -> Result<()> {
         let reference = request.reference.clone();
         let request = Self::make_request(request);
         self.client(reference.as_str(), None)
             .await?
-            .announce_image_manifest(request)
+            .announce_manifest_tag(request)
             .await?;
         Ok(())
     }

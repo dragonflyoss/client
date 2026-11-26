@@ -1504,14 +1504,15 @@ impl RegistryMirror {
     }
 }
 
-/// The image manifest cache configuration for the proxy. The proxy announces the image
-/// manifest that a tag is resolved to by the registry to the scheduler, and responds to the
-/// HEAD request for the manifest referenced by the tag with it when the registry is
-/// unavailable. The scheduler keeps the image manifest until the ttl of its cache expires.
+/// The manifest tag cache configuration for the proxy. The proxy responds to the HEAD
+/// request for the manifest referenced by the tag with the image manifest in the scheduler
+/// first. If the scheduler does not have it, the proxy resolves the tag by the registry and
+/// announces the image manifest to the scheduler. The scheduler keeps the image manifest
+/// until the ttl of its cache expires.
 #[derive(Debug, Clone, Default, Validate, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
-pub struct ManifestCache {
-    /// Indicates whether to enable the image manifest cache.
+pub struct ManifestTagCache {
+    /// Indicates whether to enable the manifest tag cache.
     pub enable: bool,
 }
 
@@ -1528,8 +1529,8 @@ pub struct Proxy {
     /// The implementation of the registry mirror in the proxy.
     pub registry_mirror: RegistryMirror,
 
-    /// The image manifest cache in the proxy.
-    pub manifest_cache: ManifestCache,
+    /// The manifest tag cache in the proxy.
+    pub manifest_tag_cache: ManifestTagCache,
 
     /// Indicates whether to prevent fallback to source downloads when a download fails.
     pub disable_back_to_source: bool,
@@ -1560,7 +1561,7 @@ impl Default for Proxy {
             server: ProxyServer::default(),
             rules: None,
             registry_mirror: RegistryMirror::default(),
-            manifest_cache: ManifestCache::default(),
+            manifest_tag_cache: ManifestTagCache::default(),
             disable_back_to_source: false,
             prefetch: false,
             prefetch_bandwidth_limit: default_proxy_prefetch_bandwidth_limit(),
@@ -2785,7 +2786,7 @@ mod tests {
                         "addr": "https://mirror.example.com",
                         "cert": "/path/to/cert.pem"
                     },
-                    "manifestCache": {
+                    "manifestTagCache": {
                         "enable": true
                     },
                     "disableBackToSource": true,
@@ -2825,7 +2826,7 @@ mod tests {
                         proxy.registry_mirror.cert,
                         Some(PathBuf::from("/path/to/cert.pem"))
                     );
-                    assert!(proxy.manifest_cache.enable);
+                    assert!(proxy.manifest_tag_cache.enable);
                     assert!(proxy.disable_back_to_source);
                     assert!(proxy.prefetch);
                     assert_eq!(proxy.prefetch_bandwidth_limit, ByteSize::gb(1));
@@ -2843,7 +2844,7 @@ mod tests {
                 assert_eq!(proxy.registry_mirror.addr, "https://index.docker.io");
                 assert!(proxy.registry_mirror.cert.is_none());
                 assert!(proxy.registry_mirror.enable_task_id_based_blob_digest);
-                assert!(!proxy.manifest_cache.enable);
+                assert!(!proxy.manifest_tag_cache.enable);
                 assert!(!proxy.disable_back_to_source);
                 assert!(!proxy.prefetch);
                 assert_eq!(proxy.prefetch_bandwidth_limit, ByteSize::gb(10));
