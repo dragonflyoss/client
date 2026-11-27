@@ -54,18 +54,21 @@ static SIMPLE_SELF_SIGNED_CERTS: LazyLock<Arc<Mutex<LruCache<String, CertKeyPair
 ///
 /// With the `fips` feature, it is the FIPS provider, which only uses the FIPS module of AWS-LC.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if the `fips` feature is enabled and the process-wide default provider is not
-/// the FIPS provider.
-pub fn install_crypto_provider() {
+/// Returns an error if the `fips` feature is enabled and the process-wide default provider is
+/// not the FIPS provider.
+pub fn install_crypto_provider() -> ClientResult<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     #[cfg(feature = "fips")]
-    assert!(
-        rustls::crypto::CryptoProvider::get_default().is_some_and(|provider| provider.fips()),
-        "rustls must use the FIPS provider in a FIPS build"
-    );
+    if !rustls::crypto::CryptoProvider::get_default().is_some_and(|provider| provider.fips()) {
+        return Err(ClientError::Unsupported(
+            "non-FIPS crypto provider in a FIPS build".to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 /// A verifier that does not verify the server certificate.

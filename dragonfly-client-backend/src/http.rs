@@ -1172,7 +1172,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
 
     #[tokio::test]
     async fn stat_reports_status_and_content_length() {
-        install_crypto_provider();
+        install_crypto_provider().unwrap();
 
         let test_cases: Vec<(Vec<Mock>, fn(StatResponse))> = vec![
             (
@@ -1317,7 +1317,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
 
     #[tokio::test]
     async fn get_reports_status_and_body() {
-        install_crypto_provider();
+        install_crypto_provider().unwrap();
 
         let test_cases: Vec<(Vec<Mock>, Option<Range>, fn(GetResponse<Body>, &str))> = vec![
             (
@@ -1522,7 +1522,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
 
     #[tokio::test]
     async fn exists_reports_whether_the_file_exists() {
-        install_crypto_provider();
+        install_crypto_provider().unwrap();
 
         let test_cases = vec![
             (vec![(None, 200)], true),
@@ -1564,7 +1564,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
 
     #[tokio::test]
     async fn requests_without_header_are_rejected() {
-        install_crypto_provider();
+        install_crypto_provider().unwrap();
         let http = HTTP::new(HTTP_SCHEME, None, 1, true, Duration::from_secs(600), true).unwrap();
         let url = "http://127.0.0.1/missing";
 
@@ -1621,7 +1621,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
 
     #[tokio::test]
     async fn connection_failures_are_reported_per_operation() {
-        install_crypto_provider();
+        install_crypto_provider().unwrap();
         let url = format!("{}/file", start_closing_server().await);
         let http = HTTP::new(HTTP_SCHEME, None, 0, true, Duration::from_secs(600), true).unwrap();
 
@@ -1684,7 +1684,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
 
     #[tokio::test]
     async fn https_requests_trust_the_given_ca_or_skip_verification() {
-        install_crypto_provider();
+        install_crypto_provider().unwrap();
 
         let test_cases: Vec<(Option<&str>, fn(StatResponse), fn(GetResponse<Body>, &str))> = vec![
             (
@@ -1755,7 +1755,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
 
     #[test]
     fn make_request_headers_fills_defaults_without_overriding() {
-        install_crypto_provider();
+        install_crypto_provider().unwrap();
 
         let test_cases: Vec<(
             Option<Vec<(&'static str, &'static str)>>,
@@ -1889,7 +1889,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
 
     #[tokio::test]
     async fn get_caches_absolute_307_locations_until_ttl_expires() {
-        install_crypto_provider();
+        install_crypto_provider().unwrap();
 
         let test_cases: Vec<(bool, Duration, fn(&str) -> String, Duration, u64)> = vec![
             (
@@ -1975,7 +1975,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
 
     #[tokio::test]
     async fn get_falls_back_to_the_original_url_when_the_cached_redirect_is_rejected() {
-        install_crypto_provider();
+        install_crypto_provider().unwrap();
 
         let test_cases = vec![
             (401, 1, StatusCode::OK),
@@ -2057,7 +2057,7 @@ LJ8gCHKBOJy9dW62DcRWw6zzlTtt9y18/Btx0Hpawg==
 
     #[tokio::test]
     async fn stat_falls_back_to_the_original_url_when_the_cached_redirect_is_rejected() {
-        install_crypto_provider();
+        install_crypto_provider().unwrap();
 
         let test_cases = vec![
             (401, 1, StatusCode::OK),

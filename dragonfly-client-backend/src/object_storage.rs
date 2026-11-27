@@ -1006,7 +1006,7 @@ mod tests {
 
     #[test]
     fn operator_builds_with_scheme_specific_fields() {
-        dragonfly_client_util::tls::install_crypto_provider();
+        dragonfly_client_util::tls::install_crypto_provider().unwrap();
         let credentials = ObjectStorageInfo {
             access_key_id: Some("access-key-id".into()),
             access_key_secret: Some("access-key-secret".into()),
@@ -1187,7 +1187,7 @@ mod tests {
 
     #[test]
     fn operator_rejects_missing_required_fields() {
-        dragonfly_client_util::tls::install_crypto_provider();
+        dragonfly_client_util::tls::install_crypto_provider().unwrap();
         let access_key_id = ObjectStorageInfo {
             access_key_id: Some("access-key-id".into()),
             ..Default::default()
