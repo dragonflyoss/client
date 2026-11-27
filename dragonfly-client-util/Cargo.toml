@@ -9,6 +9,9 @@ keywords.workspace = true
 license.workspace = true
 edition.workspace = true
 
+[features]
+fips = ["rustls/fips"]
+
 [dependencies]
 dragonfly-client-core.workspace = true
 dragonfly-api.workspace = true

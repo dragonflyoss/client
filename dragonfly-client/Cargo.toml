@@ -30,6 +30,9 @@ path = "src/bin/dfstore/main.rs"
 name = "dfctl"
 path = "src/bin/dfctl/main.rs"
 
+[features]
+fips = ["dragonfly-client-util/fips", "dragonfly-client-storage/fips"]
+
 [dependencies]
 dragonfly-client-core.workspace = true
 dragonfly-client-config.workspace = true

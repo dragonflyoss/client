@@ -473,7 +473,7 @@ struct Args {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Install the default crypto provider for rustls.
-    dragonfly_client_util::tls::install_crypto_provider();
+    dragonfly_client_util::tls::install_crypto_provider()?;
 
     // Parse command line arguments.
     let args = convert_args(Args::parse());
