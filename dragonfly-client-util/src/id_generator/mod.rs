@@ -284,6 +284,13 @@ impl IDGenerator {
     /// platforms of the image share the image id.
     #[inline]
     pub fn image_id(&self, parameter: ImageIDParameter) -> Result<String> {
+        let reference = self.image_reference(parameter)?;
+        Ok(hex::encode(Sha256::digest(reference.as_bytes())))
+    }
+
+    /// Returns the canonical reference of the image, e.g. docker.io/library/nginx:latest, so
+    /// the manifest url and the reference of the same image return the same reference.
+    pub fn image_reference(&self, parameter: ImageIDParameter) -> Result<String> {
         let reference = match parameter {
             ImageIDParameter::ManifestURLBased(url) => {
                 // Convert the manifest url to the reference, e.g.
@@ -331,16 +338,14 @@ impl IDGenerator {
 
         // Use the digest instead of the tag if the reference has both, the same as the
         // manifest url.
-        let reference = match reference.digest() {
+        Ok(match reference.digest() {
             Some(digest) => format!("{registry}/{}@{digest}", reference.repository()),
             None => format!(
                 "{registry}/{}:{}",
                 reference.repository(),
                 reference.tag().unwrap_or("latest")
             ),
-        };
-
-        Ok(hex::encode(Sha256::digest(reference.as_bytes())))
+        })
     }
 
     /// Generates the peer id.
@@ -560,6 +565,42 @@ mod tests {
         let generator = IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false);
         for (parameter, expect) in test_cases {
             expect(generator.image_id(parameter));
+        }
+    }
+
+    #[test]
+    fn image_reference_returns_the_canonical_reference() {
+        const DIGEST: &str =
+            "sha256:b2c366cce7e68013d5441c6326d5a3e1b12aeb5ed58564d0fd3fa089bc29cb6e";
+        let test_cases = vec![
+            (
+                ImageIDParameter::ReferenceBased("nginx".to_string()),
+                "docker.io/library/nginx:latest".to_string(),
+            ),
+            (
+                ImageIDParameter::ManifestURLBased(
+                    "https://index.docker.io/v2/library/nginx/manifests/latest?ns=docker.io"
+                        .to_string(),
+                ),
+                "docker.io/library/nginx:latest".to_string(),
+            ),
+            (
+                ImageIDParameter::ManifestURLBased(
+                    "http://127.0.0.1:5000/v2/dragonflyoss/client/manifests/v1.0.0".to_string(),
+                ),
+                "127.0.0.1:5000/dragonflyoss/client:v1.0.0".to_string(),
+            ),
+            (
+                ImageIDParameter::ManifestURLBased(format!(
+                    "https://ghcr.io/v2/dragonflyoss/client/manifests/{DIGEST}"
+                )),
+                format!("ghcr.io/dragonflyoss/client@{DIGEST}"),
+            ),
+        ];
+
+        let generator = IDGenerator::new("127.0.0.1".to_string(), "localhost".to_string(), false);
+        for (parameter, expected) in test_cases {
+            assert_eq!(generator.image_reference(parameter).unwrap(), expected);
         }
     }
 

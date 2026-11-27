@@ -23,6 +23,7 @@ use dragonfly_api::dfdaemon::v2::{
     download_task_response, DownloadTaskRequest, DownloadTaskStartedResponse,
 };
 use dragonfly_api::errordetails::v2::Backend;
+use dragonfly_api::scheduler::v2::{AnnounceManifestTagRequest, StatManifestTagRequest};
 use dragonfly_client_config::dfdaemon::{Config, Rule};
 use dragonfly_client_core::error::{ErrorType, OrErr};
 use dragonfly_client_core::{Error as ClientError, Result as ClientResult};
@@ -32,9 +33,9 @@ use dragonfly_client_metric::{
 };
 use dragonfly_client_storage::metadata;
 use dragonfly_client_util::{
-    digest::{is_blob_digest_url, is_manifest_digest_url},
+    digest::{is_blob_digest_url, is_manifest_digest_url, is_manifest_url},
     http::{hashmap_to_headermap, headermap_to_hashmap},
-    id_generator::{repository_revision, TaskIDParameter},
+    id_generator::{repository_revision, ImageIDParameter, TaskIDParameter},
     shutdown,
     tls::{generate_self_signed_certs_by_ca_cert, generate_simple_self_signed_certs, NoVerifier},
     types::redacted::RedactedHTTPProxyRequest,
@@ -484,6 +485,22 @@ pub async fn http_handler(
         }
     }
 
+    // If the manifest tag cache is enabled and the request is a HEAD request for the
+    // manifest referenced by the tag, proxy the request via the scheduler.
+    if config.proxy.manifest_tag_cache.enable && request.method() == Method::HEAD {
+        let url = request.uri().to_string();
+        if is_manifest_url(&url) && !is_manifest_digest_url(&url) {
+            return proxy_head_manifest_tag_via_scheduler(
+                task,
+                url,
+                request,
+                http_client,
+                https_client,
+            )
+            .await;
+        }
+    }
+
     // If find the matching rule, proxy the request via the dfdaemon.
     // Only GET requests are routed to P2P; other methods (HEAD/PUT/POST/DELETE)
     // fall through to direct proxy to avoid data loss.
@@ -784,6 +801,22 @@ pub async fn upgraded_handler(
             )
             .build()
             .or_err(ErrorType::ParseError)?;
+    }
+
+    // If the manifest tag cache is enabled and the request is a HEAD request for the
+    // manifest referenced by the tag, proxy the request via the scheduler.
+    if config.proxy.manifest_tag_cache.enable && request.method() == Method::HEAD {
+        let url = request.uri().to_string();
+        if is_manifest_url(&url) && !is_manifest_digest_url(&url) {
+            return proxy_head_manifest_tag_via_scheduler(
+                task,
+                url,
+                request,
+                http_client,
+                https_client,
+            )
+            .await;
+        }
     }
 
     // If find the matching rule, proxy the request via the dfdaemon.
@@ -1376,6 +1409,119 @@ async fn proxy_head_via_dfdaemon(
     }
 
     proxy_via_http(request, http_client).await
+}
+
+/// Proxies the HEAD request for the manifest referenced by the tag via the scheduler. It
+/// responds with the image manifest announced to the scheduler first. If the scheduler
+/// does not have it, it proxies the request directly to the remote server, and announces
+/// the image manifest that the tag is resolved to by the remote server to the scheduler.
+#[instrument(skip_all)]
+async fn proxy_head_manifest_tag_via_scheduler(
+    task_manager: Arc<Task>,
+    url: String,
+    request: Request<hyper::body::Incoming>,
+    http_client: Client<HttpConnector, hyper::body::Incoming>,
+    https_client: Client<hyper_rustls::HttpsConnector<HttpConnector>, hyper::body::Incoming>,
+) -> ClientResult<Response> {
+    let reference = match task_manager
+        .id_generator
+        .image_reference(ImageIDParameter::ManifestURLBased(url))
+    {
+        Ok(reference) => reference,
+        Err(err) => {
+            error!("get image reference failed: {}", err);
+            return Ok(make_error_response(
+                header::ErrorType::Proxy,
+                http::StatusCode::BAD_REQUEST,
+                None,
+            ));
+        }
+    };
+
+    let host_id = task_manager.id_generator.host_id();
+    match task_manager
+        .scheduler_client
+        .stat_manifest_tag(StatManifestTagRequest {
+            host_id: host_id.clone(),
+            reference: reference.clone(),
+        })
+        .await
+    {
+        Ok(manifest_tag) => {
+            info!("respond with the manifest tag from scheduler");
+            let mut response = Response::new(empty());
+            let header = response.headers_mut();
+            header.insert(
+                header::DOCKER_CONTENT_DIGEST_HEADER,
+                manifest_tag.digest.parse().or_err(ErrorType::ParseError)?,
+            );
+            header.insert(
+                reqwest::header::CONTENT_TYPE,
+                manifest_tag
+                    .media_type
+                    .parse()
+                    .or_err(ErrorType::ParseError)?,
+            );
+            header.insert(
+                reqwest::header::CONTENT_LENGTH,
+                manifest_tag.content_length.into(),
+            );
+
+            return Ok(response);
+        }
+        Err(ClientError::TonicStatus(status)) if status.code() == tonic::Code::NotFound => {
+            info!("manifest tag not found in scheduler, proxy to the remote server");
+        }
+        Err(err) => warn!("stat manifest tag from scheduler failed: {}", err),
+    }
+
+    // Proxy the request directly to the remote server.
+    let response = if request.uri().scheme().cloned() == Some(http::uri::Scheme::HTTPS) {
+        proxy_via_https(request, https_client).await
+    } else {
+        proxy_via_http(request, http_client).await
+    };
+
+    // Announce the image manifest that the tag is resolved to by the remote server to the
+    // scheduler.
+    if let Ok(remote_response) = &response {
+        if remote_response.status().is_success() {
+            let header = remote_response.headers();
+            if let (Some(digest), Some(media_type), Some(content_length)) = (
+                header::get_docker_content_digest(header),
+                header::get_content_type(header),
+                header::get_content_length(header),
+            ) {
+                let request = AnnounceManifestTagRequest {
+                    host_id,
+                    reference,
+                    digest: digest.to_string(),
+                    media_type,
+                    content_length,
+                };
+                let scheduler_client = task_manager.scheduler_client.clone();
+                tokio::spawn(
+                    async move {
+                        if let Err(err) = scheduler_client.announce_manifest_tag(request).await {
+                            warn!("announce manifest tag failed: {}", err);
+                        }
+                    }
+                    .in_current_span(),
+                );
+            } else {
+                warn!(
+                    "manifest tag is not announced, the response header does not resolve the tag"
+                );
+            }
+        } else {
+            warn!(
+                "manifest tag is not announced, the remote server responds with status {}",
+                remote_response.status()
+            );
+        }
+    }
+
+    response
 }
 
 /// Proxies the HTTP request directly to the remote server.
