@@ -167,7 +167,11 @@ pub fn generate_self_signed_certs_by_ca_cert(
     drop(cache);
 
     // Sign certificate with CA certificate by given subject alternative names.
-    let params = CertificateParams::new(subject_alt_names);
+    // The Authority Key Identifier links the certificate to the CA's Subject Key
+    // Identifier, and strict verifiers such as Python 3.13's default context and
+    // OpenSSL with -x509_strict reject certificates without it.
+    let mut params = CertificateParams::new(subject_alt_names);
+    params.use_authority_key_identifier_extension = true;
     let cert = Certificate::from_params(params).or_err(ErrorType::CertificateError)?;
     let cert_pem = cert
         .serialize_pem_with_signer(ca_cert)
@@ -413,6 +417,56 @@ Z+yQ5jhu/fmSBNhqO/8Lp+Y=
         )
         .unwrap();
         assert_ne!(other_certs, certs);
+    }
+
+    #[test]
+    fn generate_self_signed_certs_by_ca_cert_sets_authority_key_identifier() {
+        let ca_cert_file = pem_file(SERVER_CERT);
+        let ca_key_file = pem_file(SERVER_KEY);
+        let ca_cert = generate_ca_cert_from_pem(
+            &ca_cert_file.path().to_path_buf(),
+            &ca_key_file.path().to_path_buf(),
+        )
+        .unwrap();
+
+        let (certs, _) = generate_self_signed_certs_by_ca_cert(
+            &ca_cert,
+            "aki.example.com",
+            vec!["aki.example.com".to_string()],
+        )
+        .unwrap();
+
+        let (_, leaf) = x509_parser::parse_x509_certificate(certs[0].as_ref()).unwrap();
+        let aki = leaf
+            .extensions()
+            .iter()
+            .find_map(|ext| match ext.parsed_extension() {
+                x509_parser::extensions::ParsedExtension::AuthorityKeyIdentifier(aki) => Some(aki),
+                _ => None,
+            })
+            .expect("leaf certificate has no Authority Key Identifier");
+        let key_id = aki
+            .key_identifier
+            .as_ref()
+            .expect("AKI has no key identifier");
+
+        // The key identifier must match the CA certificate's Subject Key Identifier.
+        let ca_der = rustls_pemfile::certs(&mut io::BufReader::new(SERVER_CERT.as_bytes()))
+            .next()
+            .unwrap()
+            .unwrap();
+        let (_, ca) = x509_parser::parse_x509_certificate(ca_der.as_ref()).unwrap();
+        let ski = ca
+            .extensions()
+            .iter()
+            .find_map(|ext| match ext.parsed_extension() {
+                x509_parser::extensions::ParsedExtension::SubjectKeyIdentifier(ski) => {
+                    Some(ski.0.to_vec())
+                }
+                _ => None,
+            })
+            .expect("test CA certificate has no Subject Key Identifier");
+        assert_eq!(key_id.0.to_vec(), ski);
     }
 
     #[test]
