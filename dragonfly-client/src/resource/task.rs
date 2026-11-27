@@ -533,6 +533,8 @@ impl Task {
         // Check if all pieces are downloaded.
         if interested_pieces.is_empty() {
             info!("all pieces are downloaded from local");
+            self.announce_local_cache_finished(task, host_id, peer_id, request)
+                .await;
             return Ok(());
         };
 
@@ -574,6 +576,8 @@ impl Task {
             // Check if all pieces are downloaded.
             if interested_pieces.is_empty() {
                 info!("all pieces are downloaded from local");
+                self.announce_local_cache_finished(task, host_id, peer_id, request)
+                    .await;
                 return Ok(());
             };
 
@@ -649,6 +653,8 @@ impl Task {
                 }
 
                 info!("all pieces are downloaded from source");
+                self.announce_fallback_finished(task, host_id, peer_id, request)
+                    .await;
                 return Ok(());
             }
         };
@@ -694,6 +700,8 @@ impl Task {
         }
 
         info!("all pieces are downloaded from source");
+        self.announce_fallback_finished(task, host_id, peer_id, request)
+            .await;
         Ok(())
     }
 
@@ -1170,6 +1178,101 @@ impl Task {
         peer_id: &str,
         request: Download,
     ) -> ClientResult<()> {
+        self.announce_completed_peer(task, host_id, peer_id, request, false)
+            .await
+    }
+
+    /// Restores scheduler visibility after a local cache hit without changing the download result.
+    #[instrument(skip_all)]
+    async fn announce_local_cache_finished(
+        &self,
+        task: &metadata::Task,
+        host_id: &str,
+        peer_id: &str,
+        request: Download,
+    ) {
+        // 下载中断后再次执行时，本地缓存仍在，Scheduler 的旧 Peer 却可能已失效。
+        // 使用本次请求的新 Peer 宣告缓存；不能因为本地命中就跳过调度记录恢复。
+        // 保留小文件/小 Range 主动绕过 Scheduler 的策略，Always 则仍需宣告。
+        if self.should_bypass_scheduler(&request, task.content_length().unwrap_or_default()) {
+            return;
+        }
+
+        // 请求分片已齐不代表整个文件已齐，保留 Range 并发送普通 Peer 完成事件。
+        // 不冒充回源完成；Task 的状态恢复交由 Scheduler 依据完整性处理。
+        let result = tokio::time::timeout(
+            REQUEST_TIMEOUT,
+            self.announce_completed_peer(task, host_id, peer_id, request, false),
+        )
+        .await;
+        match result {
+            Ok(Ok(())) => info!(
+                task_id = %task.id,
+                peer_id,
+                "announced local cache hit"
+            ),
+            Ok(Err(err)) => warn!(
+                task_id = %task.id,
+                peer_id,
+                "announce local cache hit failed: {err}"
+            ),
+            Err(err) => warn!(
+                task_id = %task.id,
+                peer_id,
+                "announce local cache hit timed out: {err}"
+            ),
+        }
+    }
+
+    /// Reports a successful source fallback without changing the download result.
+    #[instrument(skip_all)]
+    async fn announce_fallback_finished(
+        &self,
+        task: &metadata::Task,
+        host_id: &str,
+        failed_peer_id: &str,
+        request: Download,
+    ) {
+        // 原 Peer 可能已经进入 Failed，不能再次注册或直接补报成功。
+        // 新 Peer 仅宣告本机已有的缓存，不触发调度或重复回源。
+        let peer_id = self.id_generator.peer_id();
+        let result = tokio::time::timeout(
+            REQUEST_TIMEOUT,
+            self.announce_completed_peer(task, host_id, &peer_id, request, true),
+        )
+        .await;
+        match result {
+            Ok(Ok(())) => info!(
+                task_id = %task.id,
+                failed_peer_id,
+                peer_id,
+                "announced successful source fallback"
+            ),
+            Ok(Err(err)) => warn!(
+                task_id = %task.id,
+                failed_peer_id,
+                peer_id,
+                "announce successful source fallback failed: {err}"
+            ),
+            Err(err) => warn!(
+                task_id = %task.id,
+                failed_peer_id,
+                peer_id,
+                "announce successful source fallback timed out: {err}"
+            ),
+        }
+    }
+
+    /// Announces cached data, preserving whether it completed a source fallback.
+    #[instrument(skip_all)]
+    async fn announce_completed_peer(
+        &self,
+        task: &metadata::Task,
+        host_id: &str,
+        peer_id: &str,
+        request: Download,
+        back_to_source: bool,
+    ) -> ClientResult<()> {
         // Get the id of the task.
         let task_id = task.id.as_str();
 
@@ -1178,6 +1281,9 @@ impl Task {
         let request = Download {
             metadata_only: true,
             need_back_to_source: false,
+            actual_content_length: task.content_length(),
+            actual_piece_length: task.piece_length(),
+            actual_piece_count: task.piece_count(),
             ..request
         };
 
@@ -1242,46 +1348,69 @@ impl Task {
         };
         info!("hit local cache response");
 
-        // Send the download peer started request.
+        // 兜底实际来自源站，沿用回源开始/完成事件恢复 Task 状态。
+        // 保留原 Range：局部下载只能宣告 Peer 成功，不能代表整个 Task 完成。
+        // 回源开始直接从 ReceivedNormal 转换，不能先发送 DownloadPeerStarted。
+        let started = if back_to_source {
+            announce_peer_request::Request::DownloadPeerBackToSourceStartedRequest(
+                DownloadPeerBackToSourceStartedRequest {
+                    description: Some("source fallback completed locally".to_string()),
+                },
+            )
+        } else {
+            announce_peer_request::Request::DownloadPeerStartedRequest(
+                DownloadPeerStartedRequest {},
+            )
+        };
         in_stream_tx
             .send_timeout(
                 AnnouncePeerRequest {
                     host_id: host_id.to_string(),
                     task_id: task_id.to_string(),
                     peer_id: peer_id.to_string(),
-                    request: Some(announce_peer_request::Request::DownloadPeerStartedRequest(
-                        DownloadPeerStartedRequest {},
-                    )),
+                    request: Some(started),
                 },
                 REQUEST_TIMEOUT,
             )
             .await
             .inspect_err(|err| {
-                error!("send DownloadPeerStartedRequest failed: {:?}", err);
+                error!("send completed peer started request failed: {:?}", err);
             })?;
-        debug!("sent DownloadPeerStartedRequest");
+        debug!("sent completed peer started request");
 
-        // Send the download peer finished request.
+        let finished = if back_to_source {
+            announce_peer_request::Request::DownloadPeerBackToSourceFinishedRequest(
+                DownloadPeerBackToSourceFinishedRequest {},
+            )
+        } else {
+            announce_peer_request::Request::DownloadPeerFinishedRequest(
+                DownloadPeerFinishedRequest {},
+            )
+        };
         in_stream_tx
             .send_timeout(
                 AnnouncePeerRequest {
                     host_id: host_id.to_string(),
                     task_id: task_id.to_string(),
                     peer_id: peer_id.to_string(),
-                    request: Some(announce_peer_request::Request::DownloadPeerFinishedRequest(
-                        DownloadPeerFinishedRequest {},
-                    )),
+                    request: Some(finished),
                 },
                 REQUEST_TIMEOUT,
             )
             .await
             .inspect_err(|err| {
-                error!("send DownloadPeerFinishedRequest failed: {:?}", err);
+                error!("send completed peer finished request failed: {:?}", err);
             })?;
-        debug!("sent DownloadPeerFinishedRequest");
+        debug!("sent completed peer finished request");
 
-        // Wait for the latest message to be sent.
-        in_stream_tx.closed().await;
+        // 入队不等于 Scheduler 已处理；半关闭请求流并读取最终 gRPC 状态，
+        // 防止注册或状态转换被拒绝后仍误记为补报成功。
+        drop(in_stream_tx);
+        if let Some(message) = out_stream.try_next().await? {
+            let message = message?;
+            error!("receive unexpected completion response: {:?}", message);
+            return Err(Error::UnexpectedResponse);
+        }
         Ok(())
     }
 
@@ -2720,6 +2849,10 @@ impl Task {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "task_fallback_tests.rs"]
+mod fallback_tests;
 
 #[cfg(test)]
 mod tests {
