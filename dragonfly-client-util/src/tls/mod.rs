@@ -50,28 +50,16 @@ static SIMPLE_SELF_SIGNED_CERTS: LazyLock<Arc<Mutex<LruCache<String, CertKeyPair
         )))
     });
 
-/// Returns the aws-lc-rs crypto provider for rustls. With the `fips` feature, it is the
-/// FIPS provider, which only uses the FIPS module of AWS-LC.
-pub fn crypto_provider() -> rustls::crypto::CryptoProvider {
-    #[cfg(feature = "fips")]
-    {
-        rustls::crypto::default_fips_provider()
-    }
-
-    #[cfg(not(feature = "fips"))]
-    {
-        rustls::crypto::aws_lc_rs::default_provider()
-    }
-}
-
 /// Installs the aws-lc-rs crypto provider as the process-wide default for rustls.
+///
+/// With the `fips` feature, it is the FIPS provider, which only uses the FIPS module of AWS-LC.
 ///
 /// # Panics
 ///
 /// Panics if the `fips` feature is enabled and the process-wide default provider is not
 /// the FIPS provider.
 pub fn install_crypto_provider() {
-    let _ = crypto_provider().install_default();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     #[cfg(feature = "fips")]
     assert!(
