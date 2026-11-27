@@ -2175,6 +2175,15 @@ mod tests {
 
         let mut response_header = HeaderMap::new();
         response_header.insert("content-type", "text/plain".parse().unwrap());
+        response_header.append("cache-control", "no-cache".parse().unwrap());
+        response_header.append("cache-control", "no-store".parse().unwrap());
+        response_header.append(
+            "set-cookie",
+            "a=1; Expires=Wed, 21 Oct 2015 07:28:00 GMT"
+                .parse()
+                .unwrap(),
+        );
+        response_header.append("set-cookie", "b=2; Path=/".parse().unwrap());
         let task = metadata
             .download_task_started(TASK_ID, 2048, 4096, Some(response_header))
             .unwrap();
@@ -2183,6 +2192,23 @@ mod tests {
         assert_eq!(
             task.response_header.get("content-type").map(String::as_str),
             Some("text/plain")
+        );
+        assert_eq!(
+            task.response_header
+                .get("cache-control")
+                .map(String::as_str),
+            Some("no-cache, no-store")
+        );
+        let roundtrip =
+            dragonfly_client_util::http::hashmap_to_headermap(&task.response_header).unwrap();
+        let cookies: Vec<&str> = roundtrip
+            .get_all("set-cookie")
+            .iter()
+            .map(|v| v.to_str().unwrap())
+            .collect();
+        assert_eq!(
+            cookies,
+            vec!["a=1; Expires=Wed, 21 Oct 2015 07:28:00 GMT", "b=2; Path=/"]
         );
 
         metadata.download_task_finished(TASK_ID).unwrap();
@@ -2609,6 +2635,15 @@ mod tests {
 
         let mut response_header = HeaderMap::new();
         response_header.insert("content-type", "text/plain".parse().unwrap());
+        response_header.append("cache-control", "no-cache".parse().unwrap());
+        response_header.append("cache-control", "no-store".parse().unwrap());
+        response_header.append(
+            "set-cookie",
+            "a=1; Expires=Wed, 21 Oct 2015 07:28:00 GMT"
+                .parse()
+                .unwrap(),
+        );
+        response_header.append("set-cookie", "b=2; Path=/".parse().unwrap());
         let task = metadata
             .download_cache_task_started(TASK_ID, 2048, 4096, Some(response_header))
             .unwrap();
@@ -2617,6 +2652,23 @@ mod tests {
         assert_eq!(
             task.response_header.get("content-type").map(String::as_str),
             Some("text/plain")
+        );
+        assert_eq!(
+            task.response_header
+                .get("cache-control")
+                .map(String::as_str),
+            Some("no-cache, no-store")
+        );
+        let roundtrip =
+            dragonfly_client_util::http::hashmap_to_headermap(&task.response_header).unwrap();
+        let cookies: Vec<&str> = roundtrip
+            .get_all("set-cookie")
+            .iter()
+            .map(|v| v.to_str().unwrap())
+            .collect();
+        assert_eq!(
+            cookies,
+            vec!["a=1; Expires=Wed, 21 Oct 2015 07:28:00 GMT", "b=2; Path=/"]
         );
 
         metadata.download_cache_task_finished(TASK_ID).unwrap();

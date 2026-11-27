@@ -1650,8 +1650,7 @@ fn make_download_task_request(
     }
 
     // Registry will return the 403 status code if the Host header is set.
-    let mut request_header = headermap_to_hashmap(header);
-    request_header.remove(reqwest::header::HOST.as_str());
+    let request_header = make_download_request_headers(header);
 
     Ok(DownloadTaskRequest {
         download: Some(Download {
@@ -1748,6 +1747,13 @@ fn make_download_url(
         .to_string())
 }
 
+/// Converts request headers for a download task and strips `Host`.
+fn make_download_request_headers(header: &http::HeaderMap) -> HashMap<String, String> {
+    let mut request_header = headermap_to_hashmap(header);
+    request_header.remove(reqwest::header::HOST.as_str());
+    request_header
+}
+
 /// Makes the response headers.
 fn make_response_headers(
     task_id: &str,
@@ -1823,7 +1829,7 @@ fn make_error_response(
     *response.status_mut() = status;
     if let Some(header) = header {
         for (k, v) in header.iter() {
-            response.headers_mut().insert(k, v.clone());
+            response.headers_mut().append(k, v.clone());
         }
     }
 
@@ -2118,5 +2124,59 @@ mod tests {
 
             expect(response.headers());
         }
+    }
+
+    #[test]
+    fn make_download_request_headers_preserves_repeated_headers_and_strips_host() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            http::header::HOST,
+            http::HeaderValue::from_static("example.com"),
+        );
+        headers.append(
+            http::header::ACCEPT,
+            http::HeaderValue::from_static("application/json"),
+        );
+        headers.append(
+            http::header::ACCEPT,
+            http::HeaderValue::from_static("text/plain"),
+        );
+
+        let request_header = make_download_request_headers(&headers);
+        assert!(!request_header.contains_key(reqwest::header::HOST.as_str()));
+        assert_eq!(
+            request_header.get("accept").map(String::as_str),
+            Some("application/json, text/plain")
+        );
+    }
+
+    #[test]
+    fn make_response_headers_preserves_repeated_set_cookie_values() {
+        let mut upstream = http::HeaderMap::new();
+        upstream.append(
+            http::header::SET_COOKIE,
+            http::HeaderValue::from_static("a=1; Expires=Wed, 21 Oct 2015 07:28:00 GMT"),
+        );
+        upstream.append(
+            http::header::SET_COOKIE,
+            http::HeaderValue::from_static("b=2; Path=/"),
+        );
+
+        let response = DownloadTaskStartedResponse {
+            content_length: 100,
+            response_header: headermap_to_hashmap(&upstream),
+            ..Default::default()
+        };
+        let headers =
+            make_response_headers("task-id", "127.0.0.1".parse().unwrap(), &response).unwrap();
+        let cookies: Vec<&str> = headers
+            .get_all(http::header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap())
+            .collect();
+        assert_eq!(
+            cookies,
+            vec!["a=1; Expires=Wed, 21 Oct 2015 07:28:00 GMT", "b=2; Path=/"]
+        );
     }
 }

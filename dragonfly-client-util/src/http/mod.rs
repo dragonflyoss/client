@@ -26,12 +26,43 @@ use std::collections::HashMap;
 pub mod basic_auth;
 pub mod query_params;
 
-/// Converts a headermap to a hashmap.
+/// Returns the delimiter used to combine multiple values of an HTTP header name
+/// inside a single-value `HashMap<String, String>` representation:
+/// - `Set-Cookie` (RFC 6265 §3) must not be comma-joined because attributes such as
+///   `Expires` contain commas, so `\n` (forbidden inside valid HTTP field values)
+///   retains separate values across round-trips.
+/// - `Cookie` (RFC 6265 §4.2.1 / RFC 9113 §8.2.3) joins repeated values with `"; "`.
+/// - Other fields (RFC 9110 §5.3) combine list values with `", "`.
+fn header_value_separator(name: &str) -> &'static str {
+    if name.eq_ignore_ascii_case(reqwest::header::SET_COOKIE.as_str()) {
+        "\n"
+    } else if name.eq_ignore_ascii_case(reqwest::header::COOKIE.as_str()) {
+        "; "
+    } else {
+        ", "
+    }
+}
+
+/// Converts a headermap to a hashmap, preserving repeated header values.
 pub fn headermap_to_hashmap(header: &HeaderMap<HeaderValue>) -> HashMap<String, String> {
     let mut hashmap: HashMap<String, String> = HashMap::with_capacity(header.len());
-    for (k, v) in header {
-        if let Ok(v) = v.to_str() {
-            hashmap.insert(k.to_string(), v.to_string());
+    for name in header.keys() {
+        let separator = header_value_separator(name.as_str());
+        let mut combined: Option<String> = None;
+        for value in header.get_all(name) {
+            if let Ok(value) = value.to_str() {
+                match &mut combined {
+                    Some(existing) => {
+                        existing.push_str(separator);
+                        existing.push_str(value);
+                    }
+                    None => combined = Some(value.to_string()),
+                }
+            }
+        }
+
+        if let Some(combined) = combined {
+            hashmap.insert(name.to_string(), combined);
         }
     }
 
@@ -43,19 +74,40 @@ pub fn hashmap_to_headermap(header: &HashMap<String, String>) -> Result<HeaderMa
     let mut headermap = HeaderMap::with_capacity(header.len());
     for (k, v) in header {
         let name = HeaderName::from_bytes(k.as_bytes()).or_err(ErrorType::ParseError)?;
-        let value = HeaderValue::from_bytes(v.as_bytes()).or_err(ErrorType::ParseError)?;
-        headermap.insert(name, value);
+        if name == reqwest::header::SET_COOKIE {
+            for part in v.split('\n') {
+                let value =
+                    HeaderValue::from_bytes(part.as_bytes()).or_err(ErrorType::ParseError)?;
+                headermap.append(name.clone(), value);
+            }
+        } else {
+            let value = HeaderValue::from_bytes(v.as_bytes()).or_err(ErrorType::ParseError)?;
+            headermap.insert(name, value);
+        }
     }
 
     Ok(headermap)
 }
 
-/// Converts a vector of header string to a hashmap.
+/// Converts a vector of header string to a hashmap, preserving repeated header values.
 pub fn header_vec_to_hashmap(raw_header: Vec<String>) -> Result<HashMap<String, String>> {
-    let mut header = HashMap::with_capacity(raw_header.len());
+    let mut header: HashMap<String, String> = HashMap::with_capacity(raw_header.len());
+    let mut canonical_keys: HashMap<String, String> = HashMap::with_capacity(raw_header.len());
     for h in raw_header {
         if let Some((k, v)) = h.split_once(':') {
-            header.insert(k.trim().to_string(), v.trim().to_string());
+            let key = k.trim();
+            let value = v.trim();
+            let lower = key.to_ascii_lowercase();
+            if let Some(existing_key) = canonical_keys.get(&lower) {
+                if let Some(existing_value) = header.get_mut(existing_key) {
+                    existing_value.push_str(header_value_separator(key));
+                    existing_value.push_str(value);
+                }
+            } else {
+                let key_owned = key.to_string();
+                canonical_keys.insert(lower, key_owned.clone());
+                header.insert(key_owned, value.to_string());
+            }
         }
     }
 
@@ -180,6 +232,86 @@ mod tests {
         assert_eq!(hashmap.len(), 2);
         assert_eq!(hashmap.get("content-type").unwrap(), "application/json");
         assert_eq!(hashmap.get("authorization").unwrap(), "Bearer token");
+    }
+
+    #[test]
+    fn headermap_to_hashmap_and_back_preserves_repeated_headers() {
+        let mut header = HeaderMap::new();
+        header.append(
+            reqwest::header::ACCEPT,
+            HeaderValue::from_static("application/json"),
+        );
+        header.append(
+            reqwest::header::ACCEPT,
+            HeaderValue::from_static("text/plain"),
+        );
+        header.append(reqwest::header::COOKIE, HeaderValue::from_static("a=1"));
+        header.append(reqwest::header::COOKIE, HeaderValue::from_static("b=2"));
+        header.append(
+            reqwest::header::SET_COOKIE,
+            HeaderValue::from_static("session=abc; Expires=Wed, 21 Oct 2015 07:28:00 GMT"),
+        );
+        header.append(
+            reqwest::header::SET_COOKIE,
+            HeaderValue::from_static("theme=dark; HttpOnly"),
+        );
+
+        let hashmap = headermap_to_hashmap(&header);
+        assert_eq!(
+            hashmap.get("accept").map(String::as_str),
+            Some("application/json, text/plain")
+        );
+        assert_eq!(hashmap.get("cookie").map(String::as_str), Some("a=1; b=2"));
+
+        let roundtrip = hashmap_to_headermap(&hashmap).unwrap();
+        assert_eq!(
+            roundtrip.get(reqwest::header::ACCEPT).unwrap(),
+            "application/json, text/plain"
+        );
+        assert_eq!(roundtrip.get(reqwest::header::COOKIE).unwrap(), "a=1; b=2");
+
+        let set_cookies: Vec<&str> = roundtrip
+            .get_all(reqwest::header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap())
+            .collect();
+        assert_eq!(
+            set_cookies,
+            vec![
+                "session=abc; Expires=Wed, 21 Oct 2015 07:28:00 GMT",
+                "theme=dark; HttpOnly",
+            ]
+        );
+    }
+
+    #[test]
+    fn header_vec_to_hashmap_preserves_repeated_headers() {
+        let raw_header = vec![
+            "Accept: application/json".to_string(),
+            "accept: text/plain".to_string(),
+            "Cookie: a=1".to_string(),
+            "Cookie: b=2".to_string(),
+            "Set-Cookie: s1=v1; Expires=Wed, 21 Oct 2015 07:28:00 GMT".to_string(),
+            "Set-Cookie: s2=v2".to_string(),
+        ];
+
+        let hashmap = header_vec_to_hashmap(raw_header.clone()).unwrap();
+        assert_eq!(
+            hashmap.get("Accept").map(String::as_str),
+            Some("application/json, text/plain")
+        );
+        assert_eq!(hashmap.get("Cookie").map(String::as_str), Some("a=1; b=2"));
+
+        let headermap = header_vec_to_headermap(raw_header).unwrap();
+        let set_cookies: Vec<&str> = headermap
+            .get_all(reqwest::header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap())
+            .collect();
+        assert_eq!(
+            set_cookies,
+            vec!["s1=v1; Expires=Wed, 21 Oct 2015 07:28:00 GMT", "s2=v2"]
+        );
     }
 
     #[test]
