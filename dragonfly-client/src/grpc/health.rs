@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+use dragonfly_client_config::dfdaemon::Jwt;
 use dragonfly_client_core::{
     error::{ErrorType, OrErr},
     Error, Result,
@@ -30,19 +31,23 @@ use tonic_health::pb::{
 use tower::service_fn;
 use tracing::{error, instrument};
 
-use super::interceptor::InjectTracingInterceptor;
+use super::interceptor::ClientInterceptor;
 
 /// A wrapper of HealthGRPCClient.
 #[derive(Clone)]
 pub struct HealthClient {
     /// The grpc client of the certificate.
-    client: HealthGRPCClient<InterceptedService<Channel, InjectTracingInterceptor>>,
+    client: HealthGRPCClient<InterceptedService<Channel, ClientInterceptor>>,
 }
 
 /// Implements the grpc client of the health.
 impl HealthClient {
     /// Creates a new HealthClient.
-    pub async fn new(addr: &str, client_tls_config: Option<ClientTlsConfig>) -> Result<Self> {
+    pub async fn new(
+        addr: &str,
+        client_tls_config: Option<ClientTlsConfig>,
+        auth_config: &Jwt,
+    ) -> Result<Self> {
         let channel = match client_tls_config {
             Some(client_tls_config) => Channel::from_shared(addr.to_string())
                 .map_err(|_| Error::InvalidURI(addr.into()))?
@@ -73,9 +78,10 @@ impl HealthClient {
                 .or_err(ErrorType::ConnectError)?,
         };
 
-        let client = HealthGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
-            .max_decoding_message_size(usize::MAX)
-            .max_encoding_message_size(usize::MAX);
+        let client =
+            HealthGRPCClient::with_interceptor(channel, ClientInterceptor::new(auth_config))
+                .max_decoding_message_size(usize::MAX)
+                .max_encoding_message_size(usize::MAX);
         Ok(Self { client })
     }
 
@@ -103,7 +109,7 @@ impl HealthClient {
             })
             .or_err(ErrorType::ConnectError)?;
 
-        let client = HealthGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
+        let client = HealthGRPCClient::with_interceptor(channel, ClientInterceptor::default())
             .max_decoding_message_size(usize::MAX)
             .max_encoding_message_size(usize::MAX);
         Ok(Self { client })

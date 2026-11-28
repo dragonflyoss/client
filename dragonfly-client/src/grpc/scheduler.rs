@@ -48,7 +48,7 @@ use tonic::transport::Channel;
 use tracing::{debug, error, info, instrument, Instrument};
 use url::Url;
 
-use super::interceptor::InjectTracingInterceptor;
+use super::interceptor::ClientInterceptor;
 
 /// The number of connections per scheduler address. Requests are balanced over
 /// a pool of connections to avoid the head-of-line blocking and congestion
@@ -106,17 +106,22 @@ pub struct SchedulerClient {
 
     /// Channels of the available schedulers, keyed by the scheduler address.
     channels: Arc<RwLock<HashMap<SocketAddr, Channel>>>,
+
+    /// Interceptor applied to every scheduler request.
+    interceptor: ClientInterceptor,
 }
 
 /// Implements the grpc client of the scheduler.
 impl SchedulerClient {
     /// Creates a new scheduler client.
     pub async fn new(config: Arc<Config>, dynconfig: Arc<Dynconfig>) -> Result<Self> {
+        let interceptor = ClientInterceptor::new(&config.security.jwt);
         let client = Self {
             config,
             dynconfig,
             available_schedulers: Arc::new(RwLock::new(AvailableSchedulers::new(HashMap::new()))),
             channels: Arc::new(RwLock::new(HashMap::new())),
+            interceptor,
         };
 
         client.refresh_available_scheduler_addrs().await?;
@@ -249,10 +254,12 @@ impl SchedulerClient {
 
                 // Reuse the cached channel of the scheduler.
                 let channel = scheduler_client.channel(addr).await?;
-                let mut client =
-                    SchedulerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
-                        .max_decoding_message_size(usize::MAX)
-                        .max_encoding_message_size(usize::MAX);
+                let mut client = SchedulerGRPCClient::with_interceptor(
+                    channel,
+                    scheduler_client.interceptor.clone(),
+                )
+                .max_decoding_message_size(usize::MAX)
+                .max_encoding_message_size(usize::MAX);
                 client.announce_host(request).await?;
                 Ok(())
             }
@@ -291,10 +298,12 @@ impl SchedulerClient {
 
                 // Reuse the cached channel of the scheduler.
                 let channel = scheduler_client.channel(addr).await?;
-                let mut client =
-                    SchedulerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
-                        .max_decoding_message_size(usize::MAX)
-                        .max_encoding_message_size(usize::MAX);
+                let mut client = SchedulerGRPCClient::with_interceptor(
+                    channel,
+                    scheduler_client.interceptor.clone(),
+                )
+                .max_decoding_message_size(usize::MAX)
+                .max_encoding_message_size(usize::MAX);
                 client.announce_host(request).await?;
                 Ok(())
             }
@@ -338,10 +347,12 @@ impl SchedulerClient {
 
                 // Reuse the cached channel of the scheduler.
                 let channel = scheduler_client.channel(addr).await?;
-                let mut client =
-                    SchedulerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
-                        .max_decoding_message_size(usize::MAX)
-                        .max_encoding_message_size(usize::MAX);
+                let mut client = SchedulerGRPCClient::with_interceptor(
+                    channel,
+                    scheduler_client.interceptor.clone(),
+                )
+                .max_decoding_message_size(usize::MAX)
+                .max_encoding_message_size(usize::MAX);
                 client.delete_host(request).await?;
                 Ok(())
             }
@@ -613,7 +624,7 @@ impl SchedulerClient {
         &self,
         task_id: &str,
         peer_id: Option<&str>,
-    ) -> Result<SchedulerGRPCClient<InterceptedService<Channel, InjectTracingInterceptor>>> {
+    ) -> Result<SchedulerGRPCClient<InterceptedService<Channel, ClientInterceptor>>> {
         // Update scheduler addresses of the client.
         self.update_available_scheduler_addrs().await?;
 
@@ -628,7 +639,7 @@ impl SchedulerClient {
 
         let channel = self.channel(addr).await?;
         Ok(
-            SchedulerGRPCClient::with_interceptor(channel, InjectTracingInterceptor)
+            SchedulerGRPCClient::with_interceptor(channel, self.interceptor.clone())
                 .max_decoding_message_size(usize::MAX)
                 .max_encoding_message_size(usize::MAX),
         )
